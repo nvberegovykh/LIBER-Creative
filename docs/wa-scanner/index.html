@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>LIBER Monitor — WhatsApp Scanner</title>
+  <link rel="icon" href="/public/liber avatar.ico" />
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#000;color:#eaeaea;font-family:"Courier Prime","Courier New","Lucida Console",monospace;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px}
+    .card{max-width:560px;width:100%;background:#0e1014;border:1px solid #2b2f38;border-radius:16px;padding:40px 36px;text-align:center}
+    .logo{font-size:48px;margin-bottom:16px}
+    h1{font-size:1.6rem;font-weight:700;margin-bottom:8px;letter-spacing:0.01em}
+    .tag{display:inline-block;background:#0d2a0d;color:#4caf50;border:1px solid #2d6a2d;border-radius:20px;font-size:0.75rem;padding:3px 12px;margin-bottom:20px;letter-spacing:0.05em}
+    p{color:#9aa3b0;font-size:0.93rem;line-height:1.65;margin-bottom:24px}
+    .features{text-align:left;background:#060809;border:1px solid #1e2228;border-radius:10px;padding:18px 20px;margin-bottom:28px}
+    .features li{list-style:none;padding:5px 0;color:#c8cdd5;font-size:0.88rem;display:flex;align-items:flex-start;gap:10px}
+    .features li::before{content:"✓";color:#4caf50;flex-shrink:0;margin-top:1px}
+    .privacy{background:#0a0a00;border:1px solid #2a2800;border-radius:10px;padding:14px 18px;margin-bottom:28px;text-align:left}
+    .privacy p{color:#888;font-size:0.8rem;margin:0;line-height:1.6}
+    .privacy strong{color:#c8b84a}
+    .btns{display:flex;flex-direction:column;gap:10px}
+    .btn{display:block;padding:13px 20px;border-radius:10px;font-size:0.95rem;font-weight:600;text-decoration:none;transition:opacity 0.15s;border:none;cursor:pointer;font-family:inherit}
+    .btn-primary{background:#25D366;color:#000}
+    .btn-secondary{background:#161a22;color:#eaeaea;border:1px solid #2b2f38}
+    .btn:hover{opacity:0.85}
+    .meta{margin-top:28px;font-size:0.75rem;color:#444;display:flex;justify-content:center;gap:18px;flex-wrap:wrap}
+    .meta a{color:#555;text-decoration:none}
+    .meta a:hover{color:#888}
+    @media(max-width:480px){.card{padding:28px 20px}.btns{flex-direction:column}}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">📱</div>
+    <h1>LIBER Monitor</h1>
+    <span class="tag">FREE &amp; OPEN SOURCE</span>
+    <p>WhatsApp chat scanner for busy professionals. Reads your chats twice a day, summarizes with AI, and sends alerts directly back to your WhatsApp — no extra apps needed.</p>
+
+    <ul class="features">
+      <li>Scans all your WhatsApp chats on schedule (9 AM + 6 PM)</li>
+      <li>AI-powered summaries + urgent flag detection</li>
+      <li>Alerts delivered as WhatsApp self-messages</li>
+      <li>Optional Notion integration for project logging</li>
+      <li>Connect once via QR — runs automatically after that</li>
+      <li>Deploy on Railway or Render in under 5 minutes</li>
+    </ul>
+
+    <div class="privacy">
+      <p><strong>🔒 Your data stays yours.</strong> All processing runs in your own deployment. LIBER Creative never sees your messages. No data collection. No AI training on your chats. MIT License.</p>
+    </div>
+
+    <div class="btns">
+      <a class="btn btn-primary" href="https://github.com/nvberegovykh/liber-whatsapp-monitor" target="_blank" rel="noopener">View on GitHub &amp; Deploy</a>
+      <a class="btn btn-secondary" href="https://github.com/nvberegovykh/liber-whatsapp-monitor#readme" target="_blank" rel="noopener">Read Setup Guide</a>
+    </div>
+
+    <div class="meta">
+      <span>MIT License</span>
+      <span>LIBER Creative LLC 2026</span>
+      <a href="https://github.com/nvberegovykh/liber-whatsapp-monitor/blob/main/LICENSE" target="_blank">License</a>
+      <a href="/">liberpict.com</a>
+    </div>
+  </div>
+</body>
+</html>
