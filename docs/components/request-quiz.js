@@ -241,7 +241,7 @@
         throw new Error(data?.message || 'Submission failed');
       }
     } catch (err) {
-      console.error('[Request Quiz] Submission failed:', err);
+      if (window.__devLog) window.__devLog('[Request Quiz] Submission failed:', err);
       alert(err?.message || 'Failed to submit. Please try again or email us directly.');
     } finally {
       submitBtn.disabled = false;
