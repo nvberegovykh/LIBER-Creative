@@ -52,11 +52,11 @@ class ChatGPTIntegration {
             if (this.isEnabled) {
                 // Assistants API is deprecated; keep startup lightweight and Responses-first.
                 Promise.resolve().then(() => {
-                    console.log('WALL-E startup: Responses API mode enabled');
+                    if (window.__devLog) window.__devLog('WALL-E startup: Responses API mode enabled');
                 });
             }
         } catch (error) {
-            console.warn('⚠️ WALL-E configuration failed, but widget will still be created:', error.message);
+            if (window.__devWarn) window.__devWarn('⚠️ WALL-E configuration failed, but widget will still be created:', error.message);
         }
         
         // Always create the interface regardless of configuration status
@@ -79,7 +79,7 @@ class ChatGPTIntegration {
                 this.expandChat();
             }
             
-            console.log('✅ WALL-E widget initialized successfully');
+            if (window.__devLog) window.__devLog('✅ WALL-E widget initialized successfully');
         } catch (error) {
             console.error('❌ Critical error initializing WALL-E widget:', error);
         }
@@ -139,7 +139,7 @@ class ChatGPTIntegration {
     async ensureAssistantSupportsFiles() {
         try {
             if (!this.assistantId) {
-                console.log('Assistant ID not set; skipping file support check');
+                if (window.__devLog) window.__devLog('Assistant ID not set; skipping file support check');
                 return;
             }
             // Try v2 endpoint first (newer API)
@@ -150,7 +150,7 @@ class ChatGPTIntegration {
 
             // If v2 fails, try v1 endpoint (fallback)
             if (!response.ok) {
-                console.log('v2 endpoint failed for file support check, trying v1...');
+                if (window.__devLog) window.__devLog('v2 endpoint failed for file support check, trying v1...');
                 response = await this.openaiFetch(`/v1/assistants/${this.assistantId}`, {
                     beta: 'assistants=v1',
                     json: false
@@ -158,8 +158,8 @@ class ChatGPTIntegration {
             }
 
             if (!response.ok) {
-                console.warn('⚠️ Could not fetch assistant configuration for file support check, proceeding with current setup');
-                console.log('✅ File attachments will be attempted but may not work');
+                if (window.__devWarn) window.__devWarn('⚠️ Could not fetch assistant configuration for file support check, proceeding with current setup');
+                if (window.__devLog) window.__devLog('✅ File attachments will be attempted but may not work');
                 return;
             }
 
@@ -175,14 +175,14 @@ class ChatGPTIntegration {
             ];
 
             if (supportedModels.includes(assistant.model)) {
-                console.log(`✅ Assistant is using supported model: ${assistant.model}`);
-                console.log(`✅ File attachments are supported and ready to use`);
+                if (window.__devLog) window.__devLog(`✅ Assistant is using supported model: ${assistant.model}`);
+                if (window.__devLog) window.__devLog(`✅ File attachments are supported and ready to use`);
             } else {
-                console.warn(`⚠️ Assistant is using model: ${assistant.model} which may not support file attachments`);
-                console.warn(`💡 Consider updating to gpt-4o-mini for full file support`);
+                if (window.__devWarn) window.__devWarn(`⚠️ Assistant is using model: ${assistant.model} which may not support file attachments`);
+                if (window.__devWarn) window.__devWarn(`💡 Consider updating to gpt-4o-mini for full file support`);
             }
         } catch (error) {
-            console.warn('Error checking assistant configuration:', error);
+            if (window.__devWarn) window.__devWarn('Error checking assistant configuration:', error);
         }
     }
 
@@ -192,10 +192,10 @@ class ChatGPTIntegration {
     async checkAssistantConfig() {
         try {
             if (!this.assistantId) {
-                console.log('Assistant ID not set; skipping assistant config check');
+                if (window.__devLog) window.__devLog('Assistant ID not set; skipping assistant config check');
                 return;
             }
-            console.log('Checking assistant configuration...');
+            if (window.__devLog) window.__devLog('Checking assistant configuration...');
             
             // Try v2 endpoint first (newer API)
             let response = await this.openaiFetch(`/v2/assistants/${this.assistantId}`, {
@@ -205,7 +205,7 @@ class ChatGPTIntegration {
 
             // If v2 fails, try v1 endpoint (fallback)
             if (!response.ok) {
-                console.log('v2 endpoint failed for config check, trying v1...');
+                if (window.__devLog) window.__devLog('v2 endpoint failed for config check, trying v1...');
                 response = await this.openaiFetch(`/v1/assistants/${this.assistantId}`, {
                     beta: 'assistants=v1',
                     json: false
@@ -213,13 +213,13 @@ class ChatGPTIntegration {
             }
 
             if (!response.ok) {
-                console.warn(`⚠️ Could not fetch assistant config (${response.status}), but assistant will still work`);
-                console.log('✅ Assistant is ready to use despite config check failure');
+                if (window.__devWarn) window.__devWarn(`⚠️ Could not fetch assistant config (${response.status}), but assistant will still work`);
+                if (window.__devLog) window.__devLog('✅ Assistant is ready to use despite config check failure');
                 return;
             }
 
             const assistant = await response.json();
-            console.log('Assistant Configuration:', {
+            if (window.__devLog) window.__devLog('Assistant Configuration:', {
                 id: assistant.id,
                 name: assistant.name,
                 model: assistant.model,
@@ -228,14 +228,14 @@ class ChatGPTIntegration {
             });
             
             if (assistant.model !== 'gpt-4o-mini') {
-                console.warn(`⚠️ Assistant is using model: ${assistant.model}, expected: gpt-4o-mini`);
+                if (window.__devWarn) window.__devWarn(`⚠️ Assistant is using model: ${assistant.model}, expected: gpt-4o-mini`);
             } else {
-                console.log('✅ Assistant is correctly configured with gpt-4o-mini');
+                if (window.__devLog) window.__devLog('✅ Assistant is correctly configured with gpt-4o-mini');
             }
         } catch (error) {
             // Don't crash the widget - just log the error and continue
-            console.warn('⚠️ Error checking assistant config (non-critical):', error.message);
-            console.log('✅ Assistant will continue to work normally');
+            if (window.__devWarn) window.__devWarn('⚠️ Error checking assistant config (non-critical):', error.message);
+            if (window.__devLog) window.__devLog('✅ Assistant will continue to work normally');
         }
     }
 
@@ -265,7 +265,7 @@ class ChatGPTIntegration {
                             }
                         });
                     } else {
-                        console.warn('Encrypted saved threads present but crypto not ready');
+                        if (window.__devWarn) window.__devWarn('Encrypted saved threads present but crypto not ready');
                         this.savedThreads = [];
                     }
                 } else if (Array.isArray(parsed)) {
@@ -299,18 +299,18 @@ class ChatGPTIntegration {
                     if (cipher) {
                         const envelope = { v: 1, enc: true, data: cipher };
                         localStorage.setItem(threadsKey, JSON.stringify(envelope));
-                        console.log(`Saved ${threadsToSave.length} encrypted threads for user: ${userId}`);
+                        if (window.__devLog) window.__devLog(`Saved ${threadsToSave.length} encrypted threads for user: ${userId}`);
                     } else {
                         localStorage.setItem(threadsKey, JSON.stringify(threadsToSave));
-                        console.log(`Saved ${threadsToSave.length} (fallback plaintext) threads for user: ${userId}`);
+                        if (window.__devLog) window.__devLog(`Saved ${threadsToSave.length} (fallback plaintext) threads for user: ${userId}`);
                     }
                 }).catch(() => {
                     localStorage.setItem(threadsKey, JSON.stringify(threadsToSave));
-                    console.log(`Saved ${threadsToSave.length} (fallback plaintext) threads for user: ${userId}`);
+                    if (window.__devLog) window.__devLog(`Saved ${threadsToSave.length} (fallback plaintext) threads for user: ${userId}`);
                 });
             } else {
                 localStorage.setItem(threadsKey, JSON.stringify(threadsToSave));
-                console.log(`Saved ${threadsToSave.length} threads for user: ${userId}`);
+                if (window.__devLog) window.__devLog(`Saved ${threadsToSave.length} threads for user: ${userId}`);
             }
         } catch (error) {
             console.error('Failed to save threads:', error);
@@ -350,7 +350,7 @@ class ChatGPTIntegration {
             // Update thread selector
             this.updateThreadSelector();
             
-            console.log(`Created new thread: ${name} (${newThreadId})`);
+            if (window.__devLog) window.__devLog(`Created new thread: ${name} (${newThreadId})`);
             return newThreadId;
         } catch (error) {
             console.error('Failed to create new thread:', error);
@@ -382,7 +382,7 @@ class ChatGPTIntegration {
             // Update thread selector
             this.updateThreadSelector();
             
-            console.log(`Switched to thread: ${thread.name} (${threadId})`);
+            if (window.__devLog) window.__devLog(`Switched to thread: ${thread.name} (${threadId})`);
         } catch (error) {
             console.error('Failed to switch thread:', error);
             throw error;
@@ -407,7 +407,7 @@ class ChatGPTIntegration {
                             try {
                                 const arr = JSON.parse(plain || '[]');
                                 this.chatHistory = Array.isArray(arr) ? arr.slice(-this.maxHistoryItems) : [];
-                                console.log(`Loaded ${this.chatHistory.length} encrypted messages for thread: ${threadId}`);
+                                if (window.__devLog) window.__devLog(`Loaded ${this.chatHistory.length} encrypted messages for thread: ${threadId}`);
                                 this.displayChatHistory();
                             } catch {
                                 this.chatHistory = [];
@@ -416,7 +416,7 @@ class ChatGPTIntegration {
                         });
                         return;
                     } else {
-                        console.warn('Encrypted chat history present but crypto not ready');
+                        if (window.__devWarn) window.__devWarn('Encrypted chat history present but crypto not ready');
                         this.chatHistory = [];
                     }
                 } else if (Array.isArray(parsed)) {
@@ -456,18 +456,18 @@ class ChatGPTIntegration {
                     if (cipher) {
                         const envelope = { v: 1, enc: true, data: cipher };
                         localStorage.setItem(historyKey, JSON.stringify(envelope));
-                        console.log(`Saved ${historyToSave.length} encrypted messages for thread: ${this.threadId}`);
+                        if (window.__devLog) window.__devLog(`Saved ${historyToSave.length} encrypted messages for thread: ${this.threadId}`);
                     } else {
                         localStorage.setItem(historyKey, JSON.stringify(historyToSave));
-                        console.log(`Saved ${historyToSave.length} (fallback plaintext) messages for thread: ${this.threadId}`);
+                        if (window.__devLog) window.__devLog(`Saved ${historyToSave.length} (fallback plaintext) messages for thread: ${this.threadId}`);
                     }
                 }).catch(() => {
                     localStorage.setItem(historyKey, JSON.stringify(historyToSave));
-                    console.log(`Saved ${historyToSave.length} (fallback plaintext) messages for thread: ${this.threadId}`);
+                    if (window.__devLog) window.__devLog(`Saved ${historyToSave.length} (fallback plaintext) messages for thread: ${this.threadId}`);
                 });
             } else {
                 localStorage.setItem(historyKey, JSON.stringify(historyToSave));
-                console.log(`Saved ${historyToSave.length} messages for thread: ${this.threadId}`);
+                if (window.__devLog) window.__devLog(`Saved ${historyToSave.length} messages for thread: ${this.threadId}`);
             }
             
             // Update clear history button visibility
@@ -499,7 +499,7 @@ class ChatGPTIntegration {
             // Update thread selector
             this.updateThreadSelector();
             
-            console.log(`Deleted thread: ${threadId}`);
+            if (window.__devLog) window.__devLog(`Deleted thread: ${threadId}`);
         } catch (error) {
             console.error('Failed to delete thread:', error);
             throw error;
@@ -519,7 +519,7 @@ class ChatGPTIntegration {
                 this.currentThreadName = newName.trim();
                 this.saveThreads();
                 this.updateThreadSelector();
-                console.log(`Renamed thread to: ${newName}`);
+                if (window.__devLog) window.__devLog(`Renamed thread to: ${newName}`);
             }
         } catch (error) {
             console.error('Failed to rename thread:', error);
@@ -601,7 +601,7 @@ class ChatGPTIntegration {
             // Enable if either proxy or apiKey is available
             this.isEnabled = !!(this.proxyUrl || this.apiKey);
             this.configLoaded = true;
-            console.log(this.isEnabled ? 'WALL-E configured (proxy or key present)' : 'WALL-E not configured');
+            if (window.__devLog) window.__devLog(this.isEnabled ? 'WALL-E configured (proxy or key present)' : 'WALL-E not configured');
         } catch (error) {
             // Fallback: derive proxy URL from known project/region so widget still works
             this.functionsRegion = 'europe-west1';
@@ -613,7 +613,7 @@ class ChatGPTIntegration {
             this.assistantId = null;
             this.isEnabled = true; // proxy assumed available
             this.configLoaded = true;
-            console.warn('WALL-E: keys unavailable; using default proxy URL');
+            if (window.__devWarn) window.__devWarn('WALL-E: keys unavailable; using default proxy URL');
         }
     }
 
@@ -644,9 +644,9 @@ class ChatGPTIntegration {
                 ['encrypt', 'decrypt']
             );
             this.cryptoReady = true;
-            console.log('WALL-E local encryption initialized');
+            if (window.__devLog) window.__devLog('WALL-E local encryption initialized');
         } catch (e) {
-            console.warn('Local crypto init failed; falling back to plaintext history', e);
+            if (window.__devWarn) window.__devWarn('Local crypto init failed; falling back to plaintext history', e);
             this.cryptoReady = false;
         }
     }
@@ -691,7 +691,7 @@ class ChatGPTIntegration {
             );
             return new TextDecoder().decode(plainBuf);
         } catch (e) {
-            console.warn('Decrypt failed; possibly legacy plaintext history', e);
+            if (window.__devWarn) window.__devWarn('Decrypt failed; possibly legacy plaintext history', e);
             return null;
         }
     }
@@ -728,7 +728,7 @@ class ChatGPTIntegration {
      * Create chat interface
      */
     createChatInterface() {
-        console.log('Creating chat interface...');
+        if (window.__devLog) window.__devLog('Creating chat interface...');
         const chatHTML = `
             <div id="chatgpt-widget" class="chatgpt-widget ${this.isEnabled ? 'enabled' : 'disabled'}">
                 <div class="chatgpt-header" id="chatgpt-header">
@@ -797,11 +797,11 @@ class ChatGPTIntegration {
 
         // Add to body if not exists
         if (!document.getElementById('chatgpt-widget')) {
-            console.log('Adding widget to body...');
+            if (window.__devLog) window.__devLog('Adding widget to body...');
             document.body.insertAdjacentHTML('beforeend', chatHTML);
-            console.log('Widget added successfully');
+            if (window.__devLog) window.__devLog('Widget added successfully');
         } else {
-            console.log('Widget already exists');
+            if (window.__devLog) window.__devLog('Widget already exists');
         }
 
         this.setupChatEventListeners();
@@ -828,12 +828,12 @@ class ChatGPTIntegration {
 
         // Add header click listener for mobile expansion
         if (header) {
-            console.log('Setting up header click listener');
+            if (window.__devLog) window.__devLog('Setting up header click listener');
             header.addEventListener('click', (e) => {
-                console.log('Header clicked');
+                if (window.__devLog) window.__devLog('Header clicked');
                 // Don't trigger if clicking on toggle button or other controls
                 if (e.target.closest('.chatgpt-controls')) {
-                    console.log('Clicked on controls, ignoring');
+                    if (window.__devLog) window.__devLog('Clicked on controls, ignoring');
                     return;
                 }
                 e.preventDefault();
@@ -841,47 +841,47 @@ class ChatGPTIntegration {
                 this.toggleChat();
             });
         } else {
-            console.warn('Header element not found');
+            if (window.__devWarn) window.__devWarn('Header element not found');
         }
 
         // Add specific click listener for WALL-E icon and title
         const title = document.querySelector('.chatgpt-title');
         if (title) {
-            console.log('Setting up title click listener');
+            if (window.__devLog) window.__devLog('Setting up title click listener');
             title.addEventListener('click', (e) => {
-                console.log('Title clicked');
+                if (window.__devLog) window.__devLog('Title clicked');
                 e.preventDefault();
                 e.stopPropagation();
                 this.toggleChat();
             });
         } else {
-            console.warn('Title element not found');
+            if (window.__devWarn) window.__devWarn('Title element not found');
         }
 
         // Add click listener for the WALL-E icon specifically
         const icon = document.querySelector('.chatgpt-icon');
         if (icon) {
-            console.log('Setting up icon click listener');
+            if (window.__devLog) window.__devLog('Setting up icon click listener');
             icon.addEventListener('click', (e) => {
-                console.log('Icon clicked');
+                if (window.__devLog) window.__devLog('Icon clicked');
                 e.preventDefault();
                 e.stopPropagation();
                 this.toggleChat();
             });
         } else {
-            console.warn('Icon element not found');
+            if (window.__devWarn) window.__devWarn('Icon element not found');
         }
 
         if (toggle) {
-            console.log('Setting up toggle click listener');
+            if (window.__devLog) window.__devLog('Setting up toggle click listener');
             toggle.addEventListener('click', (e) => {
-                console.log('Toggle clicked');
+                if (window.__devLog) window.__devLog('Toggle clicked');
                 e.preventDefault();
                 e.stopPropagation();
                 this.toggleChat();
             });
         } else {
-            console.warn('Toggle element not found');
+            if (window.__devWarn) window.__devWarn('Toggle element not found');
         }
 
         // New thread button
@@ -1090,7 +1090,7 @@ class ChatGPTIntegration {
             );
             
             if (isDuplicate) {
-                console.log(`Skipping duplicate file: ${file.name}`);
+                if (window.__devLog) window.__devLog(`Skipping duplicate file: ${file.name}`);
                 return;
             }
             
@@ -1124,7 +1124,7 @@ class ChatGPTIntegration {
         if (window.dashboardManager) {
             window.dashboardManager.showSuccess(message);
         } else {
-            console.log('WALL-E Success:', message);
+            if (window.__devLog) window.__devLog('WALL-E Success:', message);
             // Show a simple alert if dashboard manager is not available
             alert('WALL-E Success: ' + message);
         }
@@ -1355,7 +1355,7 @@ class ChatGPTIntegration {
      * Toggle chat visibility
      */
     toggleChat() {
-        console.log('Toggling chat visibility:', this.isExpanded);
+        if (window.__devLog) window.__devLog('Toggling chat visibility:', this.isExpanded);
         if (this.isExpanded) {
             this.collapseChat();
         } else {
@@ -1370,7 +1370,7 @@ class ChatGPTIntegration {
      * Expand chat
      */
     expandChat() {
-        console.log('Expanding chat');
+        if (window.__devLog) window.__devLog('Expanding chat');
         const widget = document.getElementById('chatgpt-widget');
         const body = document.getElementById('chatgpt-body');
         const toggle = document.getElementById('chatgpt-toggle');
@@ -1397,7 +1397,7 @@ class ChatGPTIntegration {
      * Collapse chat
      */
     collapseChat() {
-        console.log('Collapsing chat');
+        if (window.__devLog) window.__devLog('Collapsing chat');
         const widget = document.getElementById('chatgpt-widget');
         const body = document.getElementById('chatgpt-body');
         const toggle = document.getElementById('chatgpt-toggle');
@@ -1454,7 +1454,7 @@ class ChatGPTIntegration {
      * Send message to WALL-E
      */
     async sendMessage() {
-        console.log('=== SEND MESSAGE STARTED ===');
+        if (window.__devLog) window.__devLog('=== SEND MESSAGE STARTED ===');
         
         // Require either proxy or direct API key
         if (!this.proxyUrl && !this.apiKey) {
@@ -1465,12 +1465,12 @@ class ChatGPTIntegration {
         const input = document.getElementById('chatgpt-input');
         const message = input.value.trim();
 
-        console.log('Message from input: [redacted]');
-        console.log('File uploads:', this.fileUploads);
-        console.log('File uploads length:', this.fileUploads.length);
+        if (window.__devLog) window.__devLog('Message from input: [redacted]');
+        if (window.__devLog) window.__devLog('File uploads:', this.fileUploads);
+        if (window.__devLog) window.__devLog('File uploads length:', this.fileUploads.length);
 
         if (!message && this.fileUploads.length === 0) {
-            console.log('No message and no files, returning');
+            if (window.__devLog) window.__devLog('No message and no files, returning');
             return;
         }
 
@@ -1487,14 +1487,14 @@ class ChatGPTIntegration {
 
         // Check if this is an image generation request
         const isImageRequest = this.isImageGenerationRequest(message);
-        console.log('Is image generation request:', isImageRequest);
+        if (window.__devLog) window.__devLog('Is image generation request:', isImageRequest);
 
         // Add user message to chat
         this.addMessage('user', message, this.fileUploads);
 
         // Store file uploads before clearing
         const filesToSend = [...this.fileUploads];
-        console.log('Files to send:', filesToSend);
+        if (window.__devLog) window.__devLog('Files to send:', filesToSend);
 
         // Clear input and file uploads
         input.value = '';
@@ -1506,11 +1506,11 @@ class ChatGPTIntegration {
 
         try {
             if (isImageRequest) {
-                console.log('Handling image generation request');
+                if (window.__devLog) window.__devLog('Handling image generation request');
                 // Handle image generation directly
                 await this.handleImageGenerationRequest(message);
             } else {
-                console.log('Handling normal chat message with files count:', filesToSend.length);
+                if (window.__devLog) window.__devLog('Handling normal chat message with files count:', filesToSend.length);
                 // Normal chat message
                 const response = await this.callWALLE(message, filesToSend);
                 this.removeTypingIndicator();
@@ -2605,7 +2605,7 @@ Autonomous mode requirements:
             this.generatedLocalReports.set(id, { blob: reportBlob, filename, createdAt: Date.now() });
             return `[Local report: ${id}|Download zoning analysis PDF]`;
         } catch (err) {
-            console.warn('Local report generation failed:', err);
+            if (window.__devWarn) window.__devWarn('Local report generation failed:', err);
             return '';
         }
     }
@@ -2693,7 +2693,7 @@ Autonomous mode requirements:
                     zoningCtx = await this.fetchNycZoningContext(message);
                     this._lastZoningCtx = zoningCtx || null;
                 } catch (resolverErr) {
-                    console.warn('NYC zoning resolver failed:', resolverErr?.message || resolverErr);
+                    if (window.__devWarn) window.__devWarn('NYC zoning resolver failed:', resolverErr?.message || resolverErr);
                     this._lastZoningCtx = null;
                 }
                 const quickClarification = this.buildSimpleAddressClarification(message, zoningCtx);
@@ -2701,7 +2701,7 @@ Autonomous mode requirements:
             }
 
             // OpenAI-recommended path: use Responses API for text and multimodal inputs.
-            console.log('Using grounded responses API (text + files)');
+            if (window.__devLog) window.__devLog('Using grounded responses API (text + files)');
             try {
                 let out = await this.callGroundedResponses(message, false, files, '', zoningCtx);
                 // Force completion mode for address analyses: avoid "please confirm" loops.
@@ -2729,7 +2729,7 @@ Must include: zoning designation/overlays, FAR math, max-possible capacity break
                 }
                 return out;
             } catch (groundedErr) {
-                console.warn('Grounded responses failed:', groundedErr?.message || groundedErr);
+                if (window.__devWarn) window.__devWarn('Grounded responses failed:', groundedErr?.message || groundedErr);
                 // Do not silently drop multimodal inputs by downgrading to text-only fallback.
                 if (Array.isArray(files) && files.length > 0) {
                     throw new Error(`Responses failed for file/image input: ${groundedErr?.message || 'unknown error'}`);
@@ -2758,10 +2758,10 @@ Verification pass:
                             return out;
                         }
                     } catch (secondGroundedErr) {
-                        console.warn('Secondary grounded model failed:', secondGroundedErr?.message || secondGroundedErr);
+                        if (window.__devWarn) window.__devWarn('Secondary grounded model failed:', secondGroundedErr?.message || secondGroundedErr);
                     }
                 }
-                console.warn('Falling back to chat completions for text-only request');
+                if (window.__devWarn) window.__devWarn('Falling back to chat completions for text-only request');
                 if (isAddressMode) {
                     const forced = this.buildAutonomousAddressDirective(message);
                     let out = await this.callChatCompletions(forced, { skipHistory: true });
@@ -3110,7 +3110,7 @@ Rules:
             if (!id) throw new Error('OpenAI file id missing');
             return id;
         } catch (err) {
-            console.warn('uploadFileToOpenAI failed:', err);
+            if (window.__devWarn) window.__devWarn('uploadFileToOpenAI failed:', err);
             return '';
         }
     }
@@ -3349,7 +3349,7 @@ Do not omit references.`;
      */
     async callChatCompletions(message, opts = {}) {
         try {
-            console.log('Using chat completions API fallback (text-only)');
+            if (window.__devLog) window.__devLog('Using chat completions API fallback (text-only)');
             const systemPrompt = this.buildSystemPrompt();
             const historyMessages = opts?.skipHistory ? [] : this.buildChatCompletionsHistory(message);
             
@@ -3380,7 +3380,7 @@ Do not omit references.`;
             }
 
             const data = await response.json();
-            console.log('Chat completions response received');
+            if (window.__devLog) window.__devLog('Chat completions response received');
             const msg = data?.choices?.[0]?.message;
             const content = msg?.content;
             if (typeof content === 'string' && content.trim()) return content;
@@ -3434,10 +3434,10 @@ Do not omit references.`;
      */
     async addMessageToThread(message, files = []) {
         try {
-            console.log('=== ADDING MESSAGE TO THREAD ===');
-            console.log('Message: [redacted]');
-            console.log('Files:', files);
-            console.log('Files length:', files.length);
+            if (window.__devLog) window.__devLog('=== ADDING MESSAGE TO THREAD ===');
+            if (window.__devLog) window.__devLog('Message: [redacted]');
+            if (window.__devLog) window.__devLog('Files:', files);
+            if (window.__devLog) window.__devLog('Files length:', files.length);
             
             // SCENARIO 1: No message and no files - INVALID
             if (!message && (!files || files.length === 0)) {
@@ -3446,9 +3446,9 @@ Do not omit references.`;
             
             // SCENARIO 2: Text-only message (no files)
             if (message && (!files || files.length === 0)) {
-                console.log('SCENARIO 2: Text-only message');
+                if (window.__devLog) window.__devLog('SCENARIO 2: Text-only message');
                 
-                console.log('Sending text-only content as string: [redacted]');
+                if (window.__devLog) window.__devLog('Sending text-only content as string: [redacted]');
                 
                 const response = await this.openaiFetch(`/v1/threads/${this.threadId}/messages`, {
                     method: 'POST',
@@ -3466,19 +3466,19 @@ Do not omit references.`;
                 }
 
                 const result = await response.json();
-                console.log('Text-only message added successfully:', result);
+                if (window.__devLog) window.__devLog('Text-only message added successfully:', result);
                 return result;
             }
             
             // SCENARIO 3: Files only (no message)
             if (!message && files && files.length > 0) {
-                console.log('SCENARIO 3: Files only');
+                if (window.__devLog) window.__devLog('SCENARIO 3: Files only');
                 return await this.handleFilesOnlyMessage(files);
             }
             
             // SCENARIO 4: Message with files
             if (message && files && files.length > 0) {
-                console.log('SCENARIO 4: Message with files');
+                if (window.__devLog) window.__devLog('SCENARIO 4: Message with files');
                 return await this.handleMessageWithFiles(message, files);
             }
             
@@ -3495,7 +3495,7 @@ Do not omit references.`;
      * Handle files-only message (no text)
      */
     async handleFilesOnlyMessage(files) {
-        console.log('Processing files-only message');
+        if (window.__devLog) window.__devLog('Processing files-only message');
         
         // Upload all files first
         const uploadedFiles = await this.uploadAllFiles(files);
@@ -3528,7 +3528,7 @@ Do not omit references.`;
         
         // If we have no content (shouldn't happen), add a default text
         if (content.length === 0) {
-            console.log('No files uploaded, sending default text message');
+            if (window.__devLog) window.__devLog('No files uploaded, sending default text message');
             
             const response = await this.openaiFetch(`/v1/threads/${this.threadId}/messages`, {
                 method: 'POST',
@@ -3546,11 +3546,11 @@ Do not omit references.`;
             }
 
             const result = await response.json();
-            console.log('Default message added successfully:', result);
+            if (window.__devLog) window.__devLog('Default message added successfully:', result);
             return result;
         }
         
-        console.log('Sending files-only content:', JSON.stringify(content, null, 2));
+        if (window.__devLog) window.__devLog('Sending files-only content:', JSON.stringify(content, null, 2));
         
         const response = await this.openaiFetch(`/v1/threads/${this.threadId}/messages`, {
             method: 'POST',
@@ -3568,7 +3568,7 @@ Do not omit references.`;
         }
 
         const result = await response.json();
-        console.log('Files-only message added successfully:', result);
+        if (window.__devLog) window.__devLog('Files-only message added successfully:', result);
         return result;
     }
 
@@ -3576,15 +3576,15 @@ Do not omit references.`;
      * Handle message with files
      */
     async handleMessageWithFiles(message, files) {
-        console.log('Processing message with files');
+        if (window.__devLog) window.__devLog('Processing message with files');
         
         // Upload all files first
         const uploadedFiles = await this.uploadAllFiles(files);
         
         if (uploadedFiles.length === 0) {
-            console.warn('No files were successfully uploaded, falling back to text-only');
+            if (window.__devWarn) window.__devWarn('No files were successfully uploaded, falling back to text-only');
             // Fall back to text-only message
-            console.log('Fallback to text-only message');
+            if (window.__devLog) window.__devLog('Fallback to text-only message');
             
             const response = await this.openaiFetch(`/v1/threads/${this.threadId}/messages`, {
                 method: 'POST',
@@ -3602,7 +3602,7 @@ Do not omit references.`;
             }
 
             const result = await response.json();
-            console.log('Fallback message added successfully:', result);
+            if (window.__devLog) window.__devLog('Fallback message added successfully:', result);
             return result;
         }
         
@@ -3633,7 +3633,7 @@ Do not omit references.`;
             await this.attachFilesToAssistant(otherFileIds);
         }
         
-        console.log('Sending message with files content:', JSON.stringify(content, null, 2));
+        if (window.__devLog) window.__devLog('Sending message with files content:', JSON.stringify(content, null, 2));
         
         const response = await this.openaiFetch(`/v1/threads/${this.threadId}/messages`, {
             method: 'POST',
@@ -3651,7 +3651,7 @@ Do not omit references.`;
         }
 
         const result = await response.json();
-        console.log('Message with files added successfully:', result);
+        if (window.__devLog) window.__devLog('Message with files added successfully:', result);
         return result;
     }
 
@@ -3663,10 +3663,10 @@ Do not omit references.`;
         
         for (const file of files) {
             try {
-                console.log('Uploading file:', file.name, file.type, file.size);
+                if (window.__devLog) window.__devLog('Uploading file:', file.name, file.type, file.size);
                 const fileId = await this.uploadFile(file);
                 uploadedFiles.push({ file, fileId });
-                console.log('File uploaded successfully:', file.name, '->', fileId);
+                if (window.__devLog) window.__devLog('File uploaded successfully:', file.name, '->', fileId);
             } catch (fileError) {
                 console.error('Failed to upload file:', fileError);
                 // Continue with other files
@@ -3691,7 +3691,7 @@ Do not omit references.`;
             }
         }
         
-        console.log('Separated files - Images:', imageFiles.length, 'Others:', otherFiles.length);
+        if (window.__devLog) window.__devLog('Separated files - Images:', imageFiles.length, 'Others:', otherFiles.length);
         return { imageFiles, otherFiles };
     }
 
@@ -3718,7 +3718,7 @@ Do not omit references.`;
             }
 
             const data = await response.json();
-            console.log(`File uploaded successfully: ${file.name} -> ${data.id}`);
+            if (window.__devLog) window.__devLog(`File uploaded successfully: ${file.name} -> ${data.id}`);
             return data.id;
         } catch (error) {
             console.error('Error uploading file:', error);
@@ -3731,7 +3731,7 @@ Do not omit references.`;
      */
     async attachFilesToAssistant(fileIds) {
         try {
-            console.log('Attaching files to assistant:', fileIds);
+            if (window.__devLog) window.__devLog('Attaching files to assistant:', fileIds);
             
             // First, get the current assistant configuration
             const getResponse = await this.openaiFetch(`/v1/assistants/${this.assistantId}`, {
@@ -3747,15 +3747,15 @@ Do not omit references.`;
             }
 
             const assistant = await getResponse.json();
-            console.log('Current assistant config:', assistant);
+            if (window.__devLog) window.__devLog('Current assistant config:', assistant);
             
             // Get existing file IDs
             const existingFileIds = assistant.file_ids || [];
-            console.log('Existing file IDs:', existingFileIds);
+            if (window.__devLog) window.__devLog('Existing file IDs:', existingFileIds);
             
             // Merge with new file IDs, avoiding duplicates
             const allFileIds = [...new Set([...existingFileIds, ...fileIds])];
-            console.log('All file IDs (merged):', allFileIds);
+            if (window.__devLog) window.__devLog('All file IDs (merged):', allFileIds);
             
             // Update the assistant with all file IDs
             const updateResponse = await this.openaiFetch(`/v1/assistants/${this.assistantId}`, {
@@ -3773,7 +3773,7 @@ Do not omit references.`;
             }
 
             const data = await updateResponse.json();
-            console.log('Assistant updated with files successfully:', data);
+            if (window.__devLog) window.__devLog('Assistant updated with files successfully:', data);
             return data;
         } catch (error) {
             console.error('Error attaching files to assistant:', error);
@@ -3786,7 +3786,7 @@ Do not omit references.`;
      */
     async runAssistant() {
         try {
-            console.log('Starting assistant run...');
+            if (window.__devLog) window.__devLog('Starting assistant run...');
             const response = await this.openaiFetch(`/v1/threads/${this.threadId}/runs`, {
                 method: 'POST',
                 beta: 'assistants=v2',
@@ -3802,7 +3802,7 @@ Do not omit references.`;
             }
 
             const data = await response.json();
-            console.log('Assistant run started successfully:', data);
+            if (window.__devLog) window.__devLog('Assistant run started successfully:', data);
             return data.id;
         } catch (error) {
             console.error('Error in runAssistant:', error);
@@ -3817,7 +3817,7 @@ Do not omit references.`;
         let attempts = 0;
         const maxAttempts = 30; // 30 seconds timeout
 
-        console.log(`Waiting for assistant response (runId: ${runId})...`);
+        if (window.__devLog) window.__devLog(`Waiting for assistant response (runId: ${runId})...`);
 
         while (attempts < maxAttempts) {
             try {
@@ -3833,10 +3833,10 @@ Do not omit references.`;
                 }
 
                 const data = await response.json();
-                console.log(`Run status (attempt ${attempts + 1}):`, data.status);
+                if (window.__devLog) window.__devLog(`Run status (attempt ${attempts + 1}):`, data.status);
 
                 if (data.status === 'completed') {
-                    console.log('Assistant run completed successfully');
+                    if (window.__devLog) window.__devLog('Assistant run completed successfully');
                     // Get the response message
                     return await this.getLastMessage();
                 } else if (data.status === 'failed') {
@@ -4290,7 +4290,7 @@ Do not omit references.`;
                                 try {
                                     const arr = JSON.parse(plain || '[]');
                                     this.chatHistory = Array.isArray(arr) ? arr.slice(-this.maxHistoryItems) : [];
-                                    console.log(`Loaded ${this.chatHistory.length} encrypted legacy messages for user: ${userId}`);
+                                    if (window.__devLog) window.__devLog(`Loaded ${this.chatHistory.length} encrypted legacy messages for user: ${userId}`);
                                     this.displayChatHistory();
                                 } catch {
                                     this.chatHistory = [];
@@ -4299,18 +4299,18 @@ Do not omit references.`;
                             });
                             return;
                         } else {
-                            console.warn('Encrypted legacy history present but crypto not ready');
+                            if (window.__devWarn) window.__devWarn('Encrypted legacy history present but crypto not ready');
                             this.chatHistory = [];
                         }
                     } else if (Array.isArray(parsed)) {
                         this.chatHistory = parsed.slice(-this.maxHistoryItems);
-                        console.log(`Loaded ${this.chatHistory.length} chat history items for user: ${userId}`);
+                        if (window.__devLog) window.__devLog(`Loaded ${this.chatHistory.length} chat history items for user: ${userId}`);
                         this.displayChatHistory();
                     } else {
-                        console.log('No valid legacy history found');
+                        if (window.__devLog) window.__devLog('No valid legacy history found');
                     }
                 } else {
-                    console.log(`No chat history found for user: ${userId}`);
+                    if (window.__devLog) window.__devLog(`No chat history found for user: ${userId}`);
                 }
             }
         } catch (error) {
@@ -4440,7 +4440,7 @@ Do not omit references.`;
                 `;
             }
             
-            console.log(`Cleared chat history for thread: ${this.threadId}`);
+            if (window.__devLog) window.__devLog(`Cleared chat history for thread: ${this.threadId}`);
         } catch (error) {
             console.error('Failed to clear chat history:', error);
         }
