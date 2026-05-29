@@ -84,7 +84,7 @@ class LiberAppsControlPanel {
         }
 
         // Check Firebase availability first - REQUIRED
-        console.log('Checking Firebase availability...');
+        if (window.__devLog) window.__devLog('Checking Firebase availability...');
         
         // Wait for Firebase to be fully initialized (listen to event + poll)
         let attempts = 0;
@@ -119,30 +119,30 @@ class LiberAppsControlPanel {
             return;
         }
         
-        console.log('✅ Firebase is available and initialized');
+        if (window.__devLog) window.__devLog('✅ Firebase is available and initialized');
 
         // Initialize modules in order
         if (window.cryptoManager) {
-            console.log('Crypto module initialized');
+            if (window.__devLog) window.__devLog('Crypto module initialized');
         }
 
         if (window.authManager) {
-            console.log('Auth module initialized');
+            if (window.__devLog) window.__devLog('Auth module initialized');
         }
 
         if (window.dashboardManager) {
-            console.log('Dashboard module initialized');
+            if (window.__devLog) window.__devLog('Dashboard module initialized');
         }
 
         if (window.appsManager) {
-            console.log('Apps module initialized');
+            if (window.__devLog) window.__devLog('Apps module initialized');
         }
 
         if (window.usersManager) {
-            console.log('Users module initialized');
+            if (window.__devLog) window.__devLog('Users module initialized');
         }
         
-        console.log('LIBER/APPS initialized successfully');
+        if (window.__devLog) window.__devLog('LIBER/APPS initialized successfully');
 
         // Listen for admin force reload broadcast
         try{
@@ -246,10 +246,10 @@ class LiberAppsControlPanel {
     handleVisibilityChange() {
         if (document.hidden) {
             // Page is hidden (user switched tabs)
-            console.log('Page hidden');
+            if (window.__devLog) window.__devLog('Page hidden');
         } else {
             // Page is visible again
-            console.log('Page visible');
+            if (window.__devLog) window.__devLog('Page visible');
             // Refresh data if needed
             if (window.dashboardManager) {
                 window.dashboardManager.loadOverview();

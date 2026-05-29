@@ -317,16 +317,31 @@
   async function ensureAdmin() {
     try {
       const parent = window.parent || window.top;
-      if (parent && parent.dashboardManager?._isAdminSession) return true;
-      if (parent && parent.authManager?.isAdmin?.()) return true;
+      // Wait briefly for parent dashboard to finish its updateNavigation()
+      if (parent && parent !== window) {
+        let waited = 0;
+        while (waited < 3000) {
+          if (parent.dashboardManager?._isAdminSession) return true;
+          // Also check if parent explicitly resolved non-admin (navigation ran but role isn't admin)
+          if (parent.dashboardManager && waited > 500 && parent.dashboardManager._isAdminSession === false) break;
+          await new Promise((r) => setTimeout(r, 100));
+          waited += 100;
+        }
+        if (parent.authManager?.isAdmin?.()) return true;
+      }
     } catch (_) {}
+    // Fallback: use parent's Firebase service if available (avoids re-init in iframe)
     const fs = getFirebaseService();
     const me = fs?.auth?.currentUser;
     if (!me || !fs?.db) return false;
-    const userDoc = await fb().getDoc(fb().doc(fs.db, 'users', me.uid));
-    const docExists = typeof userDoc?.exists === 'function' ? userDoc.exists() : !!userDoc?.exists;
-    const role = docExists ? (userDoc.data()?.role || 'user') : 'user';
-    return String(role).toLowerCase() === 'admin';
+    try {
+      const userDoc = await fb().getDoc(fb().doc(fs.db, 'users', me.uid));
+      const docExists = typeof userDoc?.exists === 'function' ? userDoc.exists() : !!userDoc?.exists;
+      const role = docExists ? (userDoc.data()?.role || 'user') : 'user';
+      return String(role).toLowerCase() === 'admin';
+    } catch (_) {
+      return false;
+    }
   }
 
   function formatDate(v) {

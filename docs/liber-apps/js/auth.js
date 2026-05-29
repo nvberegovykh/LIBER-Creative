@@ -39,7 +39,7 @@ class AuthManager {
             this.checkUrlActions();
             
             // Debug Gist configuration
-            console.log('=== Auto-debugging Gist configuration ===');
+            if (window.__devLog) window.__devLog('=== Auto-debugging Gist configuration ===');
             await window.secureKeyManager.debugGistConfig();
             
             // Wait for Firebase to be available
@@ -52,7 +52,7 @@ class AuthManager {
             }
             
             if (!window.firebaseService || !window.firebaseService.isInitialized) {
-                console.warn('⚠️ Firebase service not available after waiting, continuing without user data');
+                if (window.__devWarn) window.__devWarn('⚠️ Firebase service not available after waiting, continuing without user data');
                 return;
             }
             
@@ -114,7 +114,7 @@ class AuthManager {
      * Debug user storage and show current state
      */
     async debugUserStorage() {
-        console.log('=== Debugging User Storage ===');
+        if (window.__devLog) window.__devLog('=== Debugging User Storage ===');
         
         // First check raw storage
         this.checkRawStorage();
@@ -122,8 +122,8 @@ class AuthManager {
         try {
             // Check current users in encrypted storage
             const users = await this.getUsers();
-            console.log('Users in encrypted storage:', users.length);
-            console.log('All users:', users);
+            if (window.__devLog) window.__devLog('Users in encrypted storage:', users.length);
+            if (window.__devLog) window.__devLog('All users:', users);
             
             // Check legacy storage with proper error handling
             let legacyUsers = [];
@@ -134,27 +134,27 @@ class AuthManager {
                     if (legacyData.startsWith('[') || legacyData.startsWith('{')) {
                         legacyUsers = JSON.parse(legacyData);
                     } else {
-                        console.log('Legacy data is not JSON (likely encrypted):', legacyData.substring(0, 20) + '...');
+                        if (window.__devLog) window.__devLog('Legacy data is not JSON (likely encrypted):', legacyData.substring(0, 20) + '...');
                     }
                 }
             } catch (parseError) {
-                console.log('Legacy data parsing failed (likely encrypted data):', parseError.message);
+                if (window.__devLog) window.__devLog('Legacy data parsing failed (likely encrypted data):', parseError.message);
             }
             
-            console.log('Users in legacy storage:', legacyUsers.length);
-            console.log('Legacy users:', legacyUsers);
+            if (window.__devLog) window.__devLog('Users in legacy storage:', legacyUsers.length);
+            if (window.__devLog) window.__devLog('Legacy users:', legacyUsers);
             
             // Check if we need to migrate
             if (legacyUsers.length > 0 && users.length === 0) {
-                console.log('Found legacy users, attempting migration...');
+                if (window.__devLog) window.__devLog('Found legacy users, attempting migration...');
                 await this.saveUsers(legacyUsers);
                 localStorage.removeItem('liber_users');
-                console.log('Migration completed');
+                if (window.__devLog) window.__devLog('Migration completed');
             }
             
             // Show current state after migration
             const finalUsers = await this.getUsers();
-            console.log('Final user count:', finalUsers.length);
+            if (window.__devLog) window.__devLog('Final user count:', finalUsers.length);
             
         } catch (error) {
             console.error('Debug error:', error);
@@ -340,7 +340,7 @@ class AuthManager {
         // First validate email exists, then attempt password; track failures
         if (window.firebaseService && window.firebaseService.isInitialized) {
             try {
-                console.log('Attempting Firebase login (email/password)...');
+                if (window.__devLog) window.__devLog('Attempting Firebase login (email/password)...');
                 if (!this.isValidEmail(email)){
                     this.showMessage('Please enter a valid email address', 'error');
                     return;
@@ -478,7 +478,7 @@ class AuthManager {
             // Firebase registration is REQUIRED
             if (window.firebaseService && window.firebaseService.isInitialized) {
                 try {
-                    console.log('Attempting Firebase registration...');
+                    if (window.__devLog) window.__devLog('Attempting Firebase registration...');
                     
                     // Check if user already exists in Firebase
                     const existingMethods = await window.firebaseService.auth.fetchSignInMethodsForEmail(email);
@@ -664,7 +664,7 @@ class AuthManager {
         }
 
         try {
-            console.log('Password reset requested for email:', email);
+            if (window.__devLog) window.__devLog('Password reset requested for email:', email);
             
             // Wait for Firebase to be fully initialized
             let attempts = 0;
@@ -677,7 +677,7 @@ class AuthManager {
             
             // Use Firebase password reset if available
             if (window.firebaseService && window.firebaseService.isInitialized) {
-                console.log('Using Firebase password reset...');
+                if (window.__devLog) window.__devLog('Using Firebase password reset...');
                 await window.firebaseService.sendPasswordResetEmail(email);
                 this.showMessage('Password reset link sent to your email. Please check your inbox. The letter may appear in your spam folder.', 'success');
             } else {
@@ -720,7 +720,7 @@ class AuthManager {
         }
 
         try {
-            console.log('Resend verification requested for email:', email);
+            if (window.__devLog) window.__devLog('Resend verification requested for email:', email);
             
             // Wait for Firebase to be fully initialized
             let attempts = 0;
@@ -733,7 +733,7 @@ class AuthManager {
             
             // Use Firebase resend verification if available
             if (window.firebaseService && window.firebaseService.isInitialized) {
-                console.log('Using Firebase resend verification...');
+                if (window.__devLog) window.__devLog('Using Firebase resend verification...');
                 
                 // First, try to sign in the user to get the current user object
                 try {
@@ -779,10 +779,10 @@ class AuthManager {
      * Handle password reset with token
      */
     async handlePasswordResetWithToken(token, email, newPassword, confirmPassword) {
-        console.log('=== Password Reset Process ===');
-        console.log('Email:', email);
-        console.log('Token:', token);
-        console.log('New password length:', newPassword.length);
+        if (window.__devLog) window.__devLog('=== Password Reset Process ===');
+        if (window.__devLog) window.__devLog('Email:', email);
+        if (window.__devLog) window.__devLog('Token:', token);
+        if (window.__devLog) window.__devLog('New password length:', newPassword.length);
         
         if (!newPassword || !confirmPassword) {
             this.showMessage('Please enter both password fields', 'error');
@@ -802,17 +802,17 @@ class AuthManager {
         try {
             // Use Firebase password reset if available
             if (window.firebaseService && window.firebaseService.isInitialized) {
-                console.log('Using Firebase password reset...');
+                if (window.__devLog) window.__devLog('Using Firebase password reset...');
                 
-                console.log('Step 1: Verifying reset code...');
+                if (window.__devLog) window.__devLog('Step 1: Verifying reset code...');
                 // Verify the reset code with Firebase
                 const verifiedEmail = await window.firebaseService.verifyPasswordResetCode(token);
-                console.log('Reset code verified for email:', verifiedEmail);
+                if (window.__devLog) window.__devLog('Reset code verified for email:', verifiedEmail);
                 
-                console.log('Step 2: Confirming password reset...');
+                if (window.__devLog) window.__devLog('Step 2: Confirming password reset...');
                 // Confirm the password reset
                 await window.firebaseService.confirmPasswordReset(token, newPassword);
-                console.log('Password reset confirmed successfully');
+                if (window.__devLog) window.__devLog('Password reset confirmed successfully');
                 
                 this.showMessage('Password updated successfully! You can now login with your new password.', 'success');
                 return true;
@@ -883,37 +883,37 @@ class AuthManager {
         }
 
         if (action && token && email) {
-            console.log('=== URL Action Detected ===');
-            console.log('Action:', action);
-            console.log('Token:', token);
-            console.log('Email:', email);
+            if (window.__devLog) window.__devLog('=== URL Action Detected ===');
+            if (window.__devLog) window.__devLog('Action:', action);
+            if (window.__devLog) window.__devLog('Token:', token);
+            if (window.__devLog) window.__devLog('Email:', email);
             
             // Check if we've already processed this verification
             const processedKey = `processed_${action}_${token}_${email}`;
-            console.log('Processing key:', processedKey);
-            console.log('Already processed:', sessionStorage.getItem(processedKey));
+            if (window.__devLog) window.__devLog('Processing key:', processedKey);
+            if (window.__devLog) window.__devLog('Already processed:', sessionStorage.getItem(processedKey));
             
             if (sessionStorage.getItem(processedKey)) {
-                console.log('Verification already processed, skipping...');
+                if (window.__devLog) window.__devLog('Verification already processed, skipping...');
                 // Clear URL parameters
                 window.history.replaceState({}, document.title, window.location.pathname);
                 return;
             }
 
             if (action === 'verify') {
-                console.log('Starting email verification...');
+                if (window.__devLog) window.__devLog('Starting email verification...');
                 try {
                     await this.handleEmailVerification(token, email);
-                    console.log('Email verification completed successfully');
+                    if (window.__devLog) window.__devLog('Email verification completed successfully');
                     // Mark as processed
                     sessionStorage.setItem(processedKey, 'true');
-                    console.log('Marked as processed in session storage');
+                    if (window.__devLog) window.__devLog('Marked as processed in session storage');
                 } catch (error) {
                     console.error('Email verification failed:', error);
                     // Don't mark as processed if it failed
                 }
             } else if (action === 'reset') {
-                console.log('Starting password reset...');
+                if (window.__devLog) window.__devLog('Starting password reset...');
                 this.showPasswordResetForm(token, email);
                 // Mark as processed
                 sessionStorage.setItem(processedKey, 'true');
@@ -996,17 +996,17 @@ class AuthManager {
 
     async login(username, password) {
         try {
-            console.log('Attempting login for:', username);
+            if (window.__devLog) window.__devLog('Attempting login for:', username);
             
             // Check admin credentials first
             const adminCreds = await this.getAdminCredentials();
-            console.log('Admin credentials loaded:', !!adminCreds);
+            if (window.__devLog) window.__devLog('Admin credentials loaded:', !!adminCreds);
             
             if (username === adminCreds.username) {
-                console.log('Admin login attempt');
+                if (window.__devLog) window.__devLog('Admin login attempt');
                 // Verify admin password using hash comparison
                 const inputHash = await this.generateAdminHash(password);
-                console.log('Admin hash comparison:', inputHash === adminCreds.passwordHash);
+                if (window.__devLog) window.__devLog('Admin hash comparison:', inputHash === adminCreds.passwordHash);
                 
                 if (inputHash === adminCreds.passwordHash) {
                     this.currentUser = { 
@@ -1015,38 +1015,38 @@ class AuthManager {
                         role: adminCreds.role
                     };
                     this.createSession();
-                    console.log('Admin login successful');
+                    if (window.__devLog) window.__devLog('Admin login successful');
                     return true;
                 }
             }
 
             // Check regular users
-            console.log('Checking regular users');
+            if (window.__devLog) window.__devLog('Checking regular users');
             const users = await this.getUsers();
-            console.log('Users loaded:', users.length);
+            if (window.__devLog) window.__devLog('Users loaded:', users.length);
             
             const user = users.find(u => u.username === username || u.email === username);
-            console.log('User found:', !!user);
+            if (window.__devLog) window.__devLog('User found:', !!user);
             
             if (user) {
                 // Check if user is verified (for email verification) or approved (for admin approval)
                 if (!user.isVerified && user.status !== 'approved') {
-                    console.log('User not verified or approved');
+                    if (window.__devLog) window.__devLog('User not verified or approved');
                     return false;
                 }
                 
                 const hashedPassword = await window.cryptoManager.hashPassword(password);
-                console.log('Password hash comparison:', user.passwordHash === hashedPassword);
+                if (window.__devLog) window.__devLog('Password hash comparison:', user.passwordHash === hashedPassword);
                 
                 if (user.passwordHash === hashedPassword) {
                     this.currentUser = user;
                     this.createSession();
-                    console.log('User login successful');
+                    if (window.__devLog) window.__devLog('User login successful');
                     return true;
                 }
             }
 
-            console.log('Login failed - no matching credentials');
+            if (window.__devLog) window.__devLog('Login failed - no matching credentials');
             return false;
         } catch (error) {
             console.error('Login error:', error);
@@ -1086,18 +1086,18 @@ class AuthManager {
 
     async loadUsers() {
         try {
-            console.log('=== loadUsers called ===');
+            if (window.__devLog) window.__devLog('=== loadUsers called ===');
             const masterKey = await this.getMasterKey();
-            console.log('Master key obtained:', !!masterKey, 'Length:', masterKey ? masterKey.length : 0);
+            if (window.__devLog) window.__devLog('Master key obtained:', !!masterKey, 'Length:', masterKey ? masterKey.length : 0);
             
             const users = await window.cryptoManager.secureRetrieve('liber_users', masterKey);
-            console.log('secureRetrieve result:', users);
-            console.log('Users type:', typeof users);
-            console.log('Users is array:', Array.isArray(users));
+            if (window.__devLog) window.__devLog('secureRetrieve result:', users);
+            if (window.__devLog) window.__devLog('Users type:', typeof users);
+            if (window.__devLog) window.__devLog('Users is array:', Array.isArray(users));
             
             const result = users || [];
-            console.log('Final result:', result);
-            console.log('Result length:', result.length);
+            if (window.__devLog) window.__devLog('Final result:', result);
+            if (window.__devLog) window.__devLog('Result length:', result.length);
             
             return result;
         } catch (error) {
@@ -1110,9 +1110,9 @@ class AuthManager {
         // Firebase-only implementation - no local storage fallback
         if (window.firebaseService && window.firebaseService.isInitialized) {
             try {
-                console.log('Loading users from Firebase...');
+                if (window.__devLog) window.__devLog('Loading users from Firebase...');
                 const users = await window.firebaseService.getAllUsers();
-                console.log('Firebase users loaded:', users.length);
+                if (window.__devLog) window.__devLog('Firebase users loaded:', users.length);
                 return users;
             } catch (error) {
                 console.error('Failed to load users from Firebase:', error);
@@ -1120,7 +1120,7 @@ class AuthManager {
                 return [];
             }
         } else {
-            console.warn('⚠️ Firebase not available - getUsers requires Firebase. No fallback.');
+            if (window.__devWarn) window.__devWarn('⚠️ Firebase not available - getUsers requires Firebase. No fallback.');
             // Return empty array instead of throwing error to prevent app crashes
             return [];
         }
@@ -1130,13 +1130,13 @@ class AuthManager {
         // Firebase-only implementation - no local storage fallback
         if (window.firebaseService && window.firebaseService.isInitialized) {
             try {
-                console.log('=== saveUsers called (Firebase) ===');
-                console.log('Users to save:', users);
-                console.log('Users count:', users.length);
+                if (window.__devLog) window.__devLog('=== saveUsers called (Firebase) ===');
+                if (window.__devLog) window.__devLog('Users to save:', users);
+                if (window.__devLog) window.__devLog('Users count:', users.length);
                 
                 // Note: Firebase doesn't have a bulk save method, so this is mainly for compatibility
                 // Individual user operations should use Firebase methods directly
-                console.log('Firebase users are managed individually, not bulk saved');
+                if (window.__devLog) window.__devLog('Firebase users are managed individually, not bulk saved');
                 return true;
             } catch (error) {
                 console.error('Error with Firebase users:', error);
@@ -1152,10 +1152,10 @@ class AuthManager {
         // Firebase-only implementation - no local storage fallback
         if (window.firebaseService && window.firebaseService.isInitialized) {
             try {
-                console.log('Adding user via Firebase...');
+                if (window.__devLog) window.__devLog('Adding user via Firebase...');
                 // Note: User creation should use Firebase Auth directly
                 // This method is mainly for compatibility
-                console.log('User creation should use Firebase Auth methods directly');
+                if (window.__devLog) window.__devLog('User creation should use Firebase Auth methods directly');
                 return true;
             } catch (error) {
                 console.error('Error adding user via Firebase:', error);
@@ -1171,13 +1171,13 @@ class AuthManager {
         // Firebase-only implementation - no local storage fallback
         if (window.firebaseService && window.firebaseService.isInitialized) {
             try {
-                console.log('Deleting user via Firebase...');
+                if (window.__devLog) window.__devLog('Deleting user via Firebase...');
                 const users = await window.firebaseService.getAllUsers();
                 const user = users.find(u => u.username === username || u.email === username);
                 
                 if (user) {
                     await window.firebaseService.deleteUser(user.id);
-                    console.log(`User ${username} deleted successfully`);
+                    if (window.__devLog) window.__devLog(`User ${username} deleted successfully`);
                     return true;
                 }
                 return false;
@@ -1195,7 +1195,7 @@ class AuthManager {
         // Firebase-only implementation - no local storage fallback
         if (window.firebaseService && window.firebaseService.isInitialized) {
             try {
-                console.log('Approving user via Firebase...');
+                if (window.__devLog) window.__devLog('Approving user via Firebase...');
                 const users = await window.firebaseService.getAllUsers();
                 const user = users.find(u => u.username === username || u.email === username);
                 
@@ -1205,7 +1205,7 @@ class AuthManager {
                         approvedBy: this.currentUser?.username || 'admin',
                         approvedAt: new Date().toISOString()
                     });
-                    console.log(`User ${username} approved successfully`);
+                    if (window.__devLog) window.__devLog(`User ${username} approved successfully`);
                     return true;
                 }
                 return false;
@@ -1223,13 +1223,13 @@ class AuthManager {
         // Firebase-only implementation - no local storage fallback
         if (window.firebaseService && window.firebaseService.isInitialized) {
             try {
-                console.log('Rejecting user via Firebase...');
+                if (window.__devLog) window.__devLog('Rejecting user via Firebase...');
                 const users = await window.firebaseService.getAllUsers();
                 const user = users.find(u => u.username === username || u.email === username);
                 
                 if (user) {
                     await window.firebaseService.deleteUser(user.id);
-                    console.log(`User ${username} rejected and deleted successfully`);
+                    if (window.__devLog) window.__devLog(`User ${username} rejected and deleted successfully`);
                     return true;
                 }
                 return false;
@@ -1330,7 +1330,7 @@ class AuthManager {
             // Sign out from Firebase if available
             if (window.firebaseService && window.firebaseService.isInitialized) {
                 await window.firebaseService.signOutUser();
-                console.log('Firebase sign out successful');
+                if (window.__devLog) window.__devLog('Firebase sign out successful');
             }
         } catch (error) {
             console.error('Firebase sign out error:', error);
@@ -1435,18 +1435,18 @@ class AuthManager {
      * Setup mobile WALL-E toggle for login screen
      */
     setupMobileWallEToggle() {
-        console.log('setupMobileWallEToggle called');
+        if (window.__devLog) window.__devLog('setupMobileWallEToggle called');
         const toggleBtn = document.getElementById('mobile-wall-e-toggle-btn');
-        console.log('Toggle button found:', !!toggleBtn);
+        if (window.__devLog) window.__devLog('Toggle button found:', !!toggleBtn);
         
         if (toggleBtn) {
-            console.log('Setting up event listener for toggle button');
+            if (window.__devLog) window.__devLog('Setting up event listener for toggle button');
             // Remove any existing event listeners
             const newToggleBtn = toggleBtn.cloneNode(true);
             toggleBtn.parentNode.replaceChild(newToggleBtn, toggleBtn);
             
             newToggleBtn.addEventListener('click', async (e) => {
-                console.log('WALL-E toggle button clicked!', e);
+                if (window.__devLog) window.__devLog('WALL-E toggle button clicked!', e);
                 
                 // Check if widget is already active
                 const widget = document.querySelector('.chatgpt-widget');
@@ -1454,21 +1454,21 @@ class AuthManager {
                 
                 if (isWidgetActive) {
                     // Widget is active, hide it
-                    console.log('Hiding WALL-E widget...');
+                    if (window.__devLog) window.__devLog('Hiding WALL-E widget...');
                     widget.classList.remove('mobile-activated');
                     sessionStorage.removeItem('wallE_activated_on_login');
                     return;
                 }
                 
                 // Widget is not active, show it
-                console.log('Showing WALL-E widget...');
+                if (window.__devLog) window.__devLog('Showing WALL-E widget...');
                 
                 // Wait for WALL-E widget to be initialized
                 let attempts = 0;
                 const maxAttempts = 30; // Increased attempts
                 
                 while ((!window.wallE || !document.querySelector('.chatgpt-widget')) && attempts < maxAttempts) {
-                    console.log(`Waiting for WALL-E widget... attempt ${attempts + 1}`);
+                    if (window.__devLog) window.__devLog(`Waiting for WALL-E widget... attempt ${attempts + 1}`);
                     await new Promise(resolve => setTimeout(resolve, 100));
                     attempts++;
                 }
@@ -1481,33 +1481,33 @@ class AuthManager {
                 // Force create widget if it doesn't exist
                 let widgetToShow = document.querySelector('.chatgpt-widget');
                 if (!widgetToShow && window.wallE.createChatInterface) {
-                    console.log('Forcing widget creation...');
+                    if (window.__devLog) window.__devLog('Forcing widget creation...');
                     window.wallE.createChatInterface();
                     widgetToShow = document.querySelector('.chatgpt-widget');
                 }
                 
                 if (widgetToShow) {
-                    console.log('WALL-E widget found, showing it...');
+                    if (window.__devLog) window.__devLog('WALL-E widget found, showing it...');
                     
                     // Use CSS class instead of inline styles for better compatibility
                     widgetToShow.classList.add('mobile-activated');
                     
                     // Expand the widget
                     if (window.wallE && typeof window.wallE.expandChat === 'function') {
-                        console.log('Expanding WALL-E widget...');
+                        if (window.__devLog) window.__devLog('Expanding WALL-E widget...');
                         window.wallE.expandChat();
                     }
                     
                     // Store state that WALL-E was activated on login screen
                     sessionStorage.setItem('wallE_activated_on_login', 'true');
                     
-                    console.log('WALL-E widget successfully activated on login screen');
+                    if (window.__devLog) window.__devLog('WALL-E widget successfully activated on login screen');
                 } else {
                     console.error('WALL-E widget element not found even after creation attempt');
                 }
             });
             
-            console.log('Event listener attached successfully');
+            if (window.__devLog) window.__devLog('Event listener attached successfully');
         } else {
             console.error('Mobile WALL-E toggle button not found in DOM');
         }
@@ -1517,11 +1517,11 @@ class AuthManager {
      * Test function to debug user storage
      */
     async testUserStorage() {
-        console.log('=== Testing User Storage ===');
+        if (window.__devLog) window.__devLog('=== Testing User Storage ===');
         
         // Check current users
         const users = await this.getUsers();
-        console.log('Current users:', users);
+        if (window.__devLog) window.__devLog('Current users:', users);
         
         // Check legacy storage (safely)
         let legacyUsers = [];
@@ -1531,9 +1531,9 @@ class AuthManager {
                 legacyUsers = JSON.parse(legacyData);
             }
         } catch (error) {
-            console.log('Legacy data parsing failed (likely encrypted):', error.message);
+            if (window.__devLog) window.__devLog('Legacy data parsing failed (likely encrypted):', error.message);
         }
-        console.log('Legacy users:', legacyUsers);
+        if (window.__devLog) window.__devLog('Legacy users:', legacyUsers);
         
         // Test saving a user
         const testUser = {
@@ -1546,13 +1546,13 @@ class AuthManager {
             createdAt: new Date().toISOString()
         };
         
-        console.log('Testing save with user:', testUser);
+        if (window.__devLog) window.__devLog('Testing save with user:', testUser);
         const saveResult = await this.saveUsers([testUser]);
-        console.log('Save result:', saveResult);
+        if (window.__devLog) window.__devLog('Save result:', saveResult);
         
         // Check if user was saved
         const savedUsers = await this.getUsers();
-        console.log('Users after save:', savedUsers);
+        if (window.__devLog) window.__devLog('Users after save:', savedUsers);
         
         return saveResult;
     }
@@ -1561,28 +1561,28 @@ class AuthManager {
      * Debug verification process
      */
     async debugVerification(email) {
-        console.log('=== Debugging Verification for:', email, '===');
+        if (window.__devLog) window.__devLog('=== Debugging Verification for:', email, '===');
         
         try {
             const users = await this.getUsers();
-            console.log('All users:', users);
+            if (window.__devLog) window.__devLog('All users:', users);
             
             const user = users.find(u => u.email === email);
-            console.log('User found:', user);
+            if (window.__devLog) window.__devLog('User found:', user);
             
             if (user) {
-                console.log('User verification status:', user.isVerified);
-                console.log('User verification token:', user.verificationToken);
-                console.log('Token created:', user.verificationTokenCreated);
-                console.log('Token age (hours):', (Date.now() - user.verificationTokenCreated) / (60 * 60 * 1000));
+                if (window.__devLog) window.__devLog('User verification status:', user.isVerified);
+                if (window.__devLog) window.__devLog('User verification token:', user.verificationToken);
+                if (window.__devLog) window.__devLog('Token created:', user.verificationTokenCreated);
+                if (window.__devLog) window.__devLog('Token age (hours):', (Date.now() - user.verificationTokenCreated) / (60 * 60 * 1000));
             }
             
             // Test verification process
             if (user && user.verificationToken) {
-                console.log('Testing verification with token:', user.verificationToken);
+                if (window.__devLog) window.__devLog('Testing verification with token:', user.verificationToken);
                 try {
                     const verifiedUser = await window.emailService.verifyToken(user.verificationToken, email);
-                    console.log('Verification successful:', verifiedUser);
+                    if (window.__devLog) window.__devLog('Verification successful:', verifiedUser);
                 } catch (error) {
                     console.error('Verification failed:', error);
                 }
@@ -1597,7 +1597,7 @@ class AuthManager {
      * Test function to manually create a user and verify storage
      */
     async testCreateUser() {
-        console.log('=== Testing User Creation ===');
+        if (window.__devLog) window.__devLog('=== Testing User Creation ===');
         
         try {
             const testUser = {
@@ -1613,23 +1613,23 @@ class AuthManager {
                 createdAt: new Date().toISOString()
             };
             
-            console.log('Creating test user:', testUser);
+            if (window.__devLog) window.__devLog('Creating test user:', testUser);
             
             // Get current users
             const currentUsers = await this.getUsers();
-            console.log('Current users before:', currentUsers.length);
+            if (window.__devLog) window.__devLog('Current users before:', currentUsers.length);
             
             // Add test user
             currentUsers.push(testUser);
             
             // Save users
             const saveResult = await this.saveUsers(currentUsers);
-            console.log('Save result:', saveResult);
+            if (window.__devLog) window.__devLog('Save result:', saveResult);
             
             // Verify user was saved
             const savedUsers = await this.getUsers();
-            console.log('Users after save:', savedUsers.length);
-            console.log('Test user in storage:', savedUsers.find(u => u.id === testUser.id));
+            if (window.__devLog) window.__devLog('Users after save:', savedUsers.length);
+            if (window.__devLog) window.__devLog('Test user in storage:', savedUsers.find(u => u.id === testUser.id));
             
             return saveResult;
             
@@ -1643,31 +1643,31 @@ class AuthManager {
      * Check and fix user verification status
      */
     async checkUserVerificationStatus(email) {
-        console.log('=== Checking User Verification Status ===');
-        console.log('Email:', email);
+        if (window.__devLog) window.__devLog('=== Checking User Verification Status ===');
+        if (window.__devLog) window.__devLog('Email:', email);
         
         try {
             const users = await this.getUsers();
             const user = users.find(u => u.email === email);
             
             if (user) {
-                console.log('User found:', user);
-                console.log('isVerified:', user.isVerified);
-                console.log('status:', user.status);
-                console.log('verificationToken:', user.verificationToken);
+                if (window.__devLog) window.__devLog('User found:', user);
+                if (window.__devLog) window.__devLog('isVerified:', user.isVerified);
+                if (window.__devLog) window.__devLog('status:', user.status);
+                if (window.__devLog) window.__devLog('verificationToken:', user.verificationToken);
                 
                 // If user is verified but status is not approved, fix it
                 if (user.isVerified && user.status !== 'approved') {
-                    console.log('Fixing user status...');
+                    if (window.__devLog) window.__devLog('Fixing user status...');
                     user.status = 'approved';
                     const updatedUsers = users.map(u => u.email === email ? user : u);
                     await this.saveUsers(updatedUsers);
-                    console.log('User status fixed to approved');
+                    if (window.__devLog) window.__devLog('User status fixed to approved');
                 }
                 
                 return user;
             } else {
-                console.log('User not found');
+                if (window.__devLog) window.__devLog('User not found');
                 return null;
             }
         } catch (error) {
@@ -1680,16 +1680,16 @@ class AuthManager {
      * Check raw storage data to see what's actually stored
      */
     checkRawStorage() {
-        console.log('=== Checking Raw Storage Data ===');
+        if (window.__devLog) window.__devLog('=== Checking Raw Storage Data ===');
         
         // Check all localStorage keys
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
             const value = localStorage.getItem(key);
-            console.log(`Key: ${key}`);
-            console.log(`Value (first 50 chars): ${value ? value.substring(0, 50) + '...' : 'null'}`);
-            console.log(`Value length: ${value ? value.length : 0}`);
-            console.log('---');
+            if (window.__devLog) window.__devLog(`Key: ${key}`);
+            if (window.__devLog) window.__devLog(`Value (first 50 chars): ${value ? value.substring(0, 50) + '...' : 'null'}`);
+            if (window.__devLog) window.__devLog(`Value length: ${value ? value.length : 0}`);
+            if (window.__devLog) window.__devLog('---');
         }
     }
 }
@@ -1699,33 +1699,33 @@ window.authManager = new AuthManager();
 
 // Add global debug function for easy console access
 window.debugUser = async function(email) {
-    console.log('=== Quick User Debug ===');
-    console.log('Email:', email);
+    if (window.__devLog) window.__devLog('=== Quick User Debug ===');
+    if (window.__devLog) window.__devLog('Email:', email);
     
     try {
         const users = await window.authManager.getUsers();
         const user = users.find(u => u.email === email);
         
         if (user) {
-            console.log('✅ User found:', user);
-            console.log('📧 Email:', user.email);
-            console.log('👤 Username:', user.username);
-            console.log('✅ Verified:', user.isVerified);
-            console.log('📋 Status:', user.status);
-            console.log('🔑 Token:', user.verificationToken);
-            console.log('📅 Created:', user.createdAt);
+            if (window.__devLog) window.__devLog('✅ User found:', user);
+            if (window.__devLog) window.__devLog('📧 Email:', user.email);
+            if (window.__devLog) window.__devLog('👤 Username:', user.username);
+            if (window.__devLog) window.__devLog('✅ Verified:', user.isVerified);
+            if (window.__devLog) window.__devLog('📋 Status:', user.status);
+            if (window.__devLog) window.__devLog('🔑 Token:', user.verificationToken);
+            if (window.__devLog) window.__devLog('📅 Created:', user.createdAt);
             
             if (user.isVerified && user.status !== 'approved') {
-                console.log('⚠️ User is verified but status is not approved - fixing...');
+                if (window.__devLog) window.__devLog('⚠️ User is verified but status is not approved - fixing...');
                 user.status = 'approved';
                 const updatedUsers = users.map(u => u.email === email ? user : u);
                 await window.authManager.saveUsers(updatedUsers);
-                console.log('✅ Status fixed to approved');
+                if (window.__devLog) window.__devLog('✅ Status fixed to approved');
             }
             
             return user;
         } else {
-            console.log('❌ User not found');
+            if (window.__devLog) window.__devLog('❌ User not found');
             return null;
         }
     } catch (error) {
@@ -1736,15 +1736,15 @@ window.debugUser = async function(email) {
 
 // Add manual verification function
 window.manualVerify = async function(email) {
-    console.log('=== Manual Verification ===');
-    console.log('Email:', email);
+    if (window.__devLog) window.__devLog('=== Manual Verification ===');
+    if (window.__devLog) window.__devLog('Email:', email);
     
     try {
         const users = await window.authManager.getUsers();
         const user = users.find(u => u.email === email);
         
         if (user) {
-            console.log('✅ User found, manually verifying...');
+            if (window.__devLog) window.__devLog('✅ User found, manually verifying...');
             
             // Manually set verification status
             user.isVerified = true;
@@ -1757,13 +1757,13 @@ window.manualVerify = async function(email) {
             const updatedUsers = users.map(u => u.email === email ? user : u);
             const saveResult = await window.authManager.saveUsers(updatedUsers);
             
-            console.log('✅ Manual verification completed');
-            console.log('Save result:', saveResult);
-            console.log('Updated user:', user);
+            if (window.__devLog) window.__devLog('✅ Manual verification completed');
+            if (window.__devLog) window.__devLog('Save result:', saveResult);
+            if (window.__devLog) window.__devLog('Updated user:', user);
             
             return user;
         } else {
-            console.log('❌ User not found');
+            if (window.__devLog) window.__devLog('❌ User not found');
             return null;
         }
     } catch (error) {
@@ -1774,36 +1774,36 @@ window.manualVerify = async function(email) {
 
 // Add test verification function to test the actual verification process
 window.testVerification = async function(email, token) {
-    console.log('=== Testing Verification Process ===');
-    console.log('Email:', email);
-    console.log('Token:', token);
+    if (window.__devLog) window.__devLog('=== Testing Verification Process ===');
+    if (window.__devLog) window.__devLog('Email:', email);
+    if (window.__devLog) window.__devLog('Token:', token);
     
     try {
         // Test step 1: Get users
-        console.log('Step 1: Getting users...');
+        if (window.__devLog) window.__devLog('Step 1: Getting users...');
         const users = await window.authManager.getUsers();
-        console.log('Users loaded:', users.length);
+        if (window.__devLog) window.__devLog('Users loaded:', users.length);
         
         // Test step 2: Find user
-        console.log('Step 2: Finding user...');
+        if (window.__devLog) window.__devLog('Step 2: Finding user...');
         const user = users.find(u => u.email === email && u.verificationToken === token);
-        console.log('User found:', !!user);
+        if (window.__devLog) window.__devLog('User found:', !!user);
         if (user) {
-            console.log('User data:', user);
+            if (window.__devLog) window.__devLog('User data:', user);
         }
         
         // Test step 3: Call email service verification
-        console.log('Step 3: Calling email service verification...');
+        if (window.__devLog) window.__devLog('Step 3: Calling email service verification...');
         const verifiedUser = await window.emailService.verifyToken(token, email);
-        console.log('Verification result:', verifiedUser);
+        if (window.__devLog) window.__devLog('Verification result:', verifiedUser);
         
         // Test step 4: Check if user was actually saved
-        console.log('Step 4: Checking if user was saved...');
+        if (window.__devLog) window.__devLog('Step 4: Checking if user was saved...');
         const updatedUsers = await window.authManager.getUsers();
         const savedUser = updatedUsers.find(u => u.email === email);
-        console.log('Saved user:', savedUser);
-        console.log('Is verified:', savedUser?.isVerified);
-        console.log('Status:', savedUser?.status);
+        if (window.__devLog) window.__devLog('Saved user:', savedUser);
+        if (window.__devLog) window.__devLog('Is verified:', savedUser?.isVerified);
+        if (window.__devLog) window.__devLog('Status:', savedUser?.status);
         
         return verifiedUser;
     } catch (error) {
@@ -1814,27 +1814,27 @@ window.testVerification = async function(email, token) {
 
 // Add function to refresh admin panel and check user status
 window.refreshAdminPanel = async function() {
-    console.log('=== Refreshing Admin Panel ===');
+    if (window.__devLog) window.__devLog('=== Refreshing Admin Panel ===');
     
     try {
         // Refresh users in admin panel
         if (window.usersManager) {
             await window.usersManager.loadUsers();
-            console.log('Admin panel refreshed');
+            if (window.__devLog) window.__devLog('Admin panel refreshed');
         } else {
-            console.log('Users manager not available');
+            if (window.__devLog) window.__devLog('Users manager not available');
         }
         
         // Check current user status
         const users = await window.authManager.getUsers();
         const user = users.find(u => u.email === 'emelianen63@gmail.com');
         if (user) {
-            console.log('Current user status:');
-            console.log('- Email:', user.email);
-            console.log('- Username:', user.username);
-            console.log('- isVerified:', user.isVerified);
-            console.log('- status:', user.status);
-            console.log('- verificationToken:', user.verificationToken);
+            if (window.__devLog) window.__devLog('Current user status:');
+            if (window.__devLog) window.__devLog('- Email:', user.email);
+            if (window.__devLog) window.__devLog('- Username:', user.username);
+            if (window.__devLog) window.__devLog('- isVerified:', user.isVerified);
+            if (window.__devLog) window.__devLog('- status:', user.status);
+            if (window.__devLog) window.__devLog('- verificationToken:', user.verificationToken);
         }
         
     } catch (error) {
@@ -1844,7 +1844,7 @@ window.refreshAdminPanel = async function() {
 
 // Add function to create a test user
 window.createTestUser = async function() {
-    console.log('=== Creating Test User ===');
+    if (window.__devLog) window.__devLog('=== Creating Test User ===');
     
     try {
         const testUser = {
@@ -1863,11 +1863,11 @@ window.createTestUser = async function() {
         users.push(testUser);
         
         const saveResult = await window.authManager.saveUsers(users);
-        console.log('Test user created:', saveResult);
-        console.log('Test user credentials:');
-        console.log('- Username: nvberegovykh');
-        console.log('- Email: nvberegovykh@gmail.com');
-        console.log('- Password: testpassword123');
+        if (window.__devLog) window.__devLog('Test user created:', saveResult);
+        if (window.__devLog) window.__devLog('Test user credentials:');
+        if (window.__devLog) window.__devLog('- Username: nvberegovykh');
+        if (window.__devLog) window.__devLog('- Email: nvberegovykh@gmail.com');
+        if (window.__devLog) window.__devLog('- Password: testpassword123');
         
         return saveResult;
     } catch (error) {
@@ -1878,7 +1878,7 @@ window.createTestUser = async function() {
 
 // Add comprehensive migration function
 window.migrateAllUsersToFirebase = async function() {
-    console.log('=== Migrating All Users to Firebase ===');
+    if (window.__devLog) window.__devLog('=== Migrating All Users to Firebase ===');
     
     try {
         // Check if Firebase is available
@@ -1889,10 +1889,10 @@ window.migrateAllUsersToFirebase = async function() {
         
         // Get existing users from local storage
         const localUsers = await window.authManager.getUsers();
-        console.log('Found local users:', localUsers.length);
+        if (window.__devLog) window.__devLog('Found local users:', localUsers.length);
         
         if (localUsers.length === 0) {
-            console.log('No local users to migrate');
+            if (window.__devLog) window.__devLog('No local users to migrate');
             return true;
         }
         
@@ -1901,13 +1901,13 @@ window.migrateAllUsersToFirebase = async function() {
         
         for (const localUser of localUsers) {
             try {
-                console.log(`Migrating user: ${localUser.email}`);
+                if (window.__devLog) window.__devLog(`Migrating user: ${localUser.email}`);
                 
                 // Check if user already exists in Firebase
                 const existingMethods = await window.firebaseService.auth.fetchSignInMethodsForEmail(localUser.email);
                 
                 if (existingMethods.length > 0) {
-                    console.log(`User ${localUser.email} already exists in Firebase`);
+                    if (window.__devLog) window.__devLog(`User ${localUser.email} already exists in Firebase`);
                     migratedCount++;
                     continue;
                 }
@@ -1928,7 +1928,7 @@ window.migrateAllUsersToFirebase = async function() {
                 const firebaseUser = await window.firebaseService.createUser(localUser.email, tempPassword, userData);
                 
                 if (firebaseUser) {
-                    console.log(`✅ Successfully migrated user: ${localUser.email}`);
+                    if (window.__devLog) window.__devLog(`✅ Successfully migrated user: ${localUser.email}`);
                     migratedCount++;
                 } else {
                     console.error(`❌ Failed to migrate user: ${localUser.email}`);
@@ -1941,12 +1941,12 @@ window.migrateAllUsersToFirebase = async function() {
             }
         }
         
-        console.log(`=== Migration Complete ===`);
-        console.log(`✅ Successfully migrated: ${migratedCount} users`);
-        console.log(`❌ Failed to migrate: ${failedCount} users`);
+        if (window.__devLog) window.__devLog(`=== Migration Complete ===`);
+        if (window.__devLog) window.__devLog(`✅ Successfully migrated: ${migratedCount} users`);
+        if (window.__devLog) window.__devLog(`❌ Failed to migrate: ${failedCount} users`);
         
         if (migratedCount > 0) {
-            console.log('📧 Sending password reset emails to migrated users...');
+            if (window.__devLog) window.__devLog('📧 Sending password reset emails to migrated users...');
             await window.sendPasswordResetEmailsToMigratedUsers();
         }
         
@@ -1960,7 +1960,7 @@ window.migrateAllUsersToFirebase = async function() {
 
 // Add function to send password reset emails to migrated users
 window.sendPasswordResetEmailsToMigratedUsers = async function() {
-    console.log('=== Sending Password Reset Emails to Migrated Users ===');
+    if (window.__devLog) window.__devLog('=== Sending Password Reset Emails to Migrated Users ===');
     
     try {
         if (!window.firebaseService || !window.firebaseService.isInitialized) {
@@ -1971,12 +1971,12 @@ window.sendPasswordResetEmailsToMigratedUsers = async function() {
         const firebaseUsers = await window.firebaseService.getAllUsers();
         const migratedUsers = firebaseUsers.filter(user => user.migratedFromLocalStorage && user.needsPasswordReset);
         
-        console.log(`Found ${migratedUsers.length} migrated users needing password reset`);
+        if (window.__devLog) window.__devLog(`Found ${migratedUsers.length} migrated users needing password reset`);
         
         for (const user of migratedUsers) {
             try {
                 await window.firebaseService.sendPasswordResetEmail(user.email);
-                console.log(`✅ Password reset email sent to: ${user.email}`);
+                if (window.__devLog) window.__devLog(`✅ Password reset email sent to: ${user.email}`);
                 
                 // Mark as password reset sent
                 await window.firebaseService.updateUserData(user.id, {
@@ -1989,7 +1989,7 @@ window.sendPasswordResetEmailsToMigratedUsers = async function() {
             }
         }
         
-        console.log('✅ Password reset emails sent to migrated users');
+        if (window.__devLog) window.__devLog('✅ Password reset emails sent to migrated users');
         
     } catch (error) {
         console.error('Error sending password reset emails:', error);
