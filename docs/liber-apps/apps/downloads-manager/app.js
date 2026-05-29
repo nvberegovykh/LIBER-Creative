@@ -293,7 +293,8 @@
     const me = fs?.auth?.currentUser;
     if (!me || !fs?.db) return false;
     const userDoc = await fb().getDoc(fb().doc(fs.db, 'users', me.uid));
-    const role = userDoc?.exists ? (userDoc.data()?.role || 'user') : 'user';
+    const docExists = typeof userDoc?.exists === 'function' ? userDoc.exists() : !!userDoc?.exists;
+    const role = docExists ? (userDoc.data()?.role || 'user') : 'user';
     return String(role).toLowerCase() === 'admin';
   }
 
@@ -594,8 +595,25 @@
     } catch (_) {}
   }
 
+  async function ensureFirebaseReady() {
+    let attempts = 0;
+    while (attempts < 150) {
+      const svc = getFirebaseService();
+      if (svc && svc.isInitialized) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      attempts += 1;
+    }
+    throw new Error('Firebase failed to initialize in time');
+  }
+
   async function init() {
     byId('back-btn')?.addEventListener('click', backToDashboard);
+    try {
+      await ensureFirebaseReady();
+    } catch (e) {
+      showDenied('Could not connect to the database. Please refresh and try again.');
+      return;
+    }
     const ok = await ensureAdmin();
     if (!ok) {
       showDenied('Downloads Manager is for administrators only.');
