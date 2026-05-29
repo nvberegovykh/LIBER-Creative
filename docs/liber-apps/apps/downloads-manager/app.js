@@ -271,16 +271,47 @@
         .map((r) => String(r.githubRepo || '').trim())
         .filter(Boolean)
     ));
-    if (!repos.length) return rows || [];
-
-    const fs = getFirebaseService();
-    const me = fs?.auth?.currentUser;
-    for (const key of repos) {
-      const [owner, repo] = key.split('/');
-      if (!owner || !repo) continue;
-      try { await syncGithubRepoLatest({ owner, repo, key }, me?.uid || ''); } catch (_) {}
+    // Return existing rows immediately so the UI renders now.
+    // Sync GitHub releases in the background and re-render when done.
+    if (repos.length) {
+      const fs = getFirebaseService();
+      const me = fs?.auth?.currentUser;
+      Promise.resolve().then(async () => {
+        let changed = false;
+        for (const key of repos) {
+          const [owner, repo] = key.split('/');
+          if (!owner || !repo) continue;
+          try {
+            await syncGithubRepoLatest({ owner, repo, key }, me?.uid || '');
+            changed = true;
+          } catch (_) {}
+        }
+        if (changed) {
+          try { renderRows(await loadRowsRaw()); } catch (_) {}
+        }
+      });
     }
-    return loadRows();
+    return rows || [];
+  }
+
+  // Raw load without auto-refresh to avoid recursion
+  async function loadRowsRaw() {
+    const fs = getFirebaseService();
+    if (!fs?.db) return [];
+    try {
+      const q = fb().query(
+        fb().collection(fs.db, COLLECTION),
+        fb().orderBy('updatedAt', 'desc'),
+        fb().limit(400)
+      );
+      const snap = await fb().getDocs(q);
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    } catch (e) {
+      const snap = await fb().getDocs(fb().collection(fs.db, COLLECTION));
+      return snap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
+    }
   }
 
   async function ensureAdmin() {
@@ -312,25 +343,8 @@
   }
 
   async function loadRows() {
-    const fs = getFirebaseService();
-    if (!fs?.db) return [];
-    try {
-      const q = fb().query(
-        fb().collection(fs.db, COLLECTION),
-        fb().orderBy('updatedAt', 'desc'),
-        fb().limit(400)
-      );
-      const snap = await fb().getDocs(q);
-      const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      return maybeAutoRefreshGithubRows(rows);
-    } catch (e) {
-      // fallback when composite indexes/order are not ready
-      const snap = await fb().getDocs(fb().collection(fs.db, COLLECTION));
-      const rows = snap.docs
-        .map((d) => ({ id: d.id, ...d.data() }))
-        .sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
-      return maybeAutoRefreshGithubRows(rows);
-    }
+    const rows = await loadRowsRaw();
+    return maybeAutoRefreshGithubRows(rows);
   }
 
   function composeDescription(row, source, fileName) {
