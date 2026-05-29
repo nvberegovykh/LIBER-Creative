@@ -18,6 +18,24 @@
     return code || 'en';
   }
 
+  // ── Static bundle lookup ──────────────────────────────────────────────────
+  // window.LiberI18nBundle is loaded from /components/i18n-bundle.js
+  // Shape: { lang: { normalizedSource: translation } }
+  function normalizeSource(s){
+    return String(s || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function lookupBundle(lang, source){
+    const b = window.LiberI18nBundle;
+    if (!b) return null;
+    const langMap = b[lang];
+    if (!langMap) return null;
+    const norm = normalizeSource(source);
+    const hit = langMap[norm];
+    return (hit && hit !== norm) ? hit : null;
+  }
+
+  // ── localStorage cache ────────────────────────────────────────────────────
   function loadCache(){
     if (cache) return cache;
     try{
@@ -43,6 +61,7 @@
     return `${lang}::${text}`;
   }
 
+  // ── DOM helpers ────────────────────────────────────────────────────────────
   function shouldSkipElement(el){
     if (!(el instanceof Element)) return true;
     const tag = String(el.tagName || '').toLowerCase();
@@ -134,6 +153,7 @@
     }catch(_){ }
   }
 
+  // ── LLM fallback ──────────────────────────────────────────────────────────
   function extractJsonObject(text){
     const raw = String(text || '').trim();
     if (!raw) return null;
@@ -190,7 +210,6 @@
       return out.filter((s)=> String(s || '').length > 0);
     };
 
-    // Long strings are split to keep translator outputs stable and complete.
     const expanded = [];
     const plan = list.map((source)=>{
       const parts = splitLongText(source, SPLIT_CHUNK_LENGTH);
@@ -237,6 +256,7 @@
     return {};
   }
 
+  // ── Main translate routine ────────────────────────────────────────────────
   async function translateRoot(root, lang){
     const targetRoot = root || document.body;
     const code = normalizeLang(lang);
@@ -253,17 +273,30 @@
     const entry = { pending: false, promise: null };
     inFlightByLang.set(runKey, entry);
 
+    // Resolve a translation for a source string using all 3 layers:
+    // 1. static bundle (instant, no network)
+    // 2. localStorage cache (instant, persisted from prior LLM calls)
+    // 3. LLM (async, stored back into cache)
+    function resolveStatic(source){
+      return lookupBundle(code, source) || null;
+    }
+
     const applyFromStore = (nodes, attrNodes, store, onlySources = null)=>{
       const allow = onlySources instanceof Set ? onlySources : null;
       if (latestLangByNode.get(nodeId) !== code) return false;
       nodes.forEach(({ el, source })=>{
         if (allow && !allow.has(source)) return;
-        const next = String(store[getCacheKey(code, source)] || source).trim() || source;
+        // prefer bundle hit over cache
+        const next = resolveStatic(source)
+          || String(store[getCacheKey(code, source)] || source).trim()
+          || source;
         if (el && next && el.textContent !== next) el.textContent = next;
       });
       attrNodes.forEach(({ el, source, attr })=>{
         if (allow && !allow.has(source)) return;
-        const next = String(store[getCacheKey(code, source)] || source).trim() || source;
+        const next = resolveStatic(source)
+          || String(store[getCacheKey(code, source)] || source).trim()
+          || source;
         if (el && attr && next && el.getAttribute(attr) !== next) el.setAttribute(attr, next);
       });
       return true;
@@ -298,10 +331,16 @@
           uniq.push(source);
         });
 
-        // Apply cached translations immediately for snappy toggles.
+        // Apply bundle + cache immediately — zero network latency for known strings.
         if (!applyFromStore(nodes, attrNodes, store)) continue;
 
-        const missing = uniq.filter((s)=> !store[getCacheKey(code, s)]);
+        // Only call LLM for strings not in bundle AND not in cache.
+        const missing = uniq.filter((s)=>{
+          if (resolveStatic(s)) return false;          // bundle hit → skip
+          if (store[getCacheKey(code, s)]) return false; // cache hit → skip
+          return true;
+        });
+
         const chunkSize = 20;
         for (let i = 0; i < missing.length; i += chunkSize){
           if (latestLangByNode.get(nodeId) !== code) break;
@@ -330,4 +369,3 @@
     }
   };
 })();
-

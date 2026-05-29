@@ -1362,20 +1362,27 @@ class AuthManager {
             widget.style.display = 'none';
         }
         
-        // One-time prefill email for switch-account fallback.
+        // One-time prefill email for switch-account flow.
         try{
             const email = sessionStorage.getItem('liber_switch_prefill_email') || localStorage.getItem('liber_prefill_email');
             if (email){
                 const el = document.getElementById('loginUsername');
                 if (el){ el.value = email; }
+                // Email already known — drop cursor straight into password field.
+                setTimeout(()=>{
+                    try{
+                        const passEl = document.getElementById('loginPassword');
+                        if (passEl){ passEl.focus(); }
+                    }catch(_){ }
+                }, 50);
             }
-            // Always clear persistent prefill to avoid leaking into unrelated fields.
+            // Clear prefill after a short grace period to avoid leaking into unrelated forms.
             setTimeout(()=>{
                 try{
                     sessionStorage.removeItem('liber_switch_prefill_email');
                     localStorage.removeItem('liber_prefill_email');
                 }catch(_){ }
-            }, 800);
+            }, 2000);
         }catch(_){ }
 
         // Setup mobile WALL-E toggle for login screen
@@ -1409,6 +1416,55 @@ class AuthManager {
 
     getCurrentUser() {
         return this.currentUser;
+    }
+
+    /**
+     * Called by firebase-service onAuthStateChanged after any Firebase auth state change.
+     * Rebuilds the app session in-place — no page reload needed.
+     * Skipped if authManager already has this uid as currentUser (initial login path).
+     */
+    onFirebaseUserChanged(firebaseUser) {
+        if (!firebaseUser) return;
+        const newUid = firebaseUser.uid;
+        // Already the active user — nothing to do.
+        if (this.currentUser && (this.currentUser.id === newUid || this.currentUser.uid === newUid)) return;
+        // This is a NEW user (account switch completed via signInWithCustomToken or re-auth).
+        // Rebuild session from Firestore profile.
+        (async () => {
+            try {
+                let role = 'user';
+                let username = firebaseUser.displayName || firebaseUser.email || '';
+                try {
+                    const data = await window.firebaseService.getUserData(newUid);
+                    if (data) {
+                        role = data.role || 'user';
+                        username = data.username || username;
+                    }
+                } catch (_) { }
+                this.currentUser = {
+                    id: newUid,
+                    uid: newUid,
+                    username,
+                    email: firebaseUser.email || '',
+                    role
+                };
+                this.createSession();
+                // Show dashboard if we're on the auth screen, or re-init if already on dashboard.
+                const authScreen = document.getElementById('auth-screen');
+                const dashboard = document.getElementById('dashboard');
+                if (authScreen && !authScreen.classList.contains('hidden')) {
+                    this.showDashboard();
+                } else if (dashboard && !dashboard.classList.contains('hidden')) {
+                    // Already on dashboard — just refresh header info and re-init.
+                    this.updateUserInfo();
+                    if (window.dashboardManager) {
+                        try { window.dashboardManager.init(); } catch (_) { }
+                    }
+                }
+            } catch (e) {
+                console.error('onFirebaseUserChanged rebuild failed:', e);
+            }
+        })();
     }
 
     /**

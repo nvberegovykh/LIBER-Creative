@@ -4680,109 +4680,55 @@ class DashboardManager {
                 layer.querySelectorAll('.acct-row').forEach(row=>{
                     row.onclick = async ()=>{
                         const uid = row.getAttribute('data-uid'); if (!uid) return;
+                        // Same account — just close.
+                        if (uid === currentUid){ try{ layer.remove(); }catch(_){ } return; }
                         try{
-                            const fnErrors = [];
-                            const callSwitchFn = async (name, payload)=>{
-                                const fs = window.firebaseService;
-                                const preferred = (()=>{ try{ return localStorage.getItem('liber_functions_region') || 'europe-west1'; }catch(_){ return 'europe-west1'; } })();
-                                const regions = [preferred, 'europe-west1'].filter((v,i,a)=> v && a.indexOf(v)===i);
-                                const errs = [];
-                                for (const r of regions){
-                                    try{
-                                        if (window.firebaseModular?.httpsCallable && fs?.app){
-                                            const f = (fs.functionsByRegion && fs.functionsByRegion[r])
-                                                ? fs.functionsByRegion[r]
-                                                : (window.firebaseModular.getFunctions ? window.firebaseModular.getFunctions(fs.app, r) : null);
-                                            if (!f) throw new Error('functions unavailable');
-                                            const callable = window.firebaseModular.httpsCallable(f, name);
-                                            const res = await callable(payload);
-                                            return (res && res.data) || null;
-                                        }
-                                    }catch(e){
-                                        const code = e?.code || '';
-                                        const msg = e?.message || '';
-                                        errs.push(`${name}@${r}[callable]: ${code}${msg ? ` (${msg})` : ''}`.trim());
-                                    }
-                                }
-                                throw new Error(errs.join(' | '));
-                            };
-                            const callFnMaybe = async (name, payload)=>{
-                                try{ return await callSwitchFn(name, payload); }
-                                catch(e){
-                                    fnErrors.push(`${name}: ${e?.message || e}`);
-                                    return null;
-                                }
-                            };
-                            const deviceId = this.getOrCreateDeviceId();
-                            // Refresh current account seed token before attempting a switch.
+                            try{ layer.remove(); }catch(_){ }
+                            // Sign out current Firebase user, then route to login prefilled with the
+                            // target account's email. onFirebaseUserChanged in auth.js will rebuild
+                            // the session in-place once the user logs in — no full page reload needed.
+                            const acc = (accounts||[]).find(a=> a.uid === uid);
+                            const prefill = (acc && (acc.email || acc.username)) || '';
+                            // Store prefill before sign-out so the showAuthScreen handler picks it up.
                             try{
-                                const ua = navigator.userAgent || '';
-                                const seed = await callFnMaybe('saveSwitchToken', { deviceId, ua });
-                                const tok = seed && seed.token;
-                                if (tok){
-                                    const meNow = await window.firebaseService.getCurrentUser();
-                                    if (meNow && meNow.uid){
-                                        const rawT = localStorage.getItem('liber_switch_tokens');
-                                        const mapT = rawT ? JSON.parse(rawT) : {};
-                                        mapT[meNow.uid] = tok;
-                                        localStorage.setItem('liber_switch_tokens', JSON.stringify(mapT));
+                                if (prefill){
+                                    sessionStorage.setItem('liber_switch_prefill_email', prefill);
+                                    localStorage.setItem('liber_prefill_email', prefill);
+                                }
+                            }catch(_){ }
+                            // Sign out from Firebase (clears Firebase auth state).
+                            try{
+                                if (window.firebaseService && window.firebaseService.auth){
+                                    if (typeof firebase !== 'undefined' && firebase.signOut){
+                                        await firebase.signOut(window.firebaseService.auth);
+                                    } else if (window.firebaseModular && window.firebaseModular.signOut){
+                                        await window.firebaseModular.signOut(window.firebaseService.auth);
                                     }
                                 }
                             }catch(_){ }
-                            let tokenMap = JSON.parse(localStorage.getItem('liber_switch_tokens')||'{}');
-                            let token = tokenMap[uid];
-                            // If selecting current account, just close
-                            if (uid === currentUid){ try{ layer.remove(); }catch(_){ } return; }
-                            let isAdmin = false;
+                            // Clear session so authManager does not restore old user.
                             try{
-                                const meData = await window.firebaseService.getUserData(currentUid);
-                                isAdmin = String(meData?.role || 'user').toLowerCase() === 'admin';
-                            }catch(_){ isAdmin = false; }
-                            let customToken = null;
-                            // Cache-proof same-device switch (requires both accounts seeded on this device).
-                            const byDevice = await callFnMaybe('switchToByDevice', { uid, deviceId });
-                            customToken = byDevice?.customToken || null;
-                            // Secondary fallback: direct admin-issued custom token.
-                            // Server enforces admin role, so it's safe to attempt unconditionally.
-                            if (!customToken && isAdmin){
-                                const adminSw = await callFnMaybe('adminSwitchToUser', { uid });
-                                customToken = adminSw?.customToken || null;
+                                if (window.authManager) window.authManager.currentUser = null;
+                                localStorage.removeItem('liber_session');
+                                localStorage.removeItem('liber_current_user');
+                            }catch(_){ }
+                            // Show auth screen with login tab and pre-filled email.
+                            const authScreen = document.getElementById('auth-screen');
+                            const dashboard = document.getElementById('dashboard');
+                            if (authScreen && dashboard){ dashboard.classList.add('hidden'); authScreen.classList.remove('hidden'); }
+                            if (window.authManager){
+                                if (typeof window.authManager.switchTab === 'function') window.authManager.switchTab('login');
+                                if (typeof window.authManager.showAuthScreen === 'function') window.authManager.showAuthScreen();
                             }
-                            if (!customToken){
-                                // Do NOT reload on failed switch. Route to login with one-time prefill.
-                                const acc = (accounts||[]).find(a=> (a.uid===uid));
-                                const prefill = (acc && (acc.email || acc.username)) || '';
+                            // Pre-fill email and focus password field for fastest possible login.
+                            setTimeout(()=>{
                                 try{
-                                    if (prefill){
-                                        sessionStorage.setItem('liber_switch_prefill_email', prefill);
-                                        localStorage.setItem('liber_prefill_email', prefill);
-                                    }
+                                    const emailInput = document.getElementById('loginUsername');
+                                    const passInput = document.getElementById('loginPassword');
+                                    if (emailInput && prefill){ emailInput.value = prefill; }
+                                    if (passInput){ passInput.focus(); } else if (emailInput){ emailInput.focus(); }
                                 }catch(_){ }
-                                try{ layer.remove(); }catch(_){ }
-                                const authScreen = document.getElementById('auth-screen');
-                                const dashboard = document.getElementById('dashboard');
-                                if (authScreen && dashboard){ dashboard.classList.add('hidden'); authScreen.classList.remove('hidden'); }
-                                if (window.authManager && typeof window.authManager.switchTab==='function'){ window.authManager.switchTab('login'); }
-                                const emailInput = document.getElementById('loginUsername'); if (emailInput && prefill){ emailInput.value = prefill; emailInput.focus(); }
-                                if (fnErrors.length){
-                                    console.warn('Instant switch call errors:', fnErrors.join(' | '));
-                                }
-                                const onlyByDeviceDenied = fnErrors.length > 0 && fnErrors.every((s)=> /switchToByDevice/i.test(s) && /permission-denied/i.test(s));
-                                if (onlyByDeviceDenied){
-                                    this.showInfo('Target account needs one login on this device first, then instant switch will work.');
-                                } else {
-                                    this.showError('Instant switch unavailable. Log in once for this account on this device.');
-                                }
-                                return;
-                            }
-                            if (firebase.signInWithCustomToken) {
-                                await firebase.signInWithCustomToken(window.firebaseService.auth, customToken);
-                            } else if (window.firebaseModular && window.firebaseModular.signInWithCustomToken) {
-                                await window.firebaseModular.signInWithCustomToken(window.firebaseService.auth, customToken);
-                            } else {
-                                throw new Error('signInWithCustomToken API not available');
-                            }
-                            window.location.reload();
+                            }, 80);
                         }catch(e){ console.error('Switch failed', e); this.showError('Switch failed'); }
                     };
                 });
