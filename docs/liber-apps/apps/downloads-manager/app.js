@@ -320,12 +320,14 @@
       // Wait briefly for parent dashboard to finish its updateNavigation()
       if (parent && parent !== window) {
         let waited = 0;
-        while (waited < 3000) {
-          if (parent.dashboardManager?._isAdminSession) return true;
-          // Also check if parent explicitly resolved non-admin (navigation ran but role isn't admin)
-          if (parent.dashboardManager && waited > 500 && parent.dashboardManager._isAdminSession === false) break;
+        while (waited < 4000) {
+          if (parent.dashboardManager?._isAdminSession === true) return true;
           await new Promise((r) => setTimeout(r, 100));
           waited += 100;
+        }
+        // updateNavigation may have set it to false (non-admin user) — respect that
+        if (parent.dashboardManager && '_isAdminSession' in parent.dashboardManager) {
+          if (parent.dashboardManager._isAdminSession === true) return true;
         }
         if (parent.authManager?.isAdmin?.()) return true;
       }
