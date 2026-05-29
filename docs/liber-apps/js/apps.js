@@ -591,7 +591,7 @@ class AppsManager {
             {
                 id: 'whatsapp-monitor',
                 name: 'WhatsApp Monitor',
-                description: 'Scans your WhatsApp Business chats 3× a day, summarizes with AI, and alerts you to what matters. Runs on GitHub Actions — no server needed.',
+                description: 'Scans your WhatsApp Business chats twice a day, summarizes with AI, and alerts you to what matters. Runs on a persistent server — no setup needed.',
                 version: '1.0.0',
                 category: 'utilities',
                 icon: 'fab fa-whatsapp',
