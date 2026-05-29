@@ -234,7 +234,7 @@ class SecureKeyManager {
     async getCorrectAdminHash() {
         // This method should be called with the actual password
         // For security, we don't hardcode the password here
-        console.warn('Please provide the actual admin password to generate the correct hash');
+        if (window.__devWarn) window.__devWarn('Please provide the actual admin password to generate the correct hash');
         return 'HASH_NOT_AVAILABLE';
     }
 

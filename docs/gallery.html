@@ -41,7 +41,7 @@
       rel="stylesheet"
       href="https://unpkg.com/animate.css@4.1.1/animate.css"
     />
-    <link rel="icon" type="image/x-icon" href="/public/liber avatar.ico">
+    <link rel="icon" type="image/x-icon" href="/public/liber%20avatar.ico">
     <link
       rel="shortcut icon"
       href="public/liberlogo2.png"
@@ -125,8 +125,6 @@
                     <fragment class="gallery-fragment11">
                       <span class="gallery-text11">
                         <span>Contact</span>
-                        <br />
-                        <br />
                       </span>
                     </fragment>
                   </a>
@@ -303,7 +301,7 @@
                 <span class="footer15-content3 thq-body-small">
                   <fragment class="gallery-fragment17">
                     <span class="gallery-text26">
-                      © 2024 liber creative llc
+                      © <span id="footer-year">2024</span> liber creative llc
                     </span>
                   </fragment>
                 </span>
@@ -374,5 +372,6 @@
       })();
     </script>
     <script defer="" src="https://unpkg.com/@teleporthq/teleport-custom-scripts"></script>
+    <script>(function(){ var el = document.getElementById('footer-year'); if (el) el.textContent = new Date().getFullYear(); })();</script>
   </body>
 </html>

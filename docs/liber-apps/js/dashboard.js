@@ -3931,7 +3931,7 @@ class DashboardManager {
                     if (mediaEl.paused) mediaEl.play().catch(()=>{});
                 }
             }catch(_){ }
-            if (playBtn){ playBtn.onclick = ()=>{ if (source.paused){ source.play(); } else { source.pause(); } }; }
+            if (playBtn){ playBtn.onclick = ()=>{ if (source.paused){ source.play().catch(()=>{}); } else { source.pause(); } }; }
             if (repeatBtn){
                 repeatBtn.onclick = ()=> this.cycleRepeatMode();
                 this.updateMiniRepeatButton();

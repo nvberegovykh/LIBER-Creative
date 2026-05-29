@@ -19,17 +19,17 @@
   },
   "icons": [
     {
-      "src": "/liber-apps/images/LIBER LOGO.png",
+      "src": "/liber-apps/images/LIBER%20LOGO.png",
       "sizes": "192x192",
       "type": "image/png"
     },
     {
-      "src": "/liber-apps/images/LIBER LOGO.png",
+      "src": "/liber-apps/images/LIBER%20LOGO.png",
       "sizes": "512x512",
       "type": "image/png"
     },
     {
-      "src": "/liber-apps/images/LIBER LOGO.svg",
+      "src": "/liber-apps/images/LIBER%20LOGO.svg",
       "sizes": "any",
       "type": "image/svg+xml"
     }

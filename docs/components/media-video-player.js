@@ -148,6 +148,16 @@
     v.playsInline = true;
     v.autoplay = true;
     v.preload = 'metadata';
+    v.addEventListener('error', ()=> {
+      const host = v.closest('.lvp-video-host') || v.parentElement;
+      if (host && v.parentElement === host) {
+        const msg = document.createElement('div');
+        msg.className = 'lvp-video-error';
+        msg.style.cssText = 'display:flex;align-items:center;justify-content:center;width:100%;height:100%;color:rgba(255,255,255,.6);font-size:14px;text-align:center;padding:16px';
+        msg.textContent = 'Video unavailable';
+        host.replaceChild(msg, v);
+      }
+    });
     v.addEventListener('play', ()=> {
       try{
         window.firebaseService?.trackVideoInteraction?.({

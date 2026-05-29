@@ -81,23 +81,23 @@ class FirebaseService {
      */
     async init() {
         try {
-            console.log('=== Firebase Service Initialization ===');
+            if (window.__devLog) window.__devLog('=== Firebase Service Initialization ===');
             
             // Wait for Firebase SDK to be available (modular SDK loads asynchronously)
             await this.waitForFirebaseSDK();
             
-            console.log('✅ Firebase SDK is available');
-            console.log('Firebase version:', firebase.SDK_VERSION);
+            if (window.__devLog) window.__devLog('✅ Firebase SDK is available');
+            if (window.__devLog) window.__devLog('Firebase version:', firebase.SDK_VERSION);
             
             // Wait for secure keys to be loaded
-            console.log('Waiting for secure keys...');
+            if (window.__devLog) window.__devLog('Waiting for secure keys...');
             await this.waitForSecureKeys();
-            console.log('Secure keys loaded');
+            if (window.__devLog) window.__devLog('Secure keys loaded');
             
             // Get Firebase configuration from secure keys
-            console.log('Getting Firebase config...');
+            if (window.__devLog) window.__devLog('Getting Firebase config...');
             const firebaseConfig = await this.getFirebaseConfig();
-            console.log('Firebase config loaded:', !!firebaseConfig);
+            if (window.__devLog) window.__devLog('Firebase config loaded:', !!firebaseConfig);
             
             if (!firebaseConfig) {
                 throw new Error('❌ Firebase configuration is required but not found in secure keys. Please add Firebase configuration to your Gist.');
@@ -113,9 +113,9 @@ class FirebaseService {
             }
             
             // Initialize Firebase with modular SDK
-            console.log('Initializing Firebase app...');
+            if (window.__devLog) window.__devLog('Initializing Firebase app...');
             this.app = firebase.initializeApp(firebaseConfig);
-            console.log('Firebase app created with name:', this.app.name);
+            if (window.__devLog) window.__devLog('Firebase app created with name:', this.app.name);
 
             // Initialize services with modular SDK
             if (window.__devLog) window.__devLog('Initializing Firebase services...');
@@ -155,14 +155,14 @@ class FirebaseService {
                 if (firebase.inMemoryPersistence && firebase.indexedDBLocalPersistence) {
                     try {
                         await firebase.setPersistence(this.auth, firebase.indexedDBLocalPersistence);
-                        console.log('✅ Auth persistence set to IndexedDB');
+                        if (window.__devLog) window.__devLog('✅ Auth persistence set to IndexedDB');
                     } catch (_) {
                         await firebase.setPersistence(this.auth, firebase.browserLocalPersistence);
-                        console.log('✅ Auth persistence set to local storage');
+                        if (window.__devLog) window.__devLog('✅ Auth persistence set to local storage');
                     }
                 } else {
                     await firebase.setPersistence(this.auth, firebase.browserLocalPersistence);
-                    console.log('✅ Auth persistence set to local storage');
+                    if (window.__devLog) window.__devLog('✅ Auth persistence set to local storage');
                 }
             } catch (error) {
                 console.warn('⚠️ Auth persistence setup failed:', error.message);
@@ -180,22 +180,22 @@ class FirebaseService {
                 // when multiple tabs/webviews open with mixed persistence modes.
                 const forceEnable = localStorage.getItem('liber_enable_firestore_persistence') === '1';
                 if (!forceEnable) {
-                    console.log('ℹ️ Firestore persistence disabled for runtime stability');
+                    if (window.__devLog) window.__devLog('ℹ️ Firestore persistence disabled for runtime stability');
                 } else if (firebase.enableMultiTabIndexedDbPersistence) {
                     await firebase.enableMultiTabIndexedDbPersistence(this.db);
-                    console.log('✅ Firestore multi-tab offline persistence enabled');
+                    if (window.__devLog) window.__devLog('✅ Firestore multi-tab offline persistence enabled');
                 } else if (firebase.enableIndexedDbPersistence) {
                     await firebase.enableIndexedDbPersistence(this.db);
-                    console.log('✅ Firestore offline persistence enabled');
+                    if (window.__devLog) window.__devLog('✅ Firestore offline persistence enabled');
                 } else {
-                    console.log('ℹ️ Firestore persistence APIs not exposed; skipping');
+                    if (window.__devLog) window.__devLog('ℹ️ Firestore persistence APIs not exposed; skipping');
                 }
             } catch (error) {
                 console.warn('⚠️ Firestore offline persistence failed:', error.message);
             }
             
             this.isInitialized = true;
-            console.log('✅ Firebase initialized successfully');
+            if (window.__devLog) window.__devLog('✅ Firebase initialized successfully');
 
             // Notify the app that Firebase is ready
             try {
@@ -426,7 +426,7 @@ class FirebaseService {
             // Send email verification
             await firebase.sendEmailVerification(user);
             
-            console.log('User created successfully:', user.uid);
+            if (window.__devLog) window.__devLog('User created successfully:', user.uid);
             return user;
             
         } catch (error) {
@@ -1082,7 +1082,7 @@ class FirebaseService {
                 update.emailLower = (data.email || '').toLowerCase();
             }
             await firebase.updateDoc(userDocRef, update);
-            console.log('User data updated successfully');
+            if (window.__devLog) window.__devLog('User data updated successfully');
         } catch (error) {
             console.error('Error updating user data:', error);
             throw error;
@@ -1157,7 +1157,7 @@ class FirebaseService {
             const user = this.auth.currentUser;
             if (user && !user.emailVerified) {
                 await firebase.sendEmailVerification(user);
-                console.log('Email verification sent');
+                if (window.__devLog) window.__devLog('Email verification sent');
             }
         } catch (error) {
             console.error('Error sending email verification:', error);
@@ -1173,7 +1173,7 @@ class FirebaseService {
         
         try {
             await firebase.sendPasswordResetEmail(this.auth, email);
-            console.log('Password reset email sent');
+            if (window.__devLog) window.__devLog('Password reset email sent');
         } catch (error) {
             console.error('Error sending password reset email:', error);
             throw error;
@@ -1203,7 +1203,7 @@ class FirebaseService {
         
         try {
             await firebase.confirmPasswordReset(this.auth, code, newPassword);
-            console.log('Password reset confirmed');
+            if (window.__devLog) window.__devLog('Password reset confirmed');
         } catch (error) {
             console.error('Error confirming password reset:', error);
             throw error;
@@ -1221,7 +1221,7 @@ class FirebaseService {
                 loginCount: firebase.increment(1),
                 updatedAt: new Date().toISOString()
             });
-            console.log('User last login updated:', uid);
+            if (window.__devLog) window.__devLog('User last login updated:', uid);
         } catch (error) {
             console.error('Error updating user last login:', error);
         }
@@ -1245,7 +1245,7 @@ class FirebaseService {
                 const userDocRef = firebase.doc(this.db, 'users', uid);
                 await firebase.updateDoc(userDocRef, { status: 'approved', isVerified: true, updatedAt: new Date().toISOString() });
             }
-            console.log('User approved:', uid);
+            if (window.__devLog) window.__devLog('User approved:', uid);
         } catch (error) {
             console.error('Error approving user:', error);
             throw error;
@@ -1268,7 +1268,7 @@ class FirebaseService {
                 const userDocRef = firebase.doc(this.db, 'users', uid);
                 await firebase.updateDoc(userDocRef, { status: 'rejected', updatedAt: new Date().toISOString() });
             }
-            console.log('User rejected:', uid);
+            if (window.__devLog) window.__devLog('User rejected:', uid);
         } catch (error) {
             console.error('Error rejecting user:', error);
             throw error;
@@ -1287,7 +1287,7 @@ class FirebaseService {
                 ...profileData,
                 updatedAt: new Date().toISOString()
             });
-            console.log('User profile updated:', uid);
+            if (window.__devLog) window.__devLog('User profile updated:', uid);
         } catch (error) {
             console.error('Error updating user profile:', error);
             throw error;

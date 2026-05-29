@@ -41,7 +41,7 @@
       rel="stylesheet"
       href="https://unpkg.com/animate.css@4.1.1/animate.css"
     />
-    <link rel="icon" type="image/x-icon" href="/public/liber avatar.ico">
+    <link rel="icon" type="image/x-icon" href="/public/liber%20avatar.ico">
     <link
       rel="shortcut icon"
       href="public/liberlogo2.png"
@@ -124,8 +124,6 @@
                     <fragment class="contact-fragment11">
                       <span class="contact-text11">
                         <span>Contact</span>
-                        <br />
-                        <br />
                       </span>
                     </fragment>
                   </a>
@@ -536,7 +534,7 @@
                     <div class="contact6-contact-info2">
                       <h3 class="contact6-text4 thq-heading-3">Phone</h3>
                       <a
-                        href="tel:+1 929 356 1398"
+                        href="tel:+19293561398"
                         class="contact6-text5 thq-body-small"
                       >
                         <fragment class="contact-fragment15">
@@ -650,7 +648,7 @@
                 <span class="footer15-content3 thq-body-small">
                   <fragment class="contact-fragment21">
                     <span class="contact-text30">
-                      © 2024 liber creative llc
+                      © <span id="footer-year">2024</span> liber creative llc
                     </span>
                   </fragment>
                 </span>
@@ -721,5 +719,6 @@
       })();
     </script>
     <script defer="" src="https://unpkg.com/@teleporthq/teleport-custom-scripts"></script>
+    <script>(function(){ var el = document.getElementById('footer-year'); if (el) el.textContent = new Date().getFullYear(); })();</script>
   </body>
 </html>

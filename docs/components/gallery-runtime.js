@@ -1034,6 +1034,21 @@
     const onGalleryMount = opts && typeof opts.onGalleryMount === 'function' ? opts.onGalleryMount : null;
     const hosts = Array.from(document.querySelectorAll('[data-gallery-template]'));
     if (!hosts.length) return;
+    // Show skeleton loader while Firebase/Firestore loads
+    hosts.forEach((host) => {
+      if (!host.innerHTML.trim()) {
+        host.innerHTML = '<div class="gc-skeleton-loader" aria-hidden="true">' +
+          '<div class="gc-sk-row">' +
+          '<div class="gc-sk-card"></div><div class="gc-sk-card"></div><div class="gc-sk-card"></div>' +
+          '</div></div>';
+      }
+    });
+    if (!document.getElementById('gc-skeleton-styles')) {
+      const s = document.createElement('style');
+      s.id = 'gc-skeleton-styles';
+      s.textContent = '.gc-skeleton-loader{padding:24px 0}.gc-sk-row{display:flex;gap:16px;flex-wrap:wrap}.gc-sk-card{flex:1;min-width:220px;height:260px;border-radius:8px;background:linear-gradient(90deg,#1a1a1a 25%,#2a2a2a 50%,#1a1a1a 75%);background-size:200% 100%;animation:gc-shimmer 1.4s infinite}@keyframes gc-shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}';
+      document.head.appendChild(s);
+    }
     try {
       const projects = await loadProjects();
       if (!projects.length) {

@@ -49,7 +49,7 @@
       rel="stylesheet"
       href="https://unpkg.com/animate.css@4.1.1/animate.css"
     />
-    <link rel="icon" type="image/x-icon" href="/public/liber avatar.ico">
+    <link rel="icon" type="image/x-icon" href="/public/liber%20avatar.ico">
     <link
       rel="shortcut icon"
       href="public/liberlogo2.png"
@@ -149,8 +149,6 @@
                     <span class="home-fragment11">
                       <span class="home-text11">
                         <span>Contact</span>
-                        <br />
-                        <br />
                       </span>
                     </span>
                   </a>
@@ -242,11 +240,11 @@
             <h3 class="home-partners-title">Our Partners</h3>
             <div class="home-partners-grid">
               <a href="https://www.unitedofweb.com/" target="_blank" rel="noopener noreferrer" class="home-partner-link" title="United of Web – High-Performance Web Development & SEO in NYC">
-                <img src="https://logo.clearbit.com/unitedofweb.com" alt="United of Web" class="home-partner-logo" onerror="this.src='https://www.google.com/s2/favicons?domain=unitedofweb.com&sz=128';this.alt='United of Web';this.onerror=null">
+                <img src="https://img.logo.dev/unitedofweb.com?token=pk_public" alt="United of Web" class="home-partner-logo" onerror="this.src='https://www.google.com/s2/favicons?domain=unitedofweb.com&sz=128';this.onerror=null">
                 <span class="home-partner-name">United of Web</span>
               </a>
               <a href="https://www.acdegroup.com/" target="_blank" rel="noopener noreferrer" class="home-partner-link" title="ACD&E Group – Architectural & Expediting Services in NYC">
-                <img src="https://logo.clearbit.com/acdegroup.com" alt="ACD&E Group" class="home-partner-logo" onerror="this.src='https://www.google.com/s2/favicons?domain=acdegroup.com&sz=128';this.onerror=null">
+                <img src="https://img.logo.dev/acdegroup.com?token=pk_public" alt="ACD&E Group" class="home-partner-logo" onerror="this.src='https://www.google.com/s2/favicons?domain=acdegroup.com&sz=128';this.onerror=null">
                 <span class="home-partner-name">ACD&E Group</span>
               </a>
             </div>
@@ -347,7 +345,7 @@
                 </div>
                 <span class="footer15-content3 thq-body-small">
                   <span class="home-fragment17">
-                    <span class="home-text26">© 2024 liber creative llc</span>
+                    <span class="home-text26">© <span id="footer-year">2024</span> liber creative llc</span>
                   </span>
                   <span class="home-fragment17">
                     <span class="home-text26">We integrate advanced AI tools into our workflow to streamline research, drafting, and documentation — always finalized and overseen by our team for accuracy and quality.</span>
@@ -453,6 +451,8 @@
           }
         });
       })();
+      // Dynamic copyright year
+      (function(){ var el = document.getElementById('footer-year'); if (el) el.textContent = new Date().getFullYear(); })();
     </script>
   </body>
 </html>
