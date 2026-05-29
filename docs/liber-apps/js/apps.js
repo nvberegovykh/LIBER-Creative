@@ -587,11 +587,26 @@ class AppsManager {
                 lastUpdated: '2026-02-27',
                 logo: null,
                 adminOnly: true
+            },
+            {
+                id: 'whatsapp-monitor',
+                name: 'WhatsApp Monitor',
+                description: 'Scans your WhatsApp Business chats 3× a day, summarizes with AI, and alerts you to what matters. Runs on GitHub Actions — no server needed.',
+                version: '1.0.0',
+                category: 'utilities',
+                icon: 'fab fa-whatsapp',
+                status: 'online',
+                path: '#whatsapp-monitor-external',
+                externalUrl: 'https://github.com/nvberegovykh/liber-whatsapp-monitor',
+                author: 'Liber Apps',
+                lastUpdated: '2026-05-29',
+                logo: null
             }
         ];
 
         const validApps = [];
         for (const app of availableApps) {
+            if (app.externalUrl) { validApps.push(app); continue; }
             if (app.path && app.path.startsWith('#')) { validApps.push(app); continue; }
             try {
                 if ((await fetch(app.path)).ok) validApps.push(app);
@@ -756,6 +771,12 @@ class AppsManager {
         }
 
         try {
+            // External URL apps (e.g. GitHub-hosted tools)
+            if (app.externalUrl) {
+                window.open(app.externalUrl, '_blank', 'noopener,noreferrer');
+                this.showSuccess(`Opening ${app.name}...`);
+                return;
+            }
             // Internal anchors switch sections instead of opening new windows
             if (app.path && app.path.startsWith('#')){
                 const section = app.path.replace('#','');

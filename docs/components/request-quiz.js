@@ -190,15 +190,33 @@
         type: filesToConvert[i].type
       }));
 
-      const callFn = (window.firebaseService || window.parent?.firebaseService)?.callFunction?.bind(window.firebaseService || window.parent?.firebaseService);
-      if (!callFn) throw new Error('Please open this page from liberpict.com to submit your request, or email us directly.');
-      const result = await callFn('submitProjectRequest', {
-        name,
-        email,
-        phone,
-        description,
-        base64Files
-      });
+      const fs = window.firebaseService || window.parent?.firebaseService;
+      const callFn = fs?.callFunction?.bind(fs);
+
+      // Direct HTTP fallback when firebaseService is not available (e.g. opened from contact.html directly)
+      async function submitDirect(data) {
+        const regions = ['europe-west1', 'us-central1'];
+        let lastErr;
+        for (const region of regions) {
+          try {
+            const res = await fetch(`https://${region}-liber-apps-cca20.cloudfunctions.net/submitProjectRequestHttp`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(data)
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(json?.error || json?.message || 'Submission failed');
+            return json;
+          } catch (e) { lastErr = e; }
+        }
+        throw lastErr || new Error('Submission failed. Please try again or email us directly.');
+      }
+
+      const result = callFn
+        ? await callFn('submitProjectRequest', {
+            name, email, phone, description, base64Files
+          })
+        : await submitDirect({ name, email, phone, description, base64Files });
 
       const data = result?.data ?? result;
       if (data?.ok) {
