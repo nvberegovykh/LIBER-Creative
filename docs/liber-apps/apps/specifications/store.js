@@ -13,10 +13,16 @@
   'use strict';
 
   /* ---------- platform bridge ---------- */
+  /* The app runs in an iframe while firebaseService/the Firestore SDK live in the shell
+   * (a different JS realm). Firestore validates payloads with its OWN Object.prototype,
+   * so an object literal built here is rejected as "a custom Object object". Every write
+   * is therefore re-created in the SDK's realm via realm.JSON.parse — see plain(). */
+  let REALM = (typeof window !== 'undefined') ? window : null;
+
   function getFS() {
     try {
       for (const w of [window, window.parent, window.top].filter(Boolean)) {
-        if (w.firebaseService && w.firebaseService.isInitialized) return w.firebaseService;
+        if (w.firebaseService && w.firebaseService.isInitialized) { REALM = w; return w.firebaseService; }
       }
     } catch (_) {}
     return (typeof window !== 'undefined' && window.firebaseService) || null;
@@ -25,10 +31,17 @@
     try {
       if (fs && fs.firebase && typeof fs.firebase.collection === 'function') return fs.firebase;
       for (const w of [window, window.parent, window.top].filter(Boolean)) {
-        if (w.firebase && typeof w.firebase.collection === 'function') return w.firebase;
+        if (w.firebase && typeof w.firebase.collection === 'function') { REALM = w; return w.firebase; }
       }
     } catch (_) {}
     return null;
+  }
+
+  /** Rebuild a payload inside the SDK's realm; also strips undefined and functions. */
+  function plain(v) {
+    let json;
+    try { json = JSON.stringify(v === undefined ? null : v); } catch (_) { return v; }
+    try { return (REALM && REALM.JSON ? REALM.JSON : JSON).parse(json); } catch (_) { return JSON.parse(json); }
   }
 
   const uid4 = () => 'x' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
@@ -139,14 +152,14 @@
         const db = Local.read(); db.projects = db.projects || {};
         const id = uid4(); db.projects[id] = { id, ...data }; Local.write(db); return id;
       }
-      const ref = await this.api.addDoc(this.api.collection(this.db, 'specProjects'), data);
+      const ref = await this.api.addDoc(this.api.collection(this.db, 'specProjects'), plain(data));
       return ref.id;
     },
 
     async updateProject(sid, patch) {
       patch = { ...patch, updatedAt: nowISO() };
       if (!this.isCloud()) { const db = Local.read(); Object.assign(db.projects[sid], patch); Local.write(db); return; }
-      await this.api.updateDoc(this.api.doc(this.db, 'specProjects', sid), patch);
+      await this.api.updateDoc(this.api.doc(this.db, 'specProjects', sid), plain(patch));
     },
 
     async deleteProject(sid) {
@@ -175,13 +188,13 @@
         bucket[id] = merge ? { ...(bucket[id] || {}), ...data, id } : { ...data, id };
         Local.write(db); return id;
       }
-      await this.api.setDoc(this.api.doc(this.db, 'specProjects', sid, kind, id), data, { merge });
+      await this.api.setDoc(this.api.doc(this.db, 'specProjects', sid, kind, id), plain(data), plain({ merge }));
       return id;
     },
 
     async addDocIn(kind, sid, data) {
       if (!this.isCloud()) { const id = uid4(); await this.setDocIn(kind, sid, id, data, false); return id; }
-      const ref = await this.api.addDoc(this.api.collection(this.db, 'specProjects', sid, kind), data);
+      const ref = await this.api.addDoc(this.api.collection(this.db, 'specProjects', sid, kind), plain(data));
       return ref.id;
     },
 
