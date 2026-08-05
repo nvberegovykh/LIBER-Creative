@@ -8,7 +8,7 @@
   const nowISO = () => new Date().toISOString();
 
   const S = {
-    sid: null, project: null, sections: [], items: [], inbox: [],
+    sid: null, project: null, sections: [], items: [], inbox: [], history: [],
     activeSec: null, view: 'book', groupBy: 'none', sortBy: 'order',
     showRemoved: false, filter: '', unsub: [], pending: null
   };
@@ -77,6 +77,7 @@
     $('#btn-sources').onclick = sourcesDialog;
     $('#btn-export').onclick = exportDialog;
     $('#btn-inbox').onclick = inboxDialog;
+    $('#btn-history').onclick = () => S.sid ? historyDialog() : toast('Open a project first');
     $('#dr-close').onclick = closeDrawer;
     $('#scrim').onclick = () => { closeDrawer(); $('#rail').classList.remove('open'); };
     $('#rail-search').oninput = debounce((e) => { S.filter = e.target.value.trim().toLowerCase(); renderRail(); renderContent(); }, 200);
@@ -87,7 +88,13 @@
     $('#group-by').onchange = (e) => { S.groupBy = e.target.value; renderContent(); };
     $('#sort-by').onchange = (e) => { S.sortBy = e.target.value; renderContent(); };
     $('#show-removed').onchange = (e) => { S.showRemoved = e.target.checked; renderContent(); };
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeModal(); closeDrawer(); } });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { closeModal(); closeDrawer(); return; }
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName || '')) || e.target.isContentEditable;
+      if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'z' && !typing && S.sid) {
+        e.preventDefault(); e.shiftKey ? redoLast() : undoLast();
+      }
+    });
   }
 
   function showView(v) {
@@ -149,6 +156,10 @@
     S.unsub.push(ST.subscribe('sections', sid, (rows) => { S.sections = rows; renderRail(); renderContent(); }));
     S.unsub.push(ST.subscribe('items', sid, (rows) => { S.items = rows; renderRail(); renderContent(); }));
     S.unsub.push(ST.subscribe('inbox', sid, (rows) => { S.inbox = rows.filter((r) => r.status !== 'done'); $('#inbox-count').textContent = S.inbox.length; }));
+    S.unsub.push(ST.subscribe('history', sid, (rows) => {
+      S.history = rows.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, ST.HISTORY_MAX);
+      $('#history-count').textContent = S.history.filter((h) => !h.undone).length;
+    }));
     if (S.pending) { const p = S.pending; S.pending = null; addLinkFlow(p); }
     // deep links: ?view=table|issues  &item=<key>  &section=<id>
     const q = new URLSearchParams(location.search);
@@ -203,7 +214,7 @@
 
   /* ---------------- content ---------------- */
   function visibleItems(secId) {
-    let list = itemsOf(secId).filter((i) => S.showRemoved || i.status !== 'removed');
+    let list = itemsOf(secId).filter((i) => i.status !== 'deleted').filter((i) => S.showRemoved || i.status !== 'removed');
     if (S.filter) list = list.filter((i) => JSON.stringify(i).toLowerCase().includes(S.filter));
     const dir = (a, b, k) => String(a[k] == null ? '' : a[k]).localeCompare(String(b[k] == null ? '' : b[k]), undefined, { numeric: true });
     list.sort((a, b) => S.sortBy === 'order' ? (a.order || 0) - (b.order || 0)
@@ -262,13 +273,20 @@
     return `<article class="sp-section" data-sec="${s.id}">${sectionHead(s)}${itemsTable(s, true)}</article>`;
   }
 
+  /* Base grid per section kind, then user columns appended. */
+  function baseCols(s) {
+    return s.kind === 'locations'
+      ? [['mark', 'No.', 0], ['label', 'Room', 0], ['level', 'Level', 0], ['area', 'Area', 0], ['spec', 'Spec / links', 0]]
+      : [['mark', 'Mark', 0], ['label', 'Type', 0], ['level', 'Level', 0], ['qty', 'Qty', 0],
+         ['manufacturer', 'Manufacturer', 1], ['model', 'Model', 1], ['finish', 'Finish', 1], ['spec', 'Status / links', 0]];
+  }
+  const userCols = (s) => (s.columns || []).filter((c) => c && c.id);
+
   function itemsTable(s, wide) {
     const list = visibleItems(s.id);
-    if (!list.length) return `<p class="sp-empty">No items.</p>`;
-    const isLoc = s.kind === 'locations';
-    const cols = isLoc
-      ? [['mark', 'No.'], ['label', 'Room'], ['level', 'Level'], ['area', 'Area'], ['spec', 'Spec / links']]
-      : [['mark', 'Mark'], ['label', 'Type'], ['level', 'Level'], ['qty', 'Qty'], ['manufacturer', 'Manufacturer'], ['model', 'Model'], ['finish', 'Finish'], ['spec', 'Status / links']];
+    const cols = baseCols(s);
+    const ucols = userCols(s);
+    const span = cols.length + ucols.length;
     const groups = new Map();
     list.forEach((i) => {
       const k = S.groupBy === 'none' ? '' : (i[S.groupBy] || (S.groupBy === 'itemSection' ? (i.itemSection ? MF.fmt(i.itemSection) : 'unmapped') : '—'));
@@ -276,12 +294,24 @@
       groups.get(k).push(i);
     });
     const rows = [...groups.entries()].map(([g, arr]) => {
-      const head = g ? `<tr class="sp-grouprow"><td colspan="${cols.length}">${esc(g)} · ${arr.length}</td></tr>` : '';
+      const head = g ? `<tr class="sp-grouprow"><td colspan="${span + 1}">${esc(g)} · ${arr.length}</td></tr>` : '';
       return head + arr.map((i) => `<tr data-item="${i.id}" class="${i.status === 'removed' ? 'removed' : ''}">
-        ${cols.map(([k]) => `<td>${cell(i, k)}</td>`).join('')}
+        ${cols.map(([k, , ed]) => `<td${ed ? ` class="ed" data-cell="${i.id}" data-field="${k}"` : ''}>${cell(i, k)}</td>`).join('')}
+        ${ucols.map((c) => `<td class="ed u" data-cell="${i.id}" data-col="${c.id}" data-type="${c.type}">${userCell(i, c)}</td>`).join('')}
+        <td class="sp-rowend"><button class="sp-icon" data-open="${i.id}" title="Open item">⤢</button></td>
       </tr>`).join('');
     }).join('');
-    return `<div class="sp-tablewrap"><table class="sp-table"><thead><tr>${cols.map(([, t]) => `<th>${t}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
+    const empty = list.length ? '' : `<tr><td colspan="${span + 1}"><span class="sp-muted">No rows yet.</span></td></tr>`;
+    return `<div class="sp-tablewrap"><table class="sp-table"><thead><tr>
+        ${cols.map(([, t]) => `<th>${t}</th>`).join('')}
+        ${ucols.map((c) => `<th class="u"><button class="sp-colh" data-colmenu="${c.id}" data-sec="${s.id}">${esc(c.label)} <span class="sp-coltype">${esc(c.type)}</span></button></th>`).join('')}
+        <th class="sp-rowend"><button class="sp-icon" data-addcol="${s.id}" title="Add column">+</button></th>
+      </tr></thead><tbody>${rows}${empty}</tbody></table></div>
+      <div class="sp-tablefoot">
+        <button class="sp-btn sp-btn-ghost sp-btn-sm" data-addrow="${s.id}">+ Add row</button>
+        <button class="sp-btn sp-btn-ghost sp-btn-sm" data-addcol="${s.id}">+ Add column</button>
+        <span class="sp-muted">Click a cell to edit · paste or drop an image into an image cell · Ctrl+Z undoes</span>
+      </div>`;
   }
 
   function cell(i, k) {
@@ -290,12 +320,30 @@
       const links = (sp.links || []).length;
       return `${sp.approval && sp.approval !== 'draft' ? `<span class="sp-tag ok">${esc(sp.approval)}</span>` : '<span class="sp-tag">draft</span>'}`
         + (links ? `<span class="sp-tag link">${links} link${links > 1 ? 's' : ''}</span>` : '')
-        + (i.mismatch ? '<span class="sp-tag bad">cross-division</span>' : '');
+        + (i.mismatch ? '<span class="sp-tag bad">cross-division</span>' : '')
+        + (i.source === 'manual' ? '<span class="sp-tag">manual</span>' : '');
     }
-    if (['manufacturer', 'model', 'finish'].includes(k)) return esc(sp[k] || '') || '<span style="color:var(--tx-3)">—</span>';
+    if (['manufacturer', 'model', 'finish'].includes(k)) return esc(sp[k] || '') || '<span class="sp-ph">—</span>';
     if (k === 'area') return i.area != null ? esc(i.area + ' ' + (i.areaUnit || '')) : '';
-    if (k === 'label') return esc(i.type || i.label || '') + (i.family && i.type ? `<div style="color:var(--tx-3);font-size:11.5px">${esc(i.family)}</div>` : '');
+    if (k === 'label') return esc(i.type || i.label || '') + (i.family && i.type ? `<div class="sp-sub">${esc(i.family)}</div>` : '');
     return esc(num(i[k]));
+  }
+
+  /** A user-defined column cell: text / number / link / image / select. */
+  function userCell(i, c) {
+    const v = ((i.spec || {}).custom || {})[c.id];
+    if (c.type === 'image') {
+      const imgs = Array.isArray(v) ? v : (v ? [v] : []);
+      return `<div class="sp-imgs">${imgs.map((im, ix) => `<span class="sp-thumb"><img src="${esc(im.url)}" alt="${esc(im.name || '')}" loading="lazy" data-img="${esc(im.url)}" /><button class="sp-x" data-imgdel="${ix}" title="Remove">×</button></span>`).join('')}
+        <button class="sp-drop" data-imgadd="1" title="Add image — click, paste or drop">＋</button></div>`;
+    }
+    if (c.type === 'link') {
+      const links = Array.isArray(v) ? v : (v ? [v] : []);
+      return links.length
+        ? `<div class="sp-cellinks">${links.map((l, ix) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || hostOf(l.url) || l.url)}</a><button class="sp-x" data-linkdel="${ix}">×</button>`).join('')}<button class="sp-plus" data-linkadd="1">＋</button></div>`
+        : `<button class="sp-plus" data-linkadd="1">＋ link</button>`;
+    }
+    return (v == null || v === '') ? '<span class="sp-ph">—</span>' : esc(v);
   }
 
   function locationSummary(s) {
@@ -333,12 +381,305 @@
       if (target) { await ST.setDocIn('items', S.sid, it.id, { sectionId: target.id, mismatch: false, updatedAt: nowISO() }); toast('Moved to ' + target.scheduleName); }
       else { const id = await createSectionFor(it.itemSection, it.itemSectionTitle); await ST.setDocIn('items', S.sid, it.id, { sectionId: id, mismatch: false, updatedAt: nowISO() }); toast('New section created'); }
     });
-    $$('tr[data-item]', host).forEach((tr) => tr.onclick = () => openItem(tr.dataset.item));
+    $$('[data-open]', host).forEach((b) => b.onclick = (e) => { e.stopPropagation(); openItem(b.dataset.open); });
+    $$('[data-addcol]', host).forEach((b) => b.onclick = (e) => { e.stopPropagation(); addColumnDialog(b.dataset.addcol); });
+    $$('[data-addrow]', host).forEach((b) => b.onclick = (e) => { e.stopPropagation(); addRow(b.dataset.addrow); });
+    $$('[data-colmenu]', host).forEach((b) => b.onclick = (e) => { e.stopPropagation(); columnDialog(b.dataset.sec, b.dataset.colmenu); });
+    $$('img[data-img]', host).forEach((im) => im.onclick = (e) => { e.stopPropagation(); lightbox(im.dataset.img); });
+    wireCells(host);
     $$('.sp-rich', host).forEach((el) => {
       el.addEventListener('blur', async () => {
         const s = S.sections.find((x) => x.id === el.dataset.sec); if (!s) return;
-        const body = { ...(s.body || {}) }; body[el.dataset.art] = el.innerText.trim();
-        await ST.setDocIn('sections', S.sid, s.id, { body, userEdited: true, updatedAt: nowISO() });
+        const body = { ...(s.body || {}) };
+        if (String(body[el.dataset.art] || '') === el.innerText.trim()) return;
+        body[el.dataset.art] = el.innerText.trim();
+        await applyEdits(`Edit ${el.dataset.art} — ${s.scheduleName}`, [{ kind: 'sections', id: s.id, patch: { body, userEdited: true } }]);
+      });
+    });
+  }
+
+  /* ---------------- spreadsheet-style cells ---------------- */
+  const cellVal = (i, td) => td.dataset.col
+    ? ((i.spec || {}).custom || {})[td.dataset.col]
+    : (i.spec || {})[td.dataset.field];
+
+  /** Persist one cell. Everything routes through applyEdits so it is reversible. */
+  async function writeCell(td, value) {
+    const i = S.items.find((x) => x.id === td.dataset.cell); if (!i) return;
+    const spec = { ...(i.spec || {}) };
+    let label;
+    if (td.dataset.col) {
+      spec.custom = { ...(spec.custom || {}) };
+      spec.custom[td.dataset.col] = value;
+      const sec = S.sections.find((s) => s.id === i.sectionId) || {};
+      const col = userCols(sec).find((c) => c.id === td.dataset.col) || {};
+      label = `${col.label || 'Column'} — ${i.label || i.mark || 'row'}`;
+    } else {
+      spec[td.dataset.field] = value;
+      label = `${td.dataset.field} — ${i.label || i.mark || 'row'}`;
+    }
+    await applyEdits(label, [{ kind: 'items', id: i.id, patch: { spec } }]);
+  }
+
+  function wireCells(host) {
+    $$('td.ed', host).forEach((td) => {
+      const type = td.dataset.type || 'text';
+      if (type === 'image') return wireImageCell(td);
+      if (type === 'link') {
+        const i = S.items.find((x) => x.id === td.dataset.cell);
+        const add = $('[data-linkadd]', td);
+        if (add) add.onclick = (e) => { e.stopPropagation(); cellLinkDialog(td); };
+        $$('[data-linkdel]', td).forEach((b) => b.onclick = async (e) => {
+          e.stopPropagation();
+          const cur = cellVal(i, td); const arr = Array.isArray(cur) ? cur.slice() : (cur ? [cur] : []);
+          arr.splice(Number(b.dataset.linkdel), 1); await writeCell(td, arr);
+        });
+        $$('a', td).forEach((a) => a.onclick = (e) => e.stopPropagation());
+        return;
+      }
+      td.onclick = (e) => {
+        if (td.classList.contains('editing')) return;
+        e.stopPropagation(); startCellEdit(td, type);
+      };
+    });
+  }
+
+  function startCellEdit(td, type) {
+    const i = S.items.find((x) => x.id === td.dataset.cell); if (!i) return;
+    const cur = cellVal(i, td);
+    td.classList.add('editing');
+    td.innerHTML = `<input class="sp-cellin" type="${type === 'number' ? 'number' : 'text'}" value="${esc(cur == null ? '' : cur)}" />`;
+    const inp = $('input', td);
+    inp.focus(); inp.select();
+    let done = false;
+    const finish = async (save) => {
+      if (done) return; done = true;
+      const v = type === 'number' ? (inp.value === '' ? '' : Number(inp.value)) : inp.value;
+      td.classList.remove('editing');
+      if (save && String(v) !== String(cur == null ? '' : cur)) await writeCell(td, v);
+      else renderContent();
+    };
+    inp.onblur = () => finish(true);
+    inp.onkeydown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+      else if (e.key === 'Tab') { finish(true); }
+    };
+  }
+
+  /* ----- image cells: click / paste / drop ----- */
+  function wireImageCell(td) {
+    const i = S.items.find((x) => x.id === td.dataset.cell); if (!i) return;
+    const pick = () => {
+      const inp = document.createElement('input');
+      inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true;
+      inp.onchange = () => addImages(td, Array.from(inp.files || []));
+      inp.click();
+    };
+    const add = $('[data-imgadd]', td);
+    if (add) add.onclick = (e) => { e.stopPropagation(); pick(); };
+    $$('[data-imgdel]', td).forEach((b) => b.onclick = async (e) => {
+      e.stopPropagation();
+      const cur = cellVal(i, td); const arr = Array.isArray(cur) ? cur.slice() : (cur ? [cur] : []);
+      arr.splice(Number(b.dataset.imgdel), 1); await writeCell(td, arr);
+    });
+    td.ondragover = (e) => { e.preventDefault(); e.stopPropagation(); td.classList.add('over'); };
+    td.ondragleave = () => td.classList.remove('over');
+    td.ondrop = (e) => {
+      e.preventDefault(); e.stopPropagation(); td.classList.remove('over');
+      const files = Array.from(e.dataTransfer.files || []).filter((f) => /^image\//.test(f.type));
+      if (files.length) return addImages(td, files);
+      const url = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
+      if (url && /^https?:/.test(url)) addImageUrls(td, [url]);
+    };
+    td.tabIndex = 0;
+    td.onpaste = (e) => {
+      const items = Array.from((e.clipboardData || {}).items || []);
+      const files = items.filter((x) => x.kind === 'file' && /^image\//.test(x.type)).map((x) => x.getAsFile()).filter(Boolean);
+      if (files.length) { e.preventDefault(); return addImages(td, files); }
+      const txt = (e.clipboardData || {}).getData ? e.clipboardData.getData('text') : '';
+      if (txt && /^https?:\/\/\S+$/.test(txt.trim())) { e.preventDefault(); addImageUrls(td, [txt.trim()]); }
+    };
+  }
+
+  async function addImages(td, files) {
+    if (!files.length) return;
+    const i = S.items.find((x) => x.id === td.dataset.cell); if (!i) return;
+    toast(`Uploading ${files.length} image${files.length > 1 ? 's' : ''}…`, 4000);
+    const out = [];
+    for (const f of files) {
+      try { out.push(await ST.uploadImage(S.sid, f, i.id)); }
+      catch (e) { toast('Image failed: ' + (e.message || e), 5000); }
+    }
+    if (!out.length) return;
+    const cur = cellVal(i, td); const arr = Array.isArray(cur) ? cur.slice() : (cur ? [cur] : []);
+    await writeCell(td, arr.concat(out));
+    if (out.some((o) => o.inline)) toast('Stored inline (Storage unavailable)', 4000);
+  }
+
+  async function addImageUrls(td, urls) {
+    const i = S.items.find((x) => x.id === td.dataset.cell); if (!i) return;
+    const cur = cellVal(i, td); const arr = Array.isArray(cur) ? cur.slice() : (cur ? [cur] : []);
+    await writeCell(td, arr.concat(urls.map((u) => ({ url: u, name: hostOf(u) }))));
+  }
+
+  function lightbox(url) {
+    modal(`<div class="sp-lightbox"><img src="${esc(url)}" alt="" /></div>
+      <div class="sp-modal-actions"><a class="sp-btn sp-btn-ghost" href="${esc(url)}" target="_blank" rel="noopener">Open original</a>
+      <button class="sp-btn" id="lb-close">Close</button></div>`, (c) => { $('#lb-close', c).onclick = closeModal; });
+  }
+
+  function cellLinkDialog(td) {
+    const i = S.items.find((x) => x.id === td.dataset.cell); if (!i) return;
+    modal(`<h3>Add link</h3>
+      <div class="sp-form">
+        <div class="sp-row"><label>URL</label><input id="cl-url" placeholder="https://…" /></div>
+        <div class="sp-row"><label>Label</label><input id="cl-title" placeholder="Product page, cut sheet, submittal…" /></div>
+      </div>
+      <div class="sp-modal-actions"><button class="sp-btn sp-btn-ghost" id="cl-cancel">Cancel</button><button class="sp-btn" id="cl-ok">Add</button></div>`, (c) => {
+      $('#cl-cancel', c).onclick = closeModal;
+      $('#cl-ok', c).onclick = async () => {
+        const url = $('#cl-url', c).value.trim(); if (!url) return toast('URL required');
+        const cur = cellVal(i, td); const arr = Array.isArray(cur) ? cur.slice() : (cur ? [cur] : []);
+        arr.push({ url, title: $('#cl-title', c).value.trim() || hostOf(url) });
+        closeModal(); await writeCell(td, arr);
+      };
+      setTimeout(() => $('#cl-url', c).focus(), 30);
+    });
+  }
+
+  /* ---------------- columns & rows ---------------- */
+  function addColumnDialog(secId) {
+    modal(`<h3>Add column</h3>
+      <div class="sp-form">
+        <div class="sp-row"><label>Column name</label><input id="ac-label" placeholder="e.g. Cut sheet, Photo, Lead time" /></div>
+        <div class="sp-row"><label>Type</label><select id="ac-type">
+          <option value="text">Text</option><option value="number">Number</option>
+          <option value="link">Link(s)</option><option value="image">Image(s)</option>
+        </select><span class="hint">Image and link columns accept several values per row. Images can be dropped or pasted straight into the cell.</span></div>
+      </div>
+      <div class="sp-modal-actions"><button class="sp-btn sp-btn-ghost" id="ac-cancel">Cancel</button><button class="sp-btn" id="ac-ok">Add column</button></div>`, (c) => {
+      $('#ac-cancel', c).onclick = closeModal;
+      $('#ac-ok', c).onclick = async () => {
+        const s = S.sections.find((x) => x.id === secId); if (!s) return;
+        const label = $('#ac-label', c).value.trim() || 'Column';
+        const col = { id: 'c' + Math.random().toString(36).slice(2, 8), label, type: $('#ac-type', c).value };
+        closeModal();
+        await applyEdits(`Add column “${label}”`, [{ kind: 'sections', id: secId, patch: { columns: userCols(s).concat([col]) } }]);
+        toast('Column added');
+      };
+      setTimeout(() => $('#ac-label', c).focus(), 30);
+    });
+  }
+
+  function columnDialog(secId, colId) {
+    const s = S.sections.find((x) => x.id === secId); if (!s) return;
+    const cols = userCols(s); const col = cols.find((c) => c.id === colId); if (!col) return;
+    modal(`<h3>Column — ${esc(col.label)}</h3>
+      <div class="sp-form">
+        <div class="sp-row"><label>Name</label><input id="cd-label" value="${esc(col.label)}" /></div>
+        <div class="sp-row"><label>Type</label><select id="cd-type">
+          ${['text', 'number', 'link', 'image'].map((t) => `<option value="${t}"${t === col.type ? ' selected' : ''}>${t}</option>`).join('')}
+        </select></div>
+        <div class="sp-row"><label>Order</label><div class="sp-inline">
+          <button class="sp-btn sp-btn-ghost sp-btn-sm" id="cd-left">← move left</button>
+          <button class="sp-btn sp-btn-ghost sp-btn-sm" id="cd-right">move right →</button>
+        </div></div>
+      </div>
+      <div class="sp-modal-actions">
+        <button class="sp-btn sp-btn-ghost bad" id="cd-del">Delete column</button>
+        <button class="sp-btn sp-btn-ghost" id="cd-cancel">Cancel</button>
+        <button class="sp-btn" id="cd-ok">Save</button>
+      </div>`, (c) => {
+      const save = async (next, label) => { closeModal(); await applyEdits(label, [{ kind: 'sections', id: secId, patch: { columns: next } }]); };
+      const move = (dir) => {
+        const ix = cols.findIndex((x) => x.id === colId); const to = ix + dir;
+        if (to < 0 || to >= cols.length) return;
+        const next = cols.slice(); next.splice(to, 0, next.splice(ix, 1)[0]);
+        save(next, `Reorder column “${col.label}”`);
+      };
+      $('#cd-left', c).onclick = () => move(-1);
+      $('#cd-right', c).onclick = () => move(1);
+      $('#cd-cancel', c).onclick = closeModal;
+      $('#cd-del', c).onclick = () => save(cols.filter((x) => x.id !== colId), `Delete column “${col.label}”`);
+      $('#cd-ok', c).onclick = () => save(cols.map((x) => x.id === colId
+        ? { ...x, label: $('#cd-label', c).value.trim() || x.label, type: $('#cd-type', c).value } : x), `Edit column “${col.label}”`);
+    });
+  }
+
+  /** Manual row: never touched or pruned by re-imports. */
+  async function addRow(secId) {
+    const s = S.sections.find((x) => x.id === secId); if (!s) return;
+    const id = 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const order = (itemsOf(secId).reduce((m, i) => Math.max(m, i.order || 0), 0) || 0) + 1;
+    const patch = {
+      sectionId: secId, sourceSchedule: s.scheduleName, source: 'manual', status: 'active',
+      mark: '', label: 'New item', type: 'New item', level: '', qty: null, order,
+      spec: SP.emptySpec(), createdAt: nowISO()
+    };
+    await applyEdits('Add row', [{ kind: 'items', id, patch, before: null, created: true }]);
+    setTimeout(() => openItem(id), 60);
+  }
+
+  /* ---------------- reversible edits ---------------- */
+  function snapOf(kind, id, patch) {
+    const cur = (kind === 'items' ? S.items : S.sections).find((x) => x.id === id) || {};
+    const before = {};
+    Object.keys(patch).forEach((k) => { before[k] = (cur[k] === undefined ? null : cur[k]); });
+    return before;
+  }
+
+  /** Write + record an undoable history entry (capped at 50 per project by the store). */
+  async function applyEdits(label, ops, opts) {
+    const rec = ops.map((o) => ({
+      kind: o.kind, id: o.id, created: !!o.created,
+      before: o.created ? null : (o.before !== undefined ? o.before : snapOf(o.kind, o.id, o.patch)),
+      after: o.patch
+    }));
+    for (const o of ops) await ST.setDocIn(o.kind, S.sid, o.id, { ...o.patch, updatedAt: nowISO() });
+    if (!(opts && opts.silent)) { try { await ST.logEdit(S.sid, { label, ops: rec }); } catch (e) { console.warn('history', e); } }
+  }
+
+  async function toggleEntry(h) {
+    const ops = h.ops || [];
+    if (!h.undone) {
+      for (const o of ops.slice().reverse()) {
+        if (o.created) await ST.deleteDocIn(o.kind, S.sid, o.id);
+        else await ST.setDocIn(o.kind, S.sid, o.id, { ...(o.before || {}), updatedAt: nowISO() });
+      }
+    } else {
+      for (const o of ops) await ST.setDocIn(o.kind, S.sid, o.id, { ...(o.after || {}), updatedAt: nowISO() });
+    }
+    await ST.setDocIn('history', S.sid, h.id, { undone: !h.undone, undoneAt: nowISO(), undoneBy: ST.me().uid });
+    toast(h.undone ? 'Redone' : 'Reverted: ' + (h.label || 'edit'));
+  }
+
+  async function undoLast() {
+    const h = S.history.find((x) => !x.undone);
+    if (!h) return toast('Nothing to undo');
+    await toggleEntry(h);
+  }
+  async function redoLast() {
+    const done = S.history.filter((x) => x.undone);
+    const h = done[0];
+    if (!h) return toast('Nothing to redo');
+    await toggleEntry(h);
+  }
+
+  function historyDialog() {
+    const rows = S.history.length ? S.history.map((h) => `<div class="sp-hrow${h.undone ? ' undone' : ''}">
+        <div class="t"><b>${esc(h.label || 'Edit')}</b>
+          <span class="sp-muted">${esc(h.byName || '')} · ${new Date(h.at).toLocaleString()} · ${(h.ops || []).length} change${(h.ops || []).length > 1 ? 's' : ''}${h.undone ? ' · reverted' : ''}</span></div>
+        <button class="sp-btn sp-btn-sm ${h.undone ? '' : 'sp-btn-ghost'}" data-h="${h.id}">${h.undone ? 'Redo' : 'Undo'}</button>
+      </div>`).join('') : '<p class="sp-empty">No edits recorded yet.</p>';
+    modal(`<h3>Edit history</h3>
+      <p class="hint">The last ${ST.HISTORY_MAX} changes in this project, newest first. Any entry can be reverted or re-applied independently — Ctrl+Z undoes the newest, Ctrl+Shift+Z re-applies it.</p>
+      <div class="sp-list">${rows}</div>
+      <div class="sp-modal-actions"><button class="sp-btn sp-btn-ghost" id="h-close">Close</button></div>`, (c) => {
+      $('#h-close', c).onclick = closeModal;
+      $$('[data-h]', c).forEach((b) => b.onclick = async () => {
+        const h = S.history.find((x) => x.id === b.dataset.h); if (!h) return;
+        b.disabled = true; await toggleEntry(h); closeModal(); historyDialog();
       });
     });
   }
@@ -430,6 +771,7 @@
       </dl>
       <label class="sp-check" style="margin-top:10px"><input type="checkbox" id="dr-lock" ${locked.length ? 'checked' : ''} />
         Freeze source fields (re-imports will not overwrite this row)</label>
+      ${i.source === 'manual' ? '<button class="sp-btn sp-btn-ghost sp-btn-sm bad" id="dr-delete" style="margin-top:12px">Delete row</button>' : ''}
       <div style="height:20px"></div>`;
     openDrawer();
 
@@ -439,8 +781,10 @@
         const f = el.dataset.f;
         spec[f] = f === 'tags' ? el.value.split(',').map((s) => s.trim()).filter(Boolean) : el.value;
       });
-      await ST.setDocIn('items', S.sid, id, { spec, updatedAt: nowISO(), updatedBy: ST.me().email || ST.me().uid });
-    }, 400);
+      if (JSON.stringify(spec) === JSON.stringify({ ...SP.emptySpec(), ...(i.spec || {}) })) return;
+      await applyEdits(`Edit ${i.type || i.label || i.mark || 'item'}`,
+        [{ kind: 'items', id, patch: { spec, updatedBy: ST.me().email || ST.me().uid } }]);
+    }, 500);
     $$('#dr-body [data-f]').forEach((el) => { el.oninput = save; el.onchange = save; });
     $('#dr-lock').onchange = async (e) => {
       await ST.setDocIn('items', S.sid, id, { lockedFields: e.target.checked ? SP.SOURCE_FIELDS : [] });
@@ -449,8 +793,15 @@
     $('#dr-addlink').onclick = () => addLinkDialog(id);
     $$('[data-rmlink]').forEach((b) => b.onclick = async () => {
       const links = (sp.links || []).slice(); links.splice(+b.dataset.rmlink, 1);
-      await ST.setDocIn('items', S.sid, id, { spec: { ...sp, links } }); openItem(id);
+      await applyEdits('Remove link', [{ kind: 'items', id, patch: { spec: { ...sp, links } } }]); openItem(id);
     });
+    const del = $('#dr-delete');
+    if (del) del.onclick = async () => {
+      closeDrawer();
+      await applyEdits(`Delete row — ${i.type || i.label || i.mark || 'item'}`,
+        [{ kind: 'items', id, patch: { status: 'deleted' }, before: { status: i.status || 'active' } }]);
+      toast('Row deleted — undo from History');
+    };
   }
   const hostOf = (u) => { try { return new URL(u).hostname; } catch (_) { return ''; } };
 
@@ -469,7 +820,7 @@
         const it = S.items.find((x) => x.id === itemId); if (!it) return closeModal();
         const sp = { ...SP.emptySpec(), ...(it.spec || {}) };
         sp.links = (sp.links || []).concat([{ url: $('#al-url', c).value, title: $('#al-title', c).value, kind: $('#al-kind', c).value, note: $('#al-note', c).value, addedAt: nowISO(), addedBy: ST.me().email || '' }]);
-        await ST.setDocIn('items', S.sid, itemId, { spec: sp, updatedAt: nowISO() });
+        await applyEdits('Add link', [{ kind: 'items', id: itemId, patch: { spec: sp } }]);
         closeModal(); toast('Link added'); openItem(itemId);
       };
     });

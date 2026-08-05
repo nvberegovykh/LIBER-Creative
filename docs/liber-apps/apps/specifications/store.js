@@ -164,7 +164,7 @@
 
     async deleteProject(sid) {
       if (!this.isCloud()) { const db = Local.read(); delete db.projects[sid]; delete (db.sections || {})[sid]; delete (db.items || {})[sid]; Local.write(db); return; }
-      for (const sub of ['sections', 'items', 'sources', 'inbox']) {
+      for (const sub of ['sections', 'items', 'sources', 'inbox', 'history']) {
         try {
           const s = await this.api.getDocs(this.api.collection(this.db, 'specProjects', sid, sub));
           await Promise.all(s.docs.map((d) => this.api.deleteDoc(d.ref)));
@@ -228,6 +228,54 @@
       try {
         return this.api.onSnapshot(this.api.doc(this.db, 'specProjects', sid), (d) => cb(d.exists() ? { id: d.id, ...d.data() } : null));
       } catch (e) { return () => {}; }
+    },
+
+    /* ----- media (images in cells) -----
+     * Uploads to Firebase Storage under specs/{sid}/{uid}/... and returns a download URL.
+     * Falls back to an inline data URL when Storage is unavailable or rejects the write,
+     * so images keep working in local mode and for members without Storage access. */
+    async uploadImage(sid, file, keyHint) {
+      const asData = () => new Promise((res, rej) => {
+        if (file.size > 700 * 1024) return rej(new Error('too large to inline (max 700 KB without Storage)'));
+        const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsDataURL(file);
+      });
+      if (!this.isCloud() || !this.fs || !this.fs.storage || !this.api.ref) return { url: await asData(), name: file.name, inline: true };
+      try {
+        const uidPart = this.me().uid;
+        const safe = String(file.name || 'image').replace(/[^\w.\-]+/g, '_').slice(-60);
+        const path = `specs/${sid}/${uidPart}/${keyHint || 'item'}/${Date.now()}_${safe}`;
+        const ref = this.api.ref(this.fs.storage, path);
+        await this.api.uploadBytes(ref, file, plain({ contentType: file.type || 'image/jpeg' }));
+        return { url: await this.api.getDownloadURL(ref), name: file.name, path };
+      } catch (e) {
+        console.warn('storage upload failed, inlining', e);
+        return { url: await asData(), name: file.name, inline: true, uploadError: String(e && e.message || e) };
+      }
+    },
+
+    /* ----- edit history (reversible edits, capped) ----- */
+    HISTORY_MAX: 50,
+
+    /** Record one reversible edit. ops: [{kind,id,before,after}] */
+    async logEdit(sid, entry) {
+      const rec = { at: nowISO(), by: this.me().uid, byName: this.me().name || this.me().email || 'user', undone: false, ...entry };
+      const id = 'h' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      await this.setDocIn('history', sid, id, rec, false);
+      this._trimHistory(sid);
+      return id;
+    },
+
+    async _trimHistory(sid) {
+      try {
+        const all = (await this.listIn('history', sid)).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+        const extra = all.slice(this.HISTORY_MAX);
+        for (const e of extra) await this.deleteDocIn('history', sid, e.id);
+      } catch (_) {}
+    },
+
+    async listHistory(sid) {
+      const all = await this.listIn('history', sid);
+      return all.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, this.HISTORY_MAX);
     },
 
     /** Batched writes with graceful local fallback. */
