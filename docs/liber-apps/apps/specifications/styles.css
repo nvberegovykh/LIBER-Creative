@@ -221,3 +221,33 @@ table.sp-table{width:100%;border-collapse:collapse;font-size:13.5px}
 .sp-hrow.undone .t b{text-decoration:line-through;color:var(--tx-3)}
 
 .sp-list{max-height:52vh;overflow:auto;margin:6px 0 4px}
+
+
+/* ---------- needs-attention summary ---------- */
+.sp-attn{position:sticky;top:0;z-index:6;margin:0 0 18px;padding:13px 15px;border:1px solid #5a4520;border-radius:10px;
+  background:linear-gradient(180deg,#241c10,#1a1712);backdrop-filter:blur(6px)}
+.sp-attn.done{border-color:#20402f;background:linear-gradient(180deg,#12241a,#141a16)}
+.sp-attn-top{display:flex;gap:14px;align-items:flex-start;justify-content:space-between}
+.sp-attn-h{font-size:13px;font-weight:650;letter-spacing:.2px}
+.sp-attn-sub{font-size:12px;color:var(--tx-2);margin-top:2px}
+.sp-attn-pct{text-align:right;line-height:1.1}
+.sp-attn-pct b{font:600 20px var(--mono);color:var(--tx)}
+.sp-attn-pct span{display:block;font:9.5px var(--mono);letter-spacing:.5px;text-transform:uppercase;color:var(--tx-3)}
+.sp-bar{height:4px;border-radius:3px;background:#2a2a2f;margin:10px 0;overflow:hidden}
+.sp-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--acc),var(--acc-2))}
+.sp-chips{display:flex;gap:7px;flex-wrap:wrap}
+.sp-chip{border:1px solid var(--line);background:rgba(255,255,255,.04);color:var(--tx-2);border-radius:999px;
+  padding:5px 11px;font-size:12px;cursor:pointer;white-space:nowrap;min-height:30px}
+.sp-chip b{color:var(--tx);font-weight:650;font-family:var(--mono)}
+.sp-chip:hover{color:var(--tx);border-color:var(--acc-2)}
+.sp-chip.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.sp-chip.on b{color:#fff}
+.sp-chip.warn{border-color:#5a4520;color:var(--warn)}
+.sp-attn-filter{display:flex;gap:10px;align-items:center;margin-top:10px;padding-top:9px;border-top:1px solid var(--line);font-size:12px;color:var(--tx-2)}
+.sp-warntx{color:var(--warn)}
+.sp-tag.miss{color:var(--warn);border-color:#5a4520;border-style:dashed}
+.sp-table td.blank{background:repeating-linear-gradient(135deg,rgba(255,178,54,.07) 0 6px,transparent 6px 12px);
+  box-shadow:inset 0 0 0 1px rgba(255,178,54,.28)}
+.sp-table td.blank:hover{box-shadow:inset 0 0 0 1px var(--warn)}
+.sp-rich:empty{border-style:dashed;border-color:#5a4520;min-height:34px}
+@media print{.sp-attn{display:none!important}.sp-table td.blank{background:none;box-shadow:none}}

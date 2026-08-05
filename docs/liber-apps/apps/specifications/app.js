@@ -10,7 +10,7 @@
   const S = {
     sid: null, project: null, sections: [], items: [], inbox: [], history: [],
     activeSec: null, view: 'book', groupBy: 'none', sortBy: 'order',
-    showRemoved: false, filter: '', unsub: [], pending: null
+    showRemoved: false, filter: '', gap: null, unsub: [], pending: null
   };
 
   /* ---------------- utils ---------------- */
@@ -198,10 +198,11 @@
         ${byDiv.get(d).map((s) => {
           const n = itemsOf(s.id).filter((i) => S.showRemoved || i.status !== 'removed').length;
           const warn = s.needsMapping && !s.numberOverride;
+          const g = gapCount(s.id);
           return `<div class="sp-sec ${S.activeSec === s.id ? 'active' : ''}" data-id="${s.id}">
             <code>${secNum(s) ? MF.fmt(secNum(s)) : '– – –'}</code>
             <span class="n">${esc(s.scheduleName)}</span>
-            <span class="sp-pill ${warn ? 'warn' : ''}">${warn ? '!' : n}</span></div>`;
+            <span class="sp-pill ${warn || g ? 'warn' : ''}" title="${warn ? 'Needs a MasterFormat number' : g ? g + ' of ' + n + ' rows have blanks' : n + ' rows complete'}">${warn ? '!' : g ? g + '/' + n : n}</span></div>`;
         }).join('')}
       </div>`).join('');
     $$('.sp-sec', host).forEach((el) => el.onclick = () => {
@@ -216,6 +217,7 @@
   function visibleItems(secId) {
     let list = itemsOf(secId).filter((i) => i.status !== 'deleted').filter((i) => S.showRemoved || i.status !== 'removed');
     if (S.filter) list = list.filter((i) => JSON.stringify(i).toLowerCase().includes(S.filter));
+    if (S.gap) { const sec = S.sections.find((s) => s.id === secId) || {}; list = list.filter((i) => gapsOf(i, sec).includes(S.gap)); }
     const dir = (a, b, k) => String(a[k] == null ? '' : a[k]).localeCompare(String(b[k] == null ? '' : b[k]), undefined, { numeric: true });
     list.sort((a, b) => S.sortBy === 'order' ? (a.order || 0) - (b.order || 0)
       : S.sortBy === 'qty' ? (b.qty || 0) - (a.qty || 0)
@@ -233,8 +235,97 @@
     }
     if (S.view === 'issues') return renderIssues(host);
     const list = S.activeSec ? [S.sections.find((s) => s.id === S.activeSec)].filter(Boolean) : sectionsSorted();
-    host.innerHTML = list.map((s) => S.view === 'table' ? sectionTable(s) : sectionBook(s)).join('');
+    host.innerHTML = attentionPanel() + list.map((s) => S.view === 'table' ? sectionTable(s) : sectionBook(s)).join('');
     wireContent(host);
+    wireAttention(host);
+  }
+
+  /* ---------------- completeness / “needs attention” ----------------
+   * Every blank the designer is expected to fill is a “gap”. Gaps are computed
+   * live from the data (no extra bookkeeping), summarised at the top of the
+   * project and clickable to filter the book down to exactly those rows. */
+  const REQ_PRODUCT = [['manufacturer', 'Manufacturer'], ['model', 'Model'], ['finish', 'Finish'], ['links', 'Reference link']];
+  const REQ_LOCATION = []; // rooms are a registry: only user-added columns count as placeholders
+
+  function reqFor(sec) { return sec.kind === 'locations' ? REQ_LOCATION : REQ_PRODUCT; }
+
+  const isBlank = (v) => v == null || v === '' || (Array.isArray(v) && !v.length);
+
+  /** Gap keys for one row, e.g. ['manufacturer','col:c8x1a']. */
+  function gapsOf(i, sec) {
+    if (i.status === 'removed' || i.status === 'deleted') return [];
+    const sp = i.spec || {};
+    const out = [];
+    reqFor(sec || {}).forEach(([k]) => { if (isBlank(k === 'links' ? sp.links : sp[k])) out.push(k); });
+    userCols(sec || {}).forEach((c) => { if (isBlank((sp.custom || {})[c.id])) out.push('col:' + c.id); });
+    if (i.mismatch) out.push('mismatch');
+    return out;
+  }
+
+  function gapReport() {
+    const secs = S.activeSec ? S.sections.filter((s) => s.id === S.activeSec) : S.sections;
+    const labels = new Map(); const counts = new Map();
+    let rows = 0, complete = 0, withGaps = 0;
+    secs.forEach((sec) => {
+      const lbl = new Map(reqFor(sec));
+      userCols(sec).forEach((c) => lbl.set('col:' + c.id, c.label));
+      lbl.set('mismatch', 'Wrong division');
+      itemsOf(sec.id).filter((i) => i.status !== 'removed' && i.status !== 'deleted').forEach((i) => {
+        rows++;
+        const g = gapsOf(i, sec);
+        if (!g.length) { complete++; return; }
+        withGaps++;
+        g.forEach((k) => { counts.set(k, (counts.get(k) || 0) + 1); if (!labels.has(k)) labels.set(k, lbl.get(k) || k); });
+      });
+    });
+    const unmapped = secs.filter((s) => s.needsMapping && !s.numberOverride);
+    const emptyText = secs.filter((s) => s.kind !== 'locations' && !Object.values(s.body || {}).some((t) => String(t || '').trim()));
+    const chips = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => ({ k, n, label: labels.get(k) }));
+    return { rows, complete, withGaps, chips, unmapped, emptyText, pct: rows ? Math.round((complete / rows) * 100) : 0 };
+  }
+
+  function gapCount(secId) {
+    const sec = S.sections.find((s) => s.id === secId) || {};
+    return itemsOf(secId).filter((i) => i.status !== 'removed' && i.status !== 'deleted' && gapsOf(i, sec).length).length;
+  }
+
+  function attentionPanel() {
+    const r = gapReport();
+    if (!r.rows && !r.unmapped.length) return '';
+    const scope = S.activeSec ? (S.sections.find((s) => s.id === S.activeSec) || {}).scheduleName : 'whole project';
+    const chips = r.chips.map((c) => `<button class="sp-chip${S.gap === c.k ? ' on' : ''}" data-gap="${esc(c.k)}">
+        <b>${c.n}</b> missing ${esc(String(c.label).toLowerCase())}</button>`).join('');
+    const extra = [
+      r.unmapped.length ? `<button class="sp-chip warn" data-goissues="1"><b>${r.unmapped.length}</b> unmapped section${r.unmapped.length > 1 ? 's' : ''}</button>` : '',
+      r.emptyText.length ? `<button class="sp-chip warn" data-emptytext="1"><b>${r.emptyText.length}</b> section${r.emptyText.length > 1 ? 's' : ''} with no spec text</button>` : ''
+    ].join('');
+    return `<section class="sp-attn${r.withGaps || r.unmapped.length ? '' : ' done'}" id="attn">
+      <div class="sp-attn-top">
+        <div>
+          <div class="sp-attn-h">Needs attention · <span class="sp-muted">${esc(scope)}</span></div>
+          <div class="sp-attn-sub">${r.complete} of ${r.rows} rows fully specified · ${r.withGaps} still have blanks</div>
+        </div>
+        <div class="sp-attn-pct"><b>${r.pct}%</b><span>complete</span></div>
+      </div>
+      <div class="sp-bar"><i style="width:${r.pct}%"></i></div>
+      <div class="sp-chips">${chips || '<span class="sp-muted">No blank placeholders left.</span>'}${extra}</div>
+      ${S.gap ? `<div class="sp-attn-filter">Showing only rows missing <b>${esc(r.chips.concat([{ k: S.gap, label: S.gap }]).find((c) => c.k === S.gap).label)}</b>
+        <button class="sp-btn sp-btn-ghost sp-btn-sm" id="gap-clear">Show all rows</button></div>` : ''}
+    </section>`;
+  }
+
+  function wireAttention(host) {
+    $$('[data-gap]', host).forEach((b) => b.onclick = () => { S.gap = S.gap === b.dataset.gap ? null : b.dataset.gap; renderContent(); $('#content').scrollTop = 0; });
+    const cl = $('#gap-clear', host); if (cl) cl.onclick = () => { S.gap = null; renderContent(); };
+    const gi = $('[data-goissues]', host); if (gi) gi.onclick = () => { S.view = 'issues'; $$('.sp-seg button').forEach((b) => b.classList.toggle('active', b.dataset.view === 'issues')); renderContent(); };
+    const et = $('[data-emptytext]', host); if (et) et.onclick = () => {
+      const r = gapReport(); const first = r.emptyText[0];
+      if (!first) return;
+      S.view = 'book'; S.activeSec = first.id;
+      $$('.sp-seg button').forEach((b) => b.classList.toggle('active', b.dataset.view === 'book'));
+      renderRail(); renderContent(); $('#content').scrollTop = 0;
+      toast(`${r.emptyText.length} section${r.emptyText.length > 1 ? 's' : ''} with no spec text — showing “${first.scheduleName}”`, 4000);
+    };
   }
 
   function sectionHead(s) {
@@ -243,7 +334,7 @@
       <div class="sp-sec-num">${n ? 'SECTION ' + MF.fmt(n) : 'SECTION — UNMAPPED'} · DIVISION ${secDiv(s)} — ${esc(MF.divisionTitle(secDiv(s))).toUpperCase()}</div>
       <h2 class="sp-sec-title">${esc(s.scheduleName)}</h2>
       <div class="sp-sec-sub">
-        ${s.title ? 'CSI mask: ' + esc(s.title) + ' · ' : ''}${itemsOf(s.id).filter((i) => i.status !== 'removed').length} items
+        ${s.title ? 'CSI mask: ' + esc(s.title) + ' · ' : ''}${itemsOf(s.id).filter((i) => i.status !== 'removed').length} items${(() => { const g = gapCount(s.id); return g ? ` · <b class="sp-warntx">${g} incomplete</b>` : ' · complete'; })()}
         ${s.kind === 'locations' ? ' · location registry (not printed as product spec)' : ''}
         <button class="sp-btn sp-btn-ghost sp-btn-sm" data-remap="${s.id}">Remap section</button>
       </div></div>`;
@@ -295,11 +386,11 @@
     });
     const rows = [...groups.entries()].map(([g, arr]) => {
       const head = g ? `<tr class="sp-grouprow"><td colspan="${span + 1}">${esc(g)} · ${arr.length}</td></tr>` : '';
-      return head + arr.map((i) => `<tr data-item="${i.id}" class="${i.status === 'removed' ? 'removed' : ''}">
-        ${cols.map(([k, , ed]) => `<td${ed ? ` class="ed" data-cell="${i.id}" data-field="${k}"` : ''}>${cell(i, k)}</td>`).join('')}
-        ${ucols.map((c) => `<td class="ed u" data-cell="${i.id}" data-col="${c.id}" data-type="${c.type}">${userCell(i, c)}</td>`).join('')}
+      return head + arr.map((i) => { const gs = gapsOf(i, s); return `<tr data-item="${i.id}" class="${i.status === 'removed' ? 'removed' : ''}${gs.length ? ' hasgap' : ''}">
+        ${cols.map(([k, , ed]) => `<td${ed ? ` class="ed${gs.includes(k) ? ' blank' : ''}" data-cell="${i.id}" data-field="${k}"` : ''}>${cell(i, k)}</td>`).join('')}
+        ${ucols.map((c) => `<td class="ed u${gs.includes('col:' + c.id) ? ' blank' : ''}" data-cell="${i.id}" data-col="${c.id}" data-type="${c.type}">${userCell(i, c)}</td>`).join('')}
         <td class="sp-rowend"><button class="sp-icon" data-open="${i.id}" title="Open item">⤢</button></td>
-      </tr>`).join('');
+      </tr>`; }).join('');
     }).join('');
     const empty = list.length ? '' : `<tr><td colspan="${span + 1}"><span class="sp-muted">No rows yet.</span></td></tr>`;
     return `<div class="sp-tablewrap"><table class="sp-table"><thead><tr>
@@ -319,7 +410,7 @@
     if (k === 'spec') {
       const links = (sp.links || []).length;
       return `${sp.approval && sp.approval !== 'draft' ? `<span class="sp-tag ok">${esc(sp.approval)}</span>` : '<span class="sp-tag">draft</span>'}`
-        + (links ? `<span class="sp-tag link">${links} link${links > 1 ? 's' : ''}</span>` : '')
+        + (links ? `<span class="sp-tag link">${links} link${links > 1 ? 's' : ''}</span>` : '<span class="sp-tag miss">no link</span>')
         + (i.mismatch ? '<span class="sp-tag bad">cross-division</span>' : '')
         + (i.source === 'manual' ? '<span class="sp-tag">manual</span>' : '');
     }
