@@ -430,6 +430,7 @@ class AppsManager {
             let launchId = sessionStorage.getItem('liber_launch_after_verify');
             let projectId = sessionStorage.getItem('liber_verify_project_id');
             let chatConnId = sessionStorage.getItem('liber_return_chat_conn_id');
+            let extraParams = '';
             if (!launchId && (typeof URLSearchParams !== 'undefined')) {
                 try {
                     const params = new URLSearchParams(window.location.search);
@@ -439,6 +440,17 @@ class AppsManager {
                         projectId = sessionStorage.getItem('liber_return_project_id') || projectId;
                         sessionStorage.removeItem('liber_return_project_id');
                         try { const u = new URL(window.location.href); u.searchParams.delete('returnTo'); u.searchParams.delete('projectId'); window.history.replaceState({}, '', u.toString()); } catch (_) {}
+                    } else if (returnTo === 'specifications' && window.firebaseService?.auth?.currentUser) {
+                        launchId = 'specifications';
+                        extraParams = ['specUrl', 'specTitle', 'specNote', 'specProjectId']
+                            .filter((k) => params.get(k))
+                            .map((k) => k + '=' + encodeURIComponent(params.get(k)))
+                            .join('&');
+                        try {
+                            const u = new URL(window.location.href);
+                            ['returnTo', 'specUrl', 'specTitle', 'specNote', 'specProjectId'].forEach((k) => u.searchParams.delete(k));
+                            window.history.replaceState({}, '', u.toString());
+                        } catch (_) {}
                     } else if (returnTo === 'chat' && window.firebaseService?.auth?.currentUser) {
                         launchId = 'chat';
                         chatConnId = chatConnId || params.get('connId');
@@ -463,7 +475,8 @@ class AppsManager {
                 const app = this.apps.find((a) => a.id === launchId);
                 if (app && !app.adminOnly) {
                     const appUrl = new URL(app.path, window.location.href).href;
-                    const urlWithProject = projectId ? `${appUrl}${appUrl.includes('?') ? '&' : '?'}projectId=${encodeURIComponent(projectId)}` : appUrl;
+                    let urlWithProject = projectId ? `${appUrl}${appUrl.includes('?') ? '&' : '?'}projectId=${encodeURIComponent(projectId)}` : appUrl;
+                    if (extraParams) urlWithProject += (urlWithProject.includes('?') ? '&' : '?') + extraParams;
                     setTimeout(() => this.openAppInShell(app, urlWithProject), 400);
                 }
             }
@@ -493,6 +506,19 @@ class AppsManager {
                 lastUpdated: '2026-02-22',
                 logo: null,
                 userOnly: true
+            },
+            {
+                id: 'specifications',
+                name: 'Specifications',
+                description: 'CSI MasterFormat spec book generated from Revit schedules and sheets.',
+                version: '1.0.0',
+                category: 'business',
+                icon: 'fas fa-book',
+                status: 'online',
+                path: 'apps/specifications/index.html',
+                author: 'Liber Apps',
+                lastUpdated: '2026-08-05',
+                logo: null
             },
             {
                 id: 'calculator',
