@@ -442,13 +442,13 @@ class AppsManager {
                         try { const u = new URL(window.location.href); u.searchParams.delete('returnTo'); u.searchParams.delete('projectId'); window.history.replaceState({}, '', u.toString()); } catch (_) {}
                     } else if (returnTo === 'specifications' && window.firebaseService?.auth?.currentUser) {
                         launchId = 'specifications';
-                        extraParams = ['specUrl', 'specTitle', 'specNote', 'specProjectId']
+                        extraParams = ['specUrl', 'specTitle', 'specNote', 'specProjectId', 'section', 'view', 'item']
                             .filter((k) => params.get(k))
                             .map((k) => k + '=' + encodeURIComponent(params.get(k)))
                             .join('&');
                         try {
                             const u = new URL(window.location.href);
-                            ['returnTo', 'specUrl', 'specTitle', 'specNote', 'specProjectId'].forEach((k) => u.searchParams.delete(k));
+                            ['returnTo', 'specUrl', 'specTitle', 'specNote', 'specProjectId', 'section', 'view', 'item'].forEach((k) => u.searchParams.delete(k));
                             window.history.replaceState({}, '', u.toString());
                         } catch (_) {}
                     } else if (returnTo === 'chat' && window.firebaseService?.auth?.currentUser) {
@@ -830,6 +830,7 @@ class AppsManager {
             return;
         }
         this._activeAppUrl = appUrl;
+        try { frame.setAttribute('allow', 'web-share; clipboard-write; clipboard-read; fullscreen; camera; microphone'); } catch (_) {}
         const currentSrc = String(frame.getAttribute('src') || '');
         const currentIsChat = /apps\/secure-chat\/index\.html/i.test(currentSrc) && currentSrc !== 'about:blank';
         const nextIsChat = String(app?.id || '') === 'secure-chat' || /apps\/secure-chat\/index\.html/i.test(String(appUrl || ''));

@@ -337,6 +337,7 @@
         ${s.title ? 'CSI mask: ' + esc(s.title) + ' · ' : ''}${itemsOf(s.id).filter((i) => i.status !== 'removed').length} items${(() => { const g = gapCount(s.id); return g ? ` · <b class="sp-warntx">${g} incomplete</b>` : ' · complete'; })()}
         ${s.kind === 'locations' ? ' · location registry (not printed as product spec)' : ''}
         <button class="sp-btn sp-btn-ghost sp-btn-sm" data-remap="${s.id}">Remap section</button>
+        <button class="sp-btn sp-btn-ghost sp-btn-sm" data-share="${s.id}">Share / export</button>
       </div></div>`;
   }
 
@@ -471,6 +472,11 @@
       const target = S.sections.find((s) => secNum(s) === it.itemSection);
       if (target) { await ST.setDocIn('items', S.sid, it.id, { sectionId: target.id, mismatch: false, updatedAt: nowISO() }); toast('Moved to ' + target.scheduleName); }
       else { const id = await createSectionFor(it.itemSection, it.itemSectionTitle); await ST.setDocIn('items', S.sid, it.id, { sectionId: id, mismatch: false, updatedAt: nowISO() }); toast('New section created'); }
+    });
+    $$('[data-share]', host).forEach((b) => b.onclick = (e) => {
+      e.stopPropagation();
+      S.activeSec = b.dataset.share; renderRail(); renderContent(); exportDialog();
+      const sel = $('#ex-scope'); if (sel) sel.value = 'sec';
     });
     $$('[data-open]', host).forEach((b) => b.onclick = (e) => { e.stopPropagation(); openItem(b.dataset.open); });
     $$('[data-addcol]', host).forEach((b) => b.onclick = (e) => { e.stopPropagation(); addColumnDialog(b.dataset.addcol); });
@@ -1092,32 +1098,177 @@
   }
 
   /* ---------------- export ---------------- */
+  /* ---------------- share & export ----------------
+   * Everything a designer wants to hand over: a real .xlsx (one sheet per
+   * schedule + a completeness summary), CSV, the printed CSI book, or a
+   * WhatsApp share. On phones the file goes straight into the native share
+   * sheet (WhatsApp included); on desktop it downloads and WhatsApp Web opens
+   * with the message pre-typed so the file just needs attaching. */
+
+  const SHEET_EXTRA = [['approval', 'Status'], ['links', 'Links'], ['notes', 'Notes']];
+
+  function xlText(i, k, sec) {
+    const sp = i.spec || {};
+    if (k === 'links') return (sp.links || []).map((l) => l.url).join('\n');
+    if (k === 'approval') return sp.approval || 'draft';
+    if (k === 'notes') return sp.notes || '';
+    if (['manufacturer', 'model', 'finish'].includes(k)) return sp[k] || '';
+    if (k === 'label') return i.type || i.label || '';
+    if (k === 'area') return i.area == null ? '' : i.area;
+    if (k === 'qty') return i.qty == null ? '' : i.qty;
+    if (k.slice(0, 4) === 'col:') {
+      const v = (sp.custom || {})[k.slice(4)];
+      if (Array.isArray(v)) return v.map((x) => x && (x.url || x.name) || x).join('\n');
+      return v == null ? '' : v;
+    }
+    return i[k] == null ? '' : i[k];
+  }
+
+  function sheetFor(s) {
+    const cols = baseCols(s).filter(([k]) => k !== 'spec').concat(SHEET_EXTRA)
+      .concat(userCols(s).map((c) => ['col:' + c.id, c.label]));
+    const rows = [cols.map(([, t]) => t)];
+    visibleItems(s.id).forEach((i) => rows.push(cols.map(([k]) => xlText(i, k, s))));
+    return rows;
+  }
+
+  function summaryRows(secs) {
+    const r = gapReport();
+    const out = [
+      [S.project ? S.project.name : 'Specifications'],
+      ['Code', S.project ? (S.project.code || '') : ''],
+      ['Generated', new Date().toLocaleString()],
+      ['Completeness', r.pct + '%'],
+      ['Rows', r.rows], ['Fully specified', r.complete], ['With blanks', r.withGaps],
+      [],
+      ['NEEDS ATTENTION'],
+      ...r.chips.map((c) => [c.label, c.n + ' missing']),
+      ...(r.unmapped.length ? [['Unmapped sections', r.unmapped.map((x) => x.scheduleName).join(', ')]] : []),
+      ...(r.emptyText.length ? [['Sections with no spec text', r.emptyText.map((x) => x.scheduleName).join(', ')]] : []),
+      [],
+      ['SECTION', 'CSI', 'ROWS', 'INCOMPLETE']
+    ];
+    secs.forEach((s) => out.push([s.scheduleName, secNum(s) ? MF.fmt(secNum(s)) : 'unmapped', visibleItems(s.id).length, gapCount(s.id)]));
+    return out;
+  }
+
+  const safeName = (t) => String(t || 'Sheet').replace(/[\\\/\?\*\[\]:]/g, '-').slice(0, 31);
+
+  /** Real .xlsx via the SheetJS build already loaded by this app. */
+  function workbookBlob(secs) {
+    const X = window.XLSX;
+    if (!X) return null;
+    const wb = X.utils.book_new();
+    X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(summaryRows(secs)), 'Summary');
+    const used = {};
+    secs.forEach((s) => {
+      let n = safeName(s.scheduleName);
+      if (used[n]) n = safeName(n.slice(0, 27) + ' ' + (++used[n])); else used[n] = 1;
+      X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(sheetFor(s)), n);
+    });
+    return new Blob([X.write(wb, { bookType: 'xlsx', type: 'array' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  }
+
+  function csvBlob(secs) {
+    const rows = [['Section', 'CSI', 'Schedule', 'Mark', 'Family', 'Type', 'Level', 'Qty', 'Area', 'Manufacturer', 'Model', 'Finish', 'Status', 'Links', 'Notes']];
+    secs.forEach((s) => visibleItems(s.id).forEach((i) => {
+      const sp = i.spec || {};
+      rows.push([s.scheduleName, secNum(s) ? MF.fmt(secNum(s)) : '', i.sourceSchedule, i.mark, i.family, i.type, i.level, i.qty, i.area,
+        sp.manufacturer, sp.model, sp.finish, sp.approval, (sp.links || []).map((l) => l.url).join(' '), sp.notes]);
+    }));
+    return new Blob([rows.map((r) => r.map((v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`).join(',')).join('\n')], { type: 'text/csv' });
+  }
+
+  /** Deep link back into the platform shell, opening this project (and section). */
+  function shareLink(secId) {
+    const base = 'https://liberpict.com/liber-apps/';
+    const q = ['returnTo=specifications', 'specProjectId=' + encodeURIComponent(S.sid)];
+    if (secId) { q.push('section=' + encodeURIComponent(secId)); q.push('view=table'); }
+    return base + '?' + q.join('&');
+  }
+
+  function waText(secs, secId) {
+    const r = gapReport();
+    const top = r.chips.slice(0, 4).map((c) => `${c.n} missing ${String(c.label).toLowerCase()}`).join(', ');
+    return `*${S.project ? S.project.name : 'Specifications'}*\n`
+      + (secId ? `Section: ${secs[0] ? secs[0].scheduleName : ''}\n` : `Spec book · ${secs.length} sections\n`)
+      + `${r.pct}% complete (${r.complete}/${r.rows} rows fully specified)\n`
+      + (top ? `Needs attention: ${top}\n` : '')
+      + `\nOpen in LIBER: ${shareLink(secId)}`;
+  }
+
+  /** Native share sheet (WhatsApp/Telegram/Mail) with the file attached; graceful fallbacks. */
+  async function shareOut(blob, filename, text) {
+    const file = (window.File) ? new File([blob], filename, { type: blob.type }) : null;
+    try {
+      if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: filename, text });
+        closeModal(); toast('Shared'); return;
+      }
+    } catch (e) {
+      if (e && e.name === 'AbortError') { toast('Share cancelled'); return; }
+      console.warn('share failed', e);
+    }
+    saveBlob(blob, filename);
+    window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener');
+    closeModal(); toast(filename + ' downloaded — attach it in WhatsApp', 5000);
+  }
+
+  function saveBlob(blob, filename) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }
+
   function exportDialog() {
-    modal(`<h3>Export specification book</h3>
+    const sec = S.activeSec ? S.sections.find((s) => s.id === S.activeSec) : null;
+    modal(`<h3>Share &amp; export</h3>
       <div class="sp-form">
-        <button class="sp-btn sp-btn-ghost sp-w" id="ex-print">Print / PDF — full CSI book</button>
+        <div class="sp-row"><label>What</label><select id="ex-scope">
+          <option value="all">Whole spec book — ${S.sections.length} sections</option>
+          ${sec ? `<option value="sec">This section only — ${esc(sec.scheduleName)}</option>` : ''}
+        </select><span class="hint">Excel exports one sheet per schedule plus a “Summary” sheet listing every blank that still needs a designer.</span></div>
+      </div>
+      <div class="sp-sub">Send</div>
+      <div class="sp-form">
+        <button class="sp-btn sp-w" id="ex-wa-x">Share spreadsheet (WhatsApp, Mail…)</button>
+        <button class="sp-btn sp-btn-ghost sp-w" id="ex-wa-t">WhatsApp — status summary + link</button>
+        <button class="sp-btn sp-btn-ghost sp-w" id="ex-copy">Copy shareable link</button>
+      </div>
+      <div class="sp-sub">Download</div>
+      <div class="sp-form">
+        <button class="sp-btn sp-btn-ghost sp-w" id="ex-xlsx">Excel (.xlsx) — sheet per schedule</button>
         <button class="sp-btn sp-btn-ghost sp-w" id="ex-csv">CSV — flat item register</button>
-        <button class="sp-btn sp-btn-ghost sp-w" id="ex-json">JSON — full data (round-trip)</button>
+        <button class="sp-btn sp-btn-ghost sp-w" id="ex-print">Print / PDF — full CSI book</button>
         <button class="sp-btn sp-btn-ghost sp-w" id="ex-md">Markdown — section outline</button>
+        <button class="sp-btn sp-btn-ghost sp-w" id="ex-json">JSON — full data (round-trip)</button>
       </div>
       <div class="sp-modal-actions"><button class="sp-btn sp-btn-ghost" id="ex-close">Close</button></div>`, (c) => {
+      const scope = () => $('#ex-scope', c).value === 'sec' && sec ? [sec] : sectionsSorted();
+      const scopeId = () => ($('#ex-scope', c).value === 'sec' && sec ? sec.id : null);
+      const stem = () => ((S.project && (S.project.code || S.project.name)) || 'specifications').replace(/[^\w\-]+/g, '-')
+        + ($('#ex-scope', c).value === 'sec' && sec ? '-' + safeName(sec.scheduleName).replace(/[^\w\-]+/g, '-') : '-spec-book');
+      const wb = () => { const b = workbookBlob(scope()); if (!b) toast('Spreadsheet engine still loading — try again'); return b; };
+
       $('#ex-close', c).onclick = closeModal;
-      $('#ex-print', c).onclick = () => { const a = S.activeSec; S.activeSec = null; renderContent(); setTimeout(() => { window.print(); S.activeSec = a; renderContent(); }, 200); };
-      $('#ex-csv', c).onclick = () => {
-        const rows = [['Section', 'CSI', 'Schedule', 'Mark', 'Family', 'Type', 'Level', 'Qty', 'Area', 'Manufacturer', 'Model', 'Finish', 'Status', 'Links', 'Notes']];
-        sectionsSorted().forEach((s) => visibleItems(s.id).forEach((i) => {
-          const sp = i.spec || {};
-          rows.push([s.scheduleName, secNum(s) ? MF.fmt(secNum(s)) : '', i.sourceSchedule, i.mark, i.family, i.type, i.level, i.qty, i.area, sp.manufacturer, sp.model, sp.finish, sp.approval, (sp.links || []).map((l) => l.url).join(' '), sp.notes]);
-        }));
-        dl(rows.map((r) => r.map((v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`).join(',')).join('\n'), 'specifications.csv', 'text/csv');
+      $('#ex-wa-x', c).onclick = async () => { const b = wb(); if (b) await shareOut(b, stem() + '.xlsx', waText(scope(), scopeId())); };
+      $('#ex-wa-t', c).onclick = () => { window.open('https://wa.me/?text=' + encodeURIComponent(waText(scope(), scopeId())), '_blank', 'noopener'); closeModal(); };
+      $('#ex-copy', c).onclick = async () => {
+        const link = shareLink(scopeId());
+        try { await navigator.clipboard.writeText(link); toast('Link copied'); }
+        catch (_) { prompt('Copy this link', link); }
       };
-      $('#ex-json', c).onclick = () => dl(JSON.stringify({ project: S.project, sections: S.sections, items: S.items }, null, 2), 'specifications.json', 'application/json');
+      $('#ex-xlsx', c).onclick = () => { const b = wb(); if (b) { saveBlob(b, stem() + '.xlsx'); closeModal(); toast('Exported ' + stem() + '.xlsx'); } };
+      $('#ex-csv', c).onclick = () => { saveBlob(csvBlob(scope()), stem() + '.csv'); closeModal(); toast('Exported CSV'); };
+      $('#ex-print', c).onclick = () => { closeModal(); const a = S.activeSec; if ($('#ex-scope', c) && !scopeId()) S.activeSec = null; renderContent(); setTimeout(() => { window.print(); S.activeSec = a; renderContent(); }, 250); };
+      $('#ex-json', c).onclick = () => dl(JSON.stringify({ project: S.project, sections: S.sections, items: S.items }, null, 2), stem() + '.json', 'application/json');
       $('#ex-md', c).onclick = () => {
         let out = `# ${S.project.name}\n\n`;
-        const divs = [...new Set(sectionsSorted().map(secDiv))].sort();
+        const secs = scope();
+        const divs = [...new Set(secs.map(secDiv))].sort();
         divs.forEach((d) => {
           out += `\n## Division ${d} — ${MF.divisionTitle(d)}\n`;
-          sectionsSorted().filter((s) => secDiv(s) === d).forEach((s) => {
+          secs.filter((s) => secDiv(s) === d).forEach((s) => {
             out += `\n### ${secNum(s) ? MF.fmt(secNum(s)) : '— — —'} ${s.scheduleName}\n`;
             MF.SECTIONFORMAT.forEach((p) => {
               out += `\n**PART ${p.number} — ${p.title}**\n`;
@@ -1133,10 +1284,11 @@
             });
           });
         });
-        dl(out, 'specification-book.md', 'text/markdown');
+        dl(out, stem() + '.md', 'text/markdown');
       };
     });
   }
+
   function dl(text, name, type) {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click();
