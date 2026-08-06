@@ -251,3 +251,7 @@ table.sp-table{width:100%;border-collapse:collapse;font-size:13.5px}
 .sp-table td.blank:hover{box-shadow:inset 0 0 0 1px var(--warn)}
 .sp-rich:empty{border-style:dashed;border-color:#5a4520;min-height:34px}
 @media print{.sp-attn{display:none!important}.sp-table td.blank{background:none;box-shadow:none}}
+
+/* long schedule names wrap instead of truncating in the rail */
+.sp-sec{align-items:flex-start}
+.sp-sec .n{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.3;word-break:break-word}

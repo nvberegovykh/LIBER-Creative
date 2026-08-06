@@ -202,7 +202,7 @@
           return `<div class="sp-sec ${S.activeSec === s.id ? 'active' : ''}" data-id="${s.id}">
             <code>${secNum(s) ? MF.fmt(secNum(s)) : '– – –'}</code>
             <span class="n">${esc(s.scheduleName)}</span>
-            <span class="sp-pill ${warn || g ? 'warn' : ''}" title="${warn ? 'Needs a MasterFormat number' : g ? g + ' of ' + n + ' rows have blanks' : n + ' rows complete'}">${warn ? '!' : g ? g + '/' + n : n}</span></div>`;
+            <span class="sp-pill ${warn || g ? 'warn' : ''}" title="${warn ? 'Needs a MasterFormat number' : g ? g + ' of ' + n + ' rows still have blanks' : n + ' rows, all complete'}">${warn ? '!' : g ? '!' + g : n}</span></div>`;
         }).join('')}
       </div>`).join('');
     $$('.sp-sec', host).forEach((el) => el.onclick = () => {
