@@ -68,28 +68,87 @@
     await openProject(sid);
   }
 
+  /* ---- session state: closing the app and reopening it must land you back
+     where you were, exactly like the chat app does ---- */
+  const UIKEY = 'liber.spec.ui';
+  function saveUI() {
+    if (!S.sid) return;
+    try {
+      const all = JSON.parse(localStorage.getItem(UIKEY) || '{}');
+      all[S.sid] = { view: S.view, sec: S.activeSec, group: S.groupBy, sort: S.sortBy,
+        showRemoved: S.showRemoved, gap: S.gap, scroll: ($('#content') || {}).scrollTop || 0, at: Date.now() };
+      localStorage.setItem(UIKEY, JSON.stringify(all));
+    } catch (_) {}
+  }
+  function loadUI(sid) {
+    try { return (JSON.parse(localStorage.getItem(UIKEY) || '{}'))[sid] || null; } catch (_) { return null; }
+  }
+  function restoreUI(sid) {
+    const u = loadUI(sid); if (!u) return;
+    S.view = u.view || 'book';
+    S.activeSec = u.sec || null;
+    S.groupBy = u.group || 'none'; S.sortBy = u.sort || 'order';
+    S.showRemoved = !!u.showRemoved; S.gap = u.gap || null;
+    $$('.sp-seg button').forEach((b) => b.classList.toggle('active', b.dataset.view === S.view));
+    const g = $('#group-by'); if (g) g.value = S.groupBy;
+    const so = $('#sort-by'); if (so) so.value = S.sortBy;
+    const sr = $('#show-removed'); if (sr) sr.checked = S.showRemoved;
+    if (u.scroll) setTimeout(() => { const c = $('#content'); if (c) c.scrollTop = u.scroll; }, 120);
+  }
+
+  /** Params handed over while the app is already mounted (shell reuses the iframe). */
+  function applyHandoff(params) {
+    if (!params) return;
+    if (params.specUrl) {
+      const p = { url: params.specUrl, title: params.specTitle || '', note: params.specNote || '' };
+      if (S.sid) addLinkFlow(p); else S.pending = p;
+    }
+    if (params.specProjectId && params.specProjectId !== S.sid) {
+      localStorage.setItem('liber.spec.last', params.specProjectId);
+      openProject(params.specProjectId).then(() => applyDeepView(params));
+      return;
+    }
+    applyDeepView(params);
+  }
+  function applyDeepView(params) {
+    if (params.view) { S.view = params.view; $$('.sp-seg button').forEach((b) => b.classList.toggle('active', b.dataset.view === S.view)); }
+    if (params.section) S.activeSec = params.section;
+    if (params.view || params.section) { renderRail(); renderContent(); }
+    if (params.item) openItem(params.item);
+  }
+
   function wireChrome() {
+    window.addEventListener('message', (e) => {
+      const d = e.data;
+      if (d && d.type === 'liber:app-params') applyHandoff(d.params || {});
+    });
+    window.addEventListener('pagehide', saveUI);
+    document.addEventListener('visibilitychange', saveUI);
+    window.addEventListener('blur', saveUI);
     $('#btn-home').onclick = () => { showView('projects'); renderProjects(); };
     $('#btn-import').onclick = () => S.sid ? importDialog() : toast('Open or create a project first');
     $('#btn-new-project').onclick = newProjectDialog;
-    $('#btn-rail').onclick = () => $('#rail').classList.toggle('open');
+    $('#btn-rail').onclick = () => setRail(!$('#rail').classList.contains('open'));
     $('#btn-menu').onclick = menuDialog;
     $('#btn-sources').onclick = sourcesDialog;
     $('#btn-export').onclick = exportDialog;
     $('#btn-inbox').onclick = inboxDialog;
     $('#btn-history').onclick = () => S.sid ? historyDialog() : toast('Open a project first');
     $('#dr-close').onclick = closeDrawer;
-    $('#scrim').onclick = () => { closeDrawer(); $('#rail').classList.remove('open'); };
+    $('#scrim').onclick = () => { closeDrawer(); setRail(false); };
+    window.addEventListener('resize', () => { if (window.innerWidth > 860) setRail(false); measureHeader(); });
+    measureHeader();
     $('#rail-search').oninput = debounce((e) => { S.filter = e.target.value.trim().toLowerCase(); renderRail(); renderContent(); }, 200);
+    $('#content').addEventListener('scroll', debounce(saveUI, 400));
     $$('.sp-seg button').forEach((btn) => btn.onclick = () => {
       $$('.sp-seg button').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active'); S.view = btn.dataset.view; renderContent();
+      btn.classList.add('active'); S.view = btn.dataset.view; renderContent(); saveUI();
     });
-    $('#group-by').onchange = (e) => { S.groupBy = e.target.value; renderContent(); };
-    $('#sort-by').onchange = (e) => { S.sortBy = e.target.value; renderContent(); };
-    $('#show-removed').onchange = (e) => { S.showRemoved = e.target.checked; renderContent(); };
+    $('#group-by').onchange = (e) => { S.groupBy = e.target.value; renderContent(); saveUI(); };
+    $('#sort-by').onchange = (e) => { S.sortBy = e.target.value; renderContent(); saveUI(); };
+    $('#show-removed').onchange = (e) => { S.showRemoved = e.target.checked; renderContent(); saveUI(); };
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { closeModal(); closeDrawer(); return; }
+      if (e.key === 'Escape') { closeModal(); closeDrawer(); setRail(false); return; }
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName || '')) || e.target.isContentEditable;
       if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'z' && !typing && S.sid) {
         e.preventDefault(); e.shiftKey ? redoLast() : undoLast();
@@ -160,6 +219,8 @@
       S.history = rows.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, ST.HISTORY_MAX);
       $('#history-count').textContent = S.history.filter((h) => !h.undone).length;
     }));
+    restoreUI(sid);
+    renderRail(); renderContent();
     if (S.pending) { const p = S.pending; S.pending = null; addLinkFlow(p); }
     // deep links: ?view=table|issues  &item=<key>  &section=<id>
     const q = new URLSearchParams(location.search);
@@ -206,8 +267,9 @@
         }).join('')}
       </div>`).join('');
     $$('.sp-sec', host).forEach((el) => el.onclick = () => {
-      S.activeSec = el.dataset.id; $('#rail').classList.remove('open'); renderRail(); renderContent();
-      $('#content').scrollTop = 0;
+      if (window.innerWidth <= 860) setRail(false);
+      S.activeSec = el.dataset.id; renderRail(); renderContent();
+      $('#content').scrollTop = 0; saveUI();
     });
     const issues = S.sections.filter((s) => s.needsMapping && !s.numberOverride).length + S.items.filter((i) => i.mismatch).length;
     $('#issue-count').textContent = issues;
@@ -821,8 +883,22 @@
   }
 
   /* ---------------- item drawer ---------------- */
-  function openDrawer() { $('#drawer').hidden = false; $('#scrim').hidden = false; }
-  function closeDrawer() { $('#drawer').hidden = true; $('#scrim').hidden = true; }
+  /* One scrim serves the section rail and the item drawer; it is the tap-away
+   * target on phones, so its visibility must track both. */
+  function syncScrim() {
+    const on = !$('#drawer').hidden || $('#rail').classList.contains('open');
+    $('#scrim').hidden = !on;
+    document.body.classList.toggle('sp-locked', on);
+  }
+  function setRail(open) { $('#rail').classList.toggle('open', !!open); syncScrim(); }
+  function openDrawer() { $('#drawer').hidden = false; syncScrim(); }
+  function closeDrawer() { $('#drawer').hidden = true; syncScrim(); }
+
+  /** Header height drives the sticky toolbar offset — measure it instead of guessing. */
+  function measureHeader() {
+    const h = $('.sp-header');
+    if (h) document.documentElement.style.setProperty('--hh', h.offsetHeight + 'px');
+  }
 
   function openItem(id) {
     const i = S.items.find((x) => x.id === id); if (!i) return;

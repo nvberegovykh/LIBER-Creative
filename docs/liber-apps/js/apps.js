@@ -821,6 +821,16 @@ class AppsManager {
         }
     }
 
+    /** Apps whose iframe survives a shell close so state is preserved. */
+    isKeepAliveApp(src){
+        return /apps\/(secure-chat|specifications)\/index\.html/i.test(String(src || ''));
+    }
+    /** Document identity of an app URL, ignoring query string and hash. */
+    appDocKey(src){
+        try { const u = new URL(String(src), window.location.href); return u.origin + u.pathname; }
+        catch (_) { return String(src || '').split('?')[0].split('#')[0]; }
+    }
+
     openAppInShell(app, appUrl){
         const shell = document.getElementById('app-shell');
         const frame = document.getElementById('app-shell-frame');
@@ -835,9 +845,25 @@ class AppsManager {
         const currentIsChat = /apps\/secure-chat\/index\.html/i.test(currentSrc) && currentSrc !== 'about:blank';
         const nextIsChat = String(app?.id || '') === 'secure-chat' || /apps\/secure-chat\/index\.html/i.test(String(appUrl || ''));
         const shouldReuseChat = currentIsChat && nextIsChat;
-        if (!shouldReuseChat){
+        // Same app reopened while its iframe is still mounted: keep it alive so the
+        // user resumes exactly where they left off, and hand parameters over by
+        // postMessage instead of reloading the document.
+        const sameMounted = currentSrc && currentSrc !== 'about:blank'
+            && this.appDocKey(currentSrc) === this.appDocKey(appUrl);
+        const shouldReuse = shouldReuseChat || (sameMounted && this.isKeepAliveApp(appUrl));
+        if (!shouldReuse){
             const separator = appUrl.includes('?') ? '&' : '?';
             frame.src = `${appUrl}${separator}inShell=1`;
+        } else if (sameMounted){
+            try{
+                const q = new URL(appUrl, window.location.href).searchParams;
+                const params = {};
+                ['specUrl','specTitle','specNote','specProjectId','section','view','item','projectId']
+                    .forEach((k)=>{ if (q.get(k)) params[k] = q.get(k); });
+                if (Object.keys(params).length){
+                    frame.contentWindow?.postMessage({ type: 'liber:app-params', params }, '*');
+                }
+            } catch (_) {}
         }
         if (title) title.textContent = app?.name || 'App';
         shell.classList.remove('hidden');
@@ -856,9 +882,9 @@ class AppsManager {
             if (!shell || !frame) return;
             const activeSrc = String(frame.getAttribute('src') || '');
             const isChatShell = /apps\/secure-chat\/index\.html/i.test(activeSrc);
-            // Keep secure-chat iframe alive when shell is closed to preserve
-            // in-call/background behavior across shell open/close transitions.
-            const keepAliveChat = isChatShell;
+            // Keep secure-chat (in-call state) and specifications (unsaved edits,
+            // scroll position, open section) alive across shell close/open.
+            const keepAliveChat = isChatShell || this.isKeepAliveApp(activeSrc);
             if (!keepAliveChat){
                 frame.src = 'about:blank';
                 this._activeAppUrl = '';
