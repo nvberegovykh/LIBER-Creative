@@ -19,6 +19,8 @@ const state = {
   chapterEdits: new Map(),
   issues: [],
   library: [],
+  renderJobs: [],
+  activeRenderJob: null,
   selectedElement: null,
   selectedDesign: null,
   selectedContext: '',
@@ -27,6 +29,10 @@ const state = {
   unsubscribe: null,
   loadingRevision: ''
 };
+
+let projectReturnFocus = null;
+let renderReturnFocus = null;
+let pendingNativeRender = null;
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -370,6 +376,7 @@ function showView(name) {
   if (hasProject) {
     history.replaceState(null, '', `${location.pathname}?${new URLSearchParams({ ...(params.get('inShell') ? { inShell: '1' } : {}), projectId: state.projectId, ...(state.preferredSpecId ? { specProjectId: state.preferredSpecId } : {}), view: name })}`);
     if (name === 'bim') setTimeout(() => viewer?.resize(), 0);
+    if (name === 'spec') renderSpec();
     if (name === 'chat') renderChatContext();
   }
 }
@@ -401,6 +408,67 @@ function renderProjects() {
     `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name || project.title || 'Untitled project')}</option>`
   ).join('');
   select.value = state.projectId;
+}
+
+function notifyNativeProject() {
+  if (!state.projectId) return;
+  try {
+    window.chrome?.webview?.postMessage({
+      type: 'liber:revex-project-selected',
+      projectId: state.projectId,
+      specProjectId: state.preferredSpecId || null,
+      projectName: state.project?.name || state.project?.title || ''
+    });
+  } catch (_) {}
+}
+
+function openProjectDialog() {
+  projectReturnFocus = document.activeElement;
+  $('#project-form').reset();
+  $('#project-dialog').hidden = false;
+  setTimeout(() => $('#project-name').focus(), 0);
+}
+
+function closeProjectDialog() {
+  $('#project-dialog').hidden = true;
+  const target = projectReturnFocus;
+  projectReturnFocus = null;
+  target?.focus?.();
+}
+
+async function createProject(event) {
+  event.preventDefault();
+  const button = $('#project-create');
+  button.disabled = true;
+  button.textContent = 'Creating…';
+  setSync('Creating REVEX project…', 'busy');
+  try {
+    const created = await Store.createProject({
+      name: $('#project-name').value,
+      code: $('#project-code').value,
+      driveFileId: $('#project-drive-id').value,
+      description: $('#project-description').value
+    });
+    state.projects = await Store.listProjects();
+    if (!state.projects.some((row) => row.id === created.id)) state.projects.unshift(created);
+    renderProjects();
+    closeProjectDialog();
+    await activateProject(created.id);
+    toast('REVEX project, Spec Book and project connection created.');
+  } catch (error) {
+    setSync('Project creation failed', 'bad');
+    toast(error.message || 'Could not create the project.', true);
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Create project';
+  }
+}
+
+function connectExistingProject() {
+  if (!state.projects.length) return openProjectDialog();
+  $('#project-select').focus();
+  try { $('#project-select').showPicker?.(); } catch (_) {}
+  toast('Choose the existing LIBER project from the project field.');
 }
 
 function renderModelTree() {
@@ -473,11 +541,13 @@ function selectElement(element, fit = true) {
       <div class="property"><span>Unique ID</span>${escapeHtml(element.uniqueId || '—')}</div>
       <div class="property"><span>Materials</span>${(element.materials || []).map((m) => `<b class="material-chip">${escapeHtml(m.name)}</b>`).join('') || '—'}</div>
     </div>
+    <button class="button" id="element-render" type="button">Render selection</button>
     <button class="button" id="element-issue" type="button">Add BIM issue</button>
     ${designPosition ? '<button class="button ghost" id="element-design" type="button">Open Design Book position</button>' : ''}
     <button class="button ghost" id="element-chat" type="button">Send context to Project Chat</button>
     <h3>Issues · ${issues.length}</h3>
     <div class="issue-list">${issues.map((issue) => `<div class="issue-row"><strong>${escapeHtml(issue.title)}</strong><small>${escapeHtml(issue.status)} · ${formatDate(issue.createdAt)}</small><p>${escapeHtml(issue.body)}</p></div>`).join('') || '<p class="muted">No issues on this element.</p>'}</div>`;
+  $('#element-render').addEventListener('click', openRenderDialog);
   $('#element-issue').addEventListener('click', () => openIssue({ kind: 'bim', element }));
   $('#element-design')?.addEventListener('click', () => openDesignPosition(designPosition.chapter, designPosition.source, true));
   $('#element-chat').addEventListener('click', () => openProjectChat(state.selectedContext));
@@ -597,6 +667,7 @@ function renderDesignInspector() {
       <div class="image-strip">${(item.images || []).map((image) => `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name || '')}" />`).join('')}</div>
       <div><span class="eyebrow">REVIT MATERIAL CANDIDATES</span><div>${(item.candidateMaterials || []).map((name) => `<b class="material-chip">${escapeHtml(name)}</b>`).join('') || '<span class="muted">None inferred.</span>'}</div></div>
       <button class="button" type="submit">Save Design Book position</button>
+      <button class="button ghost" id="design-render" type="button">Render this position</button>
       <button class="button ghost" id="design-issue" type="button">Add design issue</button>
       <button class="button ghost" id="design-chat" type="button">Send context to Project Chat</button>
     </form>`;
@@ -609,6 +680,7 @@ function renderDesignInspector() {
     showView('bim');
     selectElement(element, true);
   });
+  $('#design-render').addEventListener('click', openRenderDialog);
   $('#design-issue').addEventListener('click', () => openIssue({ kind: 'design', item }));
   $('#design-chat').addEventListener('click', () => openProjectChat(state.selectedContext));
 }
@@ -651,8 +723,199 @@ function renderSpec() {
   const spec = state.cloudState?.spec;
   const linked = state.preferredSpecId || spec?.projectId;
   $('#spec-status').textContent = linked
-    ? `${spec?.status === 'published' ? 'Revit source published' : 'Linked'} · ${spec?.rev ? `revision ${spec.rev}` : 'ready'} · Specifications remains authoritative for authored spec fields.`
-    : 'Link this LIBER project to a Specifications project, or add a Specifications project ID in the Revit add-in.';
+    ? `${spec?.status === 'published' ? 'Revit source published' : 'Connected'} · ${spec?.rev ? `revision ${spec.rev}` : 'ready'} · authored fields remain stable across Revit syncs.`
+    : 'Preparing the internal Spec Book for this project…';
+  const frame = $('#spec-frame');
+  const wrap = $('.spec-frame-wrap');
+  if (!linked) {
+    frame.removeAttribute('src');
+    wrap.classList.remove('ready');
+    return;
+  }
+  const query = {
+    embedded: '1',
+    specProjectId: linked,
+    specUrl: params.get('specUrl'),
+    specTitle: params.get('specTitle'),
+    specNote: params.get('specNote'),
+    section: params.get('section'),
+    item: params.get('item')
+  };
+  const next = appUrl('specifications', query);
+  if (frame.src !== next) {
+    wrap.classList.remove('ready');
+    frame.src = next;
+  }
+}
+
+function renderContextLabel() {
+  if (state.selectedDesign) return `${state.selectedDesign.chapterTitle} · ${state.selectedDesign.label}`;
+  if (state.selectedElement) return `${state.selectedElement.category || 'Revit element'} · ${state.selectedElement.name || state.selectedElement.type || state.selectedElement.id}`;
+  return state.viewerData?.source?.viewName || 'Current BIM viewport';
+}
+
+function renderPrompt() {
+  const project = state.project?.name || state.project?.title || 'the project';
+  const context = renderContextLabel();
+  const materials = state.selectedDesign?.candidateMaterials || state.selectedElement?.materials?.map((row) => row.name) || [];
+  return [
+    `Create a realistic architectural visualization for ${project}.`,
+    `Source context: ${context}.`,
+    'Preserve the Revit camera, geometry, openings, proportions and modeled objects exactly.',
+    materials.length ? `Use the Revit material intent: ${materials.join(', ')}.` : 'Use physically plausible project materials without changing the design.',
+    'Natural scale, buildable details, realistic light and no invented structural elements.'
+  ].join('\n');
+}
+
+function captureViewerPreview() {
+  try {
+    if (!viewer?.renderer?.domElement) return '';
+    viewer.renderer.render(viewer.scene, viewer.camera);
+    return viewer.renderer.domElement.toDataURL('image/png');
+  } catch (_) { return ''; }
+}
+
+function setRenderStatus(message, tone = '') {
+  const node = $('#render-status');
+  node.textContent = message;
+  node.className = `render-status${tone ? ` ${tone}` : ''}`;
+}
+
+function renderRenderHistory() {
+  $('#render-history').innerHTML = state.renderJobs.map((job) => `
+    <div class="render-job" data-render-job="${escapeHtml(job.id)}">
+      <strong>${escapeHtml(job.contextLabel || job.chapterTitle || 'Project view')}</strong>
+      <span>${escapeHtml(job.status || 'prepared')}</span>
+      <small>${escapeHtml(job.prompt || '')}</small>
+    </div>`).join('') || '<div class="file-empty">No renders prepared for this project yet.</div>';
+}
+
+function populateRenderChapters() {
+  const select = $('#render-chapter');
+  select.innerHTML = chapters().map((chapter) => `<option value="${escapeHtml(chapter.id)}">${escapeHtml(chapter.title)}</option>`).join('');
+  select.value = state.activeChapter || chapters()[0]?.id || '';
+}
+
+function openRenderDialog() {
+  if (!state.projectId) return openProjectDialog();
+  renderReturnFocus = document.activeElement;
+  $('#render-context').textContent = renderContextLabel();
+  $('#render-prompt').value = renderPrompt();
+  populateRenderChapters();
+  const preview = captureViewerPreview();
+  $('#render-source').innerHTML = `${preview ? `<img src="${preview}" alt="Current BIM render source" />` : ''}<span>${escapeHtml(renderContextLabel())}</span>`;
+  renderRenderHistory();
+  $('#render-dialog').hidden = false;
+  setRenderStatus('The source view, project and Design Book context stay attached to this render.');
+  // Keep the complete context stack visible when the bottom-sheet opens on mobile.
+  // Desktop still gets the prompt-first keyboard workflow.
+  if (window.matchMedia('(min-width: 861px)').matches) setTimeout(() => $('#render-prompt').focus(), 0);
+}
+
+function closeRenderDialog() {
+  $('#render-dialog').hidden = true;
+  pendingNativeRender = null;
+  const target = renderReturnFocus;
+  renderReturnFocus = null;
+  target?.focus?.();
+}
+
+function postNativeRender(payload) {
+  try {
+    if (!window.chrome?.webview?.postMessage) return false;
+    window.chrome.webview.postMessage(payload);
+    return true;
+  } catch (_) { return false; }
+}
+
+async function prepareRender(event) {
+  event.preventDefault();
+  if (!state.projectId) return openProjectDialog();
+  const prompt = $('#render-prompt').value.trim();
+  if (!prompt) return setRenderStatus('Add a render instruction first.', 'bad');
+  const chapter = chapters().find((row) => row.id === $('#render-chapter').value) || null;
+  const settings = {
+    environment: $('#render-environment').value,
+    staging: $('#render-staging').value,
+    people: $('#render-people').value,
+    autoMaterials: $('#render-materials').checked,
+    preserveGeometry: true,
+    realisticOnly: true
+  };
+  setRenderStatus('Preparing the BIM source and AI workspace…', 'busy');
+  try {
+    const job = await Store.createRenderJob(state.projectId, {
+      contextKind: state.selectedDesign ? 'design' : state.selectedElement ? 'bim' : 'view',
+      contextLabel: renderContextLabel(),
+      elementId: state.selectedElement?.id || null,
+      designItemId: state.selectedDesign?.id || null,
+      chapterId: chapter?.id || null,
+      chapterTitle: chapter?.title || null,
+      revision: state.cloudState?.revision || null,
+      prompt,
+      settings,
+      status: 'bridging'
+    });
+    state.activeRenderJob = job;
+    state.renderJobs = [job, ...state.renderJobs.filter((row) => row.id !== job.id)].slice(0, 40);
+    renderRenderHistory();
+    pendingNativeRender = {
+      type: 'liber:revex-render-request', action: 'capture-current', projectId: state.projectId,
+      specProjectId: state.preferredSpecId || null, renderJobId: job.id, prompt, settings,
+      context: { label: renderContextLabel(), elementId: state.selectedElement?.id || null, designItemId: state.selectedDesign?.id || null, chapterId: chapter?.id || null }
+    };
+    const frame = $('#render-frame');
+    const workspace = $('.render-workspace');
+    workspace.classList.remove('ready');
+    frame.src = 'https://rendair.ai/tools/3d-model-to-render';
+    if (frame.dataset.loaded === '1' && postNativeRender(pendingNativeRender)) {
+      pendingNativeRender = null;
+      setRenderStatus('Revit is capturing the active 3D view and attaching it to the embedded AI workspace…', 'busy');
+    } else if (!window.chrome?.webview?.postMessage) {
+      try { await navigator.clipboard?.writeText(prompt); } catch (_) {}
+      await Store.updateRenderJob(state.projectId, job.id, { status: 'workspace-ready' });
+      job.status = 'workspace-ready';
+      renderRenderHistory();
+      setRenderStatus('AI workspace ready. The prompt is copied; attach the prepared source preview in the embedded workspace, then save the result below.', 'good');
+    }
+  } catch (error) {
+    setRenderStatus(error.message || 'The render could not be prepared.', 'bad');
+  }
+}
+
+async function saveRenderResult(event) {
+  const file = event.target.files?.[0];
+  const chapter = chapters().find((row) => row.id === $('#render-chapter').value);
+  if (!file || !chapter) return setRenderStatus('Choose a Design Book chapter before saving the result.', 'bad');
+  try {
+    setRenderStatus('Saving the generated result into the Design Book…', 'busy');
+    const formed = mergedChapter(chapter);
+    const images = await Store.uploadChapterImage(state.projectId, chapter.id, 'renders', file, formed.renders || []);
+    state.chapterEdits.set(chapter.id, { ...(state.chapterEdits.get(chapter.id) || {}), renders: images });
+    state.activeChapter = chapter.id;
+    if (state.activeRenderJob) {
+      const result = images[images.length - 1];
+      await Store.updateRenderJob(state.projectId, state.activeRenderJob.id, { status: 'saved', resultUrl: result?.url || null, resultName: file.name, chapterId: chapter.id });
+      state.activeRenderJob = { ...state.activeRenderJob, status: 'saved', resultUrl: result?.url || null, resultName: file.name };
+      state.renderJobs = state.renderJobs.map((row) => row.id === state.activeRenderJob.id ? state.activeRenderJob : row);
+    }
+    renderDesign(); renderRenderHistory();
+    setRenderStatus(`Saved to ${chapter.title} · Renderings.`, 'good');
+    toast('Render saved into the Design Book.');
+  } catch (error) { setRenderStatus(error.message || 'Could not save the render.', 'bad'); }
+  finally { event.target.value = ''; }
+}
+
+async function handleNativeRenderStatus(data) {
+  if (!data || data.type !== 'liber:revex-render-status') return;
+  setRenderStatus(data.message || (data.ok ? 'Render bridge ready.' : 'Render bridge failed.'), data.ok ? 'good' : 'bad');
+  const jobId = data.renderJobId || state.activeRenderJob?.id;
+  if (!jobId) return;
+  const status = data.ok ? 'ready-in-ai' : 'bridge-error';
+  try { await Store.updateRenderJob(state.projectId, jobId, { status, bridgeMessage: data.message || '' }); } catch (_) {}
+  state.renderJobs = state.renderJobs.map((row) => row.id === jobId ? { ...row, status } : row);
+  if (state.activeRenderJob?.id === jobId) state.activeRenderJob = { ...state.activeRenderJob, status };
+  renderRenderHistory();
 }
 
 function renderLibrary() {
@@ -739,18 +1002,28 @@ async function activateProject(projectId) {
   state.unsubscribe?.(); state.unsubscribe = null;
   state.projectId = projectId || '';
   state.project = state.projects.find((row) => row.id === projectId) || (projectId ? await Store.getProject(projectId) : null);
+  state.preferredSpecId = ((params.get('projectId') === projectId && params.get('specProjectId')) || state.project?.revexSpecProjectId || '');
   $('#project-select').value = state.projectId;
-  if (!projectId) { showView('bim'); return; }
+  if (!projectId) { state.preferredSpecId = ''; showView('bim'); return; }
   const requestedView = params.get('view') || 'bim';
   showView(requestedView);
   setSync('Loading project…', 'busy');
   try {
-    const cloudState = await Store.getState(projectId);
+    const [cloudState, specProjectId, renderJobs] = await Promise.all([
+      Store.getState(projectId),
+      Store.ensureSpecProject(projectId, state.preferredSpecId || state.project?.revexSpecProjectId, state.project),
+      Store.listRenderJobs(projectId)
+    ]);
+    state.preferredSpecId = specProjectId || '';
+    state.renderJobs = renderJobs;
+    if (state.project) state.project.revexSpecProjectId = state.preferredSpecId;
     await loadCloudState(cloudState);
+    renderSpec(); renderRenderHistory(); notifyNativeProject();
     state.unsubscribe = Store.subscribeState(projectId, (next) => {
       if (next?.revision && next.revision !== state.cloudState?.revision) loadCloudState(next);
       else if (next) { state.cloudState = next; renderSpec(); }
     });
+    if (params.get('render') === '1') openRenderDialog();
   } catch (error) { setSync('Project unavailable', 'bad'); toast(error.message, true); }
 }
 
@@ -816,6 +1089,13 @@ $$('.main-nav [data-view]').forEach((button) => button.addEventListener('click',
 $('#rail-toggle').addEventListener('click', toggleWorkspaceRail);
 $('#rail-scrim').addEventListener('click', closeWorkspaceRail);
 $('#project-select').addEventListener('change', () => activateProject($('#project-select').value));
+$('#new-project-button').addEventListener('click', openProjectDialog);
+$('#empty-create-button').addEventListener('click', openProjectDialog);
+$('#empty-connect-button').addEventListener('click', connectExistingProject);
+$('#project-form').addEventListener('submit', createProject);
+$('#project-close').addEventListener('click', closeProjectDialog);
+$('#project-cancel').addEventListener('click', closeProjectDialog);
+$('#project-dialog').addEventListener('click', (event) => { if (event.target === event.currentTarget) closeProjectDialog(); });
 $('#sync-button').addEventListener('click', () => $('#revex-sync-upload').click());
 $('#empty-sync-button').addEventListener('click', () => $('#revex-sync-upload').click());
 $('#revex-sync-upload').addEventListener('change', (event) => handleSyncFiles(event.target.files));
@@ -826,24 +1106,42 @@ $('#model-grid').addEventListener('click', (event) => { event.currentTarget.clas
 $('#issue-close').addEventListener('click', closeIssue);
 $('#issue-cancel').addEventListener('click', closeIssue);
 $('#issue-drawer').addEventListener('click', (event) => { if (event.target === event.currentTarget) closeIssue(); });
+$('#render-button').addEventListener('click', openRenderDialog);
+$('#render-form').addEventListener('submit', prepareRender);
+$('#render-close').addEventListener('click', closeRenderDialog);
+$('#render-dialog').addEventListener('click', (event) => { if (event.target === event.currentTarget) closeRenderDialog(); });
+$('#render-result-upload').addEventListener('change', saveRenderResult);
+$('#render-frame').addEventListener('load', () => {
+  $('#render-frame').dataset.loaded = '1';
+  $('.render-workspace').classList.add('ready');
+  if (pendingNativeRender && postNativeRender(pendingNativeRender)) {
+    pendingNativeRender = null;
+    setRenderStatus('Revit is capturing the active 3D view and attaching it to the embedded AI workspace…', 'busy');
+  }
+});
+$('#spec-frame').addEventListener('load', () => $('.spec-frame-wrap').classList.add('ready'));
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
-  if (!$('#issue-drawer').hidden) closeIssue();
+  if (!$('#render-dialog').hidden) closeRenderDialog();
+  else if (!$('#project-dialog').hidden) closeProjectDialog();
+  else if (!$('#issue-drawer').hidden) closeIssue();
   else closeWorkspaceRail();
 });
 window.addEventListener('resize', () => { if (innerWidth > 860) closeWorkspaceRail(); });
 $('#open-chat').addEventListener('click', () => openProjectChat());
-$('#open-spec').addEventListener('click', () => openInLiberShell('specifications', 'Specifications', appUrl('specifications', { specProjectId: state.preferredSpecId || state.cloudState?.spec?.projectId })));
 $('#open-tracker').addEventListener('click', () => openInLiberShell('project-tracker', 'Project Tracker', appUrl('project-tracker', { projectId: state.projectId })));
-$('#rendair-button').addEventListener('click', () => window.open('https://rendair.ai/tools/3d-model-to-render', '_blank', 'noopener'));
 
 window.addEventListener('message', (event) => {
   const data = event.data || {};
-  if (data.type !== 'liber:app-params') return;
-  if (data.params?.specProjectId) state.preferredSpecId = data.params.specProjectId;
-  if (data.params?.projectId && data.params.projectId !== state.projectId) activateProject(data.params.projectId);
-  if (data.params?.view) showView(data.params.view);
+  if (data.type === 'liber:revex-render-status') return handleNativeRenderStatus(data);
+  if (data.type === 'liber:app-params') {
+    if (data.params?.specProjectId) state.preferredSpecId = data.params.specProjectId;
+    if (data.params?.projectId && data.params.projectId !== state.projectId) activateProject(data.params.projectId);
+    if (data.params?.view) showView(data.params.view);
+    if (data.params?.render === '1') openRenderDialog();
+  }
 });
+try { window.chrome?.webview?.addEventListener('message', (event) => handleNativeRenderStatus(event.data || {})); } catch (_) {}
 
 async function init() {
   setSync('Connecting to LIBER…', 'busy');
