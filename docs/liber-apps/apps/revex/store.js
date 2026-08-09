@@ -268,6 +268,37 @@
       return { id: itemId, ...data };
     },
 
+    async listChapterEdits(projectId) {
+      if (!this.isCloud() || !projectId) {
+        try { return Object.values(JSON.parse(localStorage.getItem(`liber.revex.chapters.${projectId}`) || '{}')); } catch (_) { return []; }
+      }
+      const snap = await this.api.getDocs(this.api.collection(this.db, 'projects', projectId, 'revexDesignChapters'));
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    },
+
+    async saveChapterEdit(projectId, chapterId, patch) {
+      const data = { ...patch, updatedAt: iso(), updatedBy: this.user?.uid || 'local' };
+      if (!this.isCloud()) {
+        const key = `liber.revex.chapters.${projectId}`;
+        const all = JSON.parse(localStorage.getItem(key) || '{}');
+        all[chapterId] = { ...(all[chapterId] || {}), ...data, id: chapterId };
+        localStorage.setItem(key, JSON.stringify(all));
+        return all[chapterId];
+      }
+      await this.api.setDoc(this.api.doc(this.db, 'projects', projectId, 'revexDesignChapters', chapterId), plain(data), plain({ merge: true }));
+      return { id: chapterId, ...data };
+    },
+
+    async uploadChapterImage(projectId, chapterId, field, file, currentImages) {
+      if (!this.isCloud()) throw new Error('Sign in to save chapter imagery across devices.');
+      if (!['inspiration', 'renders', 'versionImages'].includes(field)) throw new Error('Unknown Design Book image lane.');
+      const name = safe(file.name || 'image');
+      const uploaded = await this.uploadFile(`projects/${projectId}/revex/design/chapters/${docId(chapterId)}/${field}/${Date.now()}_${name}`, file);
+      const images = [...(currentImages || []), { url: uploaded.url, path: uploaded.path, name }].slice(-24);
+      await this.saveChapterEdit(projectId, chapterId, { [field]: images });
+      return images;
+    },
+
     async uploadDesignImage(projectId, itemId, file, currentImages) {
       if (!this.isCloud()) throw new Error('Sign in to save Design Book images across devices.');
       const name = safe(file.name || 'image');
