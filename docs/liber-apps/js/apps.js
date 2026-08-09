@@ -508,6 +508,19 @@ class AppsManager {
                 userOnly: true
             },
             {
+                id: 'revex',
+                name: 'REVEX Companion',
+                description: 'Live BIM viewer and Design Book linked to Project Tracker, Specifications, project docs and chat.',
+                version: '0.5.0',
+                category: 'business',
+                icon: 'fas fa-cube',
+                status: 'online',
+                path: 'apps/revex/index.html',
+                author: 'LIBER',
+                lastUpdated: '2026-08-08',
+                logo: null
+            },
+            {
                 id: 'specifications',
                 name: 'Specifications',
                 description: 'CSI MasterFormat spec book generated from Revit schedules and sheets.',
@@ -823,7 +836,7 @@ class AppsManager {
 
     /** Apps whose iframe survives a shell close so state is preserved. */
     isKeepAliveApp(src){
-        return /apps\/(secure-chat|specifications)\/index\.html/i.test(String(src || ''));
+        return /apps\/(secure-chat|specifications|revex)\/index\.html/i.test(String(src || ''));
     }
     /** Document identity of an app URL, ignoring query string and hash. */
     appDocKey(src){
@@ -858,7 +871,7 @@ class AppsManager {
             try{
                 const q = new URL(appUrl, window.location.href).searchParams;
                 const params = {};
-                ['specUrl','specTitle','specNote','specProjectId','section','view','item','projectId']
+                ['specUrl','specTitle','specNote','specProjectId','section','view','mode','item','projectId']
                     .forEach((k)=>{ if (q.get(k)) params[k] = q.get(k); });
                 if (Object.keys(params).length){
                     frame.contentWindow?.postMessage({ type: 'liber:app-params', params }, '*');
