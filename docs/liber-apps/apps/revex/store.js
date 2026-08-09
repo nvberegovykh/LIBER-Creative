@@ -18,22 +18,37 @@
   }
 
   function getService() {
+    // REVEX loads its own Firebase runtime. If that local service exists but is
+    // still initializing, wait for it instead of borrowing the parent frame's
+    // service: Firestore rejects objects created in a different JS realm.
+    if (root.firebaseService) {
+      REALM = root;
+      return root.firebaseService;
+    }
     try {
-      for (const w of [root, root.parent, root.top].filter(Boolean)) {
-        if (w.firebaseService && w.firebaseService.isInitialized) {
+      for (const w of [root.parent, root.top].filter(Boolean)) {
+        if (w !== root && w.firebaseService && w.firebaseService.isInitialized) {
           REALM = w;
           return w.firebaseService;
         }
       }
     } catch (_) {}
-    return root.firebaseService || null;
+    return null;
   }
 
   function getApi(fs) {
     try {
+      // Keep Firestore API + data objects in the same realm as the local REVEX
+      // FirebaseService. Do not fall through to parent Firebase while local SDK
+      // loading is in progress.
+      if (root.firebaseService && fs === root.firebaseService) {
+        if (fs?.firebase?.collection) { REALM = root; return fs.firebase; }
+        if (root.firebase?.collection) { REALM = root; return root.firebase; }
+        return null;
+      }
       if (fs?.firebase?.collection) return fs.firebase;
-      for (const w of [root, root.parent, root.top].filter(Boolean)) {
-        if (w.firebase?.collection) { REALM = w; return w.firebase; }
+      for (const w of [root.parent, root.top].filter(Boolean)) {
+        if (w !== root && w.firebase?.collection) { REALM = w; return w.firebase; }
       }
     } catch (_) {}
     return null;
