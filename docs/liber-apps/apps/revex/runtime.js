@@ -101,6 +101,7 @@
       console.warn('[REVEX] project chat will be created when first opened', error);
     }
 
+    setTimeout(setInviteEnabled, 300);
     return { ...project, revexSpecProjectId: specProjectId, specProjectId };
   };
 
@@ -198,7 +199,12 @@
     setInviteEnabled();
   };
 
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !document.getElementById('invite-dialog')?.hidden) closeInvite();
+  });
+
   bind();
   setTimeout(bind, 500);
   setTimeout(bind, 2000);
+  setInterval(setInviteEnabled, 1000);
 })(window);
