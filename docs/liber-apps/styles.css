@@ -109,10 +109,28 @@
   padding-top: 0 !important;
 }
 
+/* WALLT is the canonical visible name of the LIBER assistant.
+   Legacy wall-e ids/classes remain for compatibility only. */
+.mobile-wall-e-toggle .wall-e-toggle-btn span,
+.chatgpt-title > span,
+.chatgpt-welcome > h4 {
+  font-size: 0 !important;
+}
+.mobile-wall-e-toggle .wall-e-toggle-btn span::after,
+.chatgpt-title > span::after,
+.chatgpt-welcome > h4::after {
+  content: 'WALLT';
+  font-size: 14px;
+  letter-spacing: .04em;
+}
+.chatgpt-welcome > h4::after {
+  font-size: 16px;
+  letter-spacing: .06em;
+}
+
 /* Wider password input on desktop */
 @media (min-width: 769px) {
   .password-input {
     width: 300px !important; /* Adjust as needed */
   }
 }
-
