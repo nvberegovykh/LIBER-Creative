@@ -23,7 +23,6 @@
         </select>
       </label>
       <button class="button ghost compact sp-btn sp-btn-ghost sp-btn-sm" id="new-project-button" type="button">New</button>
-      <button class="button ghost compact sp-btn sp-btn-ghost sp-btn-sm" id="invite-project-button" type="button" disabled>Invite</button>
       <div id="sync-indicator" class="sync-indicator sp-badge" data-tone="quiet">
         <span class="sync-dot"></span><span id="sync-label">Waiting for project</span>
       </div>
@@ -41,6 +40,7 @@
         <button type="button" data-view="chat">Chat</button>
       </div>
       <span class="nav-spacer"></span>
+      <button type="button" id="invite-project-button" class="utility sp-btn sp-btn-ghost sp-btn-sm" disabled>Invite</button>
       <button type="button" id="render-button" class="utility sp-btn sp-btn-ghost sp-btn-sm">Render</button>
     </nav>
 
@@ -171,7 +171,7 @@
       <div class="drawer-head"><div><div class="eyebrow">PROJECT ACCESS</div><h2 id="invite-dialog-title">Invite to REVEX</h2></div><button id="invite-close" class="icon-button sp-icon-btn" type="button" aria-label="Close invite dialog">×</button></div>
       <p id="invite-project-label" class="modal-intro">Invite someone into the active REVEX project.</p>
       <label>Email<input id="invite-email" type="email" required maxlength="180" placeholder="client@example.com" autocomplete="email" /></label>
-      <p class="modal-intro">One email link handles the entry chain. Existing LIBER users are signed in and taken to this project; new users finish account setup once, then land in the same REVEX project.</p>
+      <p class="modal-intro">One email link handles sign-in or one-time account setup, then opens this REVEX project directly.</p>
       <div class="drawer-actions sp-modal-actions"><button class="button ghost sp-btn sp-btn-ghost" id="invite-cancel" type="button">Cancel</button><button class="button sp-btn" id="invite-send" type="submit">Send invite</button></div>
     </form>
   </div>
