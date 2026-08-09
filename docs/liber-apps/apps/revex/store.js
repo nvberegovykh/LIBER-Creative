@@ -46,6 +46,15 @@
     }
   }
 
+  function readDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(reader.error || new Error('Could not read the image.'));
+      reader.readAsDataURL(file);
+    });
+  }
+
   function byName(files, name) {
     return files.find((file) => String(file.name || '').toLowerCase() === name.toLowerCase()) || null;
   }
@@ -88,7 +97,12 @@
     isCloud() { return this.mode === 'cloud'; },
 
     async listProjects() {
-      if (!this.isCloud()) return [];
+      if (!this.isCloud()) {
+        try {
+          const rows = Object.values(JSON.parse(localStorage.getItem('liber.revex.projects.v1') || '{}'));
+          return rows.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+        } catch (_) { return []; }
+      }
       const f = this.api;
       const uid = this.user.uid;
       const out = new Map();
@@ -102,9 +116,56 @@
     },
 
     async getProject(projectId) {
-      if (!this.isCloud() || !projectId) return null;
+      if (!projectId) return null;
+      if (!this.isCloud()) {
+        try { return JSON.parse(localStorage.getItem('liber.revex.projects.v1') || '{}')[projectId] || null; } catch (_) { return null; }
+      }
       const snap = await this.api.getDoc(this.api.doc(this.db, 'projects', projectId));
       return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+    },
+
+    async createProject({ name, code, description, driveFileId }) {
+      const title = String(name || '').trim();
+      if (!title) throw new Error('Enter a project name.');
+      const at = iso();
+      if (!this.isCloud()) {
+        const id = `local_${Date.now().toString(36)}`;
+        const all = JSON.parse(localStorage.getItem('liber.revex.projects.v1') || '{}');
+        all[id] = {
+          id, name: title, code: String(code || '').trim(), description: String(description || '').trim(),
+          ownerId: 'local', memberIds: ['local'], status: 'Active', driveFileId: String(driveFileId || '').trim() || null,
+          createdAt: at, updatedAt: at, revexProject: true
+        };
+        localStorage.setItem('liber.revex.projects.v1', JSON.stringify(all));
+        const specProjectId = await this.ensureSpecProject(id, null, all[id]);
+        all[id].revexSpecProjectId = specProjectId;
+        localStorage.setItem('liber.revex.projects.v1', JSON.stringify(all));
+        return { ...all[id], specProjectId };
+      }
+
+      const uid = this.user.uid;
+      const data = plain({
+        name: title,
+        code: String(code || '').trim(),
+        description: String(description || '').trim(),
+        status: 'Active',
+        ownerId: uid,
+        memberIds: [uid],
+        driveFileId: String(driveFileId || '').trim() || null,
+        createdAt: at,
+        updatedAt: at,
+        requestData: null,
+        revexProject: true
+      });
+      const ref = await this.api.addDoc(this.api.collection(this.db, 'projects'), data);
+      const project = { id: ref.id, ...data };
+      const specProjectId = await this.ensureSpecProject(ref.id, null, project);
+      await this.api.updateDoc(this.api.doc(this.db, 'projects', ref.id), plain({ revexSpecProjectId: specProjectId, updatedAt: iso() }));
+      try {
+        const chat = await this.ensureProjectChat(ref.id);
+        if (chat?.connId) await this.api.updateDoc(this.api.doc(this.db, 'projects', ref.id), plain({ chatConnId: chat.connId }));
+      } catch (error) { console.warn('[REVEX] project chat will be created when first opened', error); }
+      return { ...project, revexSpecProjectId: specProjectId, specProjectId };
     },
 
     async getState(projectId) {
@@ -133,20 +194,77 @@
     },
 
     async resolveSpecProject(projectId, preferredId) {
-      if (!this.isCloud()) return preferredId || null;
+      if (!this.isCloud()) {
+        if (preferredId) return preferredId;
+        const project = await this.getProject(projectId);
+        return project?.revexSpecProjectId || null;
+      }
       const f = this.api;
       if (preferredId) {
         try {
           const exact = await f.getDoc(f.doc(this.db, 'specProjects', preferredId));
-          if (exact.exists()) return preferredId;
+          if (exact.exists()) {
+            const data = exact.data();
+            if (!data.linkedProjectId || data.linkedProjectId === projectId) return preferredId;
+          }
         } catch (_) {}
       }
       try {
+        const project = await this.getProject(projectId);
+        if (project?.revexSpecProjectId) {
+          const linked = await f.getDoc(f.doc(this.db, 'specProjects', project.revexSpecProjectId));
+          if (linked.exists()) return project.revexSpecProjectId;
+        }
         const q = f.query(f.collection(this.db, 'specProjects'), f.where('linkedProjectId', '==', projectId), f.limit(10));
         const snap = await f.getDocs(q);
         if (!snap.empty) return snap.docs[0].id;
       } catch (error) { console.warn('[REVEX] linked Specifications project', error); }
       return null;
+    },
+
+    async ensureSpecProject(projectId, preferredId, suppliedProject = null) {
+      const existing = await this.resolveSpecProject(projectId, preferredId);
+      if (existing) {
+        if (this.isCloud()) {
+          await this.api.setDoc(this.api.doc(this.db, 'specProjects', existing), plain({ linkedProjectId: projectId, updatedAt: iso(), managedByRevex: true }), plain({ merge: true }));
+          await this.api.updateDoc(this.api.doc(this.db, 'projects', projectId), plain({ revexSpecProjectId: existing, updatedAt: iso() }));
+        }
+        return existing;
+      }
+      const project = suppliedProject || await this.getProject(projectId);
+      if (!project) throw new Error('The shared LIBER project could not be loaded.');
+      const specProjectId = `spec_${docId(projectId)}`;
+      const at = iso();
+      const memberIds = Array.from(new Set([...(project.memberIds || []), project.ownerId, this.user?.uid || 'local'].filter(Boolean)));
+      const specData = {
+        id: specProjectId,
+        name: `${project.name || project.title || 'Project'} — Spec Book`,
+        code: project.code || '',
+        linkedProjectId: projectId,
+        linkedProjectName: project.name || project.title || '',
+        ownerId: project.ownerId || this.user?.uid || 'local',
+        memberIds,
+        settings: { divisionPerSchedule: true, showEmptyArticles: false },
+        createdAt: at,
+        updatedAt: at,
+        managedByRevex: true
+      };
+      if (!this.isCloud()) {
+        const specDb = JSON.parse(localStorage.getItem('liber.spec.v1') || '{}');
+        specDb.projects = specDb.projects || {};
+        specDb.projects[specProjectId] = { ...(specDb.projects[specProjectId] || {}), ...specData };
+        localStorage.setItem('liber.spec.v1', JSON.stringify(specDb));
+        const projects = JSON.parse(localStorage.getItem('liber.revex.projects.v1') || '{}');
+        if (projects[projectId]) {
+          projects[projectId].revexSpecProjectId = specProjectId;
+          projects[projectId].updatedAt = at;
+          localStorage.setItem('liber.revex.projects.v1', JSON.stringify(projects));
+        }
+        return specProjectId;
+      }
+      await this.api.setDoc(this.api.doc(this.db, 'specProjects', specProjectId), plain(specData), plain({ merge: true }));
+      await this.api.updateDoc(this.api.doc(this.db, 'projects', projectId), plain({ revexSpecProjectId: specProjectId, updatedAt: at }));
+      return specProjectId;
     },
 
     async uploadFile(path, file) {
@@ -199,7 +317,7 @@
       const uploads = {};
       for (const file of uploadFiles) uploads[file.name] = await this.uploadFile(`${base}/${safe(file.name)}`, file);
 
-      const specProjectId = await this.resolveSpecProject(projectId, preferredSpecProjectId || project?.central?.specProjectId);
+      const specProjectId = await this.ensureSpecProject(projectId, preferredSpecProjectId || project?.central?.specProjectId);
       let specSync = { status: 'unlinked', projectId: null, rev: specPush?.rev || revision };
       if (specProjectId) {
         const source = plain({
@@ -290,9 +408,13 @@
     },
 
     async uploadChapterImage(projectId, chapterId, field, file, currentImages) {
-      if (!this.isCloud()) throw new Error('Sign in to save chapter imagery across devices.');
       if (!['inspiration', 'renders', 'versionImages'].includes(field)) throw new Error('Unknown Design Book image lane.');
       const name = safe(file.name || 'image');
+      if (!this.isCloud()) {
+        const images = [...(currentImages || []), { url: await readDataUrl(file), path: null, name }].slice(-24);
+        await this.saveChapterEdit(projectId, chapterId, { [field]: images });
+        return images;
+      }
       const uploaded = await this.uploadFile(`projects/${projectId}/revex/design/chapters/${docId(chapterId)}/${field}/${Date.now()}_${name}`, file);
       const images = [...(currentImages || []), { url: uploaded.url, path: uploaded.path, name }].slice(-24);
       await this.saveChapterEdit(projectId, chapterId, { [field]: images });
@@ -300,8 +422,12 @@
     },
 
     async uploadDesignImage(projectId, itemId, file, currentImages) {
-      if (!this.isCloud()) throw new Error('Sign in to save Design Book images across devices.');
       const name = safe(file.name || 'image');
+      if (!this.isCloud()) {
+        const images = [...(currentImages || []), { url: await readDataUrl(file), path: null, name }].slice(-12);
+        await this.saveDesignEdit(projectId, itemId, { images });
+        return images;
+      }
       const uploaded = await this.uploadFile(`projects/${projectId}/revex/design/${docId(itemId)}/${Date.now()}_${name}`, file);
       const images = [...(currentImages || []), { url: uploaded.url, path: uploaded.path, name }].slice(-12);
       await this.saveDesignEdit(projectId, itemId, { images });
@@ -331,6 +457,41 @@
     async updateIssue(projectId, issueId, patch) {
       if (!this.isCloud()) return;
       await this.api.updateDoc(this.api.doc(this.db, 'projects', projectId, 'revexIssues', issueId), plain({ ...patch, updatedAt: iso() }));
+    },
+
+    async listRenderJobs(projectId) {
+      if (!projectId) return [];
+      if (!this.isCloud()) {
+        try { return JSON.parse(localStorage.getItem(`liber.revex.renders.${projectId}`) || '[]'); } catch (_) { return []; }
+      }
+      const snap = await this.api.getDocs(this.api.collection(this.db, 'projects', projectId, 'revexRenders'));
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).slice(0, 40);
+    },
+
+    async createRenderJob(projectId, job) {
+      const data = { ...job, status: job.status || 'prepared', createdAt: iso(), updatedAt: iso(), createdBy: this.user?.uid || 'local' };
+      if (!this.isCloud()) {
+        const key = `liber.revex.renders.${projectId}`;
+        const all = JSON.parse(localStorage.getItem(key) || '[]');
+        const row = { id: `render_${Date.now()}`, ...data };
+        all.unshift(row); localStorage.setItem(key, JSON.stringify(all.slice(0, 40))); return row;
+      }
+      const ref = await this.api.addDoc(this.api.collection(this.db, 'projects', projectId, 'revexRenders'), plain(data));
+      return { id: ref.id, ...data };
+    },
+
+    async updateRenderJob(projectId, jobId, patch) {
+      const data = { ...patch, updatedAt: iso(), updatedBy: this.user?.uid || 'local' };
+      if (!this.isCloud()) {
+        const key = `liber.revex.renders.${projectId}`;
+        const all = JSON.parse(localStorage.getItem(key) || '[]');
+        const index = all.findIndex((row) => row.id === jobId);
+        if (index >= 0) all[index] = { ...all[index], ...data };
+        localStorage.setItem(key, JSON.stringify(all));
+        return index >= 0 ? all[index] : { id: jobId, ...data };
+      }
+      await this.api.setDoc(this.api.doc(this.db, 'projects', projectId, 'revexRenders', jobId), plain(data), plain({ merge: true }));
+      return { id: jobId, ...data };
     },
 
     async listLibrary(projectId) {

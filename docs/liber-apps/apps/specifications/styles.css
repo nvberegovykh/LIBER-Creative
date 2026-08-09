@@ -15,6 +15,12 @@ button,input,select,textarea{font:inherit;color:inherit}
 a{color:var(--acc-2)}
 .spec-app{display:flex;flex-direction:column;min-height:100%;min-height:100dvh}
 
+body.embedded .spec-app{height:100dvh;min-height:0}
+body.embedded .sp-header{position:absolute;top:7px;left:7px;z-index:35;display:none;padding:0;border:0;background:transparent;backdrop-filter:none}
+body.embedded .sp-header .sp-title,body.embedded .sp-header .sp-head-actions{display:none}
+body.embedded .sp-layout{height:100dvh}
+body.embedded #view-projects{display:none!important}
+
 /* header */
 .sp-header{position:sticky;top:0;z-index:30;display:flex;gap:8px;align-items:center;
   padding:10px 12px;padding-top:max(10px,env(safe-area-inset-top));background:rgba(12,14,17,.92);
@@ -177,6 +183,9 @@ table.sp-table{width:100%;border-collapse:collapse;font-size:13.5px}
   .sp-tablefoot .sp-muted{flex-basis:100%}
   .sp-2col{grid-template-columns:1fr}
   .sp-drawer{width:100%;border-left:0}
+  body.embedded .sp-header{display:flex}
+  body.embedded .sp-header .only-mobile{display:inline-block;background:rgba(19,22,27,.94)}
+  body.embedded .sp-toolbar{top:0;padding-left:50px}
 }
 
 /* print — spec book output */

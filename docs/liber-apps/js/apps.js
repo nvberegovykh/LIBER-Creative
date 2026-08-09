@@ -441,10 +441,10 @@ class AppsManager {
                         sessionStorage.removeItem('liber_return_project_id');
                         try { const u = new URL(window.location.href); u.searchParams.delete('returnTo'); u.searchParams.delete('projectId'); window.history.replaceState({}, '', u.toString()); } catch (_) {}
                     } else if (returnTo === 'specifications' && window.firebaseService?.auth?.currentUser) {
-                        launchId = 'specifications';
-                        extraParams = ['specUrl', 'specTitle', 'specNote', 'specProjectId', 'section', 'view', 'item']
+                        launchId = 'revex';
+                        extraParams = ['view=spec'].concat(['specUrl', 'specTitle', 'specNote', 'specProjectId', 'section', 'item']
                             .filter((k) => params.get(k))
-                            .map((k) => k + '=' + encodeURIComponent(params.get(k)))
+                            .map((k) => k + '=' + encodeURIComponent(params.get(k))))
                             .join('&');
                         try {
                             const u = new URL(window.location.href);
@@ -470,6 +470,10 @@ class AppsManager {
                 } catch (_) {}
                 setTimeout(() => this.openAppInShell({ id: 'secure-chat', name: 'Connections' }, chatUrl), 400);
             } else if (launchId) {
+                if (launchId === 'specifications') {
+                    launchId = 'revex';
+                    extraParams = extraParams ? `view=spec&${extraParams}` : 'view=spec';
+                }
                 sessionStorage.removeItem('liber_launch_after_verify');
                 if (projectId) sessionStorage.removeItem('liber_verify_project_id');
                 const app = this.apps.find((a) => a.id === launchId);
@@ -510,27 +514,14 @@ class AppsManager {
             {
                 id: 'revex',
                 name: 'REVEX Companion',
-                description: 'Live BIM viewer and Design Book linked to Project Tracker, Specifications, project docs and chat.',
-                version: '0.5.0',
+                description: 'One Revit-connected workspace for BIM, Design Book, Spec Book, documents, chat and AI renders.',
+                version: '0.6.0',
                 category: 'business',
                 icon: 'fas fa-cube',
                 status: 'online',
                 path: 'apps/revex/index.html',
                 author: 'LIBER',
-                lastUpdated: '2026-08-08',
-                logo: null
-            },
-            {
-                id: 'specifications',
-                name: 'Specifications',
-                description: 'CSI MasterFormat spec book generated from Revit schedules and sheets.',
-                version: '1.0.0',
-                category: 'business',
-                icon: 'fas fa-book',
-                status: 'online',
-                path: 'apps/specifications/index.html',
-                author: 'Liber Apps',
-                lastUpdated: '2026-08-05',
+                lastUpdated: '2026-08-09',
                 logo: null
             },
             {

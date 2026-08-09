@@ -32,6 +32,10 @@
 
   /* ---------------- boot ---------------- */
   async function boot() {
+    const qs = new URLSearchParams(location.search);
+    const embedded = qs.get('embedded') === '1';
+    document.body.classList.toggle('embedded', embedded);
+    if (embedded) document.title = 'Spec Book — REVEX';
     const mode = await ST.init();
     const b = $('#mode-badge');
     b.textContent = mode === 'cloud' ? 'synced' : 'local';
@@ -40,7 +44,6 @@
 
     wireChrome();
     // Handoff from the browser extension: ?specUrl=&specTitle=  or  #add?url=&title=
-    const qs = new URLSearchParams(location.search);
     const hash = new URLSearchParams(location.hash.replace(/^#/, '').replace(/^add\?/, ''));
     const inUrl = qs.get('specUrl') || (location.hash.startsWith('#add') ? hash.get('url') : '');
     if (inUrl) S.pending = { url: inUrl, title: qs.get('specTitle') || hash.get('title') || '', note: qs.get('specNote') || hash.get('note') || '' };
