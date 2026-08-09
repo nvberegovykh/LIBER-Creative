@@ -4198,6 +4198,19 @@
       const uiLang = String(this.me?.language || localStorage.getItem('liber_preferred_language') || 'en').trim().toLowerCase();
       this.applyChatLanguage(uiLang);
       this.bindUI();
+      // REVEX preserves the BIM/Design Book boundary by handing only a short,
+      // user-editable context draft to the existing project conversation.
+      try {
+        const revexDraft = sessionStorage.getItem('liber_revex_chat_draft');
+        if (revexDraft) {
+          const composer = document.getElementById('message-input');
+          if (composer && !composer.value) {
+            composer.value = revexDraft;
+            composer.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          sessionStorage.removeItem('liber_revex_chat_draft');
+        }
+      } catch (_) {}
       this.setupFullscreenImagePreview();
       if (!this._callOverlayLayoutBound){
         this._callOverlayLayoutBound = true;
