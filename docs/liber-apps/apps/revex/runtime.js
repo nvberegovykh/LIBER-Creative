@@ -4,7 +4,7 @@
   const Store = root.RevexStore;
   if (!Store) return;
 
-  const BUILD = '20260809r4';
+  const BUILD = '20260809r5';
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const iso = () => new Date().toISOString();
   const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -114,9 +114,26 @@
     return select?.selectedOptions?.[0]?.textContent?.trim() || 'this REVEX project';
   }
 
-  function setInviteEnabled() {
+  function placeInviteAction() {
     const button = document.getElementById('invite-project-button');
-    if (button) button.disabled = !projectId();
+    const nav = document.querySelector('.main-nav');
+    const render = document.getElementById('render-button');
+    if (!button || !nav) return;
+    if (button.parentElement !== nav) nav.insertBefore(button, render || null);
+    button.classList.add('utility');
+    button.classList.remove('compact');
+    button.setAttribute('aria-label', 'Invite people to active REVEX project');
+    button.title = 'Project access';
+  }
+
+  function setInviteEnabled() {
+    placeInviteAction();
+    const button = document.getElementById('invite-project-button');
+    if (button) {
+      const enabled = Boolean(projectId());
+      button.disabled = !enabled;
+      button.hidden = !enabled;
+    }
   }
 
   function openInvite() {
@@ -178,6 +195,7 @@
   }
 
   const bind = () => {
+    placeInviteAction();
     const select = document.getElementById('project-select');
     const open = document.getElementById('invite-project-button');
     const close = document.getElementById('invite-close');
