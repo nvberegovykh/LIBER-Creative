@@ -4,20 +4,77 @@
   const Store = root.RevexStore;
   if (!Store) return;
 
-  const BUILD = '20260809r5';
+  const BUILD = '20260809r6';
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const iso = () => new Date().toISOString();
-  const clone = (value) => JSON.parse(JSON.stringify(value));
 
   const originalInit = Store.init.bind(Store);
   const originalCreateProject = Store.createProject.bind(Store);
+
+  function firestoreValue(value) {
+    if (value === null || value === undefined) return { nullValue: null };
+    if (typeof value === 'string') return { stringValue: value };
+    if (typeof value === 'boolean') return { booleanValue: value };
+    if (typeof value === 'number') {
+      return Number.isInteger(value) ? { integerValue: String(value) } : { doubleValue: value };
+    }
+    if (Array.isArray(value)) return { arrayValue: { values: value.map(firestoreValue) } };
+    if (typeof value === 'object') return { mapValue: { fields: firestoreFields(value) } };
+    return { stringValue: String(value) };
+  }
+
+  function firestoreFields(data) {
+    const fields = {};
+    Object.entries(data || {}).forEach(([key, value]) => { fields[key] = firestoreValue(value); });
+    return fields;
+  }
+
+  async function firestoreRest(path, data, updateMask = []) {
+    const fs = root.firebaseService && root.firebaseService.isInitialized ? root.firebaseService : Store.fs;
+    const user = fs?.auth?.currentUser || Store.user;
+    const firebaseProjectId = fs?.app?.options?.projectId || 'liber-apps-cca20';
+    if (!user?.getIdToken) throw new Error('Sign in before creating a REVEX project.');
+    const token = await user.getIdToken();
+    const docPath = String(path || '').split('/').filter(Boolean).map(encodeURIComponent).join('/');
+    let url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(firebaseProjectId)}/databases/(default)/documents/${docPath}`;
+    if (updateMask.length) {
+      url += '?' + updateMask.map((field) => `updateMask.fieldPaths=${encodeURIComponent(field)}`).join('&');
+    }
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ fields: firestoreFields(data) })
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = json?.error?.message || json?.message || `Firestore REST ${response.status}`;
+      throw new Error(message);
+    }
+    return json;
+  }
+
+  async function firestoreDelete(path) {
+    try {
+      const fs = root.firebaseService && root.firebaseService.isInitialized ? root.firebaseService : Store.fs;
+      const user = fs?.auth?.currentUser || Store.user;
+      const firebaseProjectId = fs?.app?.options?.projectId || 'liber-apps-cca20';
+      if (!user?.getIdToken) return;
+      const token = await user.getIdToken();
+      const docPath = String(path || '').split('/').filter(Boolean).map(encodeURIComponent).join('/');
+      const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(firebaseProjectId)}/databases/(default)/documents/${docPath}`;
+      await fetch(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
+    } catch (_) {}
+  }
 
   Store.init = async function initRevexRuntime() {
     const local = root.firebaseService || null;
     if (local) {
       for (let i = 0; i < 80; i += 1) {
         const api = local.firebase || root.firebase || null;
-        if (local.isInitialized && local.db && api?.collection && api?.addDoc) {
+        if (local.isInitialized && local.db && api?.collection && api?.getDocs) {
           this.fs = local;
           this.api = api;
           this.db = local.db;
@@ -35,7 +92,7 @@
             });
           }
           this.mode = this.user ? 'cloud' : 'local';
-          console.log(`[REVEX] runtime ${BUILD}`, { localFirebase: true, cloud: this.mode === 'cloud', sdk: api.SDK_VERSION || null });
+          console.log(`[REVEX] runtime ${BUILD}`, { localFirebase: true, cloud: this.mode === 'cloud', sdk: api.SDK_VERSION || null, projectWrites: 'rest' });
           return this.mode;
         }
         await wait(150);
@@ -45,7 +102,7 @@
     const mode = await originalInit();
     if (this.fs?.db) this.db = this.fs.db;
     if (this.fs?.firebase?.collection) this.api = this.fs.firebase;
-    console.log(`[REVEX] runtime ${BUILD}`, { localFirebase: this.fs === root.firebaseService, cloud: mode === 'cloud', fallback: true });
+    console.log(`[REVEX] runtime ${BUILD}`, { localFirebase: this.fs === root.firebaseService, cloud: mode === 'cloud', fallback: true, projectWrites: 'rest' });
     return mode;
   };
 
@@ -56,18 +113,18 @@
     if (!title) throw new Error('Enter a project name.');
 
     const fs = root.firebaseService && root.firebaseService.isInitialized ? root.firebaseService : this.fs;
-    const api = fs?.firebase || this.api || root.firebase;
-    if (!fs?.db || !api?.collection || !api?.addDoc) throw new Error('REVEX Firebase is not ready. Reload the app and try again.');
-
     this.fs = fs;
-    this.api = api;
-    this.db = fs.db;
-    this.user = fs.auth?.currentUser || this.user;
+    this.api = fs?.firebase || this.api || root.firebase;
+    this.db = fs?.db || this.db;
+    this.user = fs?.auth?.currentUser || this.user;
     if (!this.user?.uid) throw new Error('Sign in before creating a REVEX project.');
 
     const at = iso();
     const uid = String(this.user.uid);
-    const data = clone({
+    const suffix = (root.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)).replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);
+    const projectId = `revex_${Date.now().toString(36)}_${suffix}`;
+    const specProjectId = `spec_${projectId}`;
+    const projectData = {
       name: title,
       code: String(code || '').trim(),
       description: String(description || '').trim(),
@@ -79,30 +136,48 @@
       createdAt: at,
       updatedAt: at,
       requestData: null,
-      revexProject: true
-    });
+      revexProject: true,
+      revexSpecProjectId: specProjectId
+    };
+    const specData = {
+      id: specProjectId,
+      name: `${title} — Spec Book`,
+      code: String(code || '').trim(),
+      linkedProjectId: projectId,
+      linkedProjectName: title,
+      ownerId: uid,
+      memberIds: [uid],
+      settings: { divisionPerSchedule: true, showEmptyArticles: false },
+      createdAt: at,
+      updatedAt: at,
+      managedByRevex: true
+    };
 
-    const ref = await api.addDoc(api.collection(this.db, 'projects'), data);
-    const project = { id: ref.id, ...data };
-
-    const specProjectId = await this.ensureSpecProject(ref.id, null, project);
-    await api.updateDoc(api.doc(this.db, 'projects', ref.id), clone({
-      revexSpecProjectId: specProjectId,
-      updatedAt: iso()
-    }));
-
+    console.log('[REVEX] creating project through Firestore REST', projectId);
+    await firestoreRest(`projects/${projectId}`, projectData);
     try {
-      const chat = await this.ensureProjectChat(ref.id);
+      await firestoreRest(`specProjects/${specProjectId}`, specData);
+    } catch (error) {
+      await firestoreDelete(`projects/${projectId}`);
+      throw error;
+    }
+
+    const project = { id: projectId, ...projectData };
+    try {
+      const chat = await this.ensureProjectChat(projectId);
       if (chat?.connId) {
-        await api.updateDoc(api.doc(this.db, 'projects', ref.id), clone({ chatConnId: String(chat.connId), updatedAt: iso() }));
         project.chatConnId = String(chat.connId);
+        await firestoreRest(`projects/${projectId}`, {
+          chatConnId: project.chatConnId,
+          updatedAt: iso()
+        }, ['chatConnId', 'updatedAt']);
       }
     } catch (error) {
       console.warn('[REVEX] project chat will be created when first opened', error);
     }
 
     setTimeout(setInviteEnabled, 300);
-    return { ...project, revexSpecProjectId: specProjectId, specProjectId };
+    return { ...project, specProjectId };
   };
 
   function projectId() {
