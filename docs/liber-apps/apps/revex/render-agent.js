@@ -81,7 +81,7 @@
       selection: selectedContext(),
       capabilities: {
         nativeAutomation: nativeAutomation(),
-        reditCapture: nativeAutomation(),
+        revitCapture: nativeAutomation(),
         rendairEmbedded: true,
         rendairPartnerApi: Boolean(root.REVEX_RENDAIR_API_AVAILABLE),
         browserCrossOriginControl: false
