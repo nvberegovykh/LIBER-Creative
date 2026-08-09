@@ -42,7 +42,7 @@
       <a href="index.html" class="verify-link">Go to Login</a>
     </div>
     <div id="verify-success" style="display:none" class="verify-success">
-      <p>You're in! Redirecting to Project Tracker...</p>
+      <p>You're in! Opening your project...</p>
     </div>
   </div>
 
@@ -101,19 +101,38 @@
         }
       }
 
+      async function launchTargetForProject(fs, projectId){
+        const explicit = new URLSearchParams(window.location.search).get('returnTo');
+        if (explicit === 'revex') return 'revex';
+        if (!projectId || !fs?.db) return 'project-tracker';
+        try {
+          const api = fs.firebase || window.firebase;
+          if (!api?.doc || !api?.getDoc) return 'project-tracker';
+          const snap = await api.getDoc(api.doc(fs.db, 'projects', projectId));
+          if (snap.exists()) {
+            const project = snap.data() || {};
+            if (project.revexProject || project.revexSpecProjectId) return 'revex';
+          }
+        } catch (e) {
+          console.warn('Could not resolve project launch target', e?.message || e);
+        }
+        return 'project-tracker';
+      }
+
       async function signInAndRedirect(data){
         const fs = window.firebaseService;
         const customToken = data?.customToken;
         if (!customToken){ showError(data?.message || 'Verification failed.'); return; }
         const user = await firebase.signInWithCustomToken(fs.auth, customToken);
         if (user?.user){
+          const launchProjectId = data?.projectId || null;
+          const launchId = await launchTargetForProject(fs, launchProjectId);
           showSuccess();
           const base = window.location.pathname.replace(/[^/]*$/, '');
           const fullUrl = window.location.origin + base + 'index.html#apps';
-          sessionStorage.setItem('liber_launch_after_verify', 'project-tracker');
-          const launchProjectId = data?.projectId || null;
+          sessionStorage.setItem('liber_launch_after_verify', launchId);
           if (launchProjectId) sessionStorage.setItem('liber_verify_project_id', launchProjectId);
-          setTimeout(function(){ window.location.href = fullUrl; }, 800);
+          setTimeout(function(){ window.location.href = fullUrl; }, 450);
         } else {
           showError('Sign-in failed.');
         }
