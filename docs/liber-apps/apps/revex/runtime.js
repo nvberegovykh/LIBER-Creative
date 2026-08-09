@@ -4,7 +4,7 @@
   const Store = root.RevexStore;
   if (!Store) return;
 
-  const BUILD = '20260809r6';
+  const BUILD = '20260809r7';
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const iso = () => new Date().toISOString();
 
@@ -92,7 +92,7 @@
             });
           }
           this.mode = this.user ? 'cloud' : 'local';
-          console.log(`[REVEX] runtime ${BUILD}`, { localFirebase: true, cloud: this.mode === 'cloud', sdk: api.SDK_VERSION || null, projectWrites: 'rest' });
+          console.log(`[REVEX] runtime ${BUILD}`, { localFirebase: true, cloud: this.mode === 'cloud', sdk: api.SDK_VERSION || null, projectWrites: 'rest', chatLayer: true });
           return this.mode;
         }
         await wait(150);
@@ -102,7 +102,7 @@
     const mode = await originalInit();
     if (this.fs?.db) this.db = this.fs.db;
     if (this.fs?.firebase?.collection) this.api = this.fs.firebase;
-    console.log(`[REVEX] runtime ${BUILD}`, { localFirebase: this.fs === root.firebaseService, cloud: mode === 'cloud', fallback: true, projectWrites: 'rest' });
+    console.log(`[REVEX] runtime ${BUILD}`, { localFirebase: this.fs === root.firebaseService, cloud: mode === 'cloud', fallback: true, projectWrites: 'rest', chatLayer: true });
     return mode;
   };
 
@@ -189,26 +189,44 @@
     return select?.selectedOptions?.[0]?.textContent?.trim() || 'this REVEX project';
   }
 
-  function placeInviteAction() {
-    const button = document.getElementById('invite-project-button');
-    const nav = document.querySelector('.main-nav');
-    const render = document.getElementById('render-button');
-    if (!button || !nav) return;
-    if (button.parentElement !== nav) nav.insertBefore(button, render || null);
-    button.classList.add('utility');
-    button.classList.remove('compact');
-    button.setAttribute('aria-label', 'Invite people to active REVEX project');
-    button.title = 'Project access';
+  function setSync(label, tone = 'quiet') {
+    const text = document.getElementById('sync-label');
+    const indicator = document.getElementById('sync-indicator');
+    if (text) text.textContent = label;
+    if (indicator) indicator.dataset.tone = tone;
+  }
+
+  function notify(message, type = 'success') {
+    if (root.parent?.dashboardManager?.showNotification) root.parent.dashboardManager.showNotification(message, type);
+    else if (root.dashboardManager?.showNotification) root.dashboardManager.showNotification(message, type);
+    else if (type === 'error') console.error(message);
+    else console.log(message);
+  }
+
+  function assertActionLabels() {
+    const labels = {
+      'new-project-button': 'New',
+      'invite-project-button': 'Invite',
+      'sync-button': 'Import sync',
+      'render-button': 'Render'
+    };
+    Object.entries(labels).forEach(([id, label]) => {
+      const button = document.getElementById(id);
+      if (!button) return;
+      if (button.textContent.trim() !== label) button.textContent = label;
+    });
+    const invite = document.getElementById('invite-project-button');
+    if (invite) {
+      invite.setAttribute('aria-label', 'Invite people to the active REVEX project');
+      invite.title = 'Project access';
+      invite.hidden = false;
+    }
   }
 
   function setInviteEnabled() {
-    placeInviteAction();
+    assertActionLabels();
     const button = document.getElementById('invite-project-button');
-    if (button) {
-      const enabled = Boolean(projectId());
-      button.disabled = !enabled;
-      button.hidden = !enabled;
-    }
+    if (button) button.disabled = !projectId();
   }
 
   function openInvite() {
@@ -235,9 +253,9 @@
     const input = document.getElementById('invite-email');
     const submit = document.getElementById('invite-send');
     const email = String(input?.value || '').trim().toLowerCase();
-    if (!id || !email) return;
+    if (!id || !email || !submit) return;
     const fs = root.firebaseService;
-    if (!fs?.callFunction) return;
+    if (!fs?.callFunction) return notify('Project invitations are not available in this session.', 'error');
 
     submit.disabled = true;
     submit.textContent = 'Sending…';
@@ -255,28 +273,134 @@
         : result.added
           ? 'Member added to this REVEX project.'
           : 'This user already has access to the project.';
-      if (root.parent?.dashboardManager?.showNotification) root.parent.dashboardManager.showNotification(msg, 'success');
-      else if (root.dashboardManager?.showNotification) root.dashboardManager.showNotification(msg, 'success');
-      else alert(msg);
+      notify(msg, 'success');
     } catch (error) {
-      const msg = error?.message || 'Could not send the invitation.';
-      if (root.parent?.dashboardManager?.showNotification) root.parent.dashboardManager.showNotification(msg, 'error');
-      else if (root.dashboardManager?.showNotification) root.dashboardManager.showNotification(msg, 'error');
-      else alert(msg);
+      notify(error?.message || 'Could not send the invitation.', 'error');
     } finally {
       submit.disabled = false;
       submit.textContent = 'Send invite';
     }
   }
 
-  const bind = () => {
-    placeInviteAction();
+  function ensureChatLayer() {
+    let layer = document.getElementById('revex-chat-layer');
+    if (layer) return layer;
+    layer = document.createElement('section');
+    layer.id = 'revex-chat-layer';
+    layer.className = 'revex-chat-layer';
+    layer.hidden = true;
+    layer.setAttribute('aria-label', 'Project Chat');
+    layer.innerHTML = `
+      <div class="revex-chat-layer-shell">
+        <header class="revex-chat-layer-head">
+          <div><strong>Project Chat</strong><span id="revex-chat-layer-project"></span></div>
+          <button type="button" id="revex-chat-layer-close" class="sp-icon-btn" aria-label="Close Project Chat">×</button>
+        </header>
+        <iframe id="revex-chat-layer-frame" title="Project Chat" allow="camera; microphone; display-capture; clipboard-read; clipboard-write"></iframe>
+      </div>`;
+    document.body.appendChild(layer);
+    document.getElementById('revex-chat-layer-close')?.addEventListener('click', closeChatLayer);
+    document.getElementById('revex-chat-layer-frame')?.addEventListener('load', hydrateChatDraft);
+    return layer;
+  }
+
+  function closeChatLayer() {
+    const layer = document.getElementById('revex-chat-layer');
+    if (layer) layer.hidden = true;
+    document.body.classList.remove('revex-chat-open');
+  }
+
+  function chatContextFor(button) {
+    const id = button?.id || '';
+    const project = projectName();
+    if (id === 'element-chat') {
+      const inspector = document.getElementById('bim-inspector');
+      const title = inspector?.querySelector('h2')?.textContent?.trim() || 'Selected BIM element';
+      const ref = inspector?.querySelector('.eyebrow')?.textContent?.trim() || 'REVIT ELEMENT';
+      const props = [...(inspector?.querySelectorAll('.property') || [])].map((row) => {
+        const key = row.querySelector('span')?.textContent?.trim() || '';
+        const value = row.textContent.replace(row.querySelector('span')?.textContent || '', '').trim();
+        return key && value ? `${key}: ${value}` : '';
+      }).filter(Boolean).slice(0, 6);
+      return [`[REVEX · BIM]`, `Project: ${project}`, `${ref}: ${title}`, ...props].join('\n');
+    }
+    if (id === 'design-chat') {
+      const inspector = document.getElementById('design-inspector');
+      const title = inspector?.querySelector('h2')?.textContent?.trim() || 'Selected Design Book position';
+      const chapter = inspector?.querySelector('.eyebrow')?.textContent?.trim() || 'DESIGN BOOK';
+      const status = document.getElementById('design-status')?.value || '';
+      return [`[REVEX · Design Book]`, `Project: ${project}`, `${chapter}: ${title}`, status ? `Status: ${status}` : ''].filter(Boolean).join('\n');
+    }
+    const existing = document.getElementById('chat-context')?.textContent?.trim() || '';
+    if (existing && !/select a bim element|no item context selected/i.test(existing)) return existing;
+    return '';
+  }
+
+  function hydrateChatDraft() {
+    const frame = document.getElementById('revex-chat-layer-frame');
+    const draft = String(sessionStorage.getItem('liber_revex_chat_draft') || '').trim();
+    if (!frame || !draft) return;
+    const apply = () => {
+      try {
+        const input = frame.contentDocument?.getElementById('message-input');
+        if (!input) return false;
+        if (!String(input.value || '').trim()) {
+          input.value = draft;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        return true;
+      } catch (_) { return false; }
+    };
+    if (apply()) return;
+    let attempts = 0;
+    const timer = setInterval(() => {
+      attempts += 1;
+      if (apply() || attempts > 20) clearInterval(timer);
+    }, 150);
+  }
+
+  async function openProjectChatLayer(context = '') {
+    const id = projectId();
+    if (!id) return notify('Choose a project first.', 'error');
+    try {
+      setSync('Opening project chat…', 'busy');
+      const result = await Store.ensureProjectChat(id);
+      if (!result?.connId) throw new Error('No project connection was returned.');
+      if (context) sessionStorage.setItem('liber_revex_chat_draft', context);
+      else sessionStorage.removeItem('liber_revex_chat_draft');
+
+      const layer = ensureChatLayer();
+      const frame = document.getElementById('revex-chat-layer-frame');
+      const projectLabel = document.getElementById('revex-chat-layer-project');
+      if (projectLabel) projectLabel.textContent = projectName();
+      const url = new URL('../secure-chat/index.html', location.href);
+      url.searchParams.set('connId', String(result.connId));
+      url.searchParams.set('inShell', '1');
+      url.searchParams.set('revexLayer', '1');
+      if (frame && frame.dataset.connId !== String(result.connId)) {
+        frame.dataset.connId = String(result.connId);
+        frame.src = url.href;
+      } else {
+        hydrateChatDraft();
+      }
+      layer.hidden = false;
+      document.body.classList.add('revex-chat-open');
+      setSync('Project chat connected', 'good');
+    } catch (error) {
+      setSync('Chat unavailable', 'bad');
+      notify(error?.message || 'Could not open Project Chat.', 'error');
+    }
+  }
+
+  function bind() {
+    assertActionLabels();
     const select = document.getElementById('project-select');
     const open = document.getElementById('invite-project-button');
     const close = document.getElementById('invite-close');
     const cancel = document.getElementById('invite-cancel');
     const form = document.getElementById('invite-form');
     const dialog = document.getElementById('invite-dialog');
+
     if (select && !select.dataset.revexInviteBound) {
       select.dataset.revexInviteBound = '1';
       select.addEventListener('change', setInviteEnabled);
@@ -289,15 +413,45 @@
       dialog.dataset.revexInviteBound = '1';
       dialog.addEventListener('click', (event) => { if (event.target === dialog) closeInvite(); });
     }
+
+    const syncLabel = document.getElementById('sync-label');
+    if (syncLabel && !syncLabel.dataset.revexActionObserver) {
+      syncLabel.dataset.revexActionObserver = '1';
+      new MutationObserver(setInviteEnabled).observe(syncLabel, { childList: true, characterData: true, subtree: true });
+    }
+
+    ensureChatLayer();
     setInviteEnabled();
-  };
+  }
+
+  document.addEventListener('click', (event) => {
+    const button = event.target?.closest?.('#open-chat, #element-chat, #design-chat');
+    if (!button) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    openProjectChatLayer(chatContextFor(button));
+  }, true);
 
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !document.getElementById('invite-dialog')?.hidden) closeInvite();
+    if (event.key !== 'Escape') return;
+    const chat = document.getElementById('revex-chat-layer');
+    const invite = document.getElementById('invite-dialog');
+    if (chat && !chat.hidden) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeChatLayer();
+    } else if (invite && !invite.hidden) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeInvite();
+    }
+  }, true);
+
+  root.addEventListener('message', (event) => {
+    const frame = document.getElementById('revex-chat-layer-frame');
+    if (event.source !== frame?.contentWindow) return;
+    if (event.data?.type === 'liber:close-app-shell') closeChatLayer();
   });
 
   bind();
-  setTimeout(bind, 500);
-  setTimeout(bind, 2000);
-  setInterval(setInviteEnabled, 1000);
 })(window);
