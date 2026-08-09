@@ -5,8 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="color-scheme" content="dark" />
   <title>REVEX Companion — LIBER Apps</title>
-  <link rel="stylesheet" href="../specifications/styles.css?v=20260809r4" />
-  <link rel="stylesheet" href="styles.css?v=20260809r4" />
+  <link rel="stylesheet" href="../specifications/styles.css?v=20260809r7" />
+  <link rel="stylesheet" href="styles.css?v=20260809r7" />
+  <link rel="stylesheet" href="runtime.css?v=20260809r7" />
 </head>
 <body class="revex-app">
   <div class="app-shell">
@@ -48,7 +49,7 @@
         <div class="empty-card">
           <div class="eyebrow">REVIT + LIBER</div>
           <h1>Create or connect the project once.</h1>
-          <p>REVEX uses one project identity for the central BIM model, Design Book, Spec Book, project documents, chat and render history. Each system keeps its own data ownership without becoming a duplicate product.</p>
+          <p>REVEX uses one project identity for the central BIM model, Design Book, Spec Book, project documents, chat and render history. All project data remains owned by the users who create and control it; REVEX only links the systems and keeps their data roles separate.</p>
           <div class="empty-actions">
             <button class="button sp-btn" id="empty-create-button" type="button">Create REVEX project</button>
             <button class="button ghost sp-btn sp-btn-ghost" id="empty-connect-button" type="button">Connect existing project</button>
@@ -97,7 +98,7 @@
             <div>
               <div class="eyebrow">EDITABLE PROJECT LAYER</div>
               <h1 id="chapter-title">Design Book</h1>
-              <p id="chapter-subtitle">Revit-derived positions; LIBER-owned selections, images and approvals.</p>
+              <p id="chapter-subtitle">Revit-derived positions; user-owned selections, images and approvals.</p>
             </div>
           </div>
           <div id="design-lanes" class="design-lanes" aria-label="Chapter visual development"></div>
@@ -112,7 +113,7 @@
 
       <section id="view-spec" class="view spec-view" hidden>
         <div class="spec-head">
-          <div><div class="eyebrow">REVIT SCHEDULES + AUTHORED SPEC DATA</div><h1>Spec Book</h1></div>
+          <div><div class="eyebrow">REVIT SCHEDULES + USER-AUTHORED SPEC DATA</div><h1>Spec Book</h1></div>
           <div id="spec-status" class="resource-status">Connecting this project’s Spec Book…</div>
         </div>
         <div class="spec-frame-wrap">
@@ -223,9 +224,9 @@
   <script src="../../js/firebase-loader.js"></script>
   <script src="../../js/firebase-service.js"></script>
   <script src="../../js/chat-iframe-bridge.js"></script>
-  <script src="store.js?v=20260809r4"></script>
-  <script src="runtime.js?v=20260809r4"></script>
+  <script src="store.js?v=20260809r7"></script>
+  <script src="runtime.js?v=20260809r7"></script>
   <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.179.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.179.1/examples/jsm/"}}</script>
-  <script type="module" src="app.js?v=20260809r4"></script>
+  <script type="module" src="app.js?v=20260809r7"></script>
 </body>
 </html>
