@@ -16,12 +16,14 @@ const state = {
   viewerData: null,
   designData: null,
   designEdits: new Map(),
+  chapterEdits: new Map(),
   issues: [],
   library: [],
   selectedElement: null,
   selectedDesign: null,
   selectedContext: '',
   activeChapter: '',
+  viewerMode: '',
   unsubscribe: null,
   loadingRevision: ''
 };
@@ -98,7 +100,7 @@ class BimViewer {
   constructor(host) {
     this.host = host;
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0xe9ebe6);
+    this.scene.background = new THREE.Color(0x101319);
     this.camera = new THREE.PerspectiveCamera(43, 1, .01, 1e8);
     this.camera.position.set(18, 14, 18);
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
@@ -110,11 +112,11 @@ class BimViewer {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = .08;
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x687068, 2.2));
-    const sun = new THREE.DirectionalLight(0xffffff, 2.4);
+    this.scene.add(new THREE.HemisphereLight(0xcfe3ff, 0x202a35, 2.1));
+    const sun = new THREE.DirectionalLight(0xffffff, 2.3);
     sun.position.set(14, 25, 11);
     this.scene.add(sun);
-    this.grid = new THREE.GridHelper(400, 80, 0xa9aea8, 0xd1d4cf);
+    this.grid = new THREE.GridHelper(400, 80, 0x365a7d, 0x242a33);
     this.scene.add(this.grid);
     this.model = null;
     this.helper = null;
@@ -122,6 +124,7 @@ class BimViewer {
     this.elementById = new Map();
     this.metaWorld = null;
     this.modelBounds = null;
+    this.mode = '';
     this.edges = false;
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
@@ -167,8 +170,15 @@ class BimViewer {
     this.clearModel();
     this.metadata = viewerData?.elements || [];
     this.elementById = new Map(this.metadata.map((row) => [String(row.id), row]));
-    if (!url) return false;
-    const object = await new Promise((resolve, reject) => new FBXLoader().load(url, resolve, undefined, reject));
+    let object = null;
+    let fbxError = null;
+    if (url) {
+      try { object = await new Promise((resolve, reject) => new FBXLoader().load(url, resolve, undefined, reject)); }
+      catch (error) { fbxError = error; console.warn('[REVEX] FBX unavailable; using categorized proxy geometry.', error); }
+    }
+    if (!object) object = this.createProxyModel(this.metadata);
+    if (!object) return { mode: 'none', error: fbxError };
+    this.mode = fbxError || !url ? 'fallback' : 'fbx';
     this.model = object;
     this.model.traverse((node) => {
       if (!node.isMesh) return;
@@ -184,7 +194,55 @@ class BimViewer {
     this.modelBounds = new THREE.Box3().setFromObject(object);
     this.computeMetadataTransform();
     this.fit();
-    return true;
+    return { mode: this.mode, error: fbxError };
+  }
+
+  createProxyModel(elements) {
+    const rows = elements.filter((row) => row?.bbox?.min && row?.bbox?.max);
+    if (!rows.length) return null;
+    const byCategory = new Map();
+    rows.forEach((row) => {
+      const key = row.categoryKey || String(row.category || 'other').toLowerCase();
+      if (!byCategory.has(key)) byCategory.set(key, []);
+      byCategory.get(key).push(row);
+    });
+    const palette = {
+      walls: 0x9aa8b7, doors: 0xc88a55, windows: 0x4da3ff, floors: 0x66727f,
+      roofs: 0xa6798e, rooms: 0x5d7b70, ceilings: 0x87909b, stairs: 0xb18b63,
+      furniture: 0x7e6e98, casework: 0x8c745c, 'structural-columns': 0x697685,
+      'structural-framing': 0x697685, 'mechanical-equipment': 0x587d82,
+      'lighting-fixtures': 0xd0b55e, 'plumbing-fixtures': 0x6992a4, site: 0x667b5b,
+      other: 0x6e7782
+    };
+    const root = new THREE.Group();
+    root.name = 'REVEX categorized fallback model';
+    const geometry = new THREE.BoxGeometry(1, 1, 1);
+    const matrix = new THREE.Matrix4();
+    const quaternion = new THREE.Quaternion();
+    byCategory.forEach((categoryRows, key) => {
+      const material = new THREE.MeshStandardMaterial({
+        color: palette[key] || palette.other,
+        roughness: .82,
+        metalness: .03,
+        transparent: key === 'rooms',
+        opacity: key === 'rooms' ? .18 : .82,
+        depthWrite: key !== 'rooms'
+      });
+      const mesh = new THREE.InstancedMesh(geometry.clone(), material, categoryRows.length);
+      mesh.name = `REVEX ${key}`;
+      categoryRows.forEach((row, index) => {
+        const box = new THREE.Box3(); box.makeEmpty();
+        const min = row.bbox.min; const max = row.bbox.max;
+        for (const x of [min[0], max[0]]) for (const y of [min[1], max[1]]) for (const z of [min[2], max[2]]) box.expandByPoint(this.rawPoint([x, y, z]));
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3()).max(new THREE.Vector3(.025, .025, .025));
+        matrix.compose(center, quaternion, size);
+        mesh.setMatrixAt(index, matrix);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      root.add(mesh);
+    });
+    return root;
   }
 
   rawPoint(value) {
@@ -242,7 +300,7 @@ class BimViewer {
     this.helper = null;
     const box = this.worldBox(element);
     if (box) {
-      this.helper = new THREE.Box3Helper(box, 0x98bd16);
+      this.helper = new THREE.Box3Helper(box, 0xff2f6e);
       this.scene.add(this.helper);
       if (fit) this.fit(box.expandByScalar(Math.max(box.getSize(new THREE.Vector3()).length() * .75, .5)));
     }
@@ -304,6 +362,7 @@ try {
 }
 
 function showView(name) {
+  closeWorkspaceRail();
   const hasProject = Boolean(state.projectId);
   $('#view-empty').hidden = hasProject;
   for (const view of ['bim', 'design', 'spec', 'docs', 'chat']) $(`#view-${view}`).hidden = !hasProject || view !== name;
@@ -313,6 +372,27 @@ function showView(name) {
     if (name === 'bim') setTimeout(() => viewer?.resize(), 0);
     if (name === 'chat') renderChatContext();
   }
+}
+
+function currentWorkspaceRail() {
+  return $('.view:not([hidden]) .rail, .view:not([hidden]) .chapter-rail');
+}
+
+function setWorkspaceRail(open) {
+  const rail = currentWorkspaceRail();
+  if (!rail) open = false;
+  $$('.rail.open, .chapter-rail.open').forEach((node) => node.classList.remove('open'));
+  if (open) rail.classList.add('open');
+  $('#rail-scrim').hidden = !open;
+  $('#rail-toggle').setAttribute('aria-expanded', String(open));
+  document.body.classList.toggle('sp-locked', open);
+}
+
+function closeWorkspaceRail() { setWorkspaceRail(false); }
+
+function toggleWorkspaceRail() {
+  const rail = currentWorkspaceRail();
+  setWorkspaceRail(Boolean(rail) && !rail.classList.contains('open'));
 }
 
 function renderProjects() {
@@ -331,7 +411,7 @@ function renderModelTree() {
     <div class="fact"><strong>${elements.length.toLocaleString()}</strong><span>visible elements</span></div>
     <div class="fact"><strong>${(data?.source?.viewName || '3D').slice(0, 20)}</strong><span>Revit view</span></div>
     <div class="fact"><strong>${state.cloudState.scheduleCount || state.designData?.schedules?.length || 0}</strong><span>schedules</span></div>
-    <div class="fact"><strong>${state.cloudState.central?.driveFileId ? 'Drive' : 'Path'}</strong><span>central binding</span></div>` : '';
+    <div class="fact"><strong>${state.viewerMode === 'fallback' ? 'Proxy' : state.viewerMode === 'fbx' ? 'FBX' : 'Ready'}</strong><span>geometry</span></div>` : '';
   const groups = new Map();
   elements.forEach((element) => {
     const category = element.category || 'Other';
@@ -354,12 +434,26 @@ function renderModelTree() {
   $('#element-tree').innerHTML = chunks.join('') || '<p class="muted">No matching elements.</p>';
   $$('.tree-item', $('#element-tree')).forEach((button) => button.addEventListener('click', () => {
     const element = elements.find((row) => String(row.id) === button.dataset.elementId);
-    if (element) selectElement(element, true);
+    if (element) { selectElement(element, true); closeWorkspaceRail(); }
   }));
 }
 
 function elementIssues(element) {
   return state.issues.filter((issue) => String(issue.anchorElementId || '') === String(element?.id || ''));
+}
+
+function designPositionForElement(element) {
+  let typeMatch = null;
+  for (const chapter of chapters()) {
+    for (const source of chapter.items || []) {
+      const revit = source.revit;
+      if (!revit) continue;
+      if ((revit.elementIds || []).some((id) => String(id) === String(element.id))) return { chapter, source };
+      if (!typeMatch && String(revit.category || '').toLowerCase() === String(element.category || '').toLowerCase() &&
+          String(revit.type || '').toLowerCase() === String(element.type || '').toLowerCase()) typeMatch = { chapter, source };
+    }
+  }
+  return typeMatch;
 }
 
 function selectElement(element, fit = true) {
@@ -369,6 +463,7 @@ function selectElement(element, fit = true) {
   viewer?.select(element, fit);
   renderModelTree();
   const issues = elementIssues(element);
+  const designPosition = designPositionForElement(element);
   $('#bim-inspector').innerHTML = `
     <div class="eyebrow">REVIT ELEMENT ${escapeHtml(element.id)}</div>
     <h2>${escapeHtml(element.name || element.type || element.category || 'Element')}</h2>
@@ -379,10 +474,12 @@ function selectElement(element, fit = true) {
       <div class="property"><span>Materials</span>${(element.materials || []).map((m) => `<b class="material-chip">${escapeHtml(m.name)}</b>`).join('') || '—'}</div>
     </div>
     <button class="button" id="element-issue" type="button">Add BIM issue</button>
+    ${designPosition ? '<button class="button ghost" id="element-design" type="button">Open Design Book position</button>' : ''}
     <button class="button ghost" id="element-chat" type="button">Send context to Project Chat</button>
     <h3>Issues · ${issues.length}</h3>
     <div class="issue-list">${issues.map((issue) => `<div class="issue-row"><strong>${escapeHtml(issue.title)}</strong><small>${escapeHtml(issue.status)} · ${formatDate(issue.createdAt)}</small><p>${escapeHtml(issue.body)}</p></div>`).join('') || '<p class="muted">No issues on this element.</p>'}</div>`;
   $('#element-issue').addEventListener('click', () => openIssue({ kind: 'bim', element }));
+  $('#element-design')?.addEventListener('click', () => openDesignPosition(designPosition.chapter, designPosition.source, true));
   $('#element-chat').addEventListener('click', () => openProjectChat(state.selectedContext));
 }
 
@@ -403,30 +500,78 @@ function mergedItem(item) {
 
 function chapters() { return state.designData?.chapters || []; }
 
+function mergedChapter(chapter) {
+  return { ...chapter, ...(state.chapterEdits.get(chapter.id) || {}) };
+}
+
+function openDesignPosition(chapter, sourceItem, switchView = false) {
+  state.activeChapter = chapter.id;
+  state.selectedDesign = { ...mergedItem(sourceItem), chapterTitle: chapter.title };
+  state.selectedElement = null;
+  state.selectedContext = contextFor('Design', state.selectedDesign);
+  if (switchView) showView('design');
+  renderDesign();
+  renderDesignInspector();
+}
+
 function renderDesign() {
   const list = chapters();
   if (!state.activeChapter || !list.some((chapter) => chapter.id === state.activeChapter)) state.activeChapter = list[0]?.id || '';
-  $('#chapter-list').innerHTML = list.map((chapter) => `<button type="button" class="${chapter.id === state.activeChapter ? 'active' : ''}" data-chapter="${escapeHtml(chapter.id)}">${escapeHtml(chapter.title)}</button>`).join('') || '<p class="muted">Sync from Revit to form the Design Book.</p>';
-  $$('#chapter-list button').forEach((button) => button.addEventListener('click', () => { state.activeChapter = button.dataset.chapter; state.selectedDesign = null; renderDesign(); renderDesignInspector(); }));
+  $('#chapter-list').innerHTML = list.map((chapter) => `<button type="button" class="${chapter.id === state.activeChapter ? 'active' : ''}" data-chapter="${escapeHtml(chapter.id)}"><span>${escapeHtml(chapter.title)}</span><small>${chapter.items?.length || 0}</small></button>`).join('') || '<p class="muted">Sync from Revit to form the Design Book.</p>';
+  $$('#chapter-list button').forEach((button) => button.addEventListener('click', () => { state.activeChapter = button.dataset.chapter; state.selectedDesign = null; renderDesign(); renderDesignInspector(); closeWorkspaceRail(); }));
   const chapter = list.find((row) => row.id === state.activeChapter);
+  const formedChapter = chapter ? mergedChapter(chapter) : null;
   $('#chapter-title').textContent = chapter?.title || 'Design Book';
-  $('#chapter-subtitle').textContent = chapter ? `${chapter.items?.length || 0} Revit-derived positions · editable LIBER project decisions` : 'Sync room and material schedules from Revit.';
+  $('#chapter-subtitle').textContent = chapter
+    ? `${chapter.items?.length || 0} positions · ${chapter.sourceKind === 'revit-model-fallback' ? 'formed from visible Revit model types' : 'approved Design Book reference enriched by Revit schedules'}`
+    : 'Sync room, material and design schedules from Revit.';
+  renderDesignLanes(formedChapter);
   $('#design-grid').innerHTML = (chapter?.items || []).map((sourceItem) => {
     const item = mergedItem(sourceItem);
     const image = item.images?.at?.(-1)?.url || item.images?.[item.images.length - 1]?.url;
     return `<button class="design-card${state.selectedDesign?.id === item.id ? ' active' : ''}" data-item="${escapeHtml(item.id)}" type="button">
       <div class="design-image">${image ? `<img src="${escapeHtml(image)}" alt="" />` : 'ADD REFERENCE / RENDER'}</div>
-      <div class="design-copy"><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.description || 'No decision note yet.')}</p><span class="status-chip">${escapeHtml(item.status || 'Not Selected')}</span></div>
+      <div class="design-copy"><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.description || 'No decision note yet.')}</p><span class="status-chip">${escapeHtml(item.status || 'Not Selected')}</span>${item.revit ? `<span class="source-chip">REVIT · ${Number(item.revit.instanceCount || 0).toLocaleString()}</span>` : ''}</div>
     </button>`;
   }).join('') || '<p class="muted">No positions in this chapter.</p>';
   $$('.design-card', $('#design-grid')).forEach((card) => card.addEventListener('click', () => {
     const source = chapter.items.find((item) => item.id === card.dataset.item);
-    state.selectedDesign = { ...mergedItem(source), chapterTitle: chapter.title };
-    state.selectedElement = null;
-    state.selectedContext = contextFor('Design', state.selectedDesign);
-    renderDesign();
-    renderDesignInspector();
+    openDesignPosition(chapter, source);
   }));
+}
+
+function renderDesignLanes(chapter) {
+  const host = $('#design-lanes');
+  if (!chapter) { host.innerHTML = ''; return; }
+  const lanes = [
+    { field: 'inspiration', title: 'Inspiration', hint: 'References and precedents', images: chapter.inspiration || [] },
+    { field: 'renders', title: 'Renderings', hint: 'Current project visualizations', images: chapter.renders || [] },
+    { field: 'versionImages', title: 'Versions', hint: 'Saved visual directions', images: chapter.versionImages || [], versions: chapter.versions || [] }
+  ];
+  host.innerHTML = lanes.map((lane) => `
+    <section class="design-lane" data-field="${lane.field}">
+      <div class="design-lane-head"><div><strong>${lane.title}</strong><small>${lane.hint}</small></div><label class="lane-upload">Add<input type="file" accept="image/*" data-chapter-field="${lane.field}" /></label></div>
+      ${lane.versions?.length ? `<div class="version-list">${lane.versions.map((version) => `<span>${escapeHtml(version.name)}</span>`).join('')}</div>` : ''}
+      <div class="lane-images">${lane.images.map((image) => `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name || lane.title)}" />`).join('') || '<span>Drop in the first visual</span>'}</div>
+    </section>`).join('');
+  $$('[data-chapter-field]', host).forEach((input) => input.addEventListener('change', uploadChapterImage));
+}
+
+async function uploadChapterImage(event) {
+  const file = event.target.files?.[0];
+  const chapter = chapters().find((row) => row.id === state.activeChapter);
+  if (!file || !chapter) return;
+  const field = event.target.dataset.chapterField;
+  const current = mergedChapter(chapter)[field] || [];
+  try {
+    setSync(`Uploading ${field === 'inspiration' ? 'inspiration' : field === 'renders' ? 'rendering' : 'version'}…`, 'busy');
+    const images = await Store.uploadChapterImage(state.projectId, chapter.id, field, file, current);
+    const edit = { ...(state.chapterEdits.get(chapter.id) || {}), [field]: images };
+    state.chapterEdits.set(chapter.id, edit);
+    renderDesign();
+    setSync('Design Book visual saved', Store.isCloud() ? 'good' : 'quiet');
+    toast('Chapter visual saved outside the RVT.');
+  } catch (error) { setSync('Visual upload failed', 'bad'); toast(error.message, true); }
 }
 
 function renderDesignInspector() {
@@ -437,6 +582,13 @@ function renderDesignInspector() {
   }
   $('#design-inspector').innerHTML = `
     <div class="eyebrow">${escapeHtml(item.chapterTitle)}</div><h2>${escapeHtml(item.label)}</h2>
+    ${item.revit ? `<div class="design-source-summary">
+      <span>REVIT MODEL SOURCE</span>
+      <strong>${Number(item.revit.instanceCount || 0).toLocaleString()} visible instance${Number(item.revit.instanceCount || 0) === 1 ? '' : 's'}</strong>
+      <p>${escapeHtml([item.revit.category, item.revit.family, item.revit.type].filter(Boolean).join(' · '))}</p>
+      ${(item.revit.levels || []).length ? `<small>${escapeHtml(item.revit.levels.join(' · '))}</small>` : ''}
+      <button class="button ghost" id="design-show-bim" type="button">Show representative in BIM</button>
+    </div>` : ''}
     <form id="design-edit-form" class="edit-form">
       <label>Status<select id="design-status"><option>Not Selected</option><option>Research</option><option>Proposed</option><option>Approved</option><option>On Hold</option></select></label>
       <label>Description<textarea id="design-description" rows="4" placeholder="Selection, intent, dimensions…">${escapeHtml(item.description || '')}</textarea></label>
@@ -451,6 +603,12 @@ function renderDesignInspector() {
   $('#design-status').value = item.status || 'Not Selected';
   $('#design-edit-form').addEventListener('submit', saveDesign);
   $('#design-image-upload').addEventListener('change', uploadDesignImage);
+  $('#design-show-bim')?.addEventListener('click', () => {
+    const element = (item.revit?.elementIds || []).map(String).map((id) => state.viewerData?.elements?.find((row) => String(row.id) === id)).find(Boolean);
+    if (!element) return toast('This type is not visible in the current synced 3D view.', true);
+    showView('bim');
+    selectElement(element, true);
+  });
   $('#design-issue').addEventListener('click', () => openIssue({ kind: 'design', item }));
   $('#design-chat').addEventListener('click', () => openProjectChat(state.selectedContext));
 }
@@ -527,7 +685,7 @@ function renderAll() {
 async function loadCloudState(cloudState, localPackage = null) {
   state.cloudState = cloudState || null;
   if (!cloudState && !localPackage) {
-    state.viewerData = null; state.designData = null; state.designEdits = new Map(); state.issues = []; state.library = [];
+    state.viewerData = null; state.designData = null; state.designEdits = new Map(); state.chapterEdits = new Map(); state.issues = []; state.library = [];
     renderAll(); setSync('No Revit sync yet', 'quiet'); return;
   }
   const revision = localPackage?.revision || cloudState?.revision || 'unknown';
@@ -535,22 +693,40 @@ async function loadCloudState(cloudState, localPackage = null) {
   state.loadingRevision = revision;
   setSync('Loading project revision…', 'busy');
   try {
-    const [viewerData, designData, edits, issues, library] = await Promise.all([
+    const [viewerData, designData, edits, chapterEdits, issues, library] = await Promise.all([
       localPackage?.viewer || Store.fetchJson(cloudState.viewerUrl),
       localPackage?.design || Store.fetchJson(cloudState.designUrl),
-      Store.listDesignEdits(state.projectId), Store.listIssues(state.projectId), Store.listLibrary(state.projectId)
+      Store.listDesignEdits(state.projectId), Store.listChapterEdits(state.projectId), Store.listIssues(state.projectId), Store.listLibrary(state.projectId)
     ]);
     state.viewerData = viewerData;
     state.designData = designData;
     state.designEdits = new Map(edits.map((row) => [row.id, row]));
+    state.chapterEdits = new Map(chapterEdits.map((row) => [row.id, row]));
     state.issues = issues;
     state.library = library;
     renderAll();
     const modelUrl = localPackage?.modelUrl || cloudState.modelUrl;
-    $('#viewer-message').hidden = Boolean(modelUrl);
-    if (modelUrl && viewer) {
-      try { await viewer.load(modelUrl, viewerData); $('#viewer-message').hidden = true; }
-      catch (error) { $('#viewer-message').hidden = false; $('#viewer-message').textContent = `Model could not load: ${error.message}`; }
+    const viewerMessage = $('#viewer-message');
+    viewerMessage.classList.remove('fallback');
+    if (viewer && viewerData?.elements?.length) {
+      try {
+        const result = await viewer.load(modelUrl, viewerData);
+        state.viewerMode = result.mode;
+        if (result.mode === 'fbx') viewerMessage.hidden = true;
+        else if (result.mode === 'fallback') {
+          viewerMessage.hidden = false;
+          viewerMessage.classList.add('fallback');
+          viewerMessage.textContent = 'Categorized Revit proxy · FBX fallback active';
+        } else {
+          viewerMessage.hidden = false;
+          viewerMessage.textContent = 'No visible element geometry was found in this revision.';
+        }
+        renderModelTree();
+      } catch (error) {
+        state.viewerMode = 'none';
+        viewerMessage.hidden = false;
+        viewerMessage.textContent = `Model could not load: ${error.message}`;
+      }
     }
     setSync(`${localPackage?.cloud === false ? 'Local preview' : 'Synced'} ${formatDate(localPackage?.syncedAt || cloudState.syncedAt)}`, localPackage?.cloud === false ? 'quiet' : 'good');
   } catch (error) {
@@ -637,6 +813,8 @@ $('#issue-form').addEventListener('submit', async (event) => {
 });
 
 $$('.main-nav [data-view]').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
+$('#rail-toggle').addEventListener('click', toggleWorkspaceRail);
+$('#rail-scrim').addEventListener('click', closeWorkspaceRail);
 $('#project-select').addEventListener('change', () => activateProject($('#project-select').value));
 $('#sync-button').addEventListener('click', () => $('#revex-sync-upload').click());
 $('#empty-sync-button').addEventListener('click', () => $('#revex-sync-upload').click());
@@ -649,8 +827,11 @@ $('#issue-close').addEventListener('click', closeIssue);
 $('#issue-cancel').addEventListener('click', closeIssue);
 $('#issue-drawer').addEventListener('click', (event) => { if (event.target === event.currentTarget) closeIssue(); });
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && !$('#issue-drawer').hidden) closeIssue();
+  if (event.key !== 'Escape') return;
+  if (!$('#issue-drawer').hidden) closeIssue();
+  else closeWorkspaceRail();
 });
+window.addEventListener('resize', () => { if (innerWidth > 860) closeWorkspaceRail(); });
 $('#open-chat').addEventListener('click', () => openProjectChat());
 $('#open-spec').addEventListener('click', () => openInLiberShell('specifications', 'Specifications', appUrl('specifications', { specProjectId: state.preferredSpecId || state.cloudState?.spec?.projectId })));
 $('#open-tracker').addEventListener('click', () => openInLiberShell('project-tracker', 'Project Tracker', appUrl('project-tracker', { projectId: state.projectId })));

@@ -3,36 +3,42 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <meta name="color-scheme" content="light" />
+  <meta name="color-scheme" content="dark" />
   <title>REVEX Companion — LIBER Apps</title>
-  <link rel="stylesheet" href="styles.css?v=20260808r1" />
+  <link rel="stylesheet" href="../specifications/styles.css?v=20260809r2" />
+  <link rel="stylesheet" href="styles.css?v=20260809r2" />
 </head>
-<body>
+<body class="revex-app">
   <div class="app-shell">
-    <header class="topbar">
-      <a class="brand" href="../../index.html" aria-label="LIBER Apps">LIBER <strong>REVEX</strong></a>
-      <label class="project-picker">
+    <header class="topbar sp-header">
+      <button class="sp-icon-btn only-mobile" id="rail-toggle" type="button" aria-label="Open current navigator" aria-expanded="false">☰</button>
+      <a class="brand sp-title" href="../../index.html" aria-label="LIBER Apps">
+        <strong>REVEX</strong><span class="sp-crumb">Revit companion · central project model</span>
+      </a>
+      <label class="project-picker sp-field">
         <span>Project</span>
         <select id="project-select" aria-label="Active LIBER project">
           <option value="">Choose a project</option>
         </select>
       </label>
-      <div id="sync-indicator" class="sync-indicator" data-tone="quiet">
+      <div id="sync-indicator" class="sync-indicator sp-badge" data-tone="quiet">
         <span class="sync-dot"></span><span id="sync-label">Waiting for project</span>
       </div>
-      <button class="button ghost compact" id="sync-button" type="button">Import Revit sync</button>
+      <button class="button ghost compact sp-btn sp-btn-ghost sp-btn-sm" id="sync-button" type="button">Import sync</button>
       <input id="revex-sync-upload" data-liber-revex-sync-upload="1" type="file" multiple
         accept=".json,.fbx,application/json,application/octet-stream" hidden />
     </header>
 
-    <nav class="main-nav" aria-label="REVEX sections">
-      <button type="button" data-view="bim" class="active">BIM Viewer</button>
-      <button type="button" data-view="design">Design Book</button>
-      <button type="button" data-view="spec">Spec Book</button>
-      <button type="button" data-view="docs">Project Docs</button>
-      <button type="button" data-view="chat">Project Chat</button>
+    <nav class="main-nav sp-toolbar" aria-label="REVEX sections">
+      <div class="sp-seg revex-tabs">
+        <button type="button" data-view="bim" class="active">BIM</button>
+        <button type="button" data-view="design">Design</button>
+        <button type="button" data-view="spec">Specifications</button>
+        <button type="button" data-view="docs">Docs</button>
+        <button type="button" data-view="chat">Chat</button>
+      </div>
       <span class="nav-spacer"></span>
-      <button type="button" id="rendair-button" class="utility">Rendair ↗</button>
+      <button type="button" id="rendair-button" class="utility sp-btn sp-btn-ghost sp-btn-sm">Rendair ↗</button>
     </nav>
 
     <main id="workspace">
@@ -41,20 +47,20 @@
           <div class="eyebrow">REVIT + LIBER</div>
           <h1>One project, correctly connected.</h1>
           <p>Choose an existing LIBER project. REVEX keeps the BIM model, Design Book, Specifications, project documents and project chat distinct while linking them by project and revision.</p>
-          <button class="button" id="empty-sync-button" type="button">Import a REVEX sync package</button>
+          <button class="button sp-btn" id="empty-sync-button" type="button">Import REVEX sync package</button>
         </div>
       </section>
 
       <section id="view-bim" class="view bim-view" hidden>
-        <aside class="rail">
-          <div class="rail-head">
+        <aside class="rail sp-rail" aria-label="Central model navigator">
+          <div class="rail-head sp-rail-head">
             <div>
               <div class="eyebrow">CENTRAL MODEL</div>
               <h2 id="model-title">No model synced</h2>
             </div>
-            <button class="icon-button" id="fit-model" type="button" title="Fit model" aria-label="Fit model">⌗</button>
+            <button class="icon-button sp-icon-btn" id="fit-model" type="button" title="Fit model" aria-label="Fit model">⌗</button>
           </div>
-          <input id="element-search" class="search" type="search" placeholder="Search element, room, material…" />
+          <input id="element-search" class="search sp-inp" type="search" placeholder="Search element, room, material…" />
           <div id="model-facts" class="facts"></div>
           <div id="element-tree" class="tree"></div>
         </aside>
@@ -68,7 +74,7 @@
           <div id="viewer-message" class="viewer-message">Sync from Revit to load the active 3D view.</div>
           <div class="viewer-help">Orbit · drag &nbsp; Pan · right-drag &nbsp; Zoom · wheel</div>
         </div>
-        <aside class="inspector" id="bim-inspector">
+        <aside class="inspector" id="bim-inspector" aria-label="BIM selection inspector">
           <div class="eyebrow">SELECTION</div>
           <h2>No element selected</h2>
           <p class="muted">Select an item in the model tree or click the model.</p>
@@ -76,12 +82,11 @@
       </section>
 
       <section id="view-design" class="view design-view" hidden>
-        <aside class="chapter-rail">
-          <div class="eyebrow">DESIGN BOOK</div>
-          <h2>Chapters</h2>
+        <aside class="chapter-rail sp-rail" aria-label="Design Book chapters">
+          <div class="sp-rail-head"><div class="eyebrow">DESIGN BOOK</div><h2>Chapters</h2></div>
           <div id="chapter-list" class="chapter-list"></div>
         </aside>
-        <div class="design-content">
+        <div class="design-content sp-content">
           <div class="section-head">
             <div>
               <div class="eyebrow">EDITABLE PROJECT LAYER</div>
@@ -89,6 +94,7 @@
               <p id="chapter-subtitle">Revit-derived positions; LIBER-owned selections, images and approvals.</p>
             </div>
           </div>
+          <div id="design-lanes" class="design-lanes" aria-label="Chapter visual development"></div>
           <div id="design-grid" class="design-grid"></div>
         </div>
         <aside class="inspector" id="design-inspector">
@@ -99,7 +105,7 @@
       </section>
 
       <section id="view-spec" class="view resource-view" hidden>
-        <div class="resource-card">
+        <div class="resource-card sp-section">
           <div class="resource-icon">S</div>
           <div>
             <div class="eyebrow">EXISTING LIBER APP</div>
@@ -107,7 +113,7 @@
             <p>REVEX publishes Revit schedules as a source. Specifications keeps CSI structure, authored spec fields, sync history and ownership rules.</p>
             <div id="spec-status" class="resource-status">No linked specification project yet.</div>
           </div>
-          <button class="button" id="open-spec" type="button">Open Specifications</button>
+          <button class="button sp-btn" id="open-spec" type="button">Open Specifications</button>
         </div>
       </section>
 
@@ -118,16 +124,16 @@
             <h1>Project Docs</h1>
             <p>These are the same Record In / Record Out files. REVEX does not create a second document store.</p>
           </div>
-          <button class="button ghost" id="open-tracker" type="button">Manage in Project Tracker</button>
+          <button class="button ghost sp-btn sp-btn-ghost" id="open-tracker" type="button">Manage in Project Tracker</button>
         </div>
         <div class="docs-layout">
-          <section class="docs-panel"><h2>Record In</h2><div id="docs-in" class="file-list"></div></section>
-          <section class="docs-panel"><h2>Record Out</h2><div id="docs-out" class="file-list"></div></section>
+          <section class="docs-panel sp-tablewrap"><h2>Record In</h2><div id="docs-in" class="file-list"></div></section>
+          <section class="docs-panel sp-tablewrap"><h2>Record Out</h2><div id="docs-out" class="file-list"></div></section>
         </div>
       </section>
 
       <section id="view-chat" class="view resource-view" hidden>
-        <div class="resource-card">
+        <div class="resource-card sp-section">
           <div class="resource-icon">C</div>
           <div>
             <div class="eyebrow">PROJECT CONNECTION</div>
@@ -135,30 +141,32 @@
             <p>Open the existing authenticated connection for this LIBER project. Selected BIM or Design Book context is included when you launch from an item.</p>
             <div id="chat-context" class="resource-status">No item context selected.</div>
           </div>
-          <button class="button" id="open-chat" type="button">Open Project Chat</button>
+          <button class="button sp-btn" id="open-chat" type="button">Open Project Chat</button>
         </div>
       </section>
     </main>
   </div>
 
-  <div id="issue-drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="issue-dialog-title" hidden>
-    <form id="issue-form" class="drawer-card">
-      <div class="drawer-head"><div><div class="eyebrow">BIM / DESIGN ANNOTATION</div><h2 id="issue-dialog-title">New issue</h2></div><button id="issue-close" class="icon-button" type="button" aria-label="Close issue dialog">×</button></div>
+  <div id="rail-scrim" class="sp-scrim revex-rail-scrim" hidden></div>
+
+  <div id="issue-drawer" class="drawer sp-modal" role="dialog" aria-modal="true" aria-labelledby="issue-dialog-title" hidden>
+    <form id="issue-form" class="drawer-card sp-modal-card sp-form">
+      <div class="drawer-head"><div><div class="eyebrow">BIM / DESIGN ANNOTATION</div><h2 id="issue-dialog-title">New issue</h2></div><button id="issue-close" class="icon-button sp-icon-btn" type="button" aria-label="Close issue dialog">×</button></div>
       <label>Title<input id="issue-title" required maxlength="120" /></label>
       <label>Comment<textarea id="issue-body" required rows="5" maxlength="3000"></textarea></label>
       <label>Status<select id="issue-status"><option value="open">Open</option><option value="review">Review</option><option value="resolved">Resolved</option></select></label>
-      <div class="drawer-actions"><button class="button ghost" id="issue-cancel" type="button">Cancel</button><button class="button" type="submit">Save issue</button></div>
+      <div class="drawer-actions sp-modal-actions"><button class="button ghost sp-btn sp-btn-ghost" id="issue-cancel" type="button">Cancel</button><button class="button sp-btn" type="submit">Save issue</button></div>
     </form>
   </div>
 
-  <div id="toast" class="toast" hidden></div>
+  <div id="toast" class="toast sp-toast" role="status" aria-live="polite" hidden></div>
 
   <script src="../../js/secure-keys.js"></script>
   <script src="../../js/firebase-loader.js"></script>
   <script src="../../js/firebase-service.js"></script>
   <script src="../../js/chat-iframe-bridge.js"></script>
-  <script src="store.js?v=20260808r1"></script>
+  <script src="store.js?v=20260809r2"></script>
   <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.179.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.179.1/examples/jsm/"}}</script>
-  <script type="module" src="app.js?v=20260808r1"></script>
+  <script type="module" src="app.js?v=20260809r2"></script>
 </body>
 </html>
