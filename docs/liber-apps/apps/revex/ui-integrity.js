@@ -3,6 +3,13 @@
   const BUILD='20260810r10';
   let applying=false;
 
+  function setText(node,text){
+    if(node&&String(node.textContent||'').trim()!==text) node.textContent=text;
+  }
+  function setAttr(node,name,value){
+    if(node&&node.getAttribute(name)!==value) node.setAttribute(name,value);
+  }
+
   function canonicalize(){
     if(applying) return;
     applying=true;
@@ -13,19 +20,20 @@
       const projectId=String(document.getElementById('project-select')?.value||'').trim();
 
       if(invite){
-        invite.textContent='Invite';
-        invite.type='button';
-        invite.hidden=false;
-        invite.disabled=!projectId;
-        invite.setAttribute('aria-label','Invite people to the active REVEX project');
-        invite.title='Invite to project';
+        setText(invite,'Invite');
+        if(invite.type!=='button') invite.type='button';
+        if(invite.hidden) invite.hidden=false;
+        const shouldDisable=!projectId;
+        if(invite.disabled!==shouldDisable) invite.disabled=shouldDisable;
+        setAttr(invite,'aria-label','Invite people to the active REVEX project');
+        if(invite.title!=='Invite to project') invite.title='Invite to project';
       }
       if(render){
-        render.textContent='Render';
-        render.type='button';
-        render.hidden=false;
-        render.setAttribute('aria-label','Open REVEX Render');
-        render.title='Render';
+        setText(render,'Render');
+        if(render.type!=='button') render.type='button';
+        if(render.hidden) render.hidden=false;
+        setAttr(render,'aria-label','Open REVEX Render');
+        if(render.title!=='Render') render.title='Render';
       }
 
       if(nav){
@@ -37,16 +45,16 @@
         });
         const spacer=nav.querySelector('.nav-spacer');
         if(spacer&&invite&&render){
-          spacer.after(invite);
-          invite.after(render);
+          if(spacer.nextElementSibling!==invite) spacer.after(invite);
+          if(invite.nextElementSibling!==render) invite.after(render);
         }
       }
 
       // Legacy Drive model-source controls must never be visible in REVEX.
       const drive=document.getElementById('project-drive-id');
       if(drive){
-        drive.type='hidden';
-        drive.value='';
+        if(drive.type!=='hidden') drive.type='hidden';
+        if(drive.value) drive.value='';
         const label=drive.closest('label');
         if(label) label.remove();
       }
