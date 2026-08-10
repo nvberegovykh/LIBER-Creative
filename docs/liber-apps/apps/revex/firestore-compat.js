@@ -4,6 +4,10 @@
   if(!Store||Store.__revexFirestoreCompatR18Installed) return;
 
   const clone=(value)=>JSON.parse(JSON.stringify(value===undefined?null:value));
+  const post=(stage,detail={})=>{
+    try{ root.chrome?.webview?.postMessage({type:'liber:revex-sync-progress',stage,build:'20260810r18',...detail}); }catch(_){ }
+    console.log('[REVEX publish]',stage,detail);
+  };
 
   function sanitize(value,parentIsArray){
     if(Array.isArray(value)){
@@ -50,7 +54,7 @@
 
   function install(){
     if(Store.__revexFirestoreCompatR18Installed) return true;
-    if(!Store.api?.setDoc) return false;
+    if(!Store.api?.setDoc||!Store.api?.uploadBytes) return false;
 
     const originalSetDoc=Store.api.setDoc.bind(Store.api);
     Store.api.setDoc=async function revexFirestoreSafeSetDoc(ref,data,options){
@@ -64,13 +68,36 @@
       next.payloadEncoding='revex-firestore-row-objects-v2';
       next.rawPayloadStoragePath=next.storagePath||next.rawPayloadStoragePath||null;
       next.rawPayloadPreserved=Boolean(next.rawPayloadStoragePath);
-      return originalSetDoc(ref,next,options);
+      post('spec-write-start',{path,payloadSchedules:next.payload.length});
+      try{
+        const result=await originalSetDoc(ref,next,options);
+        post('spec-write-complete',{path});
+        return result;
+      }catch(error){
+        post('spec-write-failed',{path,error:String(error?.message||error)});
+        throw error;
+      }
+    };
+
+    const originalUploadBytes=Store.api.uploadBytes.bind(Store.api);
+    Store.api.uploadBytes=async function revexObservedUpload(ref,file,metadata){
+      const path=String(ref?.fullPath||ref?._location?.path_||file?.name||'upload');
+      const bytes=Number(file?.size||0);
+      const t0=performance.now();
+      post('upload-start',{path,bytes});
+      try{
+        const result=await originalUploadBytes(ref,file,metadata);
+        post('upload-complete',{path,bytes,uploadMs:Math.round(performance.now()-t0)});
+        return result;
+      }catch(error){
+        post('upload-failed',{path,bytes,uploadMs:Math.round(performance.now()-t0),error:String(error?.message||error)});
+        throw error;
+      }
     };
 
     Store.__revexFirestoreCompatR18Installed=true;
     root.RevexFirestoreCompat={safeSpecPayload,rowObject,sanitize};
-    console.log('[REVEX] Firestore compatibility r18 enabled',{specRows:'header-keyed-row-objects',nestedArrays:'sanitized',rawPayloadPreserved:true});
-    try{ root.chrome?.webview?.postMessage({type:'liber:revex-sync-progress',stage:'firestore-compat-ready',build:'20260810r18'}); }catch(_){ }
+    post('firestore-compat-ready',{nestedArrays:'sanitized',rawPayloadPreserved:true});
     return true;
   }
 
