@@ -5,11 +5,12 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="color-scheme" content="dark" />
   <title>REVEX Companion — LIBER Apps</title>
-  <link rel="stylesheet" href="../specifications/styles.css?v=20260810r19" />
-  <link rel="stylesheet" href="styles.css?v=20260810r19" />
-  <link rel="stylesheet" href="runtime.css?v=20260810r19" />
-  <link rel="stylesheet" href="render-agent.css?v=20260810r19" />
-  <link rel="stylesheet" href="integrity.css?v=20260810r19" />
+  <link rel="stylesheet" href="../specifications/styles.css?v=20260810r20" />
+  <link rel="stylesheet" href="styles.css?v=20260810r20" />
+  <link rel="stylesheet" href="runtime.css?v=20260810r20" />
+  <link rel="stylesheet" href="render-agent.css?v=20260810r20" />
+  <link rel="stylesheet" href="integrity.css?v=20260810r20" />
+  <link rel="stylesheet" href="r20.css?v=20260810r20" />
   <style id="revex-action-label-integrity">
     .main-nav .utility { font-size: 12px !important; }
     .main-nav .utility::before,
@@ -35,13 +36,13 @@
       </div>
       <button class="button ghost compact sp-btn sp-btn-ghost sp-btn-sm" id="sync-button" type="button">Import sync</button>
       <input id="revex-sync-upload" data-liber-revex-sync-upload="1" type="file" multiple
-        accept=".json,.ifc,.fbx,application/json,application/octet-stream" hidden />
+        accept=".json,.ifc,.fbx,.pdf,application/json,application/pdf,application/octet-stream" hidden />
     </header>
 
     <nav class="main-nav sp-toolbar" aria-label="REVEX sections">
       <div class="sp-seg revex-tabs">
         <button type="button" data-view="bim" class="active">BIM</button>
-        <button type="button" data-view="design">Design</button>
+        <button type="button" data-view="design">Design Book</button>
         <button type="button" data-view="spec">Spec Book</button>
         <button type="button" data-view="docs">Docs</button>
         <button type="button" data-view="chat">Chat</button>
@@ -68,11 +69,8 @@
       <section id="view-bim" class="view bim-view" hidden>
         <aside class="rail sp-rail" aria-label="Central model navigator">
           <div class="rail-head sp-rail-head">
-            <div>
-              <div class="eyebrow">SYNCED MODEL</div>
-              <h2 id="model-title">No model synced</h2>
-            </div>
-            <button class="icon-button sp-icon-btn" id="fit-model" type="button" title="Fit model" aria-label="Fit model">⌗</button>
+            <div><div class="eyebrow">SYNCED MODEL</div><h2 id="model-title">No model synced</h2></div>
+            <button class="icon-button sp-icon-btn" id="fit-model-rail" type="button" title="Fit model" aria-label="Fit model">⌗</button>
           </div>
           <input id="element-search" class="search sp-inp" type="search" placeholder="Search element, room, material…" />
           <div id="model-facts" class="facts"></div>
@@ -81,166 +79,58 @@
         <div class="viewport-wrap">
           <div id="viewer" class="viewer"></div>
           <div id="issue-pins" class="issue-pins" aria-label="Model issue pins"></div>
-          <div class="viewport-tools">
-            <button id="model-edges" type="button" class="tool">Wire</button>
-            <button id="model-grid" type="button" class="tool active">Grid</button>
+          <div class="viewport-tools viewer-controls" aria-label="BIM navigation">
+            <button id="fit-model" type="button" class="tool" title="Fit whole model">Fit</button>
+            <button id="section-toggle" type="button" class="tool" aria-expanded="false">Section</button>
+            <button id="walk-toggle" type="button" class="tool">Walk</button>
+            <select id="walk-floor" class="tool-select" aria-label="Walkthrough floor"><option value="">Floor</option></select>
+            <label class="tool-field" title="Camera eye height above selected floor"><span>Eye</span><input id="walk-height" type="number" value="5.5" min="2.5" max="9" step="0.25" /><b>ft</b></label>
+            <label class="tool-field" title="Camera field of view"><span>FOV</span><input id="walk-fov" type="range" value="55" min="30" max="90" step="1" /><b id="walk-fov-value">55°</b></label>
           </div>
-          <div id="viewer-message" class="viewer-message">In Revit, click SYNC BIM + BOOKS once to publish the IFC model, element data, Design Book and Spec Book as one controlled revision.</div>
-          <div class="viewer-help">Orbit · drag &nbsp; Pan · right-drag &nbsp; Zoom · wheel</div>
+          <div id="section-controls" class="section-controls" hidden>
+            <div><strong>Section box</strong><button id="section-reset" type="button">Reset</button></div>
+            <div class="control-row"><label>X</label><input id="section-x" type="range" min="0" max="100" value="100" /><span></span></div>
+            <div class="control-row"><label>Y</label><input id="section-y" type="range" min="0" max="100" value="100" /><span></span></div>
+            <div class="control-row"><label>Z</label><input id="section-z" type="range" min="0" max="100" value="100" /><span></span></div>
+          </div>
+          <div id="walk-controls" class="walk-controls" hidden><div class="control-hint">Walk: WASD · Q/E vertical · drag to look</div></div>
+          <div class="revex-r19-compat" hidden aria-hidden="true"><button id="model-edges" type="button"></button><button id="model-grid" type="button"></button></div>
+          <div id="viewer-message" class="viewer-message">In Revit, click SYNC BIM + BOOKS once to publish the IFC model, element data, Design Book, Spec Book and printing sets as one controlled revision.</div>
+          <div class="viewer-help">Move · drag &nbsp; Zoom · wheel &nbsp; Section · cuts &nbsp; Walk · WASD + drag</div>
         </div>
-        <aside class="inspector" id="bim-inspector" aria-label="BIM selection inspector">
-          <div class="eyebrow">SELECTION</div>
-          <h2>No element selected</h2>
-          <p class="muted">Select an item in the model tree or click the model.</p>
-        </aside>
+        <aside class="inspector" id="bim-inspector" aria-label="BIM selection inspector"><div class="eyebrow">SELECTION</div><h2>No element selected</h2><p class="muted">Select an item in the model tree or click the model.</p></aside>
       </section>
 
       <section id="view-design" class="view design-view" hidden>
-        <aside class="chapter-rail sp-rail" aria-label="Design Book chapters">
-          <div class="sp-rail-head"><div class="eyebrow">DESIGN BOOK</div><h2>Chapters</h2></div>
-          <div id="chapter-list" class="chapter-list"></div>
-        </aside>
+        <aside class="chapter-rail sp-rail" aria-label="Design Book chapters"><div class="sp-rail-head"><div class="eyebrow">DESIGN BOOK</div><h2>Chapters</h2></div><div id="chapter-list" class="chapter-list"></div></aside>
         <div class="design-content sp-content">
-          <div class="section-head">
-            <div>
-              <div class="eyebrow">EDITABLE PROJECT LAYER</div>
-              <h1 id="chapter-title">Design Book</h1>
-              <p id="chapter-subtitle">Revit-derived positions; user-owned selections, images and approvals.</p>
-            </div>
-          </div>
-          <div id="design-lanes" class="design-lanes" aria-label="Chapter visual development"></div>
-          <div id="design-grid" class="design-grid"></div>
+          <div id="design-progress" class="design-progress" aria-live="polite"></div>
+          <div class="section-head"><div><div class="eyebrow">EDITABLE PROJECT LAYER</div><h1 id="chapter-title">Design Book</h1><p id="chapter-subtitle">Revit-derived positions; user-owned selections, images and approvals.</p></div></div>
+          <div id="design-lanes" class="design-lanes" aria-label="Chapter visual development"></div><div id="design-grid" class="design-grid"></div>
         </div>
-        <aside class="inspector" id="design-inspector">
-          <div class="eyebrow">DESIGN POSITION</div>
-          <h2>Select a position</h2>
-          <p class="muted">Designer-authored work is stored separately from synced Revit source data and survives every later sync.</p>
-        </aside>
+        <aside class="inspector" id="design-inspector"><div class="eyebrow">DESIGN POSITION</div><h2>Select a position</h2><p class="muted">Designer-authored work is stored separately from synced Revit source data and survives every later sync.</p></aside>
       </section>
 
-      <section id="view-spec" class="view spec-view" hidden>
-        <div class="spec-head">
-          <div><div class="eyebrow">REVIT SCHEDULES + USER-AUTHORED SPEC DATA</div><h1>Spec Book</h1></div>
-          <div id="spec-status" class="resource-status">Connecting this project’s Spec Book…</div>
-        </div>
-        <div class="spec-frame-wrap">
-          <div id="spec-placeholder" class="spec-placeholder">Preparing the project’s Spec Book…</div>
-          <iframe id="spec-frame" title="REVEX Spec Book" loading="lazy"></iframe>
-        </div>
-      </section>
+      <section id="view-spec" class="view spec-view" hidden><div class="spec-head"><div><div class="eyebrow">REVIT SCHEDULES + USER-AUTHORED SPEC DATA</div><h1>Spec Book</h1></div><div id="spec-status" class="resource-status">Connecting this project’s Spec Book…</div></div><div class="spec-frame-wrap"><div id="spec-placeholder" class="spec-placeholder">Preparing the project’s Spec Book…</div><iframe id="spec-frame" title="REVEX Spec Book" loading="lazy"></iframe></div></section>
 
       <section id="view-docs" class="view docs-view" hidden>
-        <div class="section-head padded">
-          <div>
-            <div class="eyebrow">PROJECT TRACKER PROJECTION</div>
-            <h1>Project Docs</h1>
-            <p>These are the same Record In / Record Out files. REVEX does not create a second document store.</p>
-          </div>
-          <button class="button ghost sp-btn sp-btn-ghost" id="open-tracker" type="button">Manage in Project Tracker</button>
-        </div>
-        <div class="docs-layout">
-          <section class="docs-panel sp-tablewrap"><h2>Record In</h2><div id="docs-in" class="file-list"></div></section>
-          <section class="docs-panel sp-tablewrap"><h2>Record Out</h2><div id="docs-out" class="file-list"></div></section>
-        </div>
+        <div class="docs-toolbar"><div><div class="eyebrow">PROJECT DOCUMENT EXPLORER</div><h1>Docs</h1><p>Printing-set revisions, manual files and page references share one project library.</p></div><div class="docs-actions"><label class="button ghost sp-btn sp-btn-ghost docs-upload-label">Upload Record In<input id="docs-upload-in" type="file" multiple /></label><label class="button ghost sp-btn sp-btn-ghost docs-upload-label">Upload Record Out<input id="docs-upload-out" type="file" multiple /></label><button class="button ghost sp-btn sp-btn-ghost" id="open-tracker" type="button">Edit library</button></div><input id="docs-search" class="search sp-inp docs-search" type="search" placeholder="Search set, sheet, file…" /></div>
+        <div class="revex-r19-compat" hidden aria-hidden="true"><div id="docs-in"></div><div id="docs-out"></div></div>
+        <div class="docs-explorer"><aside id="docs-tree" class="docs-tree"></aside><section class="docs-preview"><div class="docs-preview-head"><div><h2 id="docs-preview-title">Select a document</h2><small id="docs-preview-meta">Full documents and exact sheet/page references open here.</small></div><div class="docs-preview-actions"><button id="docs-copy-ref" class="button ghost compact" type="button" disabled>Copy reference</button><button id="docs-open-external" class="button ghost compact" type="button" disabled>Open</button></div></div><div class="docs-frame-wrap"><iframe id="docs-frame" class="docs-frame" title="Project document viewer" hidden></iframe><div id="docs-empty" class="docs-empty">Choose a printing set, sheet/page or manual document from the explorer.</div></div></section></div>
       </section>
 
-      <section id="view-chat" class="view resource-view" hidden>
-        <div class="resource-card sp-section">
-          <div class="resource-icon">C</div>
-          <div>
-            <div class="eyebrow">PROJECT CONNECTION</div>
-            <h1>Project Chat stays the project conversation.</h1>
-            <p>Open the existing authenticated connection for this LIBER project. Selected BIM or Design Book context is included when you launch from an item.</p>
-            <div id="chat-context" class="resource-status">No item context selected.</div>
-          </div>
-          <button class="button sp-btn" id="open-chat" type="button">Open Project Chat</button>
-        </div>
-      </section>
+      <section id="view-chat" class="view chat-view" hidden><button id="open-chat" type="button" hidden aria-hidden="true"></button><div class="chat-frame-wrap"><iframe id="chat-frame" class="chat-frame" title="REVEX project chat" loading="eager"></iframe><div id="chat-placeholder" class="chat-placeholder">Connecting the project conversation…</div></div><div id="chat-context" hidden>No item context selected.</div></section>
     </main>
   </div>
 
   <div id="rail-scrim" class="sp-scrim revex-rail-scrim" hidden></div>
-
-  <div id="project-dialog" class="drawer sp-modal" role="dialog" aria-modal="true" aria-labelledby="project-dialog-title" hidden>
-    <form id="project-form" class="drawer-card sp-modal-card sp-form project-card">
-      <div class="drawer-head"><div><div class="eyebrow">ONE SHARED PROJECT IDENTITY</div><h2 id="project-dialog-title">Create REVEX project</h2></div><button id="project-close" class="icon-button sp-icon-btn" type="button" aria-label="Close project dialog">×</button></div>
-      <p class="modal-intro">This creates the shared Project Tracker record and its internal Spec Book. BIM revisions, documents, chat and renders attach to the same project.</p>
-      <label>Project name<input id="project-name" required maxlength="120" placeholder="87 Winthrop Street" autocomplete="off" /></label>
-      <label>Project code<input id="project-code" maxlength="60" placeholder="LIB-2026-087" autocomplete="off" /></label>
-      <input id="project-drive-id" type="hidden" value="" />
-      <label>Description<textarea id="project-description" rows="3" maxlength="1200" placeholder="Scope or coordination note"></textarea></label>
-      <div class="drawer-actions sp-modal-actions"><button class="button ghost sp-btn sp-btn-ghost" id="project-cancel" type="button">Cancel</button><button class="button sp-btn" id="project-create" type="submit">Create project</button></div>
-    </form>
-  </div>
-
-  <div id="invite-dialog" class="drawer sp-modal" role="dialog" aria-modal="true" aria-labelledby="invite-dialog-title" hidden>
-    <form id="invite-form" class="drawer-card sp-modal-card sp-form project-card">
-      <div class="drawer-head"><div><div class="eyebrow">PROJECT ACCESS</div><h2 id="invite-dialog-title">Invite to REVEX</h2></div><button id="invite-close" class="icon-button sp-icon-btn" type="button" aria-label="Close invite dialog">×</button></div>
-      <p id="invite-project-label" class="modal-intro">Invite someone into the active REVEX project.</p>
-      <label>Email<input id="invite-email" type="email" required maxlength="180" placeholder="client@example.com" autocomplete="email" /></label>
-      <p class="modal-intro">One email link handles sign-in or one-time account setup, then opens this REVEX project directly.</p>
-      <div class="drawer-actions sp-modal-actions"><button class="button ghost sp-btn sp-btn-ghost" id="invite-cancel" type="button">Cancel</button><button class="button sp-btn" id="invite-send" type="submit">Send invite</button></div>
-    </form>
-  </div>
-
-  <div id="render-dialog" class="render-modal sp-modal" role="dialog" aria-modal="true" aria-labelledby="render-dialog-title" hidden>
-    <section class="render-card sp-modal-card">
-      <header class="render-head">
-        <div><div class="eyebrow">RENDAIR + WALLT + REVIT</div><h2 id="render-dialog-title">REVEX Render</h2><p id="render-context">Current BIM view</p></div>
-        <button id="render-close" class="icon-button sp-icon-btn" type="button" aria-label="Close render dialog">×</button>
-      </header>
-      <div class="render-layout">
-        <form id="render-form" class="render-controls sp-form">
-          <div class="render-source" id="render-source"><span>Current BIM viewport</span></div>
-          <label>Save to Design Book chapter<select id="render-chapter"></select></label>
-          <label>Prompt<textarea id="render-prompt" rows="7" maxlength="5000" placeholder="WALLT prepares this from your request and REVEX context."></textarea></label>
-          <div class="render-options">
-            <label>Environment<select id="render-environment"><option>Natural daylight</option><option>Bright overcast</option><option>Warm late-afternoon daylight</option><option>Night exterior - physically plausible</option></select></label>
-            <label>Staging<select id="render-staging"><option>Preserve modeled objects only</option><option>Minimal real-estate staging</option><option>No loose furniture</option></select></label>
-            <label>People<select id="render-people"><option>None</option><option>Very sparse, natural scale</option></select></label>
-          </div>
-          <label class="render-check"><input id="render-materials" type="checkbox" checked /> Use Revit material intent</label>
-          <button class="button sp-btn" id="render-prepare" type="submit">Prepare AI render</button>
-          <div id="render-status" class="render-status" role="status">WALLT is ready to operate the REVEX render workflow.</div>
-          <label class="result-upload">Save generated result<input id="render-result-upload" type="file" accept="image/*" /></label>
-        </form>
-        <div class="render-workspace">
-          <div class="render-workspace-head"><strong>Rendair</strong><span>live workspace inside REVEX</span></div>
-          <iframe id="render-frame" title="Rendair workspace" allow="clipboard-read; clipboard-write" referrerpolicy="strict-origin-when-cross-origin"></iframe>
-          <div id="render-frame-empty" class="render-frame-empty">Loading the Rendair workspace…</div>
-        </div>
-      </div>
-      <div class="render-history-head"><strong>Project render history</strong><span>Saved outside the RVT</span></div>
-      <div id="render-history" class="render-history"></div>
-    </section>
-  </div>
-
-  <div id="issue-drawer" class="drawer sp-modal" role="dialog" aria-modal="true" aria-labelledby="issue-dialog-title" hidden>
-    <form id="issue-form" class="drawer-card sp-modal-card sp-form">
-      <div class="drawer-head"><div><div class="eyebrow">BIM / DESIGN ANNOTATION</div><h2 id="issue-dialog-title">New issue</h2></div><button id="issue-close" class="icon-button sp-icon-btn" type="button" aria-label="Close issue dialog">×</button></div>
-      <label>Title<input id="issue-title" required maxlength="120" /></label>
-      <label>Comment<textarea id="issue-body" required rows="5" maxlength="3000"></textarea></label>
-      <label>Status<select id="issue-status"><option value="open">Open</option><option value="review">Review</option><option value="resolved">Resolved</option></select></label>
-      <div class="drawer-actions sp-modal-actions"><button class="button ghost sp-btn sp-btn-ghost" id="issue-cancel" type="button">Cancel</button><button class="button sp-btn" type="submit">Save issue</button></div>
-    </form>
-  </div>
-
+  <div id="project-dialog" class="drawer sp-modal" role="dialog" aria-modal="true" aria-labelledby="project-dialog-title" hidden><form id="project-form" class="drawer-card sp-modal-card sp-form project-card"><div class="drawer-head"><div><div class="eyebrow">ONE SHARED PROJECT IDENTITY</div><h2 id="project-dialog-title">Create REVEX project</h2></div><button id="project-close" class="icon-button sp-icon-btn" type="button" aria-label="Close project dialog">×</button></div><p class="modal-intro">This creates the shared Project Tracker record and its internal Spec Book. BIM revisions, documents, chat and renders attach to the same project.</p><label>Project name<input id="project-name" required maxlength="120" placeholder="87 Winthrop Street" autocomplete="off" /></label><label>Project code<input id="project-code" maxlength="60" placeholder="LIB-2026-087" autocomplete="off" /></label><input id="project-drive-id" type="hidden" value="" /><label>Description<textarea id="project-description" rows="3" maxlength="1200" placeholder="Scope or coordination note"></textarea></label><div class="drawer-actions sp-modal-actions"><button class="button ghost sp-btn sp-btn-ghost" id="project-cancel" type="button">Cancel</button><button class="button sp-btn" id="project-create" type="submit">Create project</button></div></form></div>
+  <div id="invite-dialog" class="drawer sp-modal" role="dialog" aria-modal="true" aria-labelledby="invite-dialog-title" hidden><form id="invite-form" class="drawer-card sp-modal-card sp-form project-card"><div class="drawer-head"><div><div class="eyebrow">PROJECT ACCESS</div><h2 id="invite-dialog-title">Invite to REVEX</h2></div><button id="invite-close" class="icon-button sp-icon-btn" type="button" aria-label="Close invite dialog">×</button></div><p id="invite-project-label" class="modal-intro">Invite someone into the active REVEX project.</p><label>Email<input id="invite-email" type="email" required maxlength="180" placeholder="client@example.com" autocomplete="email" /></label><p class="modal-intro">One email link handles sign-in or one-time account setup, then opens this REVEX project directly.</p><div class="drawer-actions sp-modal-actions"><button class="button ghost sp-btn sp-btn-ghost" id="invite-cancel" type="button">Cancel</button><button class="button sp-btn" id="invite-send" type="submit">Send invite</button></div></form></div>
+  <div id="render-dialog" class="render-modal sp-modal" role="dialog" aria-modal="true" aria-labelledby="render-dialog-title" hidden><section class="render-card sp-modal-card"><header class="render-head"><div><div class="eyebrow">RENDAIR + WALLT + REVIT</div><h2 id="render-dialog-title">REVEX Render</h2><p id="render-context">Current BIM view</p></div><button id="render-close" class="icon-button sp-icon-btn" type="button" aria-label="Close render dialog">×</button></header><div class="render-layout"><form id="render-form" class="render-controls sp-form"><div class="render-source" id="render-source"><span>Current BIM viewport</span></div><label>Save to Design Book chapter<select id="render-chapter"></select></label><label>Prompt<textarea id="render-prompt" rows="7" maxlength="5000" placeholder="WALLT prepares this from your request and REVEX context."></textarea></label><div class="render-options"><label>Environment<select id="render-environment"><option>Natural daylight</option><option>Bright overcast</option><option>Warm late-afternoon daylight</option><option>Night exterior - physically plausible</option></select></label><label>Staging<select id="render-staging"><option>Preserve modeled objects only</option><option>Minimal real-estate staging</option><option>No loose furniture</option></select></label><label>People<select id="render-people"><option>None</option><option>Very sparse, natural scale</option></select></label></div><label class="render-check"><input id="render-materials" type="checkbox" checked /> Use Revit material intent</label><button class="button sp-btn" id="render-prepare" type="submit">Prepare AI render</button><div id="render-status" class="render-status" role="status">WALLT is ready to operate the REVEX render workflow.</div><label class="result-upload">Save generated result<input id="render-result-upload" type="file" accept="image/*" /></label></form><div class="render-workspace"><div class="render-workspace-head"><strong>Rendair</strong><span>live workspace inside REVEX</span></div><iframe id="render-frame" title="Rendair workspace" allow="clipboard-read; clipboard-write" referrerpolicy="strict-origin-when-cross-origin"></iframe><div id="render-frame-empty" class="render-frame-empty">Loading the Rendair workspace…</div></div></div><div class="render-history-head"><strong>Project render history</strong><span>Saved outside the RVT</span></div><div id="render-history" class="render-history"></div></section></div>
+  <div id="issue-drawer" class="drawer sp-modal" role="dialog" aria-modal="true" aria-labelledby="issue-dialog-title" hidden><form id="issue-form" class="drawer-card sp-modal-card sp-form"><div class="drawer-head"><div><div class="eyebrow">BIM / DESIGN ANNOTATION</div><h2 id="issue-dialog-title">New issue</h2></div><button id="issue-close" class="icon-button sp-icon-btn" type="button" aria-label="Close issue dialog">×</button></div><label>Title<input id="issue-title" required maxlength="120" /></label><label>Comment<textarea id="issue-body" required rows="5" maxlength="3000"></textarea></label><label>Status<select id="issue-status"><option value="open">Open</option><option value="review">Review</option><option value="resolved">Resolved</option></select></label><div class="drawer-actions sp-modal-actions"><button class="button ghost sp-btn sp-btn-ghost" id="issue-cancel" type="button">Cancel</button><button class="button sp-btn" type="submit">Save issue</button></div></form></div>
   <div id="toast" class="toast sp-toast" role="status" aria-live="polite" hidden></div>
 
-  <script src="../../js/secure-keys.js"></script>
-  <script src="../../js/firebase-loader.js"></script>
-  <script src="../../js/firebase-service.js"></script>
-  <script src="../../js/chat-iframe-bridge.js"></script>
-  <script src="../../js/wallt-agent.js?v=20260810r19"></script>
-  <script src="store.js?v=20260810r19"></script>
-  <script src="runtime.js?v=20260810r19"></script>
-  <script src="integrity.js?v=20260810r19"></script>
-  <script src="firestore-compat.js?v=20260810r19"></script>
-  <script src="shell-integrity.js?v=20260810r19"></script>
-  <script src="ui-integrity.js?v=20260810r19"></script>
-  <script src="projection-integrity.js?v=20260810r19"></script>
-  <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.179.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.179.1/examples/jsm/"}}</script>
-  <script type="module" src="app.js?v=20260810r19"></script>
-  <script type="module" src="render-agent.js?v=20260810r19"></script>
+  <script src="../../js/secure-keys.js"></script><script src="../../js/firebase-loader.js"></script><script src="../../js/firebase-service.js"></script><script src="../../js/chat-iframe-bridge.js"></script><script src="../../js/wallt-agent.js?v=20260810r20"></script><script src="store.js?v=20260810r20"></script><script src="runtime.js?v=20260810r20"></script><script src="integrity.js?v=20260810r20"></script><script src="firestore-compat.js?v=20260810r20"></script><script src="shell-integrity.js?v=20260810r20"></script><script src="ui-integrity.js?v=20260810r20"></script><script src="projection-integrity.js?v=20260810r20"></script>
+  <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.179.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.179.1/examples/jsm/"}}</script><script src="sync-docs-r20.js?v=20260810r20"></script><script src="workflow-r20.js?v=20260810r20"></script><script type="module" src="app.js?v=20260810r20"></script><script type="module" src="viewer-r20.js?v=20260810r20"></script><script type="module" src="render-agent.js?v=20260810r20"></script>
 </body>
 </html>
