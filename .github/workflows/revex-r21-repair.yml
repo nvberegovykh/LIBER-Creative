@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - '.github/workflows/revex-r21-repair.yml'
-      - '.github/revex-r21-patch.py'
+      - '.github/revex-r21-hotfix.py'
 
 permissions:
   contents: write
@@ -22,7 +22,7 @@ jobs:
         with:
           node-version: '22'
       - name: Apply patch
-        run: python .github/revex-r21-patch.py
+        run: python .github/revex-r21-hotfix.py
       - name: Syntax checks
         run: |
           cp docs/liber-apps/apps/revex/app.js /tmp/app.mjs
@@ -34,6 +34,12 @@ jobs:
           node --check docs/liber-apps/apps/revex/cache-r21.js
           node --check docs/liber-apps/apps/revex/workflow-r20.js
           node --check docs/liber-apps/apps/revex/sync-docs-r20.js
+      - name: Integrity assertions
+        run: |
+          ! grep -q 'class BimViewer' docs/liber-apps/apps/revex/app.js
+          ! grep -q 'requestAnimationFrame(() => this.animate())' docs/liber-apps/apps/revex/app.js
+          grep -q 'idleFramePersistent:true' docs/liber-apps/apps/revex/viewer-r21.js
+          grep -q 'model lines?' docs/liber-apps/apps/revex/projection-integrity.js
       - name: Commit
         run: |
           git config user.name 'REVEX repair bot'
