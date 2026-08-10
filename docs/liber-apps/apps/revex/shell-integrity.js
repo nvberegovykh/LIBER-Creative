@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260810r10';
+  const BUILD='20260810r11';
   try{
     const parent=root.parent&&root.parent!==root?root.parent:null;
     const manager=parent?.appsManager||null;
@@ -37,13 +37,13 @@
     if(Array.isArray(manager.apps)){
       const app=manager.apps.find((row)=>row?.id==='revex');
       if(app){
-        app.version='0.7.2';
+        app.version='0.7.3';
         app.lastUpdated='2026-08-10';
         app.path='apps/revex/index.html?build='+BUILD;
       }
     }
     const card=parent.document?.querySelector?.('.app-card[data-app-id="revex"] .app-version');
-    if(card) card.textContent='v0.7.2';
+    if(card) card.textContent='v0.7.3';
     console.log('[REVEX] shell integrity '+BUILD,{keepAlive:false,freshLaunch:true});
   }catch(error){
     console.warn('[REVEX] shell integrity failed',error);
