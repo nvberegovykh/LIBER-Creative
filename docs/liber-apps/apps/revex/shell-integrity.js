@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260810r22';
+  const BUILD='20260810r23';
   const VERSION='0.8.3';
   if(root.__revexShellR20) return;
   root.__revexShellR20=true;
