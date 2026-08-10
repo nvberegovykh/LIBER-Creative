@@ -1,7 +1,7 @@
 (function(root){
   'use strict';
   const BUILD='20260810r20';
-  const VERSION='0.8.2';
+  const VERSION='0.8.3';
   if(root.__revexShellR20) return;
   root.__revexShellR20=true;
   function notify(message,type='success'){try{if(root.parent?.dashboardManager?.showNotification)return root.parent.dashboardManager.showNotification(message,type);if(root.dashboardManager?.showNotification)return root.dashboardManager.showNotification(message,type);}catch(_){ }(type==='error'?console.error:console.log)('[REVEX]',message);}
