@@ -4,8 +4,21 @@
   try{
     const parent=root.parent&&root.parent!==root?root.parent:null;
     const manager=parent?.appsManager||null;
-    if(!manager) return;
 
+    // index.html can still reference an older cache-busted UI guard. If this r11
+    // shell guard made it through, force the current UI/sync guard as a second,
+    // idempotent load so stale entry HTML cannot resurrect old behavior.
+    try{
+      const existing=[...document.scripts].find((s)=>/ui-integrity\.js/i.test(String(s.src||'')));
+      if(!existing || !String(existing.src||'').includes(BUILD)){
+        const script=document.createElement('script');
+        script.src='ui-integrity.js?v='+BUILD+'&fresh='+Date.now();
+        script.async=false;
+        document.head.appendChild(script);
+      }
+    }catch(_){ }
+
+    if(!manager) return;
     if(!manager.__revexControlledKeepAlivePatch){
       const originalKeep=typeof manager.isKeepAliveApp==='function'?manager.isKeepAliveApp.bind(manager):null;
       manager.isKeepAliveApp=(src)=>/apps\/revex\/index\.html/i.test(String(src||''))?false:(originalKeep?originalKeep(src):false);
@@ -44,7 +57,7 @@
     }
     const card=parent.document?.querySelector?.('.app-card[data-app-id="revex"] .app-version');
     if(card) card.textContent='v0.7.3';
-    console.log('[REVEX] shell integrity '+BUILD,{keepAlive:false,freshLaunch:true});
+    console.log('[REVEX] shell integrity '+BUILD,{keepAlive:false,freshLaunch:true,uiGuard:BUILD});
   }catch(error){
     console.warn('[REVEX] shell integrity failed',error);
   }
