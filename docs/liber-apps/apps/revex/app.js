@@ -290,14 +290,16 @@ function selectElement(element, fit = true) {
 }
 
 function renderPins() {
-  $('#issue-pins').innerHTML = state.issues.filter((issue) => issue.anchorElementId).map((issue, index) =>
-    `<button class="issue-pin ${escapeHtml(issue.status || 'open')}" data-id="${escapeHtml(issue.id)}" type="button" title="${escapeHtml(issue.title)}">${index + 1}</button>`
+  $('#issue-pins').innerHTML = state.issues.filter((issue) => issue.anchorUniqueId || issue.anchorElementId).map((issue, index) =>
+    `<button class="issue-pin ${escapeHtml(issue.status || 'open')}" data-id="${escapeHtml(issue.id)}" data-element-id="${escapeHtml(issue.anchorElementId || '')}" data-unique-id="${escapeHtml(issue.anchorUniqueId || '')}" type="button" title="${escapeHtml(issue.title)}">${index + 1}</button>`
   ).join('');
   $$('.issue-pin', $('#issue-pins')).forEach((pin) => pin.addEventListener('click', () => {
     const issue = state.issues.find((row) => row.id === pin.dataset.id);
-    const element = viewer?.elementById.get(String(issue?.anchorElementId));
+    const av = activeBimViewer();
+    const element = issue?.anchorUniqueId ? av?.byUid?.get?.(String(issue.anchorUniqueId)) : av?.byId?.get?.(String(issue?.anchorElementId));
     if (element) selectElement(element, true);
   }));
+  activeBimViewer()?.requestRender?.();
 }
 
 function mergedItem(item) {
