@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/revex-r21-repair.yml'
       - '.github/revex-r21-hotfix.py'
+      - '.github/revex-r21-postfix.py'
 
 permissions:
   contents: write
@@ -22,7 +23,9 @@ jobs:
         with:
           node-version: '22'
       - name: Apply patch
-        run: python .github/revex-r21-hotfix.py
+        run: |
+          python .github/revex-r21-hotfix.py
+          python .github/revex-r21-postfix.py
       - name: Syntax checks
         run: |
           cp docs/liber-apps/apps/revex/app.js /tmp/app.mjs
