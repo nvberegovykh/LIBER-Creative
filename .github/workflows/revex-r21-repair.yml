@@ -8,6 +8,7 @@ on:
       - '.github/workflows/revex-r21-repair.yml'
       - '.github/revex-r21-hotfix.py'
       - '.github/revex-r21-postfix.py'
+      - '.github/revex-r21-pins.py'
 
 permissions:
   contents: write
@@ -26,6 +27,7 @@ jobs:
         run: |
           python .github/revex-r21-hotfix.py
           python .github/revex-r21-postfix.py
+          python .github/revex-r21-pins.py
       - name: Syntax checks
         run: |
           cp docs/liber-apps/apps/revex/app.js /tmp/app.mjs
@@ -42,12 +44,15 @@ jobs:
           ! grep -q 'class BimViewer' docs/liber-apps/apps/revex/app.js
           ! grep -q 'requestAnimationFrame(() => this.animate())' docs/liber-apps/apps/revex/app.js
           grep -q 'idleFramePersistent:true' docs/liber-apps/apps/revex/viewer-r21.js
+          grep -q 'updatePins()' docs/liber-apps/apps/revex/viewer-r21.js
+          grep -q 'data-unique-id' docs/liber-apps/apps/revex/app.js
           grep -q 'model lines?' docs/liber-apps/apps/revex/projection-integrity.js
+          grep -q "const BUILD='20260810r21'" docs/liber-apps/apps/revex/shell-integrity.js
       - name: Commit
         run: |
           git config user.name 'REVEX repair bot'
           git config user.email 'revex-repair@users.noreply.github.com'
           git add docs/liber-apps/apps/revex
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m 'REVEX r21 single-viewer and fast revision loading'
+          git commit -m 'REVEX r21 anchored issue pins'
           git push
