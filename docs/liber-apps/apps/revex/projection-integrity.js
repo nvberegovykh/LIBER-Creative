@@ -1,11 +1,11 @@
 (function(root){
   'use strict';
-  const BUILD='20260810r19';
+  const BUILD='20260810r21';
   const Store=root.RevexStore;
   if(!Store||root.__revexProjectionIntegrityR19) return;
   root.__revexProjectionIntegrityR19=true;
 
-  const blockedCategories=/^(cameras?|views?|viewports?|sheets?|levels?|grids?|reference planes?|scope boxes?|project information|internal origin|survey point|project base point|sections?|elevations?|callouts?)$/i;
+  const blockedCategories=/^(cameras?|views?|viewports?|sheets?|levels?|grids?|reference planes?|scope boxes?|project information|internal origin|survey point|project base point|sections?|elevations?|callouts?|lines?|model lines?|detail lines?|sketch lines?|analytical nodes?|reference points?)$/i;
   const categoryTitles={
     walls:'Walls',doors:'Doors',windows:'Windows',floors:'Floors',roofs:'Roofs',rooms:'Rooms',ceilings:'Ceilings',
     'stairs-railings':'Stairs & Railings',casework:'Casework',furniture:'Furniture','lighting-fixtures':'Lighting Fixtures',

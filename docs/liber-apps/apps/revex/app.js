@@ -1,6 +1,3 @@
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 
 const Store = window.RevexStore;
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -102,270 +99,9 @@ async function openProjectChat(context = state.selectedContext) {
   }
 }
 
-class BimViewer {
-  constructor(host) {
-    this.host = host;
-    this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x101319);
-    this.camera = new THREE.PerspectiveCamera(43, 1, .01, 1e8);
-    this.camera.position.set(18, 14, 18);
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
-    host.append(this.renderer.domElement);
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.enableDamping = true;
-    this.controls.dampingFactor = .08;
-    this.scene.add(new THREE.HemisphereLight(0xcfe3ff, 0x202a35, 2.1));
-    const sun = new THREE.DirectionalLight(0xffffff, 2.3);
-    sun.position.set(14, 25, 11);
-    this.scene.add(sun);
-    this.grid = new THREE.GridHelper(400, 80, 0x365a7d, 0x242a33);
-    this.scene.add(this.grid);
-    this.model = null;
-    this.helper = null;
-    this.metadata = [];
-    this.elementById = new Map();
-    this.metaWorld = null;
-    this.modelBounds = null;
-    this.mode = '';
-    this.edges = false;
-    this.raycaster = new THREE.Raycaster();
-    this.pointer = new THREE.Vector2();
-    this.onSelect = null;
-    this.renderer.domElement.addEventListener('click', (event) => this.pick(event));
-    this.resizeObserver = new ResizeObserver(() => this.resize());
-    this.resizeObserver.observe(host);
-    this.resize();
-    this.animate();
-  }
-
-  resize() {
-    const width = Math.max(this.host.clientWidth, 1);
-    const height = Math.max(this.host.clientHeight, 1);
-    this.renderer.setSize(width, height, false);
-    this.camera.aspect = width / height;
-    this.camera.updateProjectionMatrix();
-  }
-
-  animate() {
-    requestAnimationFrame(() => this.animate());
-    this.controls.update();
-    this.updatePins();
-    this.renderer.render(this.scene, this.camera);
-  }
-
-  clearModel() {
-    if (this.model) {
-      this.scene.remove(this.model);
-      this.model.traverse((node) => {
-        node.geometry?.dispose?.();
-        const materials = Array.isArray(node.material) ? node.material : [node.material];
-        materials.filter(Boolean).forEach((material) => material.dispose?.());
-      });
-    }
-    if (this.helper) this.scene.remove(this.helper);
-    this.model = null;
-    this.helper = null;
-    this.modelBounds = null;
-  }
-
-  async load(url, viewerData) {
-    this.clearModel();
-    this.metadata = viewerData?.elements || [];
-    this.elementById = new Map(this.metadata.map((row) => [String(row.id), row]));
-    let object = null;
-    let fbxError = null;
-    if (url) {
-      try { object = await new Promise((resolve, reject) => new FBXLoader().load(url, resolve, undefined, reject)); }
-      catch (error) { fbxError = error; console.warn('[REVEX] FBX unavailable; using categorized proxy geometry.', error); }
-    }
-    if (!object) object = this.createProxyModel(this.metadata);
-    if (!object) return { mode: 'none', error: fbxError };
-    this.mode = fbxError || !url ? 'fallback' : 'fbx';
-    this.model = object;
-    this.model.traverse((node) => {
-      if (!node.isMesh) return;
-      node.castShadow = false;
-      node.receiveShadow = true;
-      const materials = Array.isArray(node.material) ? node.material : [node.material];
-      materials.filter(Boolean).forEach((material) => {
-        material.wireframe = this.edges;
-        if ('roughness' in material) material.roughness = Math.max(material.roughness ?? .6, .45);
-      });
-    });
-    this.scene.add(object);
-    this.modelBounds = new THREE.Box3().setFromObject(object);
-    this.computeMetadataTransform();
-    this.fit();
-    return { mode: this.mode, error: fbxError };
-  }
-
-  createProxyModel(elements) {
-    const rows = elements.filter((row) => row?.bbox?.min && row?.bbox?.max);
-    if (!rows.length) return null;
-    const byCategory = new Map();
-    rows.forEach((row) => {
-      const key = row.categoryKey || String(row.category || 'other').toLowerCase();
-      if (!byCategory.has(key)) byCategory.set(key, []);
-      byCategory.get(key).push(row);
-    });
-    const palette = {
-      walls: 0x9aa8b7, doors: 0xc88a55, windows: 0x4da3ff, floors: 0x66727f,
-      roofs: 0xa6798e, rooms: 0x5d7b70, ceilings: 0x87909b, stairs: 0xb18b63,
-      furniture: 0x7e6e98, casework: 0x8c745c, 'structural-columns': 0x697685,
-      'structural-framing': 0x697685, 'mechanical-equipment': 0x587d82,
-      'lighting-fixtures': 0xd0b55e, 'plumbing-fixtures': 0x6992a4, site: 0x667b5b,
-      other: 0x6e7782
-    };
-    const root = new THREE.Group();
-    root.name = 'REVEX categorized fallback model';
-    const geometry = new THREE.BoxGeometry(1, 1, 1);
-    const matrix = new THREE.Matrix4();
-    const quaternion = new THREE.Quaternion();
-    byCategory.forEach((categoryRows, key) => {
-      const material = new THREE.MeshStandardMaterial({
-        color: palette[key] || palette.other,
-        roughness: .82,
-        metalness: .03,
-        transparent: key === 'rooms',
-        opacity: key === 'rooms' ? .18 : .82,
-        depthWrite: key !== 'rooms'
-      });
-      const mesh = new THREE.InstancedMesh(geometry.clone(), material, categoryRows.length);
-      mesh.name = `REVEX ${key}`;
-      categoryRows.forEach((row, index) => {
-        const box = new THREE.Box3(); box.makeEmpty();
-        const min = row.bbox.min; const max = row.bbox.max;
-        for (const x of [min[0], max[0]]) for (const y of [min[1], max[1]]) for (const z of [min[2], max[2]]) box.expandByPoint(this.rawPoint([x, y, z]));
-        const center = box.getCenter(new THREE.Vector3());
-        const size = box.getSize(new THREE.Vector3()).max(new THREE.Vector3(.025, .025, .025));
-        matrix.compose(center, quaternion, size);
-        mesh.setMatrixAt(index, matrix);
-      });
-      mesh.instanceMatrix.needsUpdate = true;
-      root.add(mesh);
-    });
-    return root;
-  }
-
-  rawPoint(value) {
-    const p = value || [0, 0, 0];
-    return new THREE.Vector3(Number(p[0]) || 0, Number(p[2]) || 0, -(Number(p[1]) || 0));
-  }
-
-  computeMetadataTransform() {
-    const boxes = this.metadata.filter((row) => row?.bbox?.min && row?.bbox?.max);
-    if (!boxes.length || !this.modelBounds) { this.metaWorld = null; return; }
-    const source = new THREE.Box3();
-    source.makeEmpty();
-    boxes.forEach((row) => {
-      source.expandByPoint(this.rawPoint(row.bbox.min));
-      source.expandByPoint(this.rawPoint(row.bbox.max));
-    });
-    const sourceSize = source.getSize(new THREE.Vector3());
-    const targetSize = this.modelBounds.getSize(new THREE.Vector3());
-    const ratios = [targetSize.x / Math.max(sourceSize.x, 1e-6), targetSize.y / Math.max(sourceSize.y, 1e-6), targetSize.z / Math.max(sourceSize.z, 1e-6)].filter(Number.isFinite);
-    const scale = ratios.sort((a, b) => a - b)[Math.floor(ratios.length / 2)] || 1;
-    const sourceCenter = source.getCenter(new THREE.Vector3());
-    const targetCenter = this.modelBounds.getCenter(new THREE.Vector3());
-    this.metaWorld = { scale, sourceCenter, targetCenter };
-  }
-
-  worldPoint(value) {
-    const point = this.rawPoint(value);
-    if (!this.metaWorld) return point;
-    return point.sub(this.metaWorld.sourceCenter).multiplyScalar(this.metaWorld.scale).add(this.metaWorld.targetCenter);
-  }
-
-  worldBox(element) {
-    if (!element?.bbox?.min || !element?.bbox?.max) return null;
-    const min = element.bbox.min;
-    const max = element.bbox.max;
-    const box = new THREE.Box3(); box.makeEmpty();
-    for (const x of [min[0], max[0]]) for (const y of [min[1], max[1]]) for (const z of [min[2], max[2]]) box.expandByPoint(this.worldPoint([x, y, z]));
-    return box;
-  }
-
-  fit(box = this.modelBounds) {
-    if (!box || box.isEmpty()) return;
-    const center = box.getCenter(new THREE.Vector3());
-    const size = Math.max(box.getSize(new THREE.Vector3()).length(), .1);
-    this.controls.target.copy(center);
-    this.camera.position.copy(center).add(new THREE.Vector3(size * .62, size * .46, size * .62));
-    this.camera.near = Math.max(size / 10000, .01);
-    this.camera.far = Math.max(size * 20, 2000);
-    this.camera.updateProjectionMatrix();
-    this.controls.update();
-  }
-
-  select(element, fit = true) {
-    if (this.helper) this.scene.remove(this.helper);
-    this.helper = null;
-    const box = this.worldBox(element);
-    if (box) {
-      this.helper = new THREE.Box3Helper(box, 0xff2f6e);
-      this.scene.add(this.helper);
-      if (fit) this.fit(box.expandByScalar(Math.max(box.getSize(new THREE.Vector3()).length() * .75, .5)));
-    }
-  }
-
-  pick(event) {
-    if (!this.model) return;
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-    this.raycaster.setFromCamera(this.pointer, this.camera);
-    const hits = this.raycaster.intersectObject(this.model, true);
-    if (!hits.length || !this.metadata.length) return;
-    const hit = hits[0].point;
-    let nearest = null;
-    let distance = Infinity;
-    for (const element of this.metadata) {
-      const box = this.worldBox(element);
-      if (!box) continue;
-      const d = box.distanceToPoint(hit);
-      if (d < distance) { distance = d; nearest = element; if (d < 1e-5) break; }
-    }
-    if (nearest) this.onSelect?.(nearest);
-  }
-
-  toggleEdges(enabled) {
-    this.edges = enabled;
-    this.model?.traverse((node) => {
-      if (!node.isMesh) return;
-      const materials = Array.isArray(node.material) ? node.material : [node.material];
-      materials.filter(Boolean).forEach((material) => { material.wireframe = enabled; material.needsUpdate = true; });
-    });
-  }
-
-  updatePins() {
-    if (!state.issues.length) return;
-    const width = this.host.clientWidth;
-    const height = this.host.clientHeight;
-    $$('.issue-pin', $('#issue-pins')).forEach((pin) => {
-      const issue = state.issues.find((row) => row.id === pin.dataset.id);
-      const element = issue?.anchorElementId ? this.elementById.get(String(issue.anchorElementId)) : null;
-      const box = this.worldBox(element);
-      if (!box) { pin.hidden = true; return; }
-      const p = box.getCenter(new THREE.Vector3()).project(this.camera);
-      pin.hidden = p.z < -1 || p.z > 1;
-      pin.style.left = `${(p.x * .5 + .5) * width}px`;
-      pin.style.top = `${(-p.y * .5 + .5) * height}px`;
-    });
-  }
-}
-
-let viewer;
-try {
-  viewer = new BimViewer($('#viewer'));
-  viewer.onSelect = (element) => selectElement(element, true);
-} catch (error) {
-  console.error('[REVEX] WebGL viewer', error);
-  $('#viewer-message').textContent = '3D acceleration is unavailable. The element tree and project data remain usable.';
-}
+// BIM rendering is owned exclusively by viewer-r21.js.
+let viewer = null;
+function activeBimViewer(){ return window.__revexViewerR21Instance || viewer || null; }
 
 function showView(name) {
   closeWorkspaceRail();
@@ -375,7 +111,7 @@ function showView(name) {
   $$('.main-nav [data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === name));
   if (hasProject) {
     history.replaceState(null, '', `${location.pathname}?${new URLSearchParams({ ...(params.get('inShell') ? { inShell: '1' } : {}), projectId: state.projectId, ...(state.preferredSpecId ? { specProjectId: state.preferredSpecId } : {}), view: name })}`);
-    if (name === 'bim') setTimeout(() => viewer?.resize(), 0);
+    if (name === 'bim') setTimeout(() => activeBimViewer()?.resize?.(), 0);
     if (name === 'spec') renderSpec();
     if (name === 'chat') renderChatContext();
   }
@@ -528,7 +264,7 @@ function selectElement(element, fit = true) {
   state.selectedElement = element;
   state.selectedDesign = null;
   state.selectedContext = contextFor('BIM', element);
-  viewer?.select(element, fit);
+  activeBimViewer()?.select?.(element, fit);
   renderModelTree();
   const issues = elementIssues(element);
   const designPosition = designPositionForElement(element);
@@ -769,9 +505,10 @@ function renderPrompt() {
 
 function captureViewerPreview() {
   try {
-    if (!viewer?.renderer?.domElement) return '';
-    viewer.renderer.render(viewer.scene, viewer.camera);
-    return viewer.renderer.domElement.toDataURL('image/png');
+    const av=activeBimViewer();
+    if(!av?.renderer?.domElement)return '';
+    av.renderer.render(av.scene,av.camera);
+    return av.renderer.domElement.toDataURL('image/png');
   } catch (_) { return ''; }
 }
 
@@ -942,89 +679,54 @@ function renderChatContext() {
 }
 
 function renderAll() {
-  renderModelTree(); renderPins(); renderDesign(); renderDesignInspector(); renderSpec(); renderLibrary(); renderChatContext();
+  renderModelTree(); renderPins(); renderDesign(); renderDesignInspector(); renderLibrary(); renderChatContext();
 }
 
-async function loadCloudState(cloudState, localPackage = null) {
-  state.cloudState = cloudState || null;
-  if (!cloudState && !localPackage) {
-    state.viewerData = null; state.designData = null; state.designEdits = new Map(); state.chapterEdits = new Map(); state.issues = []; state.library = [];
-    renderAll(); setSync('No Revit sync yet', 'quiet'); return;
-  }
-  const revision = localPackage?.revision || cloudState?.revision || 'unknown';
-  if (state.loadingRevision === revision && !localPackage) return;
-  state.loadingRevision = revision;
-  setSync('Loading project revision…', 'busy');
-  try {
-    const [viewerData, designData, edits, chapterEdits, issues, library] = await Promise.all([
-      localPackage?.viewer || Store.fetchJson(cloudState.viewerUrl),
-      localPackage?.design || Store.fetchJson(cloudState.designUrl),
-      Store.listDesignEdits(state.projectId), Store.listChapterEdits(state.projectId), Store.listIssues(state.projectId), Store.listLibrary(state.projectId)
+let revisionHydrationToken=0;
+async function hydrateRevisionOverlays(cloudState,localPackage,revision){
+  const token=++revisionHydrationToken;
+  try{
+    const [designData,edits,chapterEdits,issues,library]=await Promise.all([
+      localPackage?.design||(cloudState?.designUrl?Store.fetchJson(cloudState.designUrl):Promise.resolve(null)),
+      Store.listDesignEdits(state.projectId),Store.listChapterEdits(state.projectId),Store.listIssues(state.projectId),Store.listLibrary(state.projectId)
     ]);
-    state.viewerData = viewerData;
-    state.designData = designData;
-    state.designEdits = new Map(edits.map((row) => [row.id, row]));
-    state.chapterEdits = new Map(chapterEdits.map((row) => [row.id, row]));
-    state.issues = issues;
-    state.library = library;
-    renderAll();
-    const modelUrl = localPackage?.modelUrl || cloudState.modelUrl;
-    const viewerMessage = $('#viewer-message');
-    viewerMessage.classList.remove('fallback');
-    if (viewer && viewerData?.elements?.length) {
-      try {
-        const result = await viewer.load(modelUrl, viewerData);
-        state.viewerMode = result.mode;
-        if (result.mode === 'fbx') viewerMessage.hidden = true;
-        else if (result.mode === 'fallback') {
-          viewerMessage.hidden = false;
-          viewerMessage.classList.add('fallback');
-          viewerMessage.textContent = 'Categorized Revit proxy · FBX fallback active';
-        } else {
-          viewerMessage.hidden = false;
-          viewerMessage.textContent = 'No visible element geometry was found in this revision.';
-        }
-        renderModelTree();
-      } catch (error) {
-        state.viewerMode = 'none';
-        viewerMessage.hidden = false;
-        viewerMessage.textContent = `Model could not load: ${error.message}`;
-      }
-    }
-    setSync(`${localPackage?.cloud === false ? 'Local preview' : 'Synced'} ${formatDate(localPackage?.syncedAt || cloudState.syncedAt)}`, localPackage?.cloud === false ? 'quiet' : 'good');
-  } catch (error) {
-    console.error('[REVEX] load revision', error);
-    setSync('Revision load failed', 'bad'); toast(error.message, true);
-  }
+    if(token!==revisionHydrationToken||state.loadingRevision!==revision)return;
+    state.designData=designData;state.designEdits=new Map(edits.map(r=>[r.id,r]));state.chapterEdits=new Map(chapterEdits.map(r=>[r.id,r]));state.issues=issues;state.library=library;
+    renderPins();renderDesign();renderDesignInspector();renderLibrary();activeBimViewer()?.requestRender?.();
+    if(!$('#view-spec')?.hidden)renderSpec();
+  }catch(error){console.warn('[REVEX] deferred revision overlays',error);}
 }
 
-async function activateProject(projectId) {
-  state.unsubscribe?.(); state.unsubscribe = null;
-  state.projectId = projectId || '';
-  state.project = state.projects.find((row) => row.id === projectId) || (projectId ? await Store.getProject(projectId) : null);
-  state.preferredSpecId = ((params.get('projectId') === projectId && params.get('specProjectId')) || state.project?.revexSpecProjectId || '');
-  $('#project-select').value = state.projectId;
-  if (!projectId) { state.preferredSpecId = ''; showView('bim'); return; }
-  const requestedView = params.get('view') || 'bim';
-  showView(requestedView);
-  setSync('Loading project…', 'busy');
-  try {
-    const [cloudState, specProjectId, renderJobs] = await Promise.all([
-      Store.getState(projectId),
-      Store.ensureSpecProject(projectId, state.preferredSpecId || state.project?.revexSpecProjectId, state.project),
-      Store.listRenderJobs(projectId)
-    ]);
-    state.preferredSpecId = specProjectId || '';
-    state.renderJobs = renderJobs;
-    if (state.project) state.project.revexSpecProjectId = state.preferredSpecId;
-    await loadCloudState(cloudState);
-    renderSpec(); renderRenderHistory(); notifyNativeProject();
-    state.unsubscribe = Store.subscribeState(projectId, (next) => {
-      if (next?.revision && next.revision !== state.cloudState?.revision) loadCloudState(next);
-      else if (next) { state.cloudState = next; renderSpec(); }
-    });
-    if (params.get('render') === '1') openRenderDialog();
-  } catch (error) { setSync('Project unavailable', 'bad'); toast(error.message, true); }
+async function loadCloudState(cloudState,localPackage=null){
+  state.cloudState=cloudState||null;
+  if(!cloudState&&!localPackage){revisionHydrationToken++;state.viewerData=null;state.designData=null;state.designEdits=new Map();state.chapterEdits=new Map();state.issues=[];state.library=[];renderAll();setSync('No Revit sync yet','quiet');return;}
+  const revision=localPackage?.revision||cloudState?.revision||'unknown';
+  if(state.loadingRevision===revision&&!localPackage)return;
+  state.loadingRevision=revision;setSync('Loading BIM revision…','busy');
+  try{
+    const viewerData=localPackage?.viewer||await Store.fetchJson(cloudState.viewerUrl);
+    state.viewerData=viewerData;renderModelTree();renderPins();
+    setSync(`${localPackage?.cloud===false?'Local preview':'Synced'} ${formatDate(localPackage?.syncedAt||cloudState.syncedAt)}`,localPackage?.cloud===false?'quiet':'good');
+    const hydrate=()=>hydrateRevisionOverlays(cloudState,localPackage,revision);
+    if('requestIdleCallback'in window)requestIdleCallback(hydrate,{timeout:700});else setTimeout(hydrate,0);
+  }catch(error){console.error('[REVEX] load revision',error);setSync('Revision load failed','bad');toast(error.message,true);}
+}
+
+async function activateProject(projectId){
+  state.unsubscribe?.();state.unsubscribe=null;state.projectId=projectId||'';
+  state.project=state.projects.find(r=>r.id===projectId)||(projectId?await Store.getProject(projectId):null);
+  state.preferredSpecId=((params.get('projectId')===projectId&&params.get('specProjectId'))||state.project?.revexSpecProjectId||'');
+  $('#project-select').value=state.projectId;notifyNativeProject();
+  if(!projectId){state.preferredSpecId='';showView('bim');return;}
+  showView(params.get('view')||'bim');setSync('Loading project…','busy');
+  try{
+    const cloudState=await Store.getState(projectId);await loadCloudState(cloudState);notifyNativeProject();
+    state.unsubscribe=Store.subscribeState(projectId,next=>{if(next?.revision&&next.revision!==state.cloudState?.revision)loadCloudState(next);else if(next){state.cloudState=next;if(!$('#view-spec')?.hidden)renderSpec();}});
+    Promise.all([Store.ensureSpecProject(projectId,state.preferredSpecId||state.project?.revexSpecProjectId,state.project),Store.listRenderJobs(projectId)]).then(([specId,jobs])=>{
+      if(state.projectId!==projectId)return;state.preferredSpecId=specId||state.preferredSpecId||'';state.renderJobs=jobs||[];if(state.project)state.project.revexSpecProjectId=state.preferredSpecId;renderRenderHistory();notifyNativeProject();if(!$('#view-spec')?.hidden)renderSpec();
+    }).catch(error=>console.warn('[REVEX] deferred project services',error));
+    if(params.get('render')==='1')openRenderDialog();
+  }catch(error){setSync('Project unavailable','bad');toast(error.message,true);}
 }
 
 async function handleSyncFiles(files) {
