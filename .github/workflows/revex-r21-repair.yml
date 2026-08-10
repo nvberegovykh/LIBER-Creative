@@ -10,6 +10,7 @@ on:
       - '.github/revex-r21-postfix.py'
       - '.github/revex-r21-pins.py'
       - '.github/revex-r22-viewer.py'
+      - '.github/revex-r23-streaming.py'
 
 permissions:
   contents: write
@@ -30,10 +31,11 @@ jobs:
           python .github/revex-r21-postfix.py
           python .github/revex-r21-pins.py
           python .github/revex-r22-viewer.py
+          python .github/revex-r23-streaming.py
       - name: Syntax checks
         run: |
           cp docs/liber-apps/apps/revex/app.js /tmp/app.mjs
-          cp docs/liber-apps/apps/revex/viewer-r22.js /tmp/viewer.mjs
+          cp docs/liber-apps/apps/revex/viewer-r23.js /tmp/viewer.mjs
           node --check /tmp/app.mjs
           node --check /tmp/viewer.mjs
           node --check docs/liber-apps/apps/revex/viewer-host-guard-r21.js
@@ -45,18 +47,18 @@ jobs:
         run: |
           ! grep -q 'class BimViewer' docs/liber-apps/apps/revex/app.js
           ! grep -q 'requestAnimationFrame(() => this.animate())' docs/liber-apps/apps/revex/app.js
-          grep -q 'fitAnchors(anchors)' docs/liber-apps/apps/revex/viewer-r22.js
-          grep -q 'axisRotations()' docs/liber-apps/apps/revex/viewer-r22.js
-          grep -q 'idleFramePersistent:true' docs/liber-apps/apps/revex/viewer-r22.js
-          grep -q 'updatePins()' docs/liber-apps/apps/revex/viewer-r22.js
+          grep -q 'fitAnchors(anchors)' docs/liber-apps/apps/revex/viewer-r23.js
+          grep -q 'streamingPreview:true' docs/liber-apps/apps/revex/viewer-r23.js
+          grep -q 'idleFramePersistent:true' docs/liber-apps/apps/revex/viewer-r23.js
+          grep -q 'updatePins()' docs/liber-apps/apps/revex/viewer-r23.js
           grep -q 'data-unique-id' docs/liber-apps/apps/revex/app.js
-          grep -q 'viewer-r22.js?v=20260810r22' docs/liber-apps/apps/revex/index.html
-          grep -q "const BUILD='20260810r22'" docs/liber-apps/apps/revex/shell-integrity.js
+          grep -q 'viewer-r23.js?v=20260810r23' docs/liber-apps/apps/revex/index.html
+          grep -q "const BUILD='20260810r23'" docs/liber-apps/apps/revex/shell-integrity.js
       - name: Commit
         run: |
           git config user.name 'REVEX repair bot'
           git config user.email 'revex-repair@users.noreply.github.com'
           git add docs/liber-apps/apps/revex
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m 'REVEX r22 deterministic BIM registration'
+          git commit -m 'REVEX r23 streaming BIM load'
           git push
