@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260810r16';
+  const BUILD='20260810r17';
 
   function notify(message,type='success'){
     try{
@@ -144,12 +144,43 @@
     postNativeProjectSelection('bind');
   }
 
+  function announceNativeSyncReady(reason='load'){
+    try{
+      const input=document.querySelector("input[data-liber-revex-sync-upload='1']");
+      if(!input) return false;
+      input.dataset.liberRevexSyncHandlerReady='1';
+      root.__liberRevexNativeSyncReady=true;
+      if(root.chrome?.webview?.postMessage){
+        const select=document.getElementById('project-select');
+        root.chrome.webview.postMessage({
+          type:'liber:revex-native-sync-ready',
+          build:BUILD,
+          projectId:String(select?.value||'').trim()||null,
+          reason
+        });
+      }
+      return true;
+    }catch(error){
+      console.warn('[REVEX] native sync readiness failed',error);
+      return false;
+    }
+  }
+
   function bindWhenReady(){
     bindInviteCopy();
     bindNativeProjectBridge();
     if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>{ bindInviteCopy(); bindNativeProjectBridge(); },{once:true});
     setTimeout(()=>{ bindInviteCopy(); bindNativeProjectBridge(); },250);
     setTimeout(()=>{ bindInviteCopy(); bindNativeProjectBridge(); },1000);
+
+    // The Revit host must not attach the revision until app.js has bound the
+    // #revex-sync-upload change handler. window.load runs after module scripts
+    // have executed, so this flag is the explicit native handoff barrier.
+    root.addEventListener('load',()=>{
+      announceNativeSyncReady('window-load');
+      setTimeout(()=>announceNativeSyncReady('window-load-settle'),250);
+    },{once:true});
+    if(document.readyState==='complete') setTimeout(()=>announceNativeSyncReady('already-complete'),0);
   }
 
   try{
@@ -189,15 +220,15 @@
       if(Array.isArray(manager.apps)){
         const app=manager.apps.find((row)=>row?.id==='revex');
         if(app){
-          app.version='0.7.7';
+          app.version='0.7.8';
           app.lastUpdated='2026-08-10';
           app.path='apps/revex/index.html?build='+BUILD;
         }
       }
       const card=parent.document?.querySelector?.('.app-card[data-app-id="revex"] .app-version');
-      if(card) card.textContent='v0.7.7';
+      if(card) card.textContent='v0.7.8';
     }
-    console.log('[REVEX] shell integrity '+BUILD,{keepAlive:false,freshLaunch:true,uiGuard:'single',inviteCopy:true,nativeProjectBridge:true});
+    console.log('[REVEX] shell integrity '+BUILD,{keepAlive:false,freshLaunch:true,uiGuard:'single',inviteCopy:true,nativeProjectBridge:true,nativeSyncHandshake:true});
   }catch(error){
     console.warn('[REVEX] shell integrity failed',error);
   }
