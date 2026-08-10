@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260810r15';
+  const BUILD='20260810r16';
 
   function notify(message,type='success'){
     try{
@@ -111,11 +111,45 @@
     actions.insertBefore(button,actions.firstChild);
   }
 
+  function postNativeProjectSelection(reason='selection'){
+    try{
+      if(!root.chrome?.webview?.postMessage) return false;
+      const select=document.getElementById('project-select');
+      const projectId=String(select?.value||'').trim();
+      if(!projectId) return false;
+      const projectName=String(select?.selectedOptions?.[0]?.textContent||'').trim();
+      const params=new URLSearchParams(location.search);
+      root.chrome.webview.postMessage({
+        type:'liber:revex-project-selected',
+        projectId,
+        specProjectId:String(params.get('specProjectId')||'').trim()||null,
+        projectName,
+        source:'companion-immediate',
+        reason
+      });
+      return true;
+    }catch(_){ return false; }
+  }
+
+  function bindNativeProjectBridge(){
+    const select=document.getElementById('project-select');
+    if(!select) return;
+    if(!select.dataset.revexNativeProjectBridge){
+      select.dataset.revexNativeProjectBridge='1';
+      select.addEventListener('change',()=>postNativeProjectSelection('change'));
+      select.addEventListener('input',()=>postNativeProjectSelection('input'));
+      const observer=new MutationObserver(()=>postNativeProjectSelection('options'));
+      observer.observe(select,{childList:true,subtree:true});
+    }
+    postNativeProjectSelection('bind');
+  }
+
   function bindWhenReady(){
     bindInviteCopy();
-    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',bindInviteCopy,{once:true});
-    setTimeout(bindInviteCopy,250);
-    setTimeout(bindInviteCopy,1000);
+    bindNativeProjectBridge();
+    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>{ bindInviteCopy(); bindNativeProjectBridge(); },{once:true});
+    setTimeout(()=>{ bindInviteCopy(); bindNativeProjectBridge(); },250);
+    setTimeout(()=>{ bindInviteCopy(); bindNativeProjectBridge(); },1000);
   }
 
   try{
@@ -155,15 +189,15 @@
       if(Array.isArray(manager.apps)){
         const app=manager.apps.find((row)=>row?.id==='revex');
         if(app){
-          app.version='0.7.6';
+          app.version='0.7.7';
           app.lastUpdated='2026-08-10';
           app.path='apps/revex/index.html?build='+BUILD;
         }
       }
       const card=parent.document?.querySelector?.('.app-card[data-app-id="revex"] .app-version');
-      if(card) card.textContent='v0.7.6';
+      if(card) card.textContent='v0.7.7';
     }
-    console.log('[REVEX] shell integrity '+BUILD,{keepAlive:false,freshLaunch:true,uiGuard:'single',inviteCopy:true});
+    console.log('[REVEX] shell integrity '+BUILD,{keepAlive:false,freshLaunch:true,uiGuard:'single',inviteCopy:true,nativeProjectBridge:true});
   }catch(error){
     console.warn('[REVEX] shell integrity failed',error);
   }
