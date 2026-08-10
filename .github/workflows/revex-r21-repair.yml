@@ -1,0 +1,174 @@
+name: REVEX r21 repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/revex-r21-repair.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Apply REVEX r21 repair
+        shell: python
+        run: |
+          from pathlib import Path
+          root=Path('docs/liber-apps/apps/revex')
+          app=root/'app.js'
+          s=app.read_text(encoding='utf-8')
+          for line in ["import * as THREE from 'three';\n", "import { OrbitControls } from 'three/addons/controls/OrbitControls.js';\n", "import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';\n"]:
+              s=s.replace(line,'')
+          if 'class BimViewer {' in s:
+              a=s.index('class BimViewer {')
+              b=s.index('function populateViewerControls()',a)
+              s=s[:a]+'// BIM rendering is owned exclusively by viewer-r21.js.\n\n'+s[b:]
+          if 'let viewer;' in s:
+              a=s.index('let viewer;')
+              b=s.index('\nfunction showView(name) {',a)
+              s=s[:a]+"let viewer = null; // legacy renderer intentionally disabled in r21\nfunction activeBimViewer() { return window.__revexViewerR21Instance || viewer || null; }\n"+s[b:]
+          s=s.replace("    viewer?.setWalkFloor(Number(first.elevation) || 0);", "    // viewer-r21 reads this control directly.")
+          s=s.replace("  viewer?.setWalkHeight(Number($('#walk-height')?.value || 5.5));\n  viewer?.setFov(Number($('#walk-fov')?.value || 55));", "  // viewer-r21 owns walk height and FOV state.")
+          s=s.replace("if (name === 'bim') setTimeout(() => viewer?.resize(), 0);", "if (name === 'bim') setTimeout(() => activeBimViewer()?.resize?.(), 0);")
+          s=s.replace('viewer?.select(element, fit);','activeBimViewer()?.select?.(element, fit);')
+          s=s.replace("const element = issue?.anchorUniqueId ? viewer?.elementByUniqueId.get(String(issue.anchorUniqueId)) : viewer?.elementById.get(String(issue?.anchorElementId));", "const av = activeBimViewer();\n    const element = issue?.anchorUniqueId ? av?.byUid?.get?.(String(issue.anchorUniqueId)) : av?.byId?.get?.(String(issue?.anchorElementId));")
+          s=s.replace("if (!viewer?.renderer?.domElement) return '';\n    viewer.renderer.render(viewer.scene, viewer.camera);\n    return viewer.renderer.domElement.toDataURL('image/png');", "const av = activeBimViewer();\n    if (!av?.renderer?.domElement) return '';\n    av.renderer.render(av.scene, av.camera);\n    return av.renderer.domElement.toDataURL('image/png');")
+          nav="""for (const id of ['fit-model','fit-model-rail']) $('#'+id)?.addEventListener('click', () => { viewer?.fit(); $('#walk-toggle')?.classList.remove('active'); });
+$('#walk-toggle')?.addEventListener('click', (event) => { const on=!event.currentTarget.classList.contains('active'); event.currentTarget.classList.toggle('active',on); viewer?.toggleWalk(on); });
+$('#walk-floor')?.addEventListener('change', (event) => viewer?.setWalkFloor(Number(event.target.value)||0));
+$('#walk-height')?.addEventListener('input', (event) => viewer?.setWalkHeight(event.target.value));
+$('#walk-fov')?.addEventListener('input', (event) => viewer?.setFov(event.target.value));
+$('#section-toggle')?.addEventListener('click', (event) => { const on=!event.currentTarget.classList.contains('active'); event.currentTarget.classList.toggle('active',on); event.currentTarget.setAttribute('aria-expanded',String(on)); $('#section-panel').hidden=!on; viewer?.setSectionEnabled(on); });
+for (const [id,axis] of [['section-x','x'],['section-y','y'],['section-z','z']]) $('#'+id)?.addEventListener('input', (event) => viewer?.setSectionAxis(axis, Number(event.target.value)/100));
+$('#section-reset')?.addEventListener('click', () => { for (const id of ['section-x','section-y','section-z']) $('#'+id).value='100'; viewer?.resetSection(); });
+"""
+          s=s.replace(nav,"// BIM navigation controls are owned exclusively by viewer-r21.js.\n")
+          s=s.replace("function renderAll() {\n  renderModelTree(); renderPins(); renderDesign(); renderDesignInspector(); renderSpec(); renderLibrary(); renderChatContext();\n}\n", "function renderAll() {\n  renderModelTree(); renderPins(); renderDesign(); renderDesignInspector(); renderLibrary(); renderChatContext();\n}\n")
+          marker='async function loadCloudState(cloudState, localPackage = null) {'
+          if marker in s and 'let revisionHydrationToken = 0;' not in s:
+              insert="""let revisionHydrationToken = 0;
+async function hydrateRevisionOverlays(cloudState, localPackage, revision) {
+  const token = ++revisionHydrationToken;
+  try {
+    const [designData, edits, chapterEdits, issues, library] = await Promise.all([
+      localPackage?.design || (cloudState?.designUrl ? Store.fetchJson(cloudState.designUrl) : Promise.resolve(null)),
+      Store.listDesignEdits(state.projectId), Store.listChapterEdits(state.projectId), Store.listIssues(state.projectId), Store.listLibrary(state.projectId)
+    ]);
+    if (token !== revisionHydrationToken || state.loadingRevision !== revision) return;
+    state.designData = designData;
+    state.designEdits = new Map(edits.map((row) => [row.id, row]));
+    state.chapterEdits = new Map(chapterEdits.map((row) => [row.id, row]));
+    state.issues = issues;
+    const localDocs = (localPackage?.printingDocs || []).map((doc, index) => {
+      const set = (localPackage?.printingSets?.sets || []).find((row) => String(row.fileName || '').toLowerCase() === String(doc.name || '').toLowerCase()) || {};
+      return { id: `local-print-${index}`, type: 'file', revexDocKind: 'printing-set', printingSetId: set.id || `local-${index}`, printingSetName: set.name || doc.name, revision, sheetIndex: set.pages || [], name: doc.name, localUrl: doc.url, size: doc.size, source: 'revex-local-preview', folderPath: 'record_out/printing_sets', createdAt: localPackage?.syncedAt || new Date().toISOString() };
+    });
+    state.library = [...localDocs, ...library.filter((row) => !localDocs.some((local) => local.id === row.id))];
+    renderPins(); renderDesign(); renderDesignInspector(); renderLibrary();
+    if (!$('#view-spec')?.hidden) renderSpec();
+  } catch (error) { console.warn('[REVEX] deferred revision overlays', error); }
+}
+
+"""
+              s=s.replace(marker,insert+marker,1)
+          if marker in s:
+              a=s.index(marker); b=s.index('\nasync function activateProject(projectId) {',a)
+              fast="""async function loadCloudState(cloudState, localPackage = null) {
+  state.cloudState = cloudState || null;
+  if (!cloudState && !localPackage) {
+    revisionHydrationToken++; state.viewerData = null; state.designData = null; state.designEdits = new Map(); state.chapterEdits = new Map(); state.issues = []; state.library = [];
+    renderAll(); setSync('No Revit sync yet', 'quiet'); return;
+  }
+  const revision = localPackage?.revision || cloudState?.revision || 'unknown';
+  if (state.loadingRevision === revision && !localPackage) return;
+  state.loadingRevision = revision; setSync('Loading BIM revision…', 'busy');
+  try {
+    const viewerData = localPackage?.viewer || await Store.fetchJson(cloudState.viewerUrl);
+    state.viewerData = viewerData; renderModelTree(); renderPins();
+    setSync(`${localPackage?.cloud === false ? 'Local preview' : 'Synced'} ${formatDate(localPackage?.syncedAt || cloudState.syncedAt)}`, localPackage?.cloud === false ? 'quiet' : 'good');
+    const hydrate = () => hydrateRevisionOverlays(cloudState, localPackage, revision);
+    if ('requestIdleCallback' in window) requestIdleCallback(hydrate, { timeout: 700 }); else setTimeout(hydrate, 0);
+  } catch (error) { console.error('[REVEX] load revision', error); setSync('Revision load failed', 'bad'); toast(error.message, true); }
+}
+"""
+              s=s[:a]+fast+s[b:]
+          a=s.index('async function activateProject(projectId) {')
+          b=s.index('\nasync function handleSyncFiles(files) {',a)
+          activate="""async function activateProject(projectId) {
+  state.unsubscribe?.(); state.unsubscribe = null;
+  const projectChanged = String(projectId || '') !== String(state.projectId || '');
+  if (projectChanged) { state.chatConnId = ''; state.chatLoaded = false; $('#chat-frame')?.removeAttribute('src'); $('#chat-placeholder').hidden = false; }
+  state.projectId = projectId || '';
+  state.project = state.projects.find((row) => row.id === projectId) || (projectId ? await Store.getProject(projectId) : null);
+  state.preferredSpecId = ((params.get('projectId') === projectId && params.get('specProjectId')) || state.project?.revexSpecProjectId || '');
+  $('#project-select').value = state.projectId; notifyNativeProject();
+  if (!projectId) { state.preferredSpecId = ''; showView('bim'); return; }
+  const requestedView = params.get('view') || 'bim'; showView(requestedView); setSync('Loading project…', 'busy');
+  try {
+    const cloudState = await Store.getState(projectId); await loadCloudState(cloudState); notifyNativeProject();
+    state.unsubscribe = Store.subscribeState(projectId, (next) => {
+      if (next?.revision && next.revision !== state.cloudState?.revision) loadCloudState(next);
+      else if (next) { state.cloudState = next; if (!$('#view-spec')?.hidden) renderSpec(); }
+    });
+    Promise.all([Store.ensureSpecProject(projectId, state.preferredSpecId || state.project?.revexSpecProjectId, state.project), Store.listRenderJobs(projectId)]).then(([specProjectId, renderJobs]) => {
+      if (state.projectId !== projectId) return;
+      state.preferredSpecId = specProjectId || state.preferredSpecId || ''; state.renderJobs = renderJobs || [];
+      if (state.project) state.project.revexSpecProjectId = state.preferredSpecId;
+      renderRenderHistory(); notifyNativeProject(); if (!$('#view-spec')?.hidden) renderSpec();
+    }).catch((error) => console.warn('[REVEX] deferred project services', error));
+    if (params.get('render') === '1') openRenderDialog();
+  } catch (error) { setSync('Project unavailable', 'bad'); toast(error.message, true); }
+}
+"""
+          s=s[:a]+activate+s[b:]
+          app.write_text(s,encoding='utf-8')
+
+          guard=root/'viewer-host-guard-r21.js'
+          guard.write_text("""(function(root){
+  'use strict';
+  if(root.__revexViewerHostGuardR21) return;
+  root.__revexViewerHostGuardR21=true; root.__revexExternalViewerR21=true;
+  const announce=()=>{const host=document.getElementById('viewer');if(!host)return false;root.__revexViewerHostR21=host;root.dispatchEvent(new CustomEvent('revex:viewer-host-ready'));return true;};
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',announce,{once:true});else announce();
+  console.log('[REVEX] viewer host guard 20260810r21',{singleRenderer:true,legacyRendererDisabled:true});
+})(window);\n""",encoding='utf-8')
+
+          proj=root/'projection-integrity.js'; t=proj.read_text(encoding='utf-8')
+          t=t.replace("const BUILD='20260810r19';","const BUILD='20260810r21';")
+          t=t.replace("const blockedCategories=/^(cameras?|views?|viewports?|sheets?|levels?|grids?|reference planes?|scope boxes?|project information|internal origin|survey point|project base point|sections?|elevations?|callouts?)$/i;", "const blockedCategories=/^(cameras?|views?|viewports?|sheets?|levels?|grids?|reference planes?|scope boxes?|project information|internal origin|survey point|project base point|sections?|elevations?|callouts?|lines?|model lines?|detail lines?|sketch lines?|analytical nodes?|reference points?)$/i;")
+          proj.write_text(t,encoding='utf-8')
+
+          viewer=root/'viewer-r21.js'; t=viewer.read_text(encoding='utf-8')
+          if 'const NON_MODEL=' not in t:
+              t=t.replace("const PALETTE={walls:0xd6d2c8,doors:0x9f724f,windows:0x86b7cf,floors:0x9b968c,roofs:0x8e8884,ceilings:0xb8b3aa,stairs:0x9f927e,furniture:0x927f6f,casework:0x927358,'structural-columns':0x858b90,'structural-framing':0x858b90,'mechanical-equipment':0x6f8d8e,'lighting-fixtures':0xc6ae71,'plumbing-fixtures':0xaabac0,site:0x7c8d70,other:0x969a9e};", "const PALETTE={walls:0xd6d2c8,doors:0x9f724f,windows:0x86b7cf,floors:0x9b968c,roofs:0x8e8884,ceilings:0xb8b3aa,stairs:0x9f927e,furniture:0x927f6f,casework:0x927358,'structural-columns':0x858b90,'structural-framing':0x858b90,'mechanical-equipment':0x6f8d8e,'lighting-fixtures':0xc6ae71,'plumbing-fixtures':0xaabac0,site:0x7c8d70,other:0x969a9e};\nconst NON_MODEL=/^(cameras?|views?|viewports?|sheets?|levels?|grids?|reference planes?|scope boxes?|project information|internal origin|survey point|project base point|sections?|elevations?|callouts?|lines?|model lines?|detail lines?|sketch lines?|analytical nodes?|reference points?)$/i;\nconst usableRow=r=>!!(r?.bbox?.min&&r?.bbox?.max)&&!NON_MODEL.test(String(r.category||'').trim());")
+          t=t.replace('this.model=null;this.bounds=null;this.data=null;this.byId=new Map();this.helper=null;','this.model=null;this.bounds=null;this.data=null;this.byId=new Map();this.byUid=new Map();this.helper=null;')
+          t=t.replace("const data=await Store.fetchJson(state.viewerUrl);this.data=data;this.byId=new Map((data.elements||[]).map(r=>[String(r.id),r]));const target=this.metaBounds();", "const source=await Store.fetchJson(state.viewerUrl),rows=(source?.elements||[]).filter(usableRow),data={...source,elements:rows};this.data=data;this.byId=new Map(rows.map(r=>[String(r.id),r]));this.byUid=new Map(rows.filter(r=>r.uniqueId).map(r=>[String(r.uniqueId),r]));const target=this.metaBounds();")
+          t=t.replace('camera|cameras|grid|grids|level|levels|reference plane|scope box|section marker|elevation marker)', 'camera|cameras|grid|grids|level|levels|reference plane|scope box|section marker|elevation marker|model line|detail line|sketch line|reference point)')
+          t=t.replace("console.log('[REVEX] viewer '+BUILD,{singleRenderer:true,fixedAxes:true,onDemand:true,walkSharedScene:true,materialIntent:true});", "console.log('[REVEX] viewer '+BUILD,{singleRenderer:true,fixedAxes:true,onDemand:true,idleFramePersistent:true,walkSharedScene:true,materialIntent:true});")
+          viewer.write_text(t,encoding='utf-8')
+      - name: Syntax checks
+        run: |
+          cp docs/liber-apps/apps/revex/app.js /tmp/app.mjs
+          cp docs/liber-apps/apps/revex/viewer-r21.js /tmp/viewer.mjs
+          node --check /tmp/app.mjs
+          node --check /tmp/viewer.mjs
+          node --check docs/liber-apps/apps/revex/viewer-host-guard-r21.js
+          node --check docs/liber-apps/apps/revex/projection-integrity.js
+          node --check docs/liber-apps/apps/revex/cache-r21.js
+          node --check docs/liber-apps/apps/revex/workflow-r20.js
+          node --check docs/liber-apps/apps/revex/sync-docs-r20.js
+      - name: Commit repaired hosted REVEX
+        run: |
+          git config user.name 'REVEX repair bot'
+          git config user.email 'revex-repair@users.noreply.github.com'
+          git add docs/liber-apps/apps/revex
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'REVEX r21 single-viewer and fast revision loading'
+          git push
