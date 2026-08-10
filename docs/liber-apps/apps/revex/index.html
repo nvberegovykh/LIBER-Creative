@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="color-scheme" content="dark" />
   <title>REVEX Companion — LIBER Apps</title>
-  <link rel="stylesheet" href="../specifications/styles.css?v=20260809r8" />
-  <link rel="stylesheet" href="styles.css?v=20260809r8" />
-  <link rel="stylesheet" href="runtime.css?v=20260809r8" />
-  <link rel="stylesheet" href="render-agent.css?v=20260809r8" />
+  <link rel="stylesheet" href="../specifications/styles.css?v=20260810r9" />
+  <link rel="stylesheet" href="styles.css?v=20260810r9" />
+  <link rel="stylesheet" href="runtime.css?v=20260810r9" />
+  <link rel="stylesheet" href="render-agent.css?v=20260810r9" />
+  <link rel="stylesheet" href="integrity.css?v=20260810r9" />
 </head>
 <body class="revex-app">
   <div class="app-shell">
@@ -29,7 +30,7 @@
       </div>
       <button class="button ghost compact sp-btn sp-btn-ghost sp-btn-sm" id="sync-button" type="button">Import sync</button>
       <input id="revex-sync-upload" data-liber-revex-sync-upload="1" type="file" multiple
-        accept=".json,.fbx,application/json,application/octet-stream" hidden />
+        accept=".json,.ifc,.fbx,application/json,application/octet-stream" hidden />
     </header>
 
     <nav class="main-nav sp-toolbar" aria-label="REVEX sections">
@@ -50,7 +51,7 @@
         <div class="empty-card">
           <div class="eyebrow">REVIT + LIBER</div>
           <h1>Create or connect the project once.</h1>
-          <p>REVEX uses one project identity for the central BIM model, Design Book, Spec Book, project documents, chat and render history. All project data remains owned by the users who create and control it; REVEX only links the systems and keeps their data roles separate.</p>
+          <p>REVEX uses one project identity for the BIM model, Design Book, Spec Book, project documents, chat and render history. Revit sync is the model-delivery path; all project data remains owned by the users who create and control it.</p>
           <div class="empty-actions">
             <button class="button sp-btn" id="empty-create-button" type="button">Create REVEX project</button>
             <button class="button ghost sp-btn sp-btn-ghost" id="empty-connect-button" type="button">Connect existing project</button>
@@ -63,7 +64,7 @@
         <aside class="rail sp-rail" aria-label="Central model navigator">
           <div class="rail-head sp-rail-head">
             <div>
-              <div class="eyebrow">CENTRAL MODEL</div>
+              <div class="eyebrow">SYNCED MODEL</div>
               <h2 id="model-title">No model synced</h2>
             </div>
             <button class="icon-button sp-icon-btn" id="fit-model" type="button" title="Fit model" aria-label="Fit model">⌗</button>
@@ -79,7 +80,7 @@
             <button id="model-edges" type="button" class="tool">Wire</button>
             <button id="model-grid" type="button" class="tool active">Grid</button>
           </div>
-          <div id="viewer-message" class="viewer-message">Sync from Revit to load the active 3D view.</div>
+          <div id="viewer-message" class="viewer-message">In Revit, click SYNC BIM + BOOKS once to publish the IFC model, element data, Design Book and Spec Book as one controlled revision.</div>
           <div class="viewer-help">Orbit · drag &nbsp; Pan · right-drag &nbsp; Zoom · wheel</div>
         </div>
         <aside class="inspector" id="bim-inspector" aria-label="BIM selection inspector">
@@ -108,7 +109,7 @@
         <aside class="inspector" id="design-inspector">
           <div class="eyebrow">DESIGN POSITION</div>
           <h2>Select a position</h2>
-          <p class="muted">Images and decisions are saved outside the RVT and survive the next Revit sync.</p>
+          <p class="muted">Designer-authored work is stored separately from synced Revit source data and survives every later sync.</p>
         </aside>
       </section>
 
@@ -161,7 +162,7 @@
       <p class="modal-intro">This creates the shared Project Tracker record and its internal Spec Book. BIM revisions, documents, chat and renders attach to the same project.</p>
       <label>Project name<input id="project-name" required maxlength="120" placeholder="87 Winthrop Street" autocomplete="off" /></label>
       <label>Project code<input id="project-code" maxlength="60" placeholder="LIB-2026-087" autocomplete="off" /></label>
-      <label>Google Drive central file ID<input id="project-drive-id" maxlength="180" placeholder="Optional until the first Revit sync" autocomplete="off" /></label>
+      <input id="project-drive-id" type="hidden" value="" />
       <label>Description<textarea id="project-description" rows="3" maxlength="1200" placeholder="Scope or coordination note"></textarea></label>
       <div class="drawer-actions sp-modal-actions"><button class="button ghost sp-btn sp-btn-ghost" id="project-cancel" type="button">Cancel</button><button class="button sp-btn" id="project-create" type="submit">Create project</button></div>
     </form>
@@ -225,11 +226,12 @@
   <script src="../../js/firebase-loader.js"></script>
   <script src="../../js/firebase-service.js"></script>
   <script src="../../js/chat-iframe-bridge.js"></script>
-  <script src="../../js/wallt-agent.js?v=20260809r8"></script>
-  <script src="store.js?v=20260809r8"></script>
-  <script src="runtime.js?v=20260809r8"></script>
+  <script src="../../js/wallt-agent.js?v=20260810r9"></script>
+  <script src="store.js?v=20260810r9"></script>
+  <script src="runtime.js?v=20260810r9"></script>
+  <script src="integrity.js?v=20260810r9"></script>
   <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.179.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.179.1/examples/jsm/"}}</script>
-  <script type="module" src="app.js?v=20260809r8"></script>
-  <script type="module" src="render-agent.js?v=20260809r8"></script>
+  <script type="module" src="app.js?v=20260810r9"></script>
+  <script type="module" src="render-agent.js?v=20260810r9"></script>
 </body>
 </html>
