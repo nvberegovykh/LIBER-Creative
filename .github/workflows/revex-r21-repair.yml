@@ -18,8 +18,9 @@ jobs:
         with:
           node-version: '22'
       - name: Apply REVEX r21 repair
-        shell: python
+        shell: bash
         run: |
+          python - <<'PY'
           from pathlib import Path
           root=Path('docs/liber-apps/apps/revex')
           app=root/'app.js'
@@ -99,9 +100,10 @@ async function hydrateRevisionOverlays(cloudState, localPackage, revision) {
 }
 """
               s=s[:a]+fast+s[b:]
-          a=s.index('async function activateProject(projectId) {')
-          b=s.index('\nasync function handleSyncFiles(files) {',a)
-          activate="""async function activateProject(projectId) {
+          if 'async function activateProject(projectId) {' in s:
+              a=s.index('async function activateProject(projectId) {')
+              b=s.index('\nasync function handleSyncFiles(files) {',a)
+              activate="""async function activateProject(projectId) {
   state.unsubscribe?.(); state.unsubscribe = null;
   const projectChanged = String(projectId || '') !== String(state.projectId || '');
   if (projectChanged) { state.chatConnId = ''; state.chatLoaded = false; $('#chat-frame')?.removeAttribute('src'); $('#chat-placeholder').hidden = false; }
@@ -127,7 +129,7 @@ async function hydrateRevisionOverlays(cloudState, localPackage, revision) {
   } catch (error) { setSync('Project unavailable', 'bad'); toast(error.message, true); }
 }
 """
-          s=s[:a]+activate+s[b:]
+              s=s[:a]+activate+s[b:]
           app.write_text(s,encoding='utf-8')
 
           guard=root/'viewer-host-guard-r21.js'
@@ -153,6 +155,7 @@ async function hydrateRevisionOverlays(cloudState, localPackage, revision) {
           t=t.replace('camera|cameras|grid|grids|level|levels|reference plane|scope box|section marker|elevation marker)', 'camera|cameras|grid|grids|level|levels|reference plane|scope box|section marker|elevation marker|model line|detail line|sketch line|reference point)')
           t=t.replace("console.log('[REVEX] viewer '+BUILD,{singleRenderer:true,fixedAxes:true,onDemand:true,walkSharedScene:true,materialIntent:true});", "console.log('[REVEX] viewer '+BUILD,{singleRenderer:true,fixedAxes:true,onDemand:true,idleFramePersistent:true,walkSharedScene:true,materialIntent:true});")
           viewer.write_text(t,encoding='utf-8')
+          PY
       - name: Syntax checks
         run: |
           cp docs/liber-apps/apps/revex/app.js /tmp/app.mjs
