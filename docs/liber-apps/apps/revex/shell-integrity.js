@@ -2,6 +2,17 @@
   'use strict';
   const BUILD='20260810r17';
 
+  function loadFirestoreCompat(){
+    if(root.__revexFirestoreCompatR17||document.getElementById('revex-firestore-compat')) return;
+    const script=document.createElement('script');
+    script.id='revex-firestore-compat';
+    script.src=`firestore-compat.js?v=${BUILD}`;
+    script.async=false;
+    script.onload=()=>console.log('[REVEX] Firestore compatibility loaded');
+    script.onerror=()=>console.error('[REVEX] Firestore compatibility failed to load');
+    document.head.appendChild(script);
+  }
+
   function notify(message,type='success'){
     try{
       if(root.parent?.dashboardManager?.showNotification) return root.parent.dashboardManager.showNotification(message,type);
@@ -167,15 +178,13 @@
   }
 
   function bindWhenReady(){
+    loadFirestoreCompat();
     bindInviteCopy();
     bindNativeProjectBridge();
-    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>{ bindInviteCopy(); bindNativeProjectBridge(); },{once:true});
-    setTimeout(()=>{ bindInviteCopy(); bindNativeProjectBridge(); },250);
-    setTimeout(()=>{ bindInviteCopy(); bindNativeProjectBridge(); },1000);
+    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>{ loadFirestoreCompat(); bindInviteCopy(); bindNativeProjectBridge(); },{once:true});
+    setTimeout(()=>{ loadFirestoreCompat(); bindInviteCopy(); bindNativeProjectBridge(); },250);
+    setTimeout(()=>{ loadFirestoreCompat(); bindInviteCopy(); bindNativeProjectBridge(); },1000);
 
-    // The Revit host must not attach the revision until app.js has bound the
-    // #revex-sync-upload change handler. window.load runs after module scripts
-    // have executed, so this flag is the explicit native handoff barrier.
     root.addEventListener('load',()=>{
       announceNativeSyncReady('window-load');
       setTimeout(()=>announceNativeSyncReady('window-load-settle'),250);
@@ -228,7 +237,7 @@
       const card=parent.document?.querySelector?.('.app-card[data-app-id="revex"] .app-version');
       if(card) card.textContent='v0.7.8';
     }
-    console.log('[REVEX] shell integrity '+BUILD,{keepAlive:false,freshLaunch:true,uiGuard:'single',inviteCopy:true,nativeProjectBridge:true,nativeSyncHandshake:true});
+    console.log('[REVEX] shell integrity '+BUILD,{keepAlive:false,freshLaunch:true,uiGuard:'single',inviteCopy:true,nativeProjectBridge:true,nativeSyncHandshake:true,firestoreCompat:true});
   }catch(error){
     console.warn('[REVEX] shell integrity failed',error);
   }
