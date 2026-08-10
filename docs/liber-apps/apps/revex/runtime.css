@@ -58,6 +58,19 @@ body.revex-chat-open { overflow: hidden; }
 #new-project-button,
 #sync-button { flex: none; }
 
+/* styles.css used one generic pseudo-label for every utility button below 560px.
+   That made the real Invite element display as Render. Always render the actual
+   button text instead; each action owns its own label. */
+@media (max-width: 560px) {
+  .main-nav .utility {
+    font-size: 12px !important;
+  }
+  .main-nav .utility::after {
+    content: none !important;
+    display: none !important;
+  }
+}
+
 @media (max-width: 860px) {
   .revex-chat-layer-head {
     min-height: 44px;
