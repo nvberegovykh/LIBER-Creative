@@ -24,8 +24,15 @@ const state = {
   activeChapter: '',
   viewerMode: '',
   unsubscribe: null,
-  loadingRevision: ''
+  loadingRevision: '',
+  docSelection: null,
+  chatConnId: '',
+  chatLoaded: false,
+  historyEvents: [],
+  bimOverlays: new Map(),
+  derivedPlans: []
 };
+window.__revexState = state;
 
 let projectReturnFocus = null;
 let renderReturnFocus = null;
@@ -83,37 +90,54 @@ function contextFor(kind, record) {
   return `[REVEX · Design Book]\nProject: ${project}\n${record.chapterTitle} / ${record.label}\nStatus: ${record.status || 'Not Selected'}\nCentral revision: ${state.cloudState?.revision || 'local'}`;
 }
 
-async function openProjectChat(context = state.selectedContext) {
-  if (!state.projectId) return toast('Choose a LIBER project first.', true);
+async function ensureChatEmbedded(context = state.selectedContext) {
+  if (!state.projectId) return;
+  const frame = $('#chat-frame');
+  const placeholder = $('#chat-placeholder');
+  if (!frame) return;
   try {
-    setSync('Opening project chat…', 'busy');
-    const result = await Store.ensureProjectChat(state.projectId);
-    if (!result?.connId) throw new Error('No project connection was returned.');
-    if (context) sessionStorage.setItem('liber_revex_chat_draft', context);
-    const url = appUrl('secure-chat', { connId: result.connId });
-    openInLiberShell('secure-chat', 'Connections', url);
-    setSync(state.cloudState ? `Synced ${formatDate(state.cloudState.syncedAt)}` : 'Project connected', 'good');
+    if (!state.chatConnId) {
+      const result = await Store.ensureProjectChat(state.projectId);
+      if (!result?.connId) throw new Error('No project connection was returned.');
+      state.chatConnId = result.connId;
+    }
+    if (context) {
+      sessionStorage.setItem('liber_revex_chat_draft', context);
+      try { frame.contentWindow?.postMessage({ type: 'liber:revex-chat-context', context, projectId: state.projectId }, location.origin); } catch (_) {}
+    }
+    if (!state.chatLoaded) {
+      frame.src = appUrl('secure-chat', { connId: state.chatConnId, embedded: 'revex' });
+      state.chatLoaded = true;
+    }
+    placeholder.hidden = true;
   } catch (error) {
-    setSync('Chat unavailable', 'bad');
-    toast(error.message || 'Could not open Project Chat.', true);
+    placeholder.hidden = false;
+    placeholder.textContent = error.message || 'Project Chat is unavailable.';
   }
 }
 
-// BIM rendering is owned exclusively by viewer-r21.js.
+async function openProjectChat(context = state.selectedContext) {
+  if (!state.projectId) return toast('Choose a LIBER project first.', true);
+  showView('chat');
+  await ensureChatEmbedded(context);
+}
+
+// BIM rendering is owned exclusively by the external lightweight viewer.
 let viewer = null;
-function activeBimViewer(){ return window.__revexViewerR21Instance || viewer || null; }
+function activeBimViewer(){ return window.__revexViewerR24Instance || window.__revexViewerR23Instance || window.__revexViewerR22Instance || window.__revexViewerR21Instance || viewer || null; }
 
 function showView(name) {
   closeWorkspaceRail();
   const hasProject = Boolean(state.projectId);
   $('#view-empty').hidden = hasProject;
-  for (const view of ['bim', 'design', 'spec', 'docs', 'chat']) $(`#view-${view}`).hidden = !hasProject || view !== name;
+  for (const view of ['bim', 'design', 'spec', 'docs', 'chat', 'history']) $(`#view-${view}`).hidden = !hasProject || view !== name;
   $$('.main-nav [data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === name));
   if (hasProject) {
     history.replaceState(null, '', `${location.pathname}?${new URLSearchParams({ ...(params.get('inShell') ? { inShell: '1' } : {}), projectId: state.projectId, ...(state.preferredSpecId ? { specProjectId: state.preferredSpecId } : {}), view: name })}`);
     if (name === 'bim') setTimeout(() => activeBimViewer()?.resize?.(), 0);
     if (name === 'spec') renderSpec();
-    if (name === 'chat') renderChatContext();
+    if (name === 'chat') { renderChatContext(); setTimeout(() => ensureChatEmbedded(state.selectedContext), 0); }
+    if (name === 'history') window.dispatchEvent(new CustomEvent('revex:history-open', { detail: { projectId: state.projectId } }));
   }
 }
 
@@ -264,6 +288,7 @@ function selectElement(element, fit = true) {
   state.selectedElement = element;
   state.selectedDesign = null;
   state.selectedContext = contextFor('BIM', element);
+  window.dispatchEvent(new CustomEvent('revex:bim-selection', { detail: { element } }));
   activeBimViewer()?.select?.(element, fit);
   renderModelTree();
   const issues = elementIssues(element);
@@ -306,7 +331,23 @@ function mergedItem(item) {
   return { ...item, ...(state.designEdits.get(item.id) || {}) };
 }
 
-function chapters() { return state.designData?.chapters || []; }
+function chapters() {
+  const current = [...(state.designData?.chapters || [])];
+  const sourceIds = new Set(current.flatMap((chapter) => (chapter.items || []).map((item) => String(item.id))));
+  const archived = [];
+  state.designEdits.forEach((edit, id) => {
+    if (sourceIds.has(String(id))) return;
+    const snap = edit.sourceSnapshot;
+    if (!snap?.label) return;
+    archived.push({
+      id: String(id), label: snap.label, description: edit.description || 'Removed from the current Revit source revision.',
+      status: edit.status || 'Archived', source: edit.source || '', images: edit.images || [], revit: snap.revit || null,
+      archivedFromRevit: true, originalChapterTitle: snap.chapterTitle || 'Design Book'
+    });
+  });
+  if (archived.length) current.push({ id: 'revex-archived-source', title: 'Archived / Removed from Revit', order: 999999, sourceKind: 'revex-overlay-archive', items: archived });
+  return current;
+}
 
 function mergedChapter(chapter) {
   return { ...chapter, ...(state.chapterEdits.get(chapter.id) || {}) };
@@ -317,12 +358,29 @@ function openDesignPosition(chapter, sourceItem, switchView = false) {
   state.selectedDesign = { ...mergedItem(sourceItem), chapterTitle: chapter.title };
   state.selectedElement = null;
   state.selectedContext = contextFor('Design', state.selectedDesign);
+  window.dispatchEvent(new CustomEvent('revex:design-selection', { detail: { item: state.selectedDesign } }));
   if (switchView) showView('design');
   renderDesign();
   renderDesignInspector();
 }
 
+
+function renderDesignProgress() {
+  const sourceItems = chapters().flatMap((chapter) => (chapter.items || []).map((item) => ({ chapter, item })));
+  const active = sourceItems.map(({ item }) => mergedItem(item));
+  const specified = active.filter((item) => {
+    const status = String(item.status || 'Not Selected');
+    return status !== 'Not Selected' || Boolean(String(item.description || '').trim()) || Boolean(String(item.source || '').trim()) || Boolean(item.images?.length);
+  }).length;
+  const total = active.length;
+  const percent = total ? Math.round(specified / total * 100) : 0;
+  const host = $('#design-progress');
+  if (!host) return;
+  const needs = specified < total;
+  host.innerHTML = `<div class="design-progress-head"><div><strong>${needs ? 'Needs attention' : 'Design Book complete'}</strong><span> · whole project</span></div><b>${percent}%</b></div><div class="design-progress-meta">${specified.toLocaleString()} of ${total.toLocaleString()} positions carry a decision, note, source or image</div><div class="design-progress-track"><i style="width:${percent}%"></i></div><small>${needs ? `${(total-specified).toLocaleString()} positions still need a designer decision` : 'No unreviewed positions left'}</small>`;
+}
 function renderDesign() {
+  renderDesignProgress();
   const list = chapters();
   if (!state.activeChapter || !list.some((chapter) => chapter.id === state.activeChapter)) state.activeChapter = list[0]?.id || '';
   $('#chapter-list').innerHTML = list.map((chapter) => `<button type="button" class="${chapter.id === state.activeChapter ? 'active' : ''}" data-chapter="${escapeHtml(chapter.id)}"><span>${escapeHtml(chapter.title)}</span><small>${chapter.items?.length || 0}</small></button>`).join('') || '<p class="muted">Sync from Revit to form the Design Book.</p>';
@@ -430,7 +488,8 @@ async function saveDesign(event) {
     status: $('#design-status').value,
     description: $('#design-description').value.trim(),
     source: $('#design-source').value.trim(),
-    images: item.images || []
+    images: item.images || [],
+    sourceSnapshot: { id: item.id, label: item.label, chapterTitle: item.chapterTitle, revit: item.revit || null }
   };
   try {
     setSync('Saving Design Book…', 'busy');
@@ -438,6 +497,8 @@ async function saveDesign(event) {
     state.designEdits.set(item.id, { ...(state.designEdits.get(item.id) || {}), ...saved });
     state.selectedDesign = { ...item, ...saved };
     state.selectedContext = contextFor('Design', state.selectedDesign);
+    try { await Store.appendHistory(state.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'design', operation: 'edit', label: `Design Book · ${item.chapterTitle} / ${item.label}`, affectedElementIds: item.revit?.elementIds || [], affectedUniqueIds: [], affectedLevels: item.revit?.levels || [], before: { status: item.status || 'Not Selected', description: item.description || '', source: item.source || '', images: item.images || [] }, after: { status: saved.status, description: saved.description, source: saved.source, images: saved.images || [] }, relatedId: item.id }); } catch (historyError) { console.warn('[REVEX] Design history', historyError); }
+  window.dispatchEvent(new CustomEvent('revex:design-selection', { detail: { item: state.selectedDesign } }));
     renderDesign(); renderDesignInspector();
     setSync(Store.isCloud() ? 'Design Book saved' : 'Saved on this device', Store.isCloud() ? 'good' : 'quiet');
     toast('Design Book position saved.');
@@ -449,7 +510,9 @@ async function uploadDesignImage(event) {
   if (!file || !state.selectedDesign) return;
   try {
     setSync('Uploading design image…', 'busy');
-    const images = await Store.uploadDesignImage(state.projectId, state.selectedDesign.id, file, state.selectedDesign.images || []);
+    const beforeImages = state.selectedDesign.images || [];
+    const images = await Store.uploadDesignImage(state.projectId, state.selectedDesign.id, file, beforeImages);
+    try { await Store.appendHistory(state.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'design', operation: 'image-upload', label: `Design Book image · ${state.selectedDesign.chapterTitle} / ${state.selectedDesign.label}`, affectedElementIds: state.selectedDesign.revit?.elementIds || [], affectedLevels: state.selectedDesign.revit?.levels || [], before: { images: beforeImages }, after: { images }, relatedId: state.selectedDesign.id }); } catch (historyError) { console.warn('[REVEX] Design image history', historyError); }
     const edit = { ...(state.designEdits.get(state.selectedDesign.id) || {}), images };
     state.designEdits.set(state.selectedDesign.id, edit);
     state.selectedDesign = { ...state.selectedDesign, images };
@@ -595,6 +658,7 @@ async function prepareRender(event) {
       settings,
       status: 'bridging'
     });
+    try { await Store.appendHistory(state.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'render', operation: 'prepare', label: `Render prepared · ${renderContextLabel()}`, affectedElementIds: state.selectedElement?.id ? [state.selectedElement.id] : [], affectedLevels: state.selectedElement?.level ? [state.selectedElement.level] : [], before: null, after: { renderJobId: job.id, prompt, settings }, relatedId: job.id }); } catch (historyError) { console.warn('[REVEX] Render history', historyError); }
     state.activeRenderJob = job;
     state.renderJobs = [job, ...state.renderJobs.filter((row) => row.id !== job.id)].slice(0, 40);
     renderRenderHistory();
@@ -637,6 +701,7 @@ async function saveRenderResult(event) {
       await Store.updateRenderJob(state.projectId, state.activeRenderJob.id, { status: 'saved', resultUrl: result?.url || null, resultName: file.name, chapterId: chapter.id });
       state.activeRenderJob = { ...state.activeRenderJob, status: 'saved', resultUrl: result?.url || null, resultName: file.name };
       state.renderJobs = state.renderJobs.map((row) => row.id === state.activeRenderJob.id ? state.activeRenderJob : row);
+      try { await Store.appendHistory(state.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'render', operation: 'save-result', label: `Render saved · ${chapter.title}`, before: null, after: { renderJobId: state.activeRenderJob.id, resultUrl: result?.url || null, resultName: file.name, chapterId: chapter.id }, relatedId: state.activeRenderJob.id }); } catch (historyError) { console.warn('[REVEX] Render result history', historyError); }
     }
     renderDesign(); renderRenderHistory();
     setRenderStatus(`Saved to ${chapter.title} · Renderings.`, 'good');
@@ -657,28 +722,111 @@ async function handleNativeRenderStatus(data) {
   renderRenderHistory();
 }
 
+function docsMatches(text) {
+  const q = String($('#docs-search')?.value || '').trim().toLowerCase();
+  return !q || String(text || '').toLowerCase().includes(q);
+}
+
+function docsRecordLabel(file) {
+  if (file.revexDocKind === 'printing-set') return `${file.printingSetName || file.name} ${file.revision || ''}`;
+  return `${file.name || 'file'} ${file.folderPath || ''}`;
+}
+
+async function selectDocument(file, page = null, sheet = null) {
+  state.docSelection = { file, page: page || null, sheet: sheet || null };
+  const frame = $('#docs-frame'), empty = $('#docs-empty');
+  $('#docs-preview-title').textContent = sheet ? `${sheet.sheetNumber || `Page ${page}`} · ${sheet.sheetName || ''}` : (file.printingSetName || file.name || 'Document');
+  $('#docs-preview-meta').textContent = [file.revision ? `REVEX ${file.revision}` : null, sheet?.currentRevision ? `Sheet revision ${sheet.currentRevision}` : null, page ? `page ${page}` : null, file.source === 'manual' ? 'manual file' : null].filter(Boolean).join(' · ') || 'Project document';
+  $('#docs-copy-ref').disabled = false; $('#docs-open-external').disabled = false;
+  try {
+    const base = file.localUrl || await Store.fileUrl(file.storagePath);
+    if (!base) throw new Error('Document URL is unavailable.');
+    state.docSelection.url = base;
+    const url = page ? `${base}#page=${page}` : base;
+    frame.src = url; frame.hidden = false; empty.hidden = true;
+  } catch (error) {
+    frame.removeAttribute('src'); frame.hidden = true; empty.hidden = false; empty.textContent = error.message || 'Could not open document.';
+  }
+  renderLibrary();
+}
+
 function renderLibrary() {
-  const groups = { in: [], out: [] };
-  state.library.forEach((file) => {
-    const folder = file.folderPath || '';
-    if (folder.startsWith('record_out')) groups.out.push(file); else if (folder.startsWith('record_in')) groups.in.push(file);
+  const host = $('#docs-tree');
+  if (!host) return;
+  const rows = [...state.library];
+  const printing = rows.filter((f) => f.revexDocKind === 'printing-set');
+  const manualIn = rows.filter((f) => f.revexDocKind !== 'printing-set' && String(f.folderPath || '').startsWith('record_in'));
+  const manualOut = rows.filter((f) => f.revexDocKind !== 'printing-set' && String(f.folderPath || '').startsWith('record_out'));
+  const bySet = new Map();
+  printing.forEach((file) => {
+    const key = file.printingSetId || file.printingSetName || file.name;
+    if (!bySet.has(key)) bySet.set(key, []);
+    bySet.get(key).push(file);
   });
-  const render = (rows) => rows.length ? rows.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).map((file) => {
-    const ext = String(file.name || '').split('.').pop().slice(0, 4).toUpperCase();
-    return `<div class="file-row"><span class="file-kind">${escapeHtml(ext || 'FILE')}</span><a href="#" data-storage-path="${escapeHtml(file.storagePath || '')}">${escapeHtml(file.name || 'file')}</a><small>${formatDate(file.createdAt)}</small></div>`;
-  }).join('') : '<div class="file-empty">No project files in this folder.</div>';
-  $('#docs-in').innerHTML = render(groups.in);
-  $('#docs-out').innerHTML = render(groups.out);
-  $$('.file-row a').forEach((link) => link.addEventListener('click', async (event) => {
-    event.preventDefault();
-    try { const url = await Store.fileUrl(link.dataset.storagePath); if (url) window.open(url, '_blank', 'noopener'); }
-    catch (error) { toast(error.message || 'Could not open file.', true); }
+
+  const manualGroup = (title, files, lane) => {
+    const visible = files.filter((file) => docsMatches(docsRecordLabel(file)));
+    if (!visible.length) return '';
+    return `<section class="docs-group"><h3>${title}<small>${visible.length}</small></h3>${visible.sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||''))).map((file)=>`<button type="button" class="docs-node ${state.docSelection?.file?.id===file.id&&!state.docSelection?.page?'active':''}" data-doc-id="${escapeHtml(file.id)}"><span>${escapeHtml(file.name||'file')}</span><small>${escapeHtml(formatDate(file.createdAt))}</small></button>`).join('')}</section>`;
+  };
+
+  const printHtml = [...bySet.entries()].map(([key, revisions]) => {
+    revisions.sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+    const latest = revisions[0];
+    const allText = `${latest.printingSetName||''} ${revisions.flatMap(r => (r.sheetIndex||[]).map(p => `${p.sheetNumber} ${p.sheetName}`)).join(' ')}`;
+    if (!docsMatches(allText)) return '';
+    return `<section class="docs-group printing-set"><h3>${escapeHtml(latest.printingSetName || 'Printing Set')}<small>${revisions.length} revision${revisions.length===1?'':'s'}</small></h3>${revisions.map((file,ri)=>{
+      const selected = state.docSelection?.file?.id===file.id;
+      return `<details ${ri===0||selected?'open':''}><summary><span>${ri===0?'Current':'Revision'} · ${escapeHtml(file.revision||formatDate(file.createdAt))}</span><small>${(file.sheetIndex||[]).length} sheets</small></summary><button type="button" class="docs-node whole ${selected&&!state.docSelection?.page?'active':''}" data-doc-id="${escapeHtml(file.id)}"><span>Full document</span><small>PDF</small></button>${(file.sheetIndex||[]).map((sheet)=>`<button type="button" class="docs-node sheet ${selected&&Number(state.docSelection?.page)===Number(sheet.page)?'active':''}" data-doc-id="${escapeHtml(file.id)}" data-page="${Number(sheet.page)||1}"><b>${escapeHtml(sheet.sheetNumber||String(sheet.page))}</b><span>${escapeHtml(sheet.sheetName||'Sheet')}</span><small>p.${Number(sheet.page)||1}</small></button>`).join('')}</details>`;
+    }).join('')}</section>`;
+  }).join('');
+
+  host.innerHTML = printHtml + manualGroup('Record In', manualIn, 'in') + manualGroup('Record Out', manualOut, 'out') || '<div class="file-empty">No matching project documents.</div>';
+  $$('.docs-node', host).forEach((button) => button.addEventListener('click', () => {
+    const file = rows.find((row) => row.id === button.dataset.docId); if (!file) return;
+    const page = button.dataset.page ? Number(button.dataset.page) : null;
+    const sheet = page ? (file.sheetIndex || []).find((row) => Number(row.page) === page) : null;
+    selectDocument(file, page, sheet);
   }));
 }
 
-function renderChatContext() {
-  $('#chat-context').textContent = state.selectedContext || 'Select a BIM element or Design Book position to carry its context into the conversation.';
+async function uploadDocsFiles(files, lane) {
+  if (!files?.length) return;
+  if (!Store.isCloud()) return toast('Sign in to upload project documents.', true);
+  try {
+    setSync(`Uploading ${files.length} project document${files.length===1?'':'s'}…`, 'busy');
+    for (const file of [...files]) {
+      const ext = String(file.name || '').split('.').pop().toLowerCase();
+      const folder = `${lane === 'out' ? 'record_out' : 'record_in'}/${/^(png|jpg|jpeg|gif|webp)$/i.test(ext)?'images':'docs'}`;
+      const record = await Store.uploadLibraryFile(state.projectId, file, folder, { manualInRevex: true });
+      state.library.unshift(record);
+      try { await Store.appendHistory(state.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'document', operation: 'upload', label: `Document uploaded · ${file.name}`, before: null, after: { libraryId: record.id, name: record.name, folderPath: record.folderPath, size: record.size }, relatedId: record.id }); } catch (historyError) { console.warn('[REVEX] Docs history', historyError); }
+    }
+    renderLibrary(); setSync('Docs updated', 'good'); toast('Project document uploaded.');
+  } catch (error) { setSync('Docs upload failed', 'bad'); toast(error.message || 'Document upload failed.', true); }
 }
+
+function copyDocumentReference() {
+  const sel = state.docSelection; if (!sel?.file) return;
+  const parts = ['REVEX Docs', state.project?.name || state.projectId, sel.file.printingSetName || sel.file.name];
+  if (sel.file.revision) parts.push(sel.file.revision);
+  if (sel.sheet) parts.push(`${sel.sheet.sheetNumber || `Page ${sel.page}`} — ${sel.sheet.sheetName || ''}`.trim());
+  else if (sel.page) parts.push(`Page ${sel.page}`);
+  const text = parts.filter(Boolean).join(' · ');
+  navigator.clipboard?.writeText(text).then(()=>toast('Document reference copied.')).catch(()=>toast(text));
+}
+
+function openDocumentExternal() {
+  const sel = state.docSelection; if (!sel?.url) return;
+  window.open(sel.page ? `${sel.url}#page=${sel.page}` : sel.url, '_blank', 'noopener');
+}
+
+function renderChatContext() {
+  const context = state.selectedContext || 'Project-wide conversation';
+  $('#chat-context').textContent = context;
+  try { $('#chat-frame')?.contentWindow?.postMessage({ type: 'liber:revex-chat-context', context: state.selectedContext || '', projectId: state.projectId }, location.origin); } catch (_) {}
+}
+
 
 function renderAll() {
   renderModelTree(); renderPins(); renderDesign(); renderDesignInspector(); renderLibrary(); renderChatContext();
@@ -688,26 +836,27 @@ let revisionHydrationToken=0;
 async function hydrateRevisionOverlays(cloudState,localPackage,revision){
   const token=++revisionHydrationToken;
   try{
-    const [designData,edits,chapterEdits,issues,library]=await Promise.all([
+    const [designData,edits,chapterEdits,issues,library,historyEvents,bimOverlays,derivedPlans]=await Promise.all([
       localPackage?.design||(cloudState?.designUrl?Store.fetchJson(cloudState.designUrl):Promise.resolve(null)),
-      Store.listDesignEdits(state.projectId),Store.listChapterEdits(state.projectId),Store.listIssues(state.projectId),Store.listLibrary(state.projectId)
+      Store.listDesignEdits(state.projectId),Store.listChapterEdits(state.projectId),Store.listIssues(state.projectId),Store.listLibrary(state.projectId),
+      Store.listHistory(state.projectId),Store.listBimOverlays(state.projectId),Store.listDerivedPlans(state.projectId)
     ]);
     if(token!==revisionHydrationToken||state.loadingRevision!==revision)return;
-    state.designData=designData;state.designEdits=new Map(edits.map(r=>[r.id,r]));state.chapterEdits=new Map(chapterEdits.map(r=>[r.id,r]));state.issues=issues;state.library=library;
-    renderPins();renderDesign();renderDesignInspector();renderLibrary();activeBimViewer()?.requestRender?.();
+    state.designData=designData;state.designEdits=new Map(edits.map(r=>[r.id,r]));state.chapterEdits=new Map(chapterEdits.map(r=>[r.id,r]));state.issues=issues;state.library=library;state.historyEvents=historyEvents||[];state.bimOverlays=new Map((bimOverlays||[]).map(r=>[String(r.uniqueId||r.elementId||r.id),r]));state.derivedPlans=derivedPlans||[];
+    renderPins();renderDesign();renderDesignInspector();renderLibrary();activeBimViewer()?.setOverlays?.(bimOverlays||[]);activeBimViewer()?.requestRender?.();window.dispatchEvent(new CustomEvent('revex:history-data', { detail: { historyEvents: state.historyEvents, bimOverlays: bimOverlays||[], derivedPlans: state.derivedPlans } }));
     if(!$('#view-spec')?.hidden)renderSpec();
   }catch(error){console.warn('[REVEX] deferred revision overlays',error);}
 }
 
 async function loadCloudState(cloudState,localPackage=null){
   state.cloudState=cloudState||null;
-  if(!cloudState&&!localPackage){revisionHydrationToken++;state.viewerData=null;state.designData=null;state.designEdits=new Map();state.chapterEdits=new Map();state.issues=[];state.library=[];renderAll();setSync('No Revit sync yet','quiet');return;}
+  if(!cloudState&&!localPackage){revisionHydrationToken++;state.viewerData=null;state.designData=null;state.designEdits=new Map();state.chapterEdits=new Map();state.issues=[];state.library=[];state.historyEvents=[];state.bimOverlays=new Map();state.derivedPlans=[];renderAll();setSync('No Revit sync yet','quiet');return;}
   const revision=localPackage?.revision||cloudState?.revision||'unknown';
   if(state.loadingRevision===revision&&!localPackage)return;
   state.loadingRevision=revision;setSync('Loading BIM revision…','busy');
   try{
     const viewerData=localPackage?.viewer||await Store.fetchJson(cloudState.viewerUrl);
-    state.viewerData=viewerData;renderModelTree();renderPins();
+    state.viewerData=viewerData;renderModelTree();renderPins();window.dispatchEvent(new CustomEvent('revex:source-revision-loaded', { detail: { revision, cloudState, localPackage } }));
     setSync(`${localPackage?.cloud===false?'Local preview':'Synced'} ${formatDate(localPackage?.syncedAt||cloudState.syncedAt)}`,localPackage?.cloud===false?'quiet':'good');
     const hydrate=()=>hydrateRevisionOverlays(cloudState,localPackage,revision);
     if('requestIdleCallback'in window)requestIdleCallback(hydrate,{timeout:700});else setTimeout(hydrate,0);
@@ -724,9 +873,13 @@ async function activateProject(projectId){
   try{
     const cloudState=await Store.getState(projectId);await loadCloudState(cloudState);notifyNativeProject();
     state.unsubscribe=Store.subscribeState(projectId,next=>{if(next?.revision&&next.revision!==state.cloudState?.revision)loadCloudState(next);else if(next){state.cloudState=next;if(!$('#view-spec')?.hidden)renderSpec();}});
-    Promise.all([Store.ensureSpecProject(projectId,state.preferredSpecId||state.project?.revexSpecProjectId,state.project),Store.listRenderJobs(projectId)]).then(([specId,jobs])=>{
-      if(state.projectId!==projectId)return;state.preferredSpecId=specId||state.preferredSpecId||'';state.renderJobs=jobs||[];if(state.project)state.project.revexSpecProjectId=state.preferredSpecId;renderRenderHistory();notifyNativeProject();if(!$('#view-spec')?.hidden)renderSpec();
-    }).catch(error=>console.warn('[REVEX] deferred project services',error));
+    Promise.allSettled([Store.ensureSpecProject(projectId,state.preferredSpecId||state.project?.revexSpecProjectId,state.project),Store.listRenderJobs(projectId)]).then(([specResult,renderResult])=>{
+      if(state.projectId!==projectId)return;
+      if(specResult.status==='fulfilled')state.preferredSpecId=specResult.value||state.preferredSpecId||'';else console.warn('[REVEX] Spec Book projection pending',specResult.reason);
+      state.renderJobs=renderResult.status==='fulfilled'?(renderResult.value||[]):[];
+      if(state.project&&state.preferredSpecId)state.project.revexSpecProjectId=state.preferredSpecId;
+      renderRenderHistory();notifyNativeProject();if(!$('#view-spec')?.hidden)renderSpec();
+    });
     if(params.get('render')==='1')openRenderDialog();
   }catch(error){setSync('Project unavailable','bad');toast(error.message,true);}
 }
@@ -783,7 +936,9 @@ $('#issue-form').addEventListener('submit', async (event) => {
   try {
     setSync('Saving issue…', 'busy');
     const saved = await Store.addIssue(state.projectId, issue);
-    state.issues.unshift(saved); closeIssue(); renderPins();
+    state.issues.unshift(saved);
+    try { await Store.appendHistory(state.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'issue', operation: 'create', label: `Issue · ${saved.title}`, affectedElementIds: saved.anchorElementId ? [saved.anchorElementId] : [], affectedUniqueIds: saved.anchorUniqueId ? [saved.anchorUniqueId] : [], affectedLevels: state.selectedElement?.level ? [state.selectedElement.level] : [], before: null, after: saved, relatedId: saved.id }); } catch (historyError) { console.warn('[REVEX] Issue history', historyError); }
+    closeIssue(); renderPins();
     if (state.selectedElement) selectElement(state.selectedElement, false);
     setSync('Issue saved', Store.isCloud() ? 'good' : 'quiet'); toast('Issue saved outside the RVT.');
   } catch (error) { setSync('Issue save failed', 'bad'); toast(error.message, true); }
@@ -804,9 +959,14 @@ $('#sync-button').addEventListener('click', () => $('#revex-sync-upload').click(
 $('#empty-sync-button').addEventListener('click', () => $('#revex-sync-upload').click());
 $('#revex-sync-upload').addEventListener('change', (event) => handleSyncFiles(event.target.files));
 $('#element-search').addEventListener('input', renderModelTree);
-$('#fit-model').addEventListener('click', () => viewer?.fit());
-$('#model-edges').addEventListener('click', (event) => { event.currentTarget.classList.toggle('active'); viewer?.toggleEdges(event.currentTarget.classList.contains('active')); });
-$('#model-grid').addEventListener('click', (event) => { event.currentTarget.classList.toggle('active'); if (viewer) viewer.grid.visible = event.currentTarget.classList.contains('active'); });
+for (const id of ['fit-model','fit-model-rail']) $('#'+id)?.addEventListener('click', () => { viewer?.fit(); $('#walk-toggle')?.classList.remove('active'); });
+$('#walk-toggle')?.addEventListener('click', (event) => { const on=!event.currentTarget.classList.contains('active'); event.currentTarget.classList.toggle('active',on); viewer?.toggleWalk(on); });
+$('#walk-floor')?.addEventListener('change', (event) => viewer?.setWalkFloor(Number(event.target.value)||0));
+$('#walk-height')?.addEventListener('input', (event) => viewer?.setWalkHeight(event.target.value));
+$('#walk-fov')?.addEventListener('input', (event) => viewer?.setFov(event.target.value));
+$('#section-toggle')?.addEventListener('click', (event) => { const on=!event.currentTarget.classList.contains('active'); event.currentTarget.classList.toggle('active',on); event.currentTarget.setAttribute('aria-expanded',String(on)); $('#section-panel').hidden=!on; viewer?.setSectionEnabled(on); });
+for (const [id,axis] of [['section-x','x'],['section-y','y'],['section-z','z']]) $('#'+id)?.addEventListener('input', (event) => viewer?.setSectionAxis(axis, Number(event.target.value)/100));
+$('#section-reset')?.addEventListener('click', () => { for (const id of ['section-x','section-y','section-z']) $('#'+id).value='100'; viewer?.resetSection(); });
 $('#issue-close').addEventListener('click', closeIssue);
 $('#issue-cancel').addEventListener('click', closeIssue);
 $('#issue-drawer').addEventListener('click', (event) => { if (event.target === event.currentTarget) closeIssue(); });
@@ -824,6 +984,7 @@ $('#render-frame').addEventListener('load', () => {
   }
 });
 $('#spec-frame').addEventListener('load', () => $('.spec-frame-wrap').classList.add('ready'));
+$('#chat-frame')?.addEventListener('load', () => { $('#chat-placeholder').hidden = true; renderChatContext(); });
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
   if (!$('#render-dialog').hidden) closeRenderDialog();
@@ -832,7 +993,11 @@ document.addEventListener('keydown', (event) => {
   else closeWorkspaceRail();
 });
 window.addEventListener('resize', () => { if (innerWidth > 860) closeWorkspaceRail(); });
-$('#open-chat').addEventListener('click', () => openProjectChat());
+$('#docs-search')?.addEventListener('input', renderLibrary);
+$('#docs-upload-in')?.addEventListener('change', (event) => { uploadDocsFiles(event.target.files, 'in'); event.target.value=''; });
+$('#docs-upload-out')?.addEventListener('change', (event) => { uploadDocsFiles(event.target.files, 'out'); event.target.value=''; });
+$('#docs-copy-ref')?.addEventListener('click', copyDocumentReference);
+$('#docs-open-external')?.addEventListener('click', openDocumentExternal);
 $('#open-tracker').addEventListener('click', () => openInLiberShell('project-tracker', 'Project Tracker', appUrl('project-tracker', { projectId: state.projectId })));
 
 window.addEventListener('message', (event) => {

@@ -1,81 +1,9 @@
-.revex-chat-layer {
-  position: fixed;
-  inset: 0;
-  z-index: 80;
-  background: var(--bg);
-}
-.revex-chat-layer[hidden] { display: none !important; }
-.revex-chat-layer-shell {
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  background: var(--bg);
-}
-.revex-chat-layer-head {
-  min-height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: max(6px, env(safe-area-inset-top)) 10px 6px;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel);
-}
-.revex-chat-layer-head > div {
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-}
-.revex-chat-layer-head strong {
-  flex: none;
-  font-size: 14px;
-}
-.revex-chat-layer-head span {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--tx-2);
-  font: 11px var(--mono);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-#revex-chat-layer-frame {
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  border: 0;
-  background: #000;
-}
-body.revex-chat-open { overflow: hidden; }
-
-/* Keep project actions stable: Invite never reuses or relocates the Render control. */
-#invite-project-button,
-#render-button,
-#new-project-button,
-#sync-button { flex: none; }
-
-/* styles.css used one generic pseudo-label for every utility button below 560px.
-   That made the real Invite element display as Render. Always render the actual
-   button text instead; each action owns its own label. */
-@media (max-width: 560px) {
-  .main-nav .utility {
-    font-size: 12px !important;
-  }
-  .main-nav .utility::after {
-    content: none !important;
-    display: none !important;
-  }
-}
-
-@media (max-width: 860px) {
-  .revex-chat-layer-head {
-    min-height: 44px;
-    padding-left: 8px;
-    padding-right: 8px;
-  }
-  .revex-chat-layer-head span { max-width: 55vw; }
-}
+.revex-chat-layer{position:fixed;inset:0;z-index:80;background:var(--bg)}
+.revex-chat-layer[hidden]{display:none!important}
+.revex-chat-layer-shell{width:100%;height:100%;min-width:0;min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr);background:var(--bg)}
+.revex-chat-layer-head{min-height:48px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:max(6px,env(safe-area-inset-top)) 10px 6px;border-bottom:1px solid var(--line);background:var(--panel)}
+.revex-chat-layer-head>div{min-width:0;display:flex;align-items:baseline;gap:10px}.revex-chat-layer-head strong{flex:none;font-size:14px}.revex-chat-layer-head span{min-width:0;overflow:hidden;color:var(--tx-2);font:11px var(--mono);text-overflow:ellipsis;white-space:nowrap}
+#revex-chat-layer-frame{width:100%;height:100%;min-width:0;min-height:0;border:0;background:#000}
+body.revex-chat-open{overflow:hidden}
+#invite-project-button,#render-button,#new-project-button,#sync-button{flex:none}
+@media(max-width:860px){.revex-chat-layer-head{min-height:44px;padding-left:8px;padding-right:8px}.revex-chat-layer-head span{max-width:55vw}}

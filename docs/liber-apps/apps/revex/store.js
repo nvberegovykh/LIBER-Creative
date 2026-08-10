@@ -18,37 +18,22 @@
   }
 
   function getService() {
-    // REVEX loads its own Firebase runtime. If that local service exists but is
-    // still initializing, wait for it instead of borrowing the parent frame's
-    // service: Firestore rejects objects created in a different JS realm.
-    if (root.firebaseService) {
-      REALM = root;
-      return root.firebaseService;
-    }
     try {
-      for (const w of [root.parent, root.top].filter(Boolean)) {
-        if (w !== root && w.firebaseService && w.firebaseService.isInitialized) {
+      for (const w of [root, root.parent, root.top].filter(Boolean)) {
+        if (w.firebaseService && w.firebaseService.isInitialized) {
           REALM = w;
           return w.firebaseService;
         }
       }
     } catch (_) {}
-    return null;
+    return root.firebaseService || null;
   }
 
   function getApi(fs) {
     try {
-      // Keep Firestore API + data objects in the same realm as the local REVEX
-      // FirebaseService. Do not fall through to parent Firebase while local SDK
-      // loading is in progress.
-      if (root.firebaseService && fs === root.firebaseService) {
-        if (fs?.firebase?.collection) { REALM = root; return fs.firebase; }
-        if (root.firebase?.collection) { REALM = root; return root.firebase; }
-        return null;
-      }
       if (fs?.firebase?.collection) return fs.firebase;
-      for (const w of [root.parent, root.top].filter(Boolean)) {
-        if (w !== root && w.firebase?.collection) { REALM = w; return w.firebase; }
+      for (const w of [root, root.parent, root.top].filter(Boolean)) {
+        if (w.firebase?.collection) { REALM = w; return w.firebase; }
       }
     } catch (_) {}
     return null;
@@ -174,13 +159,22 @@
       });
       const ref = await this.api.addDoc(this.api.collection(this.db, 'projects'), data);
       const project = { id: ref.id, ...data };
-      const specProjectId = await this.ensureSpecProject(ref.id, null, project);
-      await this.api.updateDoc(this.api.doc(this.db, 'projects', ref.id), plain({ revexSpecProjectId: specProjectId, updatedAt: iso() }));
+      let specProjectId = null;
+      try {
+        specProjectId = await this.ensureSpecProject(ref.id, null, project);
+        await this.api.updateDoc(this.api.doc(this.db, 'projects', ref.id), plain({ revexSpecProjectId: specProjectId, specBookStatus: 'ready', updatedAt: iso() }));
+      } catch (error) {
+        // Project creation must never be blocked by a secondary compatibility projection.
+        // REVEX owns the project identity; the internal Spec Book can retry after activation.
+        console.warn('[REVEX] Spec Book projection deferred', error);
+        try { await this.api.updateDoc(this.api.doc(this.db, 'projects', ref.id), plain({ specBookStatus: 'pending', updatedAt: iso() })); } catch (_) {}
+      }
       try {
         const chat = await this.ensureProjectChat(ref.id);
         if (chat?.connId) await this.api.updateDoc(this.api.doc(this.db, 'projects', ref.id), plain({ chatConnId: chat.connId }));
       } catch (error) { console.warn('[REVEX] project chat will be created when first opened', error); }
-      return { ...project, revexSpecProjectId: specProjectId, specProjectId };
+      try { await this.appendHistory(ref.id, { kind: 'project', operation: 'create', label: `Project created · ${title}`, before: null, after: { projectId: ref.id, name: title, code: data.code }, note: specProjectId ? 'REVEX project and internal Spec Book created.' : 'REVEX project created; Spec Book projection will retry on activation.' }); } catch (_) {}
+      return { ...project, revexSpecProjectId: specProjectId, specProjectId, specBookStatus: specProjectId ? 'ready' : 'pending' };
     },
 
     async getState(projectId) {
@@ -296,10 +290,13 @@
       const viewerFile = byName(files, 'viewer-model.json');
       const specFile = byName(files, 'spec-revit-push.json');
       const integrityFile = byName(files, 'integrity.json');
+      const printingFile = byName(files, 'printing-sets.json');
+      let affectedPlansFile = byName(files, 'affected-plan-views.json');
+      if (!affectedPlansFile) affectedPlansFile = new File([JSON.stringify({ schema: 'liber.revex.affected-plan-views.v1', revision: null, exportedAt: iso(), source: 'compatibility-empty-for-pre-0.8.4-import', changedElementCount: 0, hadDeletion: false, views: [] }, null, 2)], 'affected-plan-views.json', { type: 'application/json' });
       const modelFile = files.find((file) => /\.fbx$/i.test(file.name)) || null;
 
-      if (!projectFile || !designFile || !viewerFile || !specFile) {
-        throw new Error('Select the complete REVEX package: project, Design Book, viewer metadata and specification source JSON.');
+      if (!projectFile || !designFile || !viewerFile || !specFile || !integrityFile) {
+        throw new Error('Select the complete REVEX package: project, Design Book, viewer metadata, Spec Book source, integrity manifest and affected native plan manifest.');
       }
 
       const [project, design, viewer, specPush, integrity] = await Promise.all([
@@ -328,7 +325,7 @@
       if (!this.fs.storage) throw new Error('LIBER Storage is not available in this session.');
 
       const base = `projects/${projectId}/revex/revisions/${revision}`;
-      const uploadFiles = [projectFile, designFile, viewerFile, specFile, integrityFile, modelFile].filter(Boolean);
+      const uploadFiles = [projectFile, designFile, viewerFile, specFile, integrityFile, printingFile, affectedPlansFile, modelFile].filter(Boolean);
       const uploads = {};
       for (const file of uploadFiles) uploads[file.name] = await this.uploadFile(`${base}/${safe(file.name)}`, file);
 
@@ -364,6 +361,8 @@
         designUrl: uploads['design-book.json']?.url || null,
         projectUrl: uploads['project.json']?.url || null,
         specPushUrl: uploads['spec-revit-push.json']?.url || null,
+        printingSetsUrl: uploads['printing-sets.json']?.url || null,
+        affectedPlansUrl: uploads['affected-plan-views.json']?.url || null,
         scheduleCount: integrity?.counts?.schedules || design?.schedules?.length || 0,
         elementCount: integrity?.counts?.elements || viewer?.elements?.length || 0,
         spec: specSync,
@@ -518,6 +517,164 @@
     async fileUrl(storagePath) {
       if (!storagePath || !this.fs?.storage) return null;
       return this.api.getDownloadURL(this.api.ref(this.fs.storage, storagePath));
+    },
+
+    async uploadLibraryFile(projectId, file, folderPath = 'record_in/docs', metadata = {}) {
+      if (!projectId || !file) throw new Error('Project and file are required.');
+      if (!this.isCloud() || !this.fs?.storage) throw new Error('Sign in to upload project documents.');
+      const safeName = safe(file.name || 'file');
+      const id = `manual_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`;
+      const storagePath = `projects/${projectId}/library/${String(folderPath || 'record_in/docs').replace(/^\/+|\/+$/g,'')}/${id}_${safeName}`;
+      const ref = this.api.ref(this.fs.storage, storagePath);
+      await this.api.uploadBytes(ref, file, plain({ contentType: file.type || 'application/octet-stream' }));
+      const at = iso();
+      const data = plain({
+        type: 'file', name: file.name || safeName, storagePath, folderPath, size: file.size || 0, mimeType: file.type || '',
+        createdAt: at, updatedAt: at, createdBy: this.user?.uid || null, source: 'manual', editable: true, ...metadata
+      });
+      await this.api.setDoc(this.api.doc(this.db, 'projects', projectId, 'library', id), data, plain({ merge: true }));
+      return { id, ...data };
+    },
+
+    async listHistory(projectId) {
+      if (!projectId) return [];
+      if (!this.isCloud()) {
+        try { return JSON.parse(localStorage.getItem(`liber.revex.history.${projectId}`) || '[]'); } catch (_) { return []; }
+      }
+      const snap = await this.api.getDocs(this.api.collection(this.db, 'projects', projectId, 'revexHistory'));
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    },
+
+    async appendHistory(projectId, event) {
+      if (!projectId) throw new Error('Choose a REVEX project first.');
+      const at = iso();
+      const id = event?.id || `hist_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+      const data = plain({
+        id,
+        projectId,
+        sourceRevision: event?.sourceRevision || null,
+        kind: event?.kind || 'project',
+        operation: event?.operation || 'change',
+        label: event?.label || event?.operation || 'Change',
+        affectedElementIds: event?.affectedElementIds || [],
+        affectedUniqueIds: event?.affectedUniqueIds || [],
+        affectedLevels: event?.affectedLevels || [],
+        affectedViews: event?.affectedViews || [],
+        before: event?.before ?? null,
+        after: event?.after ?? null,
+        camera: event?.camera ?? null,
+        snapshot: event?.snapshot ?? null,
+        note: event?.note || '',
+        relatedId: event?.relatedId || null,
+        previousEventId: event?.previousEventId || null,
+        createdAt: at,
+        createdBy: this.user?.uid || 'local'
+      });
+      if (!this.isCloud()) {
+        const key = `liber.revex.history.${projectId}`;
+        const all = JSON.parse(localStorage.getItem(key) || '[]');
+        all.unshift(data);
+        localStorage.setItem(key, JSON.stringify(all.slice(0, 2500)));
+        return data;
+      }
+      await this.api.setDoc(this.api.doc(this.db, 'projects', projectId, 'revexHistory', id), data, plain({ merge: false }));
+      return data;
+    },
+
+    async listBimOverlays(projectId) {
+      if (!projectId) return [];
+      if (!this.isCloud()) {
+        try { return Object.values(JSON.parse(localStorage.getItem(`liber.revex.bim-overlays.${projectId}`) || '{}')); } catch (_) { return []; }
+      }
+      const snap = await this.api.getDocs(this.api.collection(this.db, 'projects', projectId, 'revexBimOverlays'));
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    },
+
+    async commitBimOverlay(projectId, element, patch, meta = {}) {
+      if (!projectId || !element) throw new Error('Project and BIM element are required.');
+      const stable = String(element.uniqueId || element.id || '').trim();
+      if (!stable) throw new Error('The selected BIM element has no stable Revit identity.');
+      const overlayId = docId(stable);
+      let before = null;
+      if (!this.isCloud()) {
+        const key = `liber.revex.bim-overlays.${projectId}`;
+        const all = JSON.parse(localStorage.getItem(key) || '{}');
+        before = all[overlayId] || null;
+        const after = {
+          ...(before || {}),
+          ...plain(patch),
+          id: overlayId,
+          elementId: element.id ?? before?.elementId ?? null,
+          uniqueId: element.uniqueId || before?.uniqueId || null,
+          category: element.category || before?.category || '',
+          level: element.level || before?.level || '',
+          sourceRevision: meta.sourceRevision || before?.sourceRevision || null,
+          updatedAt: iso(),
+          updatedBy: this.user?.uid || 'local'
+        };
+        all[overlayId] = after;
+        localStorage.setItem(key, JSON.stringify(all));
+        const event = await this.appendHistory(projectId, {
+          sourceRevision: meta.sourceRevision || null,
+          kind: 'bim-overlay', operation: meta.operation || 'edit', label: meta.label || `${element.category || 'BIM'} ${element.id || ''}`.trim(),
+          affectedElementIds: element.id != null ? [element.id] : [], affectedUniqueIds: element.uniqueId ? [element.uniqueId] : [],
+          affectedLevels: element.level ? [element.level] : [], affectedViews: meta.affectedViews || [], before, after, camera: meta.camera || null,
+          snapshot: meta.snapshot || null, note: meta.note || '', relatedId: overlayId, previousEventId: meta.previousEventId || null
+        });
+        return { overlay: after, event };
+      }
+      const f = this.api;
+      const ref = f.doc(this.db, 'projects', projectId, 'revexBimOverlays', overlayId);
+      try { const snap = await f.getDoc(ref); before = snap.exists() ? { id: snap.id, ...snap.data() } : null; } catch (_) {}
+      const after = plain({
+        ...(before || {}), ...patch, id: overlayId,
+        elementId: element.id ?? before?.elementId ?? null, uniqueId: element.uniqueId || before?.uniqueId || null,
+        category: element.category || before?.category || '', level: element.level || before?.level || '',
+        sourceRevision: meta.sourceRevision || before?.sourceRevision || null, updatedAt: iso(), updatedBy: this.user?.uid || 'local'
+      });
+      await f.setDoc(ref, after, plain({ merge: false }));
+      const event = await this.appendHistory(projectId, {
+        sourceRevision: meta.sourceRevision || null,
+        kind: 'bim-overlay', operation: meta.operation || 'edit', label: meta.label || `${element.category || 'BIM'} ${element.id || ''}`.trim(),
+        affectedElementIds: element.id != null ? [element.id] : [], affectedUniqueIds: element.uniqueId ? [element.uniqueId] : [],
+        affectedLevels: element.level ? [element.level] : [], affectedViews: meta.affectedViews || [], before, after, camera: meta.camera || null,
+        snapshot: meta.snapshot || null, note: meta.note || '', relatedId: overlayId, previousEventId: meta.previousEventId || null
+      });
+      return { overlay: after, event };
+    },
+
+    async listDerivedPlans(projectId) {
+      if (!projectId) return [];
+      if (!this.isCloud()) {
+        try { return JSON.parse(localStorage.getItem(`liber.revex.derived-plans.${projectId}`) || '[]'); } catch (_) { return []; }
+      }
+      const snap = await this.api.getDocs(this.api.collection(this.db, 'projects', projectId, 'revexDerivedPlans'));
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    },
+
+    async saveDerivedPlan(projectId, plan, imageDataUrl = '') {
+      if (!projectId) throw new Error('Choose a REVEX project first.');
+      const id = plan?.id || `plan_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+      const data = { ...plain(plan || {}), id, createdAt: iso(), createdBy: this.user?.uid || 'local' };
+      if (!this.isCloud()) {
+        const key = `liber.revex.derived-plans.${projectId}`;
+        const all = JSON.parse(localStorage.getItem(key) || '[]');
+        all.unshift({ ...data, imageDataUrl: imageDataUrl || null });
+        localStorage.setItem(key, JSON.stringify(all.slice(0, 250)));
+        return all[0];
+      }
+      let imageUrl = null, imagePath = null;
+      if (imageDataUrl && this.fs?.storage) {
+        const blob = await (await fetch(imageDataUrl)).blob();
+        const file = new File([blob], `${id}.png`, { type: 'image/png' });
+        const uploaded = await this.uploadFile(`projects/${projectId}/revex/derived-plans/${id}.png`, file);
+        imageUrl = uploaded.url; imagePath = uploaded.path;
+      }
+      const finalData = plain({ ...data, imageUrl, imagePath });
+      await this.api.setDoc(this.api.doc(this.db, 'projects', projectId, 'revexDerivedPlans', id), finalData, plain({ merge: false }));
+      return finalData;
     },
 
     async ensureProjectChat(projectId) {

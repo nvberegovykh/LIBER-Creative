@@ -1,96 +1,24 @@
 # REVEX BIM Edit + History Contract
 
-Status: implementation contract for the Companion. Revit remains the source model; Companion BIM edits are non-destructive overlays until explicitly reconciled back to Revit.
+Status: implemented in REVEX Companion 0.8.4 / build 20260810r24. Revit remains the source model; Companion BIM edits are non-destructive overlays until explicitly reconciled back to Revit.
 
-## 1. Stable identity
+## Stable identity
+Every editable BIM asset is addressed by Revit `UniqueId` first, with numeric `ElementId` as a secondary key. Every overlay is attached to the REVEX source revision that supplied the element.
 
-Every editable BIM asset is addressed by Revit `UniqueId` first, with numeric `ElementId` as a secondary convenience key. An overlay is always attached to the source REVEX revision that supplied that element.
+## Companion BIM operations
+Where an asset type safely permits exact mapping, Companion creates overlay operations for move/translate, rotate, limited exposed dimensions/properties, material/finish override, visibility/hide, Companion-delete, and safe explicit duplication. Unsupported operations stay disabled instead of being approximated. No Companion operation silently mutates the RVT.
 
-## 2. Supported Companion BIM operations
+## Change journal
+Every committed operation creates an append-only history event with event/project/source revision, user, UTC time, operation, affected Revit IDs, before/after state, transform/property/material patch, affected levels/views, viewport camera state, viewport snapshot, optional note/reference, previous event, and resulting overlay version. Undo/restore creates a new event; history is never rewritten.
 
-Where the asset type permits it, Companion may create overlay operations for:
+## History tab
+One project-level History tab must expose the complete chronology for Revit source revisions, BIM overlays, Design Book edits, Spec Book authored changes, Docs/manual uploads and Printing Set revisions, comments/issues, render outputs, derived plan exports, and restore/revert operations. It must filter by user/date/revision/floor/view/BIM element/Design position/Spec item/document and support before/after inspection and snapshot compare where feasible.
 
-- move / translate;
-- rotate;
-- limited editable dimensions or properties exposed by the Companion schema;
-- material / finish override;
-- visibility / hide;
-- delete from the Companion-derived model;
-- duplicate only where the object class has a safe explicit implementation.
+## Derived plan views
+When BIM overlays affect plan-visible assets, REVEX marks the corresponding levels/views dirty and can generate a Companion-derived plan issue from source revision + overlay state. It is previewable/exportable, versioned in Docs/History, linked to the exact history events, and never claims the RVT itself changed. Later changes create new plan versions instead of overwriting old ones.
 
-Unsupported operations must remain disabled rather than silently approximated.
+## Sync integrity
+A later Revit sync replaces source-owned geometry/metadata/schedules only. Compatible overlays replay by stable identity. Exact match -> replay; changed-but-compatible -> replay + `source_changed`; ambiguous -> `needs_review` with no guessing; removed source -> retain history/snapshot as `orphaned/removed_from_revit`. Manual/user-authored values are never deleted merely because source changed.
 
-No Companion operation silently mutates the RVT.
-
-## 3. Change journal
-
-Each committed operation creates an append-only history event containing at minimum:
-
-- event id;
-- project id;
-- source REVEX revision;
-- user id / display name;
-- UTC timestamp;
-- operation kind;
-- affected Revit `UniqueId` / `ElementId` values;
-- before state;
-- after state;
-- transform/property/material patch;
-- affected levels / plan views;
-- viewport camera state;
-- viewport snapshot;
-- optional user note / issue / chat reference;
-- previous event id and resulting overlay version.
-
-Undo/restore creates a new event. History itself is never rewritten.
-
-## 4. History tab
-
-REVEX has one dedicated project-level **History** tab. It is the complete chronological record for:
-
-- Revit source revisions;
-- BIM overlay edits;
-- Design Book edits;
-- Spec Book authored changes;
-- Docs uploads and synced Printing Set revisions;
-- comments/issues;
-- render outputs;
-- derived plan exports;
-- restore/revert operations.
-
-History supports filtering by user, date, source revision, floor/view, BIM element, Design Book position, Spec item and document.
-
-Selecting an event can show before/after metadata and its captured viewport snapshot. Where feasible, Compare replays the before and after overlay states against the same source revision.
-
-## 5. Derived plan views
-
-When BIM overlays change an asset that affects one or more plan views, REVEX records those plan views as dirty/affected.
-
-REVEX can generate a **Companion-derived plan issue** from the source revision plus overlay state. The derived view:
-
-- does not claim the RVT was modified;
-- records source REVEX revision + overlay version;
-- records affected level/view ids;
-- can be previewed and exported;
-- is stored as a versioned Docs/History artifact;
-- links back to the exact history events that produced it.
-
-A later overlay change generates a new derived issue/version rather than overwriting the previous export.
-
-## 6. Sync integrity
-
-A later Revit sync replaces only source-owned geometry/metadata/schedule state. REVEX replays compatible overlays by stable identity onto the new source revision.
-
-For each overlay after sync:
-
-- exact stable match -> replay;
-- source changed but still compatible -> replay and mark `source_changed`;
-- ambiguous match -> do not guess; mark `needs_review`;
-- source element removed -> retain history and overlay snapshot as `orphaned/removed_from_revit`;
-- manual user-owned data is not deleted by synchronization.
-
-A sync must never overwrite shared/user-authored values merely because a new source revision arrived.
-
-## 7. Reconciliation back to Revit
-
-Future write-back is a separate explicit operation. It consumes selected approved history events, validates them against the current RVT/source revision and reports conflicts before modifying Revit. Automatic background write-back is prohibited by this contract.
+## Reconciliation to Revit
+Any future write-back remains explicit and conflict-checked against the current source revision. Automatic background write-back is prohibited.

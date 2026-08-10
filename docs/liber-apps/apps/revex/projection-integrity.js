@@ -1,11 +1,11 @@
 (function(root){
   'use strict';
-  const BUILD='20260810r23';
+  const BUILD='20260810r24';
   const Store=root.RevexStore;
   if(!Store||root.__revexProjectionIntegrityR19) return;
   root.__revexProjectionIntegrityR19=true;
 
-  const blockedCategories=/^(cameras?|views?|viewports?|sheets?|levels?|grids?|reference planes?|scope boxes?|project information|internal origin|survey point|project base point|sections?|elevations?|callouts?|lines?|model lines?|detail lines?|sketch lines?|analytical nodes?|reference points?)$/i;
+  const blockedCategories=/^(cameras?|views?|viewports?|sheets?|levels?|grids?|reference planes?|scope boxes?|project information|internal origin|survey point|project base point|sections?|elevations?|callouts?)$/i;
   const categoryTitles={
     walls:'Walls',doors:'Doors',windows:'Windows',floors:'Floors',roofs:'Roofs',rooms:'Rooms',ceilings:'Ceilings',
     'stairs-railings':'Stairs & Railings',casework:'Casework',furniture:'Furniture','lighting-fixtures':'Lighting Fixtures',
@@ -15,6 +15,7 @@
   };
   const safe=(v)=>String(v??'').trim();
   const slug=(v)=>safe(v).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||'item';
+  const clone=(v)=>JSON.parse(JSON.stringify(v===undefined?null:v));
 
   function post(type,detail={}){
     try{ root.chrome?.webview?.postMessage({type,build:BUILD,...detail}); }catch(_){ }
@@ -98,7 +99,12 @@
   function localStateFor(pkg){
     if(!pkg) return null;
     if(!pkg.__projectionUrls){
-      pkg.__projectionUrls={viewerUrl:jsonUrl(pkg.viewer),designUrl:jsonUrl(pkg.design),projectUrl:jsonUrl(pkg.project),specPushUrl:jsonUrl(pkg.specPush)};
+      pkg.__projectionUrls={
+        viewerUrl:jsonUrl(pkg.viewer),
+        designUrl:jsonUrl(pkg.design),
+        projectUrl:jsonUrl(pkg.project),
+        specPushUrl:jsonUrl(pkg.specPush)
+      };
     }
     return {
       ...pkg,
@@ -139,9 +145,11 @@
       root.__revexActiveRevision=result;
       setLocalUi(result);
       post('liber:revex-revision-projection',{
-        revision:result.revision,cloud:Boolean(result.cloud),viewerElements:result.viewer?.elements?.length||0,
+        revision:result.revision,cloud:Boolean(result.cloud),
+        viewerElements:result.viewer?.elements?.length||0,
         designChapters:result.design?.chapters?.length||0,
-        designPositions:(result.design?.chapters||[]).reduce((n,c)=>n+(c.items?.length||0),0),specSchedules:result.specPush?.payload?.length||0
+        designPositions:(result.design?.chapters||[]).reduce((n,c)=>n+(c.items?.length||0),0),
+        specSchedules:result.specPush?.payload?.length||0
       });
       return result;
     };
@@ -175,9 +183,11 @@
       const raw=JSON.parse(child.localStorage.getItem('liber.spec.v1')||'{}');
       raw.projects=raw.projects||{};
       raw.projects[sid]={
-        ...(raw.projects[sid]||{}),id:sid,name:`${safe(pkg.project?.central?.documentTitle)||'REVEX Project'} — Specifications`,
-        code:raw.projects[sid]?.code||'',linkedProjectId:pkg.projectId,linkedProjectName:safe(pkg.project?.central?.documentTitle),ownerId:'local',memberIds:[],
-        settings:{divisionPerSchedule:true,showEmptyArticles:false},createdAt:raw.projects[sid]?.createdAt||new Date().toISOString(),updatedAt:new Date().toISOString()
+        ...(raw.projects[sid]||{}),id:sid,
+        name:`${safe(pkg.project?.central?.documentTitle)||'REVEX Project'} — Specifications`,
+        code:raw.projects[sid]?.code||'',linkedProjectId:pkg.projectId,linkedProjectName:safe(pkg.project?.central?.documentTitle),
+        ownerId:'local',memberIds:[],settings:{divisionPerSchedule:true,showEmptyArticles:false},
+        createdAt:raw.projects[sid]?.createdAt||new Date().toISOString(),updatedAt:new Date().toISOString()
       };
       child.localStorage.setItem('liber.spec.v1',JSON.stringify(raw));
       child.localStorage.setItem('liber.spec.last',sid);
@@ -204,26 +214,29 @@
       frame.dataset.revexProjectionR19='1';
       frame.addEventListener('load',()=>setTimeout(provisionLocalSpec,80));
     }
-    const tab=document.querySelector('[data-view="spec"]');
-    if(tab&&!tab.dataset.revexProjectionR19){tab.dataset.revexProjectionR19='1';tab.addEventListener('click',()=>setTimeout(provisionLocalSpec,180));}
+    document.querySelector('[data-view="spec"]')?.addEventListener('click',()=>setTimeout(provisionLocalSpec,180));
   }
 
   let lastAuth='';
-  function reportAuth(){
+  async function reportAuth(){
     try{
       const signedIn=Boolean(Store.user?.uid);
       const cloud=Boolean(Store.isCloud?.());
       const sig=`${cloud}:${Store.user?.uid||''}`;
-      if(sig!==lastAuth){lastAuth=sig;post('liber:revex-auth-state',{cloud,signedIn,email:Store.user?.email||null});}
+      if(sig!==lastAuth){
+        lastAuth=sig;
+        post('liber:revex-auth-state',{cloud,signedIn,email:Store.user?.email||null});
+      }
     }catch(_){ }
   }
 
   function start(){
     const wait=()=>{
       if(!wrapStore()) return setTimeout(wait,50);
-      wireSpec();reportAuth();
+      wireSpec();
+      reportAuth();
       setInterval(reportAuth,1200);
-      setInterval(()=>{wireSpec();if(Store.lastLocalPackage)setLocalUi(Store.lastLocalPackage);},1600);
+      setInterval(()=>{ wireSpec(); if(Store.lastLocalPackage) setLocalUi(Store.lastLocalPackage); },1600);
       console.log('[REVEX] projection integrity '+BUILD,{singleRevision:true,localSpec:true,designRecovery:true,viewerFilter:true});
     };
     wait();

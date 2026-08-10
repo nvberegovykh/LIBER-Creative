@@ -3,7 +3,7 @@
 
   const Store = root.RevexStore;
   if (!Store) return;
-  const BUILD = '20260810r9';
+  const BUILD = '20260810r24';
   const iso = () => new Date().toISOString();
   const safe = (value) => String(value || '').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || 'file';
   const docId = (value) => safe(value).replace(/\./g, '_');
@@ -124,6 +124,8 @@
     const viewerFile = byName(files, 'viewer-model.json');
     const specFile = byName(files, 'spec-revit-push.json');
     const integrityFile = byName(files, 'integrity.json');
+    const printingFile = byName(files, 'printing-sets.json');
+    const pdfFiles = files.filter((file) => /\.pdf$/i.test(file.name));
     const ifcFile = files.find((file) => /\.ifc$/i.test(file.name)) || null;
     const fbxFile = files.find((file) => /\.fbx$/i.test(file.name)) || null;
 
@@ -131,8 +133,8 @@
       throw new Error('Select the complete REVEX revision: project, Design Book, Spec Book, viewer metadata and integrity manifest.');
     }
 
-    const [project, design, viewer, specPush, integrity] = await Promise.all([
-      readJson(projectFile), readJson(designFile), readJson(viewerFile), readJson(specFile), readJson(integrityFile)
+    const [project, design, viewer, specPush, integrity, printingSets] = await Promise.all([
+      readJson(projectFile), readJson(designFile), readJson(viewerFile), readJson(specFile), readJson(integrityFile), printingFile ? readJson(printingFile) : null
     ]);
     const projectId = preferredProjectId || project?.central?.projectId || null;
     if (!projectId) throw new Error('Choose the REVEX project once before the first Revit sync.');
@@ -141,7 +143,8 @@
 
     const revision = docId(integrity?.revision || `rev_${Date.now()}`);
     const localPackage = {
-      projectId, revision, project, design, viewer, specPush, integrity,
+      projectId, revision, project, design, viewer, specPush, integrity, printingSets,
+      printingDocs: pdfFiles.map((file) => ({ name: file.name, url: URL.createObjectURL(file), size: file.size })),
       ifcUrl: URL.createObjectURL(ifcFile),
       modelUrl: fbxFile ? URL.createObjectURL(fbxFile) : null,
       syncedAt: iso(), cloud: false
@@ -159,7 +162,7 @@
     }
 
     const area = `revisions/${revision}`;
-    const packageFiles = [projectFile, designFile, viewerFile, specFile, integrityFile, ifcFile, fbxFile].filter(Boolean);
+    const packageFiles = [projectFile, designFile, viewerFile, specFile, integrityFile, printingFile, ifcFile, fbxFile, ...pdfFiles].filter(Boolean);
     const uploads = {};
     for (const file of packageFiles) uploads[file.name] = await upload(projectId, area, file);
 
@@ -180,6 +183,27 @@
       specSync = { status: 'published', projectId: specProjectId, rev: source.rev, pushedAt: source.pushedAt };
     }
 
+    const printingDocs = [];
+    if (printingSets?.sets?.length) {
+      for (const set of printingSets.sets) {
+        const pdf = pdfFiles.find((file) => String(file.name).toLowerCase() === String(set.fileName || '').toLowerCase());
+        const uploaded = pdf ? uploads[pdf.name] : null;
+        if (!uploaded) continue;
+        const recordId = `revex_print_${docId(set.id || set.name || 'set')}_${revision}`;
+        const record = clone({
+          type: 'file', hidden: false, folderPath: 'record_out/printing_sets',
+          name: `${set.name || 'Printing Set'} · ${revision}.pdf`, originalName: set.fileName || pdf.name,
+          storagePath: uploaded.path, size: uploaded.size || pdf.size, mimeType: 'application/pdf',
+          source: 'revex-revit-printing-set', editable: false, revexDocKind: 'printing-set',
+          printingSetId: set.id || null, printingSetName: set.name || 'Printing Set', revision,
+          sheetIndex: (set.pages || []).map((page) => ({ page: Number(page.page || 0), sheetId: page.sheetId || null, sheetUniqueId: page.sheetUniqueId || null, sheetNumber: page.sheetNumber || '', sheetName: page.sheetName || '', currentRevision: page.currentRevision || null })),
+          createdAt: iso(), updatedAt: iso(), createdBy: this.user.uid
+        });
+        await this.api.setDoc(libraryDoc(projectId, recordId), record, clone({ merge: true }));
+        printingDocs.push({ id: recordId, ...record });
+      }
+    }
+
     const state = clone({
       schema: 'liber.revex.cloud-state.v2',
       projectId,
@@ -198,6 +222,9 @@
       designUrl: uploads['design-book.json']?.url || null,
       projectUrl: uploads['project.json']?.url || null,
       specPushUrl: uploads['spec-revit-push.json']?.url || null,
+      printingSetsUrl: uploads['printing-sets.json']?.url || null,
+      printingSetCount: printingSets?.sets?.length || 0,
+      printingSheetCount: (printingSets?.sets || []).reduce((n, set) => n + (set.pages?.length || 0), 0),
       scheduleCount: integrity?.counts?.schedules || design?.schedules?.length || 0,
       elementCount: integrity?.counts?.elements || viewer?.elements?.length || 0,
       spec: specSync,
@@ -209,10 +236,10 @@
     await setRecord(projectId, `revex_revision_${revision}`, 'revision', {
       revision, syncedAt: state.syncedAt, ifcPath: state.ifcPath, modelPath: state.modelPath,
       viewerUrl: state.viewerUrl, designUrl: state.designUrl, projectUrl: state.projectUrl,
-      specPushUrl: state.specPushUrl, integrity: state.integrity, createdAt: state.syncedAt
+      specPushUrl: state.specPushUrl, printingSetsUrl: state.printingSetsUrl, integrity: state.integrity, createdAt: state.syncedAt
     }, false);
     root.__revexCloudState = state;
-    return { ...localPackage, ...state, cloud: true, specProjectId };
+    return { ...localPackage, ...state, cloud: true, specProjectId, printingDocs };
   };
 
   Store.listDesignEdits = async function listDesignEditsControlled(projectId) {
@@ -342,6 +369,19 @@
     return { id: jobId, ...data };
   };
 
+  function disableParentRevexKeepAlive() {
+    try {
+      const manager = root.parent && root.parent !== root ? root.parent.appsManager : null;
+      if (!manager || manager.__revexControlledKeepAlivePatch) return;
+      const original = typeof manager.isKeepAliveApp === 'function' ? manager.isKeepAliveApp.bind(manager) : null;
+      manager.isKeepAliveApp = (src) => {
+        if (/apps\/revex\/index\.html/i.test(String(src || ''))) return false;
+        return original ? original(src) : false;
+      };
+      manager.__revexControlledKeepAlivePatch = true;
+    } catch (_) {}
+  }
+
   function stabilizeActions() {
     const expected = { 'new-project-button': 'New', 'invite-project-button': 'Invite', 'sync-button': 'Import sync', 'render-button': 'Render' };
     Object.entries(expected).forEach(([id, text]) => { const button = document.getElementById(id); if (button) button.textContent = text; });
@@ -384,6 +424,7 @@
   }
 
   document.addEventListener('DOMContentLoaded', () => {
+    disableParentRevexKeepAlive();
     stabilizeActions();
     installSelectionSheet();
     installAuthorityBadge();
