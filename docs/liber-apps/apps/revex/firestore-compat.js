@@ -8,20 +8,30 @@
   const originalSetDoc=Store.api?.setDoc?.bind(Store.api);
   if(!originalSetDoc) return;
 
-  function safeRows(rows){
-    if(!Array.isArray(rows)) return rows;
-    return rows.map((row,index)=>Array.isArray(row)
-      ? { index, cells: row.map((cell)=>cell===undefined?null:cell) }
-      : row);
+  function rowObject(headers,row,index){
+    if(!Array.isArray(row)) return row;
+    const out={__row:index};
+    const names=Array.isArray(headers)?headers:[];
+    row.forEach((cell,column)=>{
+      let key=String(names[column]||`Column ${column+1}`).trim()||`Column ${column+1}`;
+      // Firestore map keys may contain arbitrary strings, but duplicate schedule
+      // headers would otherwise overwrite each other. Keep every cell losslessly.
+      if(Object.prototype.hasOwnProperty.call(out,key)) key=`${key} [${column+1}]`;
+      out[key]=cell===undefined?null:cell;
+    });
+    return out;
   }
 
   function safeSpecPayload(payload){
     if(!Array.isArray(payload)) return payload;
     return payload.map((schedule)=>{
       if(!schedule||typeof schedule!=='object'||Array.isArray(schedule)) return schedule;
+      const headers=Array.isArray(schedule.headers)?schedule.headers:[];
       return {
         ...schedule,
-        rows:safeRows(schedule.rows)
+        rows:Array.isArray(schedule.rows)
+          ? schedule.rows.map((row,index)=>rowObject(headers,row,index))
+          : schedule.rows
       };
     });
   }
@@ -34,12 +44,12 @@
 
     const next=clone(data);
     next.payload=safeSpecPayload(next.payload);
-    next.payloadEncoding='revex-firestore-rows-v1';
+    next.payloadEncoding='revex-firestore-row-objects-v1';
     next.rawPayloadStoragePath=next.storagePath||null;
     next.rawPayloadPreserved=true;
     return originalSetDoc(ref,next,options);
   };
 
-  root.RevexFirestoreCompat={safeSpecPayload,safeRows};
-  console.log('[REVEX] Firestore compatibility r17 enabled',{specRows:'objects-with-cells',rawPayloadPreserved:true});
+  root.RevexFirestoreCompat={safeSpecPayload,rowObject};
+  console.log('[REVEX] Firestore compatibility r17 enabled',{specRows:'header-keyed-row-objects',rawPayloadPreserved:true});
 })(window);
