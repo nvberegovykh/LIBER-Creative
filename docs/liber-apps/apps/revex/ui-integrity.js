@@ -1,8 +1,12 @@
 (function(root){
   'use strict';
-  const BUILD='20260810r11';
+  const BUILD='20260810r12';
+  if(root.__revexUiIntegrityR12Loaded) return;
+  root.__revexUiIntegrityR12Loaded=true;
+
   const Store=root.RevexStore;
   let applying=false;
+  let canonicalizeTimer=0;
 
   function setText(node,text){
     if(node&&String(node.textContent||'').trim()!==text) node.textContent=text;
@@ -35,8 +39,11 @@
       badge.addEventListener('click',async()=>{
         const id=String(select.value||'').trim();
         if(!id) return;
-        try{ await navigator.clipboard.writeText(id); badge.textContent='Copied '+id; setTimeout(()=>updateProjectIdBadge(),900); }
-        catch(_){ badge.textContent=id; }
+        try{
+          await navigator.clipboard.writeText(id);
+          setText(badge,'Copied '+id);
+          setTimeout(updateProjectIdBadge,900);
+        }catch(_){ setText(badge,id); }
       });
       picker.after(badge);
     }
@@ -48,8 +55,9 @@
     const badge=document.getElementById('project-id-badge');
     if(!select||!badge) return;
     const id=String(select.value||'').trim();
-    badge.hidden=!id;
-    if(id) badge.textContent='ID '+id;
+    const shouldHide=!id;
+    if(badge.hidden!==shouldHide) badge.hidden=shouldHide;
+    if(id) setText(badge,'ID '+id);
   }
 
   function canonicalize(){
@@ -107,9 +115,14 @@
     }finally{ applying=false; }
   }
 
+  function scheduleCanonicalize(){
+    clearTimeout(canonicalizeTimer);
+    canonicalizeTimer=setTimeout(canonicalize,50);
+  }
+
   function installSyncRecovery(){
-    if(!Store||Store.__revexR11SyncInstalled) return;
-    Store.__revexR11SyncInstalled=true;
+    if(!Store||Store.__revexR12SyncInstalled) return;
+    Store.__revexR12SyncInstalled=true;
 
     const cloudReady=()=>Store.isCloud()&&Store.api&&Store.db&&Store.user?.uid;
     const libraryDoc=(projectId,id)=>Store.api.doc(Store.db,'projects',projectId,'library',id);
@@ -148,7 +161,7 @@
       return {path,url:await Store.api.getDownloadURL(ref),name,size:file.size};
     };
 
-    Store.syncPackage=async function syncR11(fileList,preferredProjectId,preferredSpecProjectId){
+    Store.syncPackage=async function syncR12(fileList,preferredProjectId,preferredSpecProjectId){
       const files=Array.from(fileList||[]);
       const projectFile=byName(files,'project.json');
       const designFile=byName(files,'design-book.json');
@@ -210,15 +223,15 @@
   function start(){
     installSyncRecovery();
     canonicalize();
-    const observer=new MutationObserver(canonicalize);
-    observer.observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['hidden','disabled']});
+    const observer=new MutationObserver(scheduleCanonicalize);
+    observer.observe(document.documentElement,{subtree:true,childList:true});
     document.getElementById('project-select')?.addEventListener('change',canonicalize);
     root.addEventListener('pageshow',canonicalize);
     root.addEventListener('focus',canonicalize);
-    setTimeout(canonicalize,0);
     setTimeout(canonicalize,300);
     setTimeout(canonicalize,1200);
-    console.log('[REVEX] UI integrity '+BUILD,{invite:'canonical',render:'canonical',projectId:'visible',sync:'permission-resilient',driveModelSource:false});
+    setInterval(canonicalize,5000);
+    console.log('[REVEX] UI integrity '+BUILD,{invite:'canonical',render:'canonical',projectId:'visible',sync:'permission-resilient',observer:'debounced-idempotent',driveModelSource:false});
   }
 
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',start,{once:true});
