@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260810r12';
+  const BUILD='20260810r13';
   try{
     const parent=root.parent&&root.parent!==root?root.parent:null;
     const manager=parent?.appsManager||null;
