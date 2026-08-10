@@ -50,13 +50,13 @@
     if(Array.isArray(manager.apps)){
       const app=manager.apps.find((row)=>row?.id==='revex');
       if(app){
-        app.version='0.7.4';
+        app.version='0.7.5';
         app.lastUpdated='2026-08-10';
         app.path='apps/revex/index.html?build='+BUILD;
       }
     }
     const card=parent.document?.querySelector?.('.app-card[data-app-id="revex"] .app-version');
-    if(card) card.textContent='v0.7.4';
+    if(card) card.textContent='v0.7.5';
     console.log('[REVEX] shell integrity '+BUILD,{keepAlive:false,freshLaunch:true,uiGuard:BUILD});
   }catch(error){
     console.warn('[REVEX] shell integrity failed',error);
