@@ -1,0 +1,114 @@
+name: REVEX r25 / 0.8.16 release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/revex-r25-release.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: revex-r25-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download exact REVEX 0.8.16 package
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL='https://drive.usercontent.google.com/download?id=1FEa0X3VnUeljydaBhntnOJ3bjDabeJye&export=download&confirm=t'
+          curl -L --fail --retry 4 --retry-delay 2 "$URL" -o /tmp/LIBER_REVEX_0.8.16_NORMAL_PACKAGE.zip
+          test "$(stat -c%s /tmp/LIBER_REVEX_0.8.16_NORMAL_PACKAGE.zip)" -gt 100000
+          unzip -t /tmp/LIBER_REVEX_0.8.16_NORMAL_PACKAGE.zip >/dev/null
+
+      - name: Install exact r25 live Companion tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/revex-r25
+          mkdir -p /tmp/revex-r25
+          unzip -q /tmp/LIBER_REVEX_0.8.16_NORMAL_PACKAGE.zip -d /tmp/revex-r25
+          SRC='/tmp/revex-r25/LIBER_REVEX_0.8.16/src/Live-Companion'
+          DST='docs/liber-apps/apps/revex'
+          test -f "$SRC/index.html"
+          test -f "$SRC/app.js"
+          test -f "$SRC/viewer-r25.js"
+          test -f "$SRC/history-r24.js"
+          test -f "$SRC/sync-docs-r24.js"
+          mkdir -p "$DST"
+          rsync -a --delete "$SRC/" "$DST/"
+
+      - name: Align LIBER Apps launcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('docs/liber-apps/js/apps.js')
+          s = p.read_text(encoding='utf-8')
+          pat = re.compile(r"(id:\s*'revex'[\s\S]{0,700}?version:\s*')[^']+('[\s\S]{0,700}?lastUpdated:\s*')[^']+(')")
+          s2, n = pat.subn(r"\g<1>0.8.16\g<2>2026-08-11\g<3>", s, count=1)
+          if n != 1:
+              raise SystemExit('Could not update REVEX launcher metadata exactly once')
+          p.write_text(s2, encoding='utf-8')
+          PY
+
+      - name: Static QA
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/revex-js && mkdir -p /tmp/revex-js
+          for f in docs/liber-apps/apps/revex/*.js; do
+            b="$(basename "$f" .js)"
+            cp "$f" "/tmp/revex-js/$b.mjs"
+            node --check "/tmp/revex-js/$b.mjs"
+          done
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('docs/liber-apps/apps/revex/index.html')
+          s=p.read_text(encoding='utf-8')
+          ids=re.findall(r'\bid=["\']([^"\']+)["\']',s)
+          dup=sorted({x for x in ids if ids.count(x)>1})
+          if dup: raise SystemExit('duplicate ids: '+', '.join(dup))
+          required=['view-bim','view-design','view-spec','view-docs','view-chat','view-history','detail-toggle','viewer','render-dialog']
+          missing=[x for x in required if x not in ids]
+          if missing: raise SystemExit('missing ids: '+', '.join(missing))
+          for needle in ['viewer-r25.js','20260811r25']:
+            if needle not in s: raise SystemExit('missing '+needle)
+          if 'viewer-r24.js' in s: raise SystemExit('stale viewer-r24 reference remains')
+          print('HTML QA OK; ids=',len(ids))
+          PY
+          grep -q "version: '0.8.16'" docs/liber-apps/js/apps.js
+          grep -q "launchId = 'revex'" docs/liber-apps/js/apps.js
+          grep -q "view=spec" docs/liber-apps/js/apps.js
+          grep -q 'body.embedded' docs/liber-apps/apps/specifications/styles.css
+          grep -q "qs.get('embedded')" docs/liber-apps/apps/specifications/app.js
+          grep -q 'lazyDetail:true' docs/liber-apps/apps/revex/viewer-r25.js
+          grep -q 'duplicateStateFetch:false' docs/liber-apps/apps/revex/viewer-r25.js
+
+      - name: Commit live release
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'REVEX release bot'
+          git config user.email 'revex-release@users.noreply.github.com'
+          git add docs/liber-apps/apps/revex docs/liber-apps/js/apps.js
+          if git diff --cached --quiet; then
+            echo 'r25 content already live in main'
+            exit 0
+          fi
+          git commit -m 'REVEX Companion r25 / 0.8.16 stability release'
+          git push origin HEAD:main
