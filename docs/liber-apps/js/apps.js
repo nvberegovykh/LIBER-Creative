@@ -515,7 +515,7 @@ class AppsManager {
                 id: 'revex',
                 name: 'REVEX Companion',
                 description: 'One Revit-connected workspace for BIM, Design Book, Spec Book, documents, chat and AI renders.',
-                version: '0.8.16',
+                version: '0.8.17',
                 category: 'business',
                 icon: 'fas fa-cube',
                 status: 'online',

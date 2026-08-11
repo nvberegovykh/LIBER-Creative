@@ -124,7 +124,7 @@ async function openProjectChat(context = state.selectedContext) {
 
 // BIM rendering is owned exclusively by the external lightweight viewer.
 let viewer = null;
-function activeBimViewer(){ return window.__revexViewerR25Instance || window.__revexViewerR24Instance || window.__revexViewerR23Instance || window.__revexViewerR22Instance || window.__revexViewerR21Instance || viewer || null; }
+function activeBimViewer(){ return window.__revexViewerR26Instance || window.__revexViewerR25Instance || window.__revexViewerR24Instance || window.__revexViewerR23Instance || window.__revexViewerR22Instance || window.__revexViewerR21Instance || viewer || null; }
 
 function showView(name) {
   closeWorkspaceRail();
@@ -241,7 +241,7 @@ function renderModelTree() {
     <div class="fact"><strong>${elements.length.toLocaleString()}</strong><span>visible elements</span></div>
     <div class="fact"><strong>${(data?.source?.viewName || '3D').slice(0, 20)}</strong><span>Revit view</span></div>
     <div class="fact"><strong>${state.cloudState.scheduleCount || state.designData?.schedules?.length || 0}</strong><span>schedules</span></div>
-    <div class="fact"><strong>${state.viewerMode === 'fallback' ? 'Proxy' : state.viewerMode === 'fbx' ? 'FBX' : 'Ready'}</strong><span>geometry</span></div>` : '';
+    <div class="fact"><strong>${state.viewerMode === 'rvxmesh' ? 'Exact' : state.viewerMode === 'fbx' ? 'FBX' : state.viewerMode === 'fallback' ? 'Index' : 'Loading'}</strong><span>geometry</span></div>` : '';
   const groups = new Map();
   elements.forEach((element) => {
     const category = element.category || 'Other';
@@ -1006,6 +1006,11 @@ $('#issue-form').addEventListener('submit', async (event) => {
 $$('.main-nav [data-view]').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
 $('#rail-toggle').addEventListener('click', toggleWorkspaceRail);
 $('#rail-scrim').addEventListener('click', closeWorkspaceRail);
+window.addEventListener('revex:viewer-mode', (event) => {
+  state.viewerMode = event.detail?.mode || '';
+  renderModelTree();
+});
+
 $('#project-select').addEventListener('change', () => activateProject($('#project-select').value));
 $('#new-project-button').addEventListener('click', openProjectDialog);
 $('#empty-create-button').addEventListener('click', openProjectDialog);

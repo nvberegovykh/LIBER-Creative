@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260811r25';
+  const BUILD='20260811r26';
   const Store=root.RevexStore;
   if(!Store||root.__revexSyncDocsR24) return;
   root.__revexSyncDocsR24=true;

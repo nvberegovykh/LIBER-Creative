@@ -293,7 +293,9 @@
       const printingFile = byName(files, 'printing-sets.json');
       let affectedPlansFile = byName(files, 'affected-plan-views.json');
       if (!affectedPlansFile) affectedPlansFile = new File([JSON.stringify({ schema: 'liber.revex.affected-plan-views.v1', revision: null, exportedAt: iso(), source: 'compatibility-empty-for-pre-0.8.4-import', changedElementCount: 0, hadDeletion: false, views: [] }, null, 2)], 'affected-plan-views.json', { type: 'application/json' });
-      const modelFile = files.find((file) => /\.fbx$/i.test(file.name)) || null;
+      const rvxMeshFile = files.find((file) => /\.rvxmesh\.gz$/i.test(file.name)) || null;
+      const fbxFile = files.find((file) => /\.fbx$/i.test(file.name)) || null;
+      const modelFile = rvxMeshFile || fbxFile;
 
       if (!projectFile || !designFile || !viewerFile || !specFile || !integrityFile) {
         throw new Error('Select the complete REVEX package: project, Design Book, viewer metadata, Spec Book source, integrity manifest and affected native plan manifest.');
@@ -309,6 +311,8 @@
       const localPackage = {
         projectId, revision, project, design, viewer, specPush, integrity,
         modelUrl: modelFile ? URL.createObjectURL(modelFile) : null,
+        modelFormat: rvxMeshFile ? 'rvxmesh-gzip' : (fbxFile ? 'fbx' : null),
+        fallbackModelUrl: rvxMeshFile && fbxFile ? URL.createObjectURL(fbxFile) : null,
         syncedAt: iso(), cloud: false
       };
       this.lastLocalPackage = localPackage;
@@ -325,7 +329,7 @@
       if (!this.fs.storage) throw new Error('LIBER Storage is not available in this session.');
 
       const base = `projects/${projectId}/revex/revisions/${revision}`;
-      const uploadFiles = [projectFile, designFile, viewerFile, specFile, integrityFile, printingFile, affectedPlansFile, modelFile].filter(Boolean);
+      const uploadFiles = [projectFile, designFile, viewerFile, specFile, integrityFile, printingFile, affectedPlansFile, rvxMeshFile, fbxFile].filter(Boolean);
       const uploads = {};
       for (const file of uploadFiles) uploads[file.name] = await this.uploadFile(`${base}/${safe(file.name)}`, file);
 
@@ -357,6 +361,8 @@
         integrity: integrity || null,
         modelUrl: uploads[modelFile?.name]?.url || null,
         modelPath: uploads[modelFile?.name]?.path || null,
+        modelFormat: rvxMeshFile ? 'rvxmesh-gzip' : (fbxFile ? 'fbx' : null),
+        fallbackModelUrl: rvxMeshFile && fbxFile ? (uploads[fbxFile.name]?.url || null) : null,
         viewerUrl: uploads['viewer-model.json']?.url || null,
         designUrl: uploads['design-book.json']?.url || null,
         projectUrl: uploads['project.json']?.url || null,

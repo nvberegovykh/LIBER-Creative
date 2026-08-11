@@ -22,5 +22,5 @@
   memo('listLibrary',id=>String(id||''),8000);
   root.addEventListener('revex:r20-revision',()=>cache.clear());
   root.addEventListener('revex:r21-revision',()=>cache.clear());
-  console.log('[REVEX] revision cache 20260811r25',{dedupe:true});
+  console.log('[REVEX] revision cache 20260811r26',{dedupe:true});
 })(window);

@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260811r25', Store=root.RevexStore;
+  const BUILD='20260811r26', Store=root.RevexStore;
   if(!Store||root.__revexWorkflowR20)return; root.__revexWorkflowR20=true;
   const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
   const esc=(v)=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));

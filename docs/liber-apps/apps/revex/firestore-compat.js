@@ -5,7 +5,7 @@
 
   const clone=(value)=>JSON.parse(JSON.stringify(value===undefined?null:value));
   const post=(stage,detail={})=>{
-    try{ root.chrome?.webview?.postMessage({type:'liber:revex-sync-progress',stage,build:'20260811r25',...detail}); }catch(_){ }
+    try{ root.chrome?.webview?.postMessage({type:'liber:revex-sync-progress',stage,build:'20260811r26',...detail}); }catch(_){ }
     console.log('[REVEX publish]',stage,detail);
   };
 
