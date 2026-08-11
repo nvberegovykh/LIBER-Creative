@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260810r24', Store=root.RevexStore;
+  const BUILD='20260811r25', Store=root.RevexStore;
   if(!Store||root.__revexWorkflowR20)return; root.__revexWorkflowR20=true;
   const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
   const esc=(v)=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -59,8 +59,11 @@
   async function designProgress(){
     const host=$('#design-progress'),id=projectId();if(!host||!id)return;
     try{
-      const cloud=await Store.getState(id);if(!cloud?.designUrl)return;
-      const [data,edits,chapterEdits]=await Promise.all([Store.fetchJson(cloud.designUrl),Store.listDesignEdits(id),Store.listChapterEdits(id)]);
+      const hydrated=root.__revexState?.projectId===id?root.__revexState?.designData:null;
+      const cloud=hydrated?null:await Store.getState(id);
+      const designTask=hydrated?Promise.resolve(hydrated):(cloud?.designUrl?Store.fetchJson(cloud.designUrl):Promise.resolve(null));
+      const [data,edits,chapterEdits]=await Promise.all([designTask,Store.listDesignEdits(id),Store.listChapterEdits(id)]);
+      if(!data)return;
       designSources.clear();chapterSources.clear();
       const items=[];
       for(const chapter of data?.chapters||[]){

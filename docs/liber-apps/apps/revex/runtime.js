@@ -1,7 +1,7 @@
 (function(root){
 'use strict';
 const Store=root.RevexStore;if(!Store)return;
-const BUILD='20260810r24';
+const BUILD='20260811r25';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const iso=()=>new Date().toISOString();
 const originalInit=Store.init.bind(Store);

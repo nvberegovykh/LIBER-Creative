@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260810r24';
+  const BUILD='20260811r25';
   if(root.__revexUiIntegrityR20) return;
   root.__revexUiIntegrityR20=true;
   function updateProjectId(){

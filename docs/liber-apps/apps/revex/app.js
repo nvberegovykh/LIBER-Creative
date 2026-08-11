@@ -124,7 +124,7 @@ async function openProjectChat(context = state.selectedContext) {
 
 // BIM rendering is owned exclusively by the external lightweight viewer.
 let viewer = null;
-function activeBimViewer(){ return window.__revexViewerR24Instance || window.__revexViewerR23Instance || window.__revexViewerR22Instance || window.__revexViewerR21Instance || viewer || null; }
+function activeBimViewer(){ return window.__revexViewerR25Instance || window.__revexViewerR24Instance || window.__revexViewerR23Instance || window.__revexViewerR22Instance || window.__revexViewerR21Instance || viewer || null; }
 
 function showView(name) {
   closeWorkspaceRail();
@@ -134,7 +134,9 @@ function showView(name) {
   $$('.main-nav [data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === name));
   if (hasProject) {
     history.replaceState(null, '', `${location.pathname}?${new URLSearchParams({ ...(params.get('inShell') ? { inShell: '1' } : {}), projectId: state.projectId, ...(state.preferredSpecId ? { specProjectId: state.preferredSpecId } : {}), view: name })}`);
-    if (name === 'bim') setTimeout(() => activeBimViewer()?.resize?.(), 0);
+    const av = activeBimViewer();
+    av?.setActive?.(name === 'bim');
+    if (name === 'bim') setTimeout(() => { av?.resize?.(); av?.requestRender?.(); }, 0);
     if (name === 'spec') renderSpec();
     if (name === 'chat') { renderChatContext(); setTimeout(() => ensureChatEmbedded(state.selectedContext), 0); }
     if (name === 'history') window.dispatchEvent(new CustomEvent('revex:history-open', { detail: { projectId: state.projectId } }));
@@ -247,18 +249,19 @@ function renderModelTree() {
     groups.get(category).push(element);
   });
   const q = $('#element-search').value.trim().toLowerCase();
+  const treeLimit = q ? 1500 : 800;
   let shown = 0;
   const chunks = [];
   [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).forEach(([category, rows]) => {
     const matching = rows.filter((row) => !q || `${row.id} ${row.category} ${row.name} ${row.type} ${(row.materials || []).map((m) => m.name).join(' ')}`.toLowerCase().includes(q));
-    if (!matching.length || shown >= 3000) return;
+    if (!matching.length || shown >= treeLimit) return;
     chunks.push(`<div class="tree-group">${escapeHtml(category)} · ${matching.length}</div>`);
-    for (const row of matching.slice(0, Math.max(3000 - shown, 0))) {
+    for (const row of matching.slice(0, Math.max(treeLimit - shown, 0))) {
       shown += 1;
       chunks.push(`<button class="tree-item${String(state.selectedElement?.id) === String(row.id) ? ' active' : ''}" data-element-id="${escapeHtml(row.id)}"><span>${escapeHtml(row.name || row.type || category)}</span><span class="tree-id">${escapeHtml(row.id)}</span></button>`);
     }
   });
-  if (elements.length > shown && !q) chunks.push(`<p class="muted">Showing the first ${shown.toLocaleString()} elements. Search to find the rest.</p>`);
+  if (elements.length > shown && !q) chunks.push(`<p class="muted">Showing ${shown.toLocaleString()} of ${elements.length.toLocaleString()} elements for responsiveness. Search finds the rest.</p>`);
   $('#element-tree').innerHTML = chunks.join('') || '<p class="muted">No matching elements.</p>';
   $$('.tree-item', $('#element-tree')).forEach((button) => button.addEventListener('click', () => {
     const element = elements.find((row) => String(row.id) === button.dataset.elementId);
@@ -325,6 +328,45 @@ function renderPins() {
     if (element) selectElement(element, true);
   }));
   activeBimViewer()?.requestRender?.();
+}
+
+function smallStableHash(value) {
+  let h = 2166136261;
+  for (const ch of String(value || '')) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(36);
+}
+
+function formDesignFallback(viewerData) {
+  const rows = viewerData?.elements || [];
+  if (!rows.length) return null;
+  const categories = new Map();
+  for (const row of rows) {
+    const category = String(row.category || 'Other').trim() || 'Other';
+    const family = String(row.family || '').trim();
+    const type = String(row.type || row.name || 'Unnamed type').trim() || 'Unnamed type';
+    const key = `${category}\u0000${family}\u0000${type}`;
+    if (!categories.has(category)) categories.set(category, new Map());
+    const bucket = categories.get(category);
+    if (!bucket.has(key)) bucket.set(key, { category, family, type, ids: [], levels: new Set() });
+    const item = bucket.get(key);
+    item.ids.push(row.id);
+    if (row.level) item.levels.add(String(row.level));
+  }
+  const chapters = [...categories.entries()].sort(([a],[b]) => a.localeCompare(b)).map(([category, bucket], order) => ({
+    id: `model-${smallStableHash(category)}`, title: category, order, sourceKind: 'revit-model-fallback',
+    items: [...bucket.values()].sort((a,b) => `${a.family} ${a.type}`.localeCompare(`${b.family} ${b.type}`)).map((item) => ({
+      id: `model-${smallStableHash(`${item.category}|${item.family}|${item.type}`)}`,
+      label: [item.family, item.type].filter(Boolean).join(' · ') || item.category,
+      description: '', status: 'Not Selected', source: '', images: [],
+      revit: { category: item.category, family: item.family, type: item.type, instanceCount: item.ids.length, elementIds: item.ids, levels: [...item.levels] }
+    }))
+  }));
+  return { schema: 'liber.revex.design-book.fallback.v1', sourceKind: 'revit-model-fallback', chapters, schedules: [] };
+}
+
+function normalizeDesignSource(data, viewerData) {
+  if (data && Array.isArray(data.chapters) && data.chapters.length) return data;
+  return formDesignFallback(viewerData) || data || null;
 }
 
 function mergedItem(item) {
@@ -833,34 +875,51 @@ function renderAll() {
 }
 
 let revisionHydrationToken=0;
+function settledValue(result,fallback){ return result?.status==='fulfilled' ? result.value : fallback; }
 async function hydrateRevisionOverlays(cloudState,localPackage,revision){
   const token=++revisionHydrationToken;
-  try{
-    const [designData,edits,chapterEdits,issues,library,historyEvents,bimOverlays,derivedPlans]=await Promise.all([
-      localPackage?.design||(cloudState?.designUrl?Store.fetchJson(cloudState.designUrl):Promise.resolve(null)),
-      Store.listDesignEdits(state.projectId),Store.listChapterEdits(state.projectId),Store.listIssues(state.projectId),Store.listLibrary(state.projectId),
-      Store.listHistory(state.projectId),Store.listBimOverlays(state.projectId),Store.listDerivedPlans(state.projectId)
-    ]);
-    if(token!==revisionHydrationToken||state.loadingRevision!==revision)return;
-    state.designData=designData;state.designEdits=new Map(edits.map(r=>[r.id,r]));state.chapterEdits=new Map(chapterEdits.map(r=>[r.id,r]));state.issues=issues;state.library=library;state.historyEvents=historyEvents||[];state.bimOverlays=new Map((bimOverlays||[]).map(r=>[String(r.uniqueId||r.elementId||r.id),r]));state.derivedPlans=derivedPlans||[];
-    renderPins();renderDesign();renderDesignInspector();renderLibrary();activeBimViewer()?.setOverlays?.(bimOverlays||[]);activeBimViewer()?.requestRender?.();window.dispatchEvent(new CustomEvent('revex:history-data', { detail: { historyEvents: state.historyEvents, bimOverlays: bimOverlays||[], derivedPlans: state.derivedPlans } }));
-    if(!$('#view-spec')?.hidden)renderSpec();
-  }catch(error){console.warn('[REVEX] deferred revision overlays',error);}
+  const results=await Promise.allSettled([
+    Store.listDesignEdits(state.projectId),Store.listChapterEdits(state.projectId),Store.listIssues(state.projectId),Store.listLibrary(state.projectId),
+    Store.listHistory(state.projectId),Store.listBimOverlays(state.projectId),Store.listDerivedPlans(state.projectId)
+  ]);
+  if(token!==revisionHydrationToken||state.loadingRevision!==revision)return;
+  const [editsR,chapterR,issuesR,libraryR,historyR,overlayR,plansR]=results;
+  for(const [label,result] of [['design edits',editsR],['chapter edits',chapterR],['issues',issuesR],['library',libraryR],['history',historyR],['BIM overlays',overlayR],['derived plans',plansR]]){
+    if(result.status==='rejected')console.warn(`[REVEX] ${label} hydration`,result.reason);
+  }
+  const edits=settledValue(editsR,[]),chapterEdits=settledValue(chapterR,[]),issues=settledValue(issuesR,[]),library=settledValue(libraryR,[]),historyEvents=settledValue(historyR,[]),bimOverlays=settledValue(overlayR,[]),derivedPlans=settledValue(plansR,[]);
+  state.designEdits=new Map(edits.map(r=>[r.id,r]));state.chapterEdits=new Map(chapterEdits.map(r=>[r.id,r]));state.issues=issues;state.library=library;state.historyEvents=historyEvents||[];state.bimOverlays=new Map((bimOverlays||[]).map(r=>[String(r.uniqueId||r.elementId||r.id),r]));state.derivedPlans=derivedPlans||[];
+  renderPins();renderDesign();renderDesignInspector();renderLibrary();activeBimViewer()?.setOverlays?.(bimOverlays||[]);activeBimViewer()?.requestRender?.();window.dispatchEvent(new CustomEvent('revex:history-data', { detail: { historyEvents: state.historyEvents, bimOverlays: bimOverlays||[], derivedPlans: state.derivedPlans } }));
+  if(!$('#view-spec')?.hidden)renderSpec();
 }
 
 async function loadCloudState(cloudState,localPackage=null){
   state.cloudState=cloudState||null;
   if(!cloudState&&!localPackage){revisionHydrationToken++;state.viewerData=null;state.designData=null;state.designEdits=new Map();state.chapterEdits=new Map();state.issues=[];state.library=[];state.historyEvents=[];state.bimOverlays=new Map();state.derivedPlans=[];renderAll();setSync('No Revit sync yet','quiet');return;}
   const revision=localPackage?.revision||cloudState?.revision||'unknown';
-  if(state.loadingRevision===revision&&!localPackage)return;
-  state.loadingRevision=revision;setSync('Loading BIM revision…','busy');
-  try{
-    const viewerData=localPackage?.viewer||await Store.fetchJson(cloudState.viewerUrl);
-    state.viewerData=viewerData;renderModelTree();renderPins();window.dispatchEvent(new CustomEvent('revex:source-revision-loaded', { detail: { revision, cloudState, localPackage } }));
-    setSync(`${localPackage?.cloud===false?'Local preview':'Synced'} ${formatDate(localPackage?.syncedAt||cloudState.syncedAt)}`,localPackage?.cloud===false?'quiet':'good');
-    const hydrate=()=>hydrateRevisionOverlays(cloudState,localPackage,revision);
-    if('requestIdleCallback'in window)requestIdleCallback(hydrate,{timeout:700});else setTimeout(hydrate,0);
-  }catch(error){console.error('[REVEX] load revision',error);setSync('Revision load failed','bad');toast(error.message,true);}
+  if(state.loadingRevision===revision&&!localPackage&&state.viewerData&&state.designData)return;
+  state.loadingRevision=revision;setSync('Loading project revision…','busy');
+  const viewerPromise=localPackage?.viewer?Promise.resolve(localPackage.viewer):(cloudState?.viewerUrl?Store.fetchJson(cloudState.viewerUrl):Promise.resolve(null));
+  const designPromise=localPackage?.design?Promise.resolve(localPackage.design):(cloudState?.designUrl?Store.fetchJson(cloudState.designUrl):Promise.resolve(null));
+  const [viewerResult,designResult]=await Promise.allSettled([viewerPromise,designPromise]);
+  if(state.loadingRevision!==revision)return;
+  const viewerData=settledValue(viewerResult,null);
+  const fetchedDesign=settledValue(designResult,null);
+  if(viewerResult.status==='rejected')console.error('[REVEX] BIM index load',viewerResult.reason);
+  if(designResult.status==='rejected')console.warn('[REVEX] Design Book source load',designResult.reason);
+  state.viewerData=viewerData;
+  state.designData=normalizeDesignSource(fetchedDesign,viewerData);
+  renderDesign();renderDesignInspector();
+  if(viewerData){
+    renderModelTree();renderPins();
+    window.dispatchEvent(new CustomEvent('revex:source-revision-loaded', { detail: { revision, cloudState, localPackage, viewerData } }));
+  }
+  const sourceLabel=localPackage?.cloud===false?'Local preview':'Synced';
+  if(!viewerData&&!state.designData){setSync('Revision data unavailable','bad');toast('BIM and Design Book source files could not load.',true);}
+  else if(!fetchedDesign&&state.designData){setSync(`${sourceLabel} · Design Book rebuilt from BIM index`,'quiet');}
+  else setSync(`${sourceLabel} ${formatDate(localPackage?.syncedAt||cloudState?.syncedAt)}`,localPackage?.cloud===false?'quiet':'good');
+  // User-authored overlays are independent of source files. Start immediately; never wait for browser idle.
+  setTimeout(()=>hydrateRevisionOverlays(cloudState,localPackage,revision),0);
 }
 
 async function activateProject(projectId){
