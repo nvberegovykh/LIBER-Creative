@@ -1,0 +1,97 @@
+name: REVEX r26 / 0.8.17 release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/revex-r26-release.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: revex-r26-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download exact REVEX 0.8.17 package
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL='https://drive.usercontent.google.com/download?id=1I9ZA55ROX8JazqJznxPFOOnynfLUIW-Y&export=download&confirm=t'
+          curl -L --fail --retry 4 --retry-delay 2 "$URL" -o /tmp/LIBER_REVEX_0.8.17_NORMAL_PACKAGE.zip
+          echo '33618c3e044d70480fe28629b7d37da12243b55a2843b4e68d7f424c94f4a5d7  /tmp/LIBER_REVEX_0.8.17_NORMAL_PACKAGE.zip' | sha256sum -c -
+          unzip -t /tmp/LIBER_REVEX_0.8.17_NORMAL_PACKAGE.zip >/dev/null
+
+      - name: Install exact r26 live Companion tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/revex-r26
+          mkdir -p /tmp/revex-r26
+          unzip -q /tmp/LIBER_REVEX_0.8.17_NORMAL_PACKAGE.zip -d /tmp/revex-r26
+          SRC='/tmp/revex-r26/LIBER_REVEX_0.8.17/src/Live-Companion'
+          DST='docs/liber-apps/apps/revex'
+          test -f "$SRC/index.html"
+          test -f "$SRC/viewer-r26.js"
+          test ! -f "$SRC/viewer-r25.js"
+          test -f "$SRC/app.js"
+          test -f "$SRC/store.js"
+          mkdir -p "$DST"
+          rsync -a --delete --exclude='README.txt' --exclude='liber-apps-integration.patch' "$SRC/" "$DST/"
+
+      - name: Align LIBER Apps launcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('docs/liber-apps/js/apps.js')
+          s = p.read_text(encoding='utf-8')
+          pat = re.compile(r"(id:\s*'revex'[\s\S]{0,700}?version:\s*')[^']+('[\s\S]{0,700}?lastUpdated:\s*')[^']+(')")
+          s2, n = pat.subn(r"\g<1>0.8.17\g<2>2026-08-11\g<3>", s, count=1)
+          if n != 1:
+              raise SystemExit('Could not update REVEX launcher metadata exactly once')
+          p.write_text(s2, encoding='utf-8')
+          PY
+
+      - name: Static QA
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in docs/liber-apps/apps/revex/*.js; do cp "$f" /tmp/revex-check.mjs; node --check /tmp/revex-check.mjs >/dev/null; done
+          grep -q '20260811r26' docs/liber-apps/apps/revex/index.html
+          grep -q 'viewer-r26.js' docs/liber-apps/apps/revex/index.html
+          ! grep -q 'viewer-r25.js' docs/liber-apps/apps/revex/index.html
+          grep -q 'rvxmesh-gzip' docs/liber-apps/apps/revex/store.js
+          grep -q 'RVXSCN2' docs/liber-apps/apps/revex/viewer-r26.js
+          grep -q 'exactGeometryPrimary:true' docs/liber-apps/apps/revex/viewer-r26.js
+          grep -q "version: '0.8.17'" docs/liber-apps/js/apps.js
+          grep -q "launchId = 'revex'" docs/liber-apps/js/apps.js
+          grep -q "view=spec" docs/liber-apps/js/apps.js
+          grep -q 'body.embedded' docs/liber-apps/apps/specifications/styles.css
+          grep -q "qs.get('embedded')" docs/liber-apps/apps/specifications/app.js
+
+      - name: Commit live release
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'REVEX release bot'
+          git config user.email 'revex-release@users.noreply.github.com'
+          git add docs/liber-apps/apps/revex docs/liber-apps/js/apps.js
+          if git diff --cached --quiet; then
+            echo 'r26 content already live in main'
+            exit 0
+          fi
+          git commit -m 'REVEX Companion r26 high-fidelity model viewer'
+          git push origin HEAD:main
