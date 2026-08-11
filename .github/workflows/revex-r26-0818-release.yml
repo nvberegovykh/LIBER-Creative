@@ -1,0 +1,96 @@
+name: REVEX r26 / 0.8.18 build hotfix
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/revex-r26-0818-release.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: revex-r26-0818-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download exact REVEX 0.8.18 package
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL='https://drive.usercontent.google.com/download?id=1S50WKf1OzYB9aa1m-m45dhdkkTk49uo6&export=download&confirm=t'
+          curl -L --fail --retry 4 --retry-delay 2 "$URL" -o /tmp/LIBER_REVEX_0.8.18_NORMAL_PACKAGE.zip
+          test "$(stat -c%s /tmp/LIBER_REVEX_0.8.18_NORMAL_PACKAGE.zip)" -gt 100000
+          test "$(sha256sum /tmp/LIBER_REVEX_0.8.18_NORMAL_PACKAGE.zip | awk '{print $1}')" = 'fbc25b8b8218817f7b0ffb8e35eba2ff1c6e21dddc88b7661955070a8dd930a2'
+          unzip -t /tmp/LIBER_REVEX_0.8.18_NORMAL_PACKAGE.zip >/dev/null
+
+      - name: Install exact r26 Companion tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/revex-0818
+          mkdir -p /tmp/revex-0818
+          unzip -q /tmp/LIBER_REVEX_0.8.18_NORMAL_PACKAGE.zip -d /tmp/revex-0818
+          SRC='/tmp/revex-0818/LIBER_REVEX_0.8.18/src/Live-Companion'
+          DST='docs/liber-apps/apps/revex'
+          test -f "$SRC/index.html"
+          test -f "$SRC/viewer-r26.js"
+          test -f "$SRC/shell-integrity.js"
+          mkdir -p "$DST"
+          rsync -a --delete --exclude='README.txt' --exclude='liber-apps-integration.patch' "$SRC/" "$DST/"
+
+      - name: Align LIBER Apps launcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('docs/liber-apps/js/apps.js')
+          s = p.read_text(encoding='utf-8')
+          pat = re.compile(r"(id:\s*'revex'[\s\S]{0,700}?version:\s*')[^']+('[\s\S]{0,700}?lastUpdated:\s*')[^']+(')")
+          s2, n = pat.subn(r"\g<1>0.8.18\g<2>2026-08-11\g<3>", s, count=1)
+          if n != 1:
+              raise SystemExit('Could not update REVEX launcher metadata exactly once')
+          p.write_text(s2, encoding='utf-8')
+          PY
+
+      - name: Static QA
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp docs/liber-apps/apps/revex/app.js /tmp/revex-app.mjs
+          cp docs/liber-apps/apps/revex/viewer-r26.js /tmp/revex-viewer.mjs
+          cp docs/liber-apps/apps/revex/store.js /tmp/revex-store.mjs
+          node --check /tmp/revex-app.mjs
+          node --check /tmp/revex-viewer.mjs
+          node --check /tmp/revex-store.mjs
+          node --check docs/liber-apps/apps/revex/runtime.js
+          node --check docs/liber-apps/apps/revex/shell-integrity.js
+          grep -q '20260811r26' docs/liber-apps/apps/revex/index.html
+          grep -q 'viewer-r26.js' docs/liber-apps/apps/revex/index.html
+          grep -q "VERSION='0.8.18'" docs/liber-apps/apps/revex/shell-integrity.js
+          grep -q "version: '0.8.18'" docs/liber-apps/js/apps.js
+
+      - name: Commit live metadata-aligned release
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'REVEX release bot'
+          git config user.email 'revex-release@users.noreply.github.com'
+          git add docs/liber-apps/apps/revex docs/liber-apps/js/apps.js
+          if git diff --cached --quiet; then
+            echo '0.8.18 r26 content already live in main'
+            exit 0
+          fi
+          git commit -m 'REVEX 0.8.18 build hotfix live metadata'
+          git push origin HEAD:main
