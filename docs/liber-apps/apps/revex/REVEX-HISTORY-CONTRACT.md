@@ -1,6 +1,6 @@
 # REVEX BIM Edit + History Contract
 
-Status: implemented since REVEX Companion 0.8.4; current release 0.8.17 / build 20260811r26. Revit remains the source model; Companion BIM edits are non-destructive overlays until explicitly reconciled back to Revit.
+Status: implemented since REVEX Companion 0.8.4; current release 0.8.18 / build 20260811r26. Revit remains the source model; Companion BIM edits are non-destructive overlays until explicitly reconciled back to Revit.
 
 ## Stable identity
 Every editable BIM asset is addressed by Revit `UniqueId` first, with numeric `ElementId` as a secondary key. Every overlay is attached to the REVEX source revision that supplied the element.
