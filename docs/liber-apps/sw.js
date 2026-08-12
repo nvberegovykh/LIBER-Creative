@@ -1,6 +1,7 @@
 /* Service Worker for LIBER/APPS
  * - Shows notifications when the page posts a message to the SW
  * - Handles generic Push events if configured by a push service (FCM or other)
+ * - Keeps REVEX core assets network-authoritative so mixed cached builds cannot execute together
  */
 
 self.addEventListener('install', (event) => {
@@ -8,8 +9,39 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
-	clients.claim();
+	event.waitUntil((async () => {
+		try {
+			const names = await caches.keys();
+			await Promise.all(names.map((name) => caches.delete(name)));
+		} catch (_) {}
+		await clients.claim();
+	})());
 });
+
+/* REVEX is revision-sensitive: app/store/integrity/viewer/energy must come from one deployment.
+ * Do not serve these from a stale browser/SW cache even when their historical ?v= token is old.
+ */
+self.addEventListener('fetch', (event) => {
+	try {
+		const request = event.request;
+		if (!request || request.method !== 'GET') return;
+		const url = new URL(request.url);
+		if (url.origin !== self.location.origin) return;
+		const isRevex = /\/liber-apps\/apps\/revex\//.test(url.pathname);
+		const isCoreAsset = isRevex && (/\.(?:js|css|html|webmanifest)$/.test(url.pathname) || /\/revex-r39-runtime\.js$/.test(url.pathname));
+		if (!isCoreAsset) return;
+		event.respondWith((async () => {
+			try {
+				return await fetch(request, { cache: 'no-store' });
+			} catch (error) {
+				const cached = await caches.match(request);
+				if (cached) return cached;
+				throw error;
+			}
+		})());
+	} catch (_) {}
+});
+
 let __activeCallCache = { title: '', body: '', at: 0 };
 
 async function showNotification(data){
@@ -71,7 +103,6 @@ self.addEventListener('message', (event) => {
 self.addEventListener('push', (event) => {
 	let raw = {};
 	try { raw = event.data ? event.data.json() : {}; } catch(_) {}
-	// Normalize FCM payload: notification + data at top level
 	const payload = {
 		title: raw.notification?.title || raw.title || 'LIBER/APPS',
 		body: raw.notification?.body || raw.body || '',
@@ -82,9 +113,7 @@ self.addEventListener('push', (event) => {
 	event.waitUntil(showNotification(payload));
 });
 
-
-// Focus an existing client or open a new tab when the user clicks a notification
-	self.addEventListener('notificationclick', (event) => {
+self.addEventListener('notificationclick', (event) => {
 	event.notification.close();
 	const d = (event.notification && event.notification.data) || {};
 	const action = String(event.action || '').trim();
@@ -93,9 +122,7 @@ self.addEventListener('push', (event) => {
 			try{
 				const allClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
 				for (const client of allClients) {
-					try{
-						client.postMessage({ type: 'liber-call-action', action, connId: d.connId || '' });
-					}catch(_){}
+					try{ client.postMessage({ type: 'liber-call-action', action, connId: d.connId || '' }); }catch(_){}
 				}
 			}catch(_){}
 		})());
@@ -111,20 +138,13 @@ self.addEventListener('push', (event) => {
 	event.waitUntil((async () => {
 		const allClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
 		for (const client of allClients) {
-			try {
-				await client.navigate(fullUrl);
-				return client.focus();
-			} catch(_) {
-				return client.focus();
-			}
+			try { await client.navigate(fullUrl); return client.focus(); }
+			catch(_) { return client.focus(); }
 		}
-		if (clients.openWindow) {
-			return clients.openWindow(fullUrl);
-		}
+		if (clients.openWindow) return clients.openWindow(fullUrl);
 	})());
 });
 
-// Optional: accept a message to clear caches and help force-reload
 self.addEventListener('message', (event) => {
 	const msg = event.data || {};
 	if (msg && msg.type === 'force-reload') {
