@@ -1,0 +1,16 @@
+{
+  "name": "REVEX Companion",
+  "short_name": "REVEX",
+  "id": "/liber-apps/apps/revex/",
+  "start_url": "/liber-apps/apps/revex/index.html",
+  "scope": "/liber-apps/apps/revex/",
+  "display": "standalone",
+  "background_color": "#080a0e",
+  "theme_color": "#080a0e",
+  "description": "REVEX Companion for BIM, Design Book, Spec Book, Energy, project documents and coordination.",
+  "icons": [
+    { "src": "/liber-apps/images/LIBER%20LOGO.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/liber-apps/images/LIBER%20LOGO.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/liber-apps/images/LIBER%20LOGO.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
