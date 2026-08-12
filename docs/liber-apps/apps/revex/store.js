@@ -391,7 +391,8 @@
       const files = Array.from(fileList || []);
       const manifestFile = byName(files, 'engineering-sync.json');
       const gbxmlFile = files.find((file) => /\.xml$/i.test(file.name)) || null;
-      if (!manifestFile || !gbxmlFile) throw new Error('The Energy Sync evidence must include engineering-sync.json and the Revit gbXML.');
+      const weatherFile = files.find((file) => /\.epw$/i.test(file.name)) || null;
+      if (!manifestFile || !gbxmlFile || !weatherFile) throw new Error('The Energy Sync evidence must include engineering-sync.json, the Revit gbXML, and the selected EPW weather file.');
       const manifest = await readJson(manifestFile);
       if (manifest?.schema !== 'liber.revex.engineering-sync.v1' || manifest?.architecture !== 'REVIT_EVIDENCE_GRAPH_V1')
         throw new Error('This is not a compatible REVIT_EVIDENCE_GRAPH_V1 Energy Sync revision.');
