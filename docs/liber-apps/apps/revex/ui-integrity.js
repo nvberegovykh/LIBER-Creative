@@ -15,6 +15,65 @@
     }
   }
 
+  function installControlledBimStore(){
+    const Store=root.RevexStore;
+    if(!Store||Store.__r39ControlledBim)return;
+    Store.__r39ControlledBim=true;
+    const iso=()=>new Date().toISOString();
+    const clone=(v)=>JSON.parse(JSON.stringify(v===undefined?null:v));
+    const safe=(v)=>String(v||'').replace(/[^a-zA-Z0-9._-]+/g,'_').slice(0,120)||'item';
+    const docId=(v)=>safe(v).replace(/\./g,'_');
+    const cloud=()=>Boolean(Store.isCloud?.()&&Store.api&&Store.db&&Store.user?.uid);
+    const library=(projectId)=>Store.api.collection(Store.db,'projects',projectId,'library');
+    const libraryDoc=(projectId,id)=>Store.api.doc(Store.db,'projects',projectId,'library',id);
+    async function listKind(projectId,kind,max=1000){
+      if(!cloud()||!projectId)return[];
+      try{const f=Store.api,q=f.query(library(projectId),f.where('revexKind','==',kind),f.limit(max)),snap=await f.getDocs(q);return snap.docs.map(d=>({id:d.id,...d.data()}))}
+      catch(error){console.warn(`[REVEX r39] ${kind} list`,error);return[]}
+    }
+    async function setRecord(projectId,id,kind,data,merge=true){
+      const payload=clone({...data,type:'revex',hidden:true,revexKind:kind,updatedAt:data?.updatedAt||iso()});
+      await Store.api.setDoc(libraryDoc(projectId,id),payload,clone({merge}));return payload;
+    }
+
+    Store.listBimOverlays=async function(projectId){
+      if(!projectId)return[];
+      if(!cloud()){try{return Object.values(JSON.parse(localStorage.getItem(`liber.revex.bim-overlays.${projectId}`)||'{}'))}catch(_){return[]}}
+      return(await listKind(projectId,'bim-overlay',5000)).map(r=>({...r,id:r.revexId||r.id}));
+    };
+    Store.commitBimOverlay=async function(projectId,element,patch,meta={}){
+      if(!projectId||!element)throw new Error('Project and BIM element are required.');
+      const stable=String(element.uniqueId||element.id||'').trim();if(!stable)throw new Error('The selected BIM element has no stable Revit identity.');
+      const overlayId=docId(stable);let before=null,after=null;
+      if(!cloud()){
+        const key=`liber.revex.bim-overlays.${projectId}`,all=JSON.parse(localStorage.getItem(key)||'{}');before=all[overlayId]||null;
+        after={...(before||{}),...clone(patch),id:overlayId,revexId:overlayId,elementId:element.id??before?.elementId??null,uniqueId:element.uniqueId||before?.uniqueId||null,category:element.category||before?.category||'',level:element.level||before?.level||'',sourceRevision:meta.sourceRevision||before?.sourceRevision||null,updatedAt:iso(),updatedBy:this.user?.uid||'local'};
+        all[overlayId]=after;localStorage.setItem(key,JSON.stringify(all));
+      }else{
+        before=(await listKind(projectId,'bim-overlay',5000)).find(r=>String(r.revexId||r.id)===overlayId)||null;
+        after=clone({...(before||{}),...patch,id:overlayId,revexId:overlayId,elementId:element.id??before?.elementId??null,uniqueId:element.uniqueId||before?.uniqueId||null,category:element.category||before?.category||'',level:element.level||before?.level||'',sourceRevision:meta.sourceRevision||before?.sourceRevision||null,updatedAt:iso(),updatedBy:this.user?.uid||'local'});
+        await setRecord(projectId,`revex_bim_${overlayId}`,'bim-overlay',after,false);
+      }
+      const event=typeof this.appendHistory==='function'?await this.appendHistory(projectId,{sourceRevision:meta.sourceRevision||null,kind:'bim-overlay',operation:meta.operation||'edit',label:meta.label||`${element.category||'BIM'} ${element.id||''}`.trim(),affectedElementIds:element.id!=null?[element.id]:[],affectedUniqueIds:element.uniqueId?[element.uniqueId]:[],affectedLevels:element.level?[element.level]:[],affectedViews:meta.affectedViews||[],before,after,camera:meta.camera||null,snapshot:meta.snapshot||null,note:meta.note||'',relatedId:overlayId,previousEventId:meta.previousEventId||null}):null;
+      return{overlay:after,event};
+    };
+    Store.listDerivedPlans=async function(projectId){
+      if(!projectId)return[];
+      if(!cloud()){try{return JSON.parse(localStorage.getItem(`liber.revex.derived-plans.${projectId}`)||'[]')}catch(_){return[]}}
+      return(await listKind(projectId,'derived-plan',1000)).map(r=>({...r,id:r.revexId||r.id})).sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+    };
+    Store.saveDerivedPlan=async function(projectId,plan={},imageDataUrl=''){
+      if(!projectId)throw new Error('Choose a REVEX project first.');
+      const id=plan.id||`plan_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`,data=clone({...plan,id,revexId:id,createdAt:plan.createdAt||iso(),createdBy:plan.createdBy||this.user?.uid||'local'});
+      if(!cloud()){const key=`liber.revex.derived-plans.${projectId}`,all=JSON.parse(localStorage.getItem(key)||'[]');all.unshift({...data,imageDataUrl:imageDataUrl||null});localStorage.setItem(key,JSON.stringify(all.slice(0,250)));return all[0]}
+      let imageUrl=null,imagePath=null;
+      if(imageDataUrl&&this.fs?.storage){const blob=await(await fetch(imageDataUrl)).blob(),file=new File([blob],`${id}.png`,{type:'image/png'}),path=`projects/${projectId}/library/revex/derived-plans/${docId(id)}/${Date.now()}_${id}.png`,ref=this.api.ref(this.fs.storage,path);await this.api.uploadBytes(ref,file,clone({contentType:'image/png'}));imageUrl=await this.api.getDownloadURL(ref);imagePath=path}
+      const finalData=clone({...data,imageUrl,imagePath});await setRecord(projectId,`revex_plan_${docId(id)}`,'derived-plan',finalData,false);return finalData;
+    };
+    console.info('[REVEX] r39 controlled BIM persistence',{overlays:'project-library',derivedPlans:'project-library'});
+  }
+  installControlledBimStore();
+
   function installCompanion(){
     if(root.__revexInstallBannerR38)return;
     root.__revexInstallBannerR38=true;
@@ -49,5 +108,5 @@
   function enforceLabels(){const invite=document.getElementById('invite-project-button'),render=document.getElementById('render-button');if(invite&&invite.textContent!=='Invite')invite.textContent='Invite';if(render&&render.textContent!=='Render')render.textContent='Render'}
   function bind(){installCompanion();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels()})}updateProjectId();enforceLabels()}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();setTimeout(bind,250);setTimeout(bind,1000);
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',pwaInstallBanner:true,revitSuppressed:true,r39Runtime:true});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',pwaInstallBanner:true,revitSuppressed:true,r39Runtime:true,controlledBim:true});
 })(window);
