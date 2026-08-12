@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '20260812r38';
+  const VERSION = '20260812r39';
   const LIMIT = 200;
   const entries = [];
   const native = () => window.chrome?.webview?.postMessage;
@@ -62,7 +62,46 @@
     emit(d.level || 'INFO', d.stage || 'APP', d.message || 'Companion app diagnostic', d);
   });
 
+  function auditContracts() {
+    const store = window.RevexStore;
+    const requiredStore = [
+      'listProjects','getProject','createProject','getState','syncPackage',
+      'resolveSpecProject','ensureSpecProject',
+      'listDesignEdits','saveDesignEdit','listChapterEdits','saveChapterEdit','uploadDesignImage','uploadChapterImage',
+      'listLibrary','fileUrl','uploadLibraryFile','listHistory','appendHistory',
+      'listBimOverlays','commitBimOverlay','listDerivedPlans','saveDerivedPlan',
+      'getEngineeringState','syncEngineeringPackage','runEnergyServer','getEnergyResult'
+    ];
+    const missingStore = !store ? requiredStore : requiredStore.filter((name) => typeof store[name] !== 'function');
+    emit(missingStore.length ? 'ERROR' : 'INFO', 'RUNTIME_CONTRACT', missingStore.length
+      ? `REVEX Store contract incomplete: ${missingStore.join(', ')}`
+      : `REVEX Store contract complete (${requiredStore.length} required methods).`, {
+        initiator: 'browser dependency audit'
+      });
+
+    const viewer = window.__revexViewerR26Instance;
+    if (viewer) {
+      const requiredViewer = ['sectionBox','sectionApply','setSectionFace','setSectionDimension','resetSection','pick'];
+      const missingViewer = requiredViewer.filter((name) => typeof viewer[name] !== 'function');
+      emit(missingViewer.length ? 'ERROR' : 'INFO', 'VIEWER_CONTRACT', missingViewer.length
+        ? `BIM viewer contract incomplete: ${missingViewer.join(', ')}`
+        : 'BIM viewer contract ready: exact instance picking + six-face section box.', {
+          initiator: 'browser dependency audit',
+          detail: {
+            instanceIdPicking: true,
+            familyFilter: Boolean(document.getElementById('model-family-type-filter')),
+            instanceFilter: Boolean(document.getElementById('model-instance-filter'))
+          }
+        });
+    } else {
+      emit('WARN', 'VIEWER_CONTRACT', 'BIM viewer instance is not ready yet; deferred audit will retry.', { initiator: 'browser dependency audit' });
+    }
+  }
+
   emit('INFO', 'BOOT', 'REVEX Companion browser diagnostics bridge initialized.', {
     initiator: native() ? 'REVEX Revit WebView2' : 'regular browser'
   });
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(auditContracts, 250), { once: true });
+  else setTimeout(auditContracts, 250);
+  setTimeout(auditContracts, 2500);
 })();
