@@ -1,4 +1,4 @@
-name: REVEX r27 / 0.8.19 Engineering release
+name: REVEX r27 / 0.8.19 Spec Energy release
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: revex-r27-0819-engineering-release
+  group: revex-r27-0819-spec-energy-release
   cancel-in-progress: false
 
 jobs:
@@ -23,7 +23,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download exact REVEX 0.8.19 live Companion files
+      - name: Download exact REVEX 0.8.19 Companion files
         shell: bash
         run: |
           set -euo pipefail
@@ -35,14 +35,15 @@ jobs:
               -o "/tmp/revex-r27/${out}"
             echo "${sha}  /tmp/revex-r27/${out}" | sha256sum -c -
           }
-          fetch_drive '1kvRhwCEPWzUyc-0kK8Q0t2KemyJtX4p0' 'index.html' '0452f91ac8ca971232c18fea1a0eef5ab755221739526899dca8bccb8c2950ee'
-          fetch_drive '1ELpV95mdDzLI8XWemMNSphXAVll19fko' 'app.js' 'feea232bc64583634d37fd6456dbe99fe3a7a98529b44cd017c51680202bcb8b'
+          fetch_drive '1kvRhwCEPWzUyc-0kK8Q0t2KemyJtX4p0' 'index.html' '8b827d24a53f56fdb5588a1ff9170ddd4cde3d35e9908b4c5b30933f47ab04d9'
+          fetch_drive '1ELpV95mdDzLI8XWemMNSphXAVll19fko' 'app.js' 'df4f321deefa1521483787fac64306de44d694e88c73b103f941beeefa3dba9f'
           fetch_drive '10cAgG1uDl7MAcuaUsgXEz3VdJ6AfTojd' 'store.js' '51dc540823ebe6760f3bdc7cb0fca4c6c771aeecf6c624c1d7178e3ace1d15a5'
-          fetch_drive '1lCABFvA380DYNyqK5W7vuAKMDTYJifdE' 'energy-r27.js' 'a5390c6c253ba2c34a7ba3e7a57c5062495127ea8e6876aa876f65bee32bfb78'
-          fetch_drive '1n8F0yAs0LcItGUO9DmUDs2VBTznQRisb' 'energy-r27.css' '5630c16ccdc40a74309c2998fd43daa562ca619e14d232e2b60fc8687b1f14c4'
-          fetch_drive '1g58NvJ7aN3WBEupBe0gc8UIvlWPaJ54p' 'shell-integrity.js' '76210a49699a4e40fd944e419d8c88e17251af8bc584607af3b9c6e9ee4ec7b2'
+          fetch_drive '1lCABFvA380DYNyqK5W7vuAKMDTYJifdE' 'energy-r27.js' 'dfff0fa07975a7025ab95d9ac643c1cace092806a173b6f430de25cc4fb957c0'
+          fetch_drive '1n8F0yAs0LcItGUO9DmUDs2VBTznQRisb' 'energy-r27.css' 'e630617006fc22daf4c4e9dd6a9009ac2186a83494bdbcf11b4ffc33238fbc86'
+          fetch_drive '1g58NvJ7aN3WBEupBe0gc8UIvlWPaJ54p' 'shell-integrity.js' '34361df874e8b291bf882afd2e5ad7daf3a9a308f5007153ca46caf1deb68f1f'
+          fetch_drive '1ZoNuM2FzbzCcsq2e24IIvdrjEVeaIwGj' 'README.txt' '6930658a66353bfb554c381b12014cca0574dfc567b2721638bc4a11dd39c50d'
 
-      - name: Install r27 Engineering Companion without touching Design/BIM/Spec internals
+      - name: Install r27 Spec Energy Companion files
         shell: bash
         run: |
           set -euo pipefail
@@ -53,6 +54,7 @@ jobs:
           install -m 0644 /tmp/revex-r27/energy-r27.js "$DST/energy-r27.js"
           install -m 0644 /tmp/revex-r27/energy-r27.css "$DST/energy-r27.css"
           install -m 0644 /tmp/revex-r27/shell-integrity.js "$DST/shell-integrity.js"
+          install -m 0644 /tmp/revex-r27/README.txt "$DST/README.txt"
 
       - name: Align LIBER Apps launcher to REVEX 0.8.19
         shell: bash
@@ -63,11 +65,17 @@ jobs:
           import re
           p = Path('docs/liber-apps/js/apps.js')
           s = p.read_text(encoding='utf-8')
-          pat = re.compile(r"(id:\s*'revex'[\s\S]{0,700}?version:\s*')[^']+('[\s\S]{0,700}?lastUpdated:\s*')[^']+('")
-          s2, n = pat.subn(r"\g<1>0.8.19\g<2>2026-08-11\g<3>", s, count=1)
-          if n != 1:
-              raise SystemExit('Could not update REVEX launcher metadata exactly once')
-          p.write_text(s2, encoding='utf-8')
+          m = re.search(r"id:\s*'revex'", s)
+          if not m:
+              raise SystemExit('REVEX launcher entry not found')
+          start = m.start()
+          end = min(len(s), start + 1800)
+          block = s[start:end]
+          block, n1 = re.subn(r"version:\s*'[^']+'", "version: '0.8.19'", block, count=1)
+          block, n2 = re.subn(r"lastUpdated:\s*'[^']+'", "lastUpdated: '2026-08-11'", block, count=1)
+          if n1 != 1 or n2 != 1:
+              raise SystemExit(f'Could not align REVEX launcher metadata: version={n1}, date={n2}')
+          p.write_text(s[:start] + block + s[end:], encoding='utf-8')
           PY
 
       - name: Static architecture QA
@@ -77,16 +85,23 @@ jobs:
           cp docs/liber-apps/apps/revex/app.js /tmp/revex-app.mjs
           cp docs/liber-apps/apps/revex/store.js /tmp/revex-store.mjs
           cp docs/liber-apps/apps/revex/energy-r27.js /tmp/revex-energy.mjs
+          cp docs/liber-apps/apps/revex/shell-integrity.js /tmp/revex-shell.mjs
           node --check /tmp/revex-app.mjs
           node --check /tmp/revex-store.mjs
           node --check /tmp/revex-energy.mjs
-          node --check docs/liber-apps/apps/revex/shell-integrity.js
-          grep -q 'data-view="engineering"' docs/liber-apps/apps/revex/index.html
-          grep -q 'id="view-engineering"' docs/liber-apps/apps/revex/index.html
-          grep -q '>Energy</button>' docs/liber-apps/apps/revex/index.html
-          grep -q 'data-liber-revex-energy-input="1"' docs/liber-apps/apps/revex/index.html
+          node --check /tmp/revex-shell.mjs
+          grep -q 'data-view="spec">Spec</button>' docs/liber-apps/apps/revex/index.html
+          grep -q 'data-spec-section="book"' docs/liber-apps/apps/revex/index.html
+          grep -q 'data-spec-section="energy"' docs/liber-apps/apps/revex/index.html
+          grep -q 'id="spec-energy-section"' docs/liber-apps/apps/revex/index.html
+          grep -q 'id="view-docs"' docs/liber-apps/apps/revex/index.html
+          ! grep -q 'data-view="engineering"' docs/liber-apps/apps/revex/index.html
+          ! grep -q 'id="view-engineering"' docs/liber-apps/apps/revex/index.html
+          ! grep -q 'data-view="energy"' docs/liber-apps/apps/revex/index.html
+          ! grep -q 'id="view-energy"' docs/liber-apps/apps/revex/index.html
           ! grep -q 'data-energy-applicant' docs/liber-apps/apps/revex/index.html
           ! grep -q 'id="energy-seal"' docs/liber-apps/apps/revex/index.html
+          grep -q 'data-liber-revex-energy-input="1"' docs/liber-apps/apps/revex/index.html
           grep -q 'syncEngineeringPackage' docs/liber-apps/apps/revex/store.js
           grep -q 'getEngineeringState' docs/liber-apps/apps/revex/store.js
           grep -q 'publishEnergyResult' docs/liber-apps/apps/revex/store.js
@@ -96,8 +111,9 @@ jobs:
           grep -q "VERSION='0.8.19'" docs/liber-apps/apps/revex/shell-integrity.js
           grep -q "BUILD='20260811r27'" docs/liber-apps/apps/revex/shell-integrity.js
           grep -q "version: '0.8.19'" docs/liber-apps/js/apps.js
+          grep -q 'Energy is a section inside the REVEX Companion Spec tab' docs/liber-apps/apps/revex/README.txt
 
-      - name: Commit live Engineering release
+      - name: Commit live Spec Energy release
         shell: bash
         run: |
           set -euo pipefail
@@ -109,10 +125,11 @@ jobs:
                   docs/liber-apps/apps/revex/energy-r27.js \
                   docs/liber-apps/apps/revex/energy-r27.css \
                   docs/liber-apps/apps/revex/shell-integrity.js \
+                  docs/liber-apps/apps/revex/README.txt \
                   docs/liber-apps/js/apps.js
           if git diff --cached --quiet; then
-            echo 'REVEX r27 Engineering Companion already live in main'
+            echo 'REVEX r27 Spec Energy Companion already live in main'
             exit 0
           fi
-          git commit -m 'REVEX 0.8.19 Engineering tab and Energy chain'
+          git commit -m 'REVEX 0.8.19 move Energy under Spec'
           git push origin HEAD:main
