@@ -6,8 +6,11 @@ let sourceState = null;
 let resultState = null;
 let sourceBusy = false;
 let resultBusy = false;
+let serverBusy = false;
 let lastSourceRevision = '';
 let lastResultRevision = '';
+const ENERGY_HARD_STOP = 0.98;
+const ENERGY_QUALITY_TARGET = 0.98;
 
 function state() { return window.__revexState || {}; }
 function projectId() { return String(state().projectId || new URLSearchParams(location.search).get('projectId') || '').trim(); }
@@ -31,32 +34,108 @@ function setBadge(text, tone = 'quiet') {
   node.textContent = text;
   node.dataset.tone = tone;
 }
+function pct(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : '—';
+}
+function integrityState(manifest) {
+  const publication = manifest?.publicationIntegrity || {};
+  const ratios = Object.entries(publication.ratios || {})
+    .map(([key, value]) => [key, Number(value)])
+    .filter(([, value]) => Number.isFinite(value));
+  const hardStop = Number(publication.threshold || ENERGY_HARD_STOP);
+  const qualityTarget = Number(publication.qualityTarget || Math.max(hardStop, ENERGY_QUALITY_TARGET));
+  const lowest = ratios.length ? Math.min(...ratios.map(([, value]) => value)) : NaN;
+  const belowQuality = ratios.filter(([, value]) => value < qualityTarget);
+  return { ratios, hardStop, qualityTarget, lowest, belowQuality };
+}
 
 function renderSource() {
   const summary = $('#energy-source-summary');
   const facts = $('#energy-source-facts');
-  if (!sourceState?.manifest) {
-    setBadge('No Energy Sync', 'quiet');
-    summary.innerHTML = 'In Revit, choose <b>ENERGY SYNC</b>.';
+  const gate = $('#energy-project-gate');
+  const id = projectId();
+  if (gate) gate.hidden = Boolean(id);
+  if (!id) {
+    sourceState = null;
+    setBadge('Choose project', 'quiet');
+    summary.innerHTML = 'Create or choose the same REVEX project used by Design. Then click <b>SYNC ENGINEERING</b> in Revit; the full downstream Energy chain runs automatically after the ≥98% publication gate. Sub-98% evidence is preserved for repair as diagnostic evidence and is never published or sent to managed processing.';
     facts.innerHTML = '';
-    setRun('Waiting for a published ≥98% Energy Sync revision.');
+    setRun('Choose or create a REVEX project to begin Engineering Sync.');
+    return;
+  }
+  if (!sourceState?.manifest) {
+    setBadge('Ready for Engineering Sync', 'quiet');
+    summary.innerHTML = 'Project connected. In Revit Engineering, click <b>SYNC ENGINEERING</b>. Revit evidence will attach here automatically and the downstream pipeline will continue without a second button.';
+    facts.innerHTML = '';
+    setRun('Waiting for an Engineering Sync revision that clears the ≥98% publication gate. Sub-98% evidence remains diagnostic only and will not be published.');
     return;
   }
   const manifest = sourceState.manifest;
-  setBadge(manifest.gbxmlStatus === 'EXPORTED' ? 'Evidence ready' : manifest.gbxmlStatus || 'Energy Sync', manifest.gbxmlStatus === 'EXPORTED' ? 'ready' : 'blocked');
-  summary.textContent = 'Immutable Energy evidence is attached to this Project ID. Design Book, Spec Book content, printing sets and sheet PDFs were not modified.';
+  const integrity = integrityState(manifest);
+  const exported = manifest.gbxmlStatus === 'EXPORTED';
+  const belowGate = !exported || !integrity.ratios.length || integrity.ratios.some(([, value]) => value < ENERGY_HARD_STOP);
+  setBadge(belowGate ? `Diagnostic ${pct(integrity.lowest)} · not published` : 'Evidence ready', belowGate ? 'blocked' : 'ready');
+  summary.textContent = belowGate
+    ? `Engineering evidence is preserved for repair, but it does not clear the ≥${pct(ENERGY_HARD_STOP)} publication gate in every evidence domain. It is not published and managed processing will not start.`
+    : 'Immutable Engineering evidence and Weather file (.EPW) are attached. Revit writes are finished; downstream GeometryCo/EnergyPlus work has no RVT return path.';
+  const weather = manifest.weather || {};
+  const weatherLocation = [weather.city, weather.stateProvince, weather.country].filter(Boolean).join(', ') || '—';
+  const belowQualityText = integrity.belowQuality.length
+    ? integrity.belowQuality.map(([key, value]) => `${key}: ${pct(value)}`).join(' · ')
+    : 'None';
   const rows = [
     ['Revision', sourceState.revision || manifest.revision],
     ['Model', manifest.sourceModel?.title || '—'],
     ['Engine', manifest.engine || '—'],
     ['Architecture', manifest.architecture || '—'],
-    ['Publication integrity', '≥98% in every evidence domain'],
+    ['Integrity hard stop', `≥${pct(integrity.hardStop)} in every evidence domain`],
+    ['Publication / quality target', `≥${pct(ENERGY_HARD_STOP)} in every evidence domain`],
+    ['Lowest integrity', pct(integrity.lowest)],
+    ['Below quality target', belowQualityText],
+    ['Weather file (.EPW)', weather.sourceFile || weather.file || '—'],
+    ['Weather location', weatherLocation],
     ['Revit writes', 'Spaces · EADM · EN/Energy tags'],
-    ['Weather', manifest.companionProcessing?.weather?.name || manifest.companionProcessing?.weather || 'EPW attached from REVEX'],
     ['Post-export writeback', 'None']
   ];
   facts.innerHTML = rows.map(([key, value]) => `<dt>${esc(key)}</dt><dd>${esc(value)}</dd>`).join('');
-  setRun('Evidence attached. The full managed Energy run starts automatically from REVEX.');
+  setRun(belowGate
+    ? `Diagnostic only: this revision is preserved but blocked below the ≥${pct(ENERGY_HARD_STOP)} publication gate.`
+    : 'Engineering evidence attached. The managed REVEX Energy server is processing this immutable revision; the workstation is no longer part of the simulation environment.', belowGate ? 'bad' : '');
+}
+
+
+async function runManagedServerForSource() {
+  const id = projectId();
+  const revision = String(sourceState?.revision || sourceState?.manifest?.revision || '').trim();
+  if (!id || !revision || serverBusy) return;
+  if (!sourceState?.cloud) {
+    setRun('Engineering evidence is preserved locally, but managed Energy processing requires a signed-in REVEX cloud session.', 'bad');
+    return;
+  }
+  const integrity = integrityState(sourceState?.manifest);
+  const publishable = sourceState?.manifest?.gbxmlStatus === 'EXPORTED' && integrity.ratios.length > 0 && integrity.ratios.every(([, value]) => value >= ENERGY_HARD_STOP);
+  if (!publishable) {
+    setRun(`Diagnostic only: every Engineering evidence domain must be ≥${pct(ENERGY_HARD_STOP)} before managed processing can start.`, 'bad');
+    return;
+  }
+  const existingSource = String(resultState?.manifest?.sourceEngineeringRevision || '').trim();
+  if (existingSource === revision && String(resultState?.manifest?.status || '').toUpperCase() === 'COMPLETE') {
+    setRun('Managed Energy package already complete for this Engineering revision.', 'good');
+    return;
+  }
+  serverBusy = true;
+  setRun('Managed REVEX Energy server: GeometryCo → Baseline/Proposed → OpenStudio/EnergyPlus → reports → EN-1…', 'busy');
+  try {
+    const job = await Store.runEnergyServer(id, revision);
+    resultState = await Store.getEnergyResult(id);
+    lastResultRevision = resultState?.revision || resultState?.manifest?.resultRevision || '';
+    renderResult();
+    const complete = String(resultState?.manifest?.status || job?.status || '').toUpperCase() === 'COMPLETE';
+    setRun(complete ? 'Managed Energy package complete. EN-1 is prepared with identity/signature/seal fields intentionally blank.' : (resultState?.manifest?.error || job?.message || 'Managed Energy worker returned a reviewable result.'), complete ? 'good' : 'bad');
+  } catch (error) {
+    setRun(error?.message || 'Managed REVEX Energy server failed.', 'bad');
+  } finally { serverBusy = false; }
 }
 
 function renderResult() {
@@ -73,16 +152,40 @@ function renderResult() {
     ? `${manifest.resultRevision || resultState.revision} completed. PDFs are standalone and ready for later insertion.`
     : `${manifest.status || 'Blocked'}: ${manifest.error || 'Review the pipeline logs.'}`;
   const rows = Array.isArray(resultState.artifacts) ? resultState.artifacts : [];
-  const ranked = [...rows].sort((a, b) => {
-    const rank = (row) => /EN-1_READY_TO_INSERT\.pdf|COMcheck_READY_TO_INSERT\.pdf/i.test(row.name || '') ? 0 : /\.pdf$/i.test(row.name || '') ? 1 : 2;
-    return rank(a) - rank(b) || String(a.name || '').localeCompare(String(b.name || ''));
-  });
-  artifacts.innerHTML = ranked.length ? ranked.map((row) => {
-    const filing = /EN-1_READY_TO_INSERT\.pdf|COMcheck_READY_TO_INSERT\.pdf/i.test(row.name || '');
-    const label = filing ? 'Ready to insert' : (row.kind || 'Energy output');
-    const body = `<span>${esc(row.name || 'Artifact')}</span><small>${esc(label)}${row.bytes ? ` · ${bytes(row.bytes)}` : ''}</small>`;
-    return row.url ? `<a class="energy-artifact${filing ? ' is-filing' : ''}" href="${esc(row.url)}" target="_blank" rel="noopener">${body}</a>` : `<div class="energy-artifact${filing ? ' is-filing' : ''}">${body}</div>`;
-  }).join('') : '<div class="energy-empty">No downloadable artifacts were attached to this result.</div>';
+  const groups = [
+    ['filing-input', 'Filing'],
+    ['review-report', 'Reports / review package'],
+    ['simulation-output', 'Original simulation reports'],
+    ['compiled-model', 'Compiled OSM models'],
+    ['original-model', 'Original Revit-derived OSM'],
+    ['source-evidence', 'Source evidence'],
+    ['reference-only', 'Approved references'],
+    ['diagnostic', 'Diagnostics'],
+  ];
+  const byKind = new Map(groups.map(([kind]) => [kind, []]));
+  for (const row of rows) {
+    const kind = String(row.kind || 'diagnostic');
+    (byKind.get(kind) || byKind.get('diagnostic')).push(row);
+  }
+  const renderArtifact = (row) => {
+    const filing = /EN-1_READY_TO_INSERT\.pdf/i.test(row.name || '');
+    const cxlReady = /COMcheck_PROJECT_INPUT_READY\.cxl/i.test(row.name || '');
+    const label = filing ? 'Ready to insert' : cxlReady ? 'Ready for COMcheck Web / review' : (row.kind || 'Energy output');
+    const relative = String(row.relativePath || '').replace(/\\/g, '/');
+    const detail = [label, relative && relative !== row.name ? relative : '', row.bytes ? bytes(row.bytes) : ''].filter(Boolean).join(' · ');
+    const body = `<span>${esc(row.name || 'Artifact')}</span><small>${esc(detail)}</small>`;
+    const cls = `energy-artifact${filing || cxlReady ? ' is-filing' : ''}`;
+    return row.url ? `<a class="${cls}" href="${esc(row.url)}" target="_blank" rel="noopener">${body}</a>` : `<div class="${cls}">${body}</div>`;
+  };
+  const grouped = groups.map(([kind, title]) => {
+    const items = (byKind.get(kind) || []).sort((a, b) => {
+      const rank = (row) => /EN-1_READY_TO_INSERT\.pdf/i.test(row.name || '') ? 0 : /COMcheck_PROJECT_INPUT_READY\.cxl/i.test(row.name || '') ? 1 : /\.pdf$/i.test(row.name || '') ? 2 : 3;
+      return rank(a) - rank(b) || String(a.relativePath || a.name || '').localeCompare(String(b.relativePath || b.name || ''));
+    });
+    if (!items.length) return '';
+    return `<section class="energy-artifact-group" data-kind="${esc(kind)}"><h4>${esc(title)}</h4><div class="energy-artifact-group-list">${items.map(renderArtifact).join('')}</div></section>`;
+  }).join('');
+  artifacts.innerHTML = grouped || '<div class="energy-empty">No downloadable artifacts were attached to this result.</div>';
 }
 
 async function importSource(files) {
@@ -98,9 +201,10 @@ async function importSource(files) {
     sourceState = await Store.syncEngineeringPackage(files, projectId());
     lastSourceRevision = sourceState.revision || sourceState.manifest?.revision || '';
     renderSource();
+    void runManagedServerForSource();
   } catch (error) {
-    setBadge('Energy Sync rejected', 'blocked');
-    setRun(error.message || 'Energy Sync could not be imported.', 'bad');
+    setBadge('Engineering Sync rejected', 'blocked');
+    setRun(error.message || 'Engineering Sync could not be imported.', 'bad');
   } finally { sourceBusy = false; }
 }
 
@@ -122,21 +226,6 @@ async function importResult(files) {
   } finally { resultBusy = false; }
 }
 
-async function runEnergy(event) {
-  event?.preventDefault?.();
-  if (!sourceState?.manifest) { setRun('Run ENERGY SYNC + RUN in REVEX first.', 'bad'); return; }
-  if (!window.chrome?.webview?.postMessage) { setRun('Open this project inside REVEX to run the managed Energy worker.', 'bad'); return; }
-  const button = $('#energy-run');
-  button.disabled = true;
-  setRun('Requesting a full managed rerun…', 'busy');
-  window.chrome.webview.postMessage({
-    type: 'liber:revex-energy-run',
-    projectId: projectId(),
-    projectName: state().project?.name || state().project?.title || sourceState.manifest?.sourceModel?.title || 'REVEX Energy',
-    sourceEngineeringRevision: sourceState.revision || sourceState.manifest.revision,
-    applicant: {}
-  });
-}
 
 async function hydrate() {
   const id = projectId();
@@ -148,6 +237,9 @@ async function hydrate() {
   } catch (_) { sourceState = null; resultState = null; }
   renderSource();
   renderResult();
+  const currentSource = String(sourceState?.revision || sourceState?.manifest?.revision || '').trim();
+  const resultSource = String(resultState?.manifest?.sourceEngineeringRevision || '').trim();
+  if (sourceState?.cloud && currentSource && resultSource !== currentSource) setTimeout(() => { void runManagedServerForSource(); }, 0);
 }
 
 const sourceInput = $('#revex-energy-sync-upload');
@@ -160,39 +252,14 @@ if (resultInput) {
   resultInput.dataset.liberRevexEnergyHandlerReady = '1';
   resultInput.addEventListener('change', () => { if (resultInput.files?.length) importResult(resultInput.files); });
 }
-function showSpecSection(section = 'book', updateRoute = true) {
-  const selected = section === 'energy' ? 'energy' : 'book';
-  $$('[data-spec-section]').forEach((button) => {
-    const active = button.dataset.specSection === selected;
-    button.classList.toggle('active', active);
-    button.setAttribute('aria-selected', String(active));
-  });
-  $$('[data-spec-panel]').forEach((panel) => { panel.hidden = panel.dataset.specPanel !== selected; });
-  const specStatus = $('#spec-status');
-  if (specStatus) specStatus.hidden = selected === 'energy';
-  if (updateRoute && projectId()) {
-    const url = new URL(location.href);
-    url.searchParams.set('view', 'spec');
-    if (selected === 'energy') url.searchParams.set('specSection', 'energy');
-    else url.searchParams.delete('specSection');
-    history.replaceState(null, '', `${url.pathname}?${url.searchParams}`);
-  }
-  if (selected === 'energy') hydrate();
-}
-
-$$('[data-spec-section]').forEach((button) => button.addEventListener('click', () => showSpecSection(button.dataset.specSection || 'book')));
-$('#energy-run')?.addEventListener('click', runEnergy);
-window.addEventListener('revex:spec-section-route', (event) => showSpecSection(event.detail?.section || 'book', false));
-window.addEventListener('revex:energy-open', () => showSpecSection('energy'));
-$('#project-select')?.addEventListener('change', () => setTimeout(() => { if (!$('#spec-energy-section')?.hidden) hydrate(); }, 0));
+window.addEventListener('revex:energy-open', hydrate);
+$('#project-select')?.addEventListener('change', () => setTimeout(hydrate, 0));
 window.chrome?.webview?.addEventListener?.('message', (event) => {
   const message = event.data || {};
   if (message.type !== 'liber:revex-energy-status') return;
-  const button = $('#energy-run');
-  if (button && !['running', 'busy'].includes(String(message.stage || '').toLowerCase())) button.disabled = false;
   setRun(message.message || message.stage || 'Energy update', message.ok ? 'good' : (['running', 'busy'].includes(String(message.stage || '').toLowerCase()) ? 'busy' : 'bad'));
 });
 
 renderSource();
 renderResult();
-showSpecSection(new URLSearchParams(location.search).get('specSection') === 'energy' ? 'energy' : 'book', false);
+if (!$('#view-energy')?.hidden) hydrate();
