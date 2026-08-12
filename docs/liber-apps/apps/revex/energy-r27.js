@@ -1,4 +1,5 @@
 import './energy-contract-r40.js?v=20260812r40';
+import './revex-r41-live.js?v=20260812r41';
 
 const Store = window.RevexStore;
 const $ = (selector, root = document) => root.querySelector(selector);
