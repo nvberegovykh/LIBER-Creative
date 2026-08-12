@@ -9,7 +9,7 @@
   // Store methods exist before app.js evaluates.
   if(!root.__revexR39Runtime){
     if(document.readyState==='loading'){
-      document.write('<script src="revex-r39-runtime.js?v='+BUILD+'"><\\/script>');
+      document.write('<script src="revex-r39-runtime.js?v='+BUILD+'"></'+'script>');
     }else{
       const script=document.createElement('script');script.src='revex-r39-runtime.js?v='+BUILD;script.async=false;document.head.appendChild(script);
     }
