@@ -391,18 +391,18 @@
       const files = Array.from(fileList || []);
       const manifestFile = byName(files, 'engineering-sync.json');
       const gbxmlFile = files.find((file) => /\.xml$/i.test(file.name)) || null;
-      if (!manifestFile || !gbxmlFile) throw new Error('The Engineering Sync package must include engineering-sync.json and the Revit gbXML.');
+      if (!manifestFile || !gbxmlFile) throw new Error('The Energy Sync evidence must include engineering-sync.json and the Revit gbXML.');
       const manifest = await readJson(manifestFile);
       if (manifest?.schema !== 'liber.revex.engineering-sync.v1' || manifest?.architecture !== 'REVIT_EVIDENCE_GRAPH_V1')
-        throw new Error('This is not a compatible REVIT_EVIDENCE_GRAPH_V1 Engineering Sync revision.');
+        throw new Error('This is not a compatible REVIT_EVIDENCE_GRAPH_V1 Energy Sync revision.');
       if (Number(manifest?.publicationIntegrity?.threshold || 0) < 0.98 ||
           Object.values(manifest?.publicationIntegrity?.ratios || {}).some((value) => Number(value) < 0.98))
         throw new Error('Energy Sync requires at least 98% integrity in every Revit evidence domain.');
       const projectId = preferredProjectId || manifest.projectId || null;
-      if (!projectId) throw new Error('Choose a LIBER project before importing Engineering Sync.');
-      if (manifest.projectId && manifest.projectId !== projectId) throw new Error('The Engineering Sync revision belongs to a different REVEX project.');
+      if (!projectId) throw new Error('Choose a REVEX project before importing Energy Sync.');
+      if (manifest.projectId && manifest.projectId !== projectId) throw new Error('The Energy Sync revision belongs to a different REVEX project.');
       if (manifest.writeBackToRevitAfterExport !== false || manifest.pdfInsertion !== false)
-        throw new Error('The Engineering Sync authority boundary is invalid.');
+        throw new Error('The Energy Sync authority boundary is invalid.');
 
       const revision = docId(manifest.revision || `eng_${Date.now()}`);
       const at = iso();

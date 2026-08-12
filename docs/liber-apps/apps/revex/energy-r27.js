@@ -37,7 +37,7 @@ function renderSource() {
   const facts = $('#energy-source-facts');
   if (!sourceState?.manifest) {
     setBadge('No Energy Sync', 'quiet');
-    summary.innerHTML = 'In Revit, choose <b>ENERGY SYNC TO COMPANION</b>.';
+    summary.innerHTML = 'In Revit, choose <b>ENERGY SYNC</b>.';
     facts.innerHTML = '';
     setRun('Waiting for a published ≥98% Energy Sync revision.');
     return;
@@ -132,7 +132,7 @@ function dataUrl(file) {
 
 async function runEnergy(event) {
   event.preventDefault();
-  if (!sourceState?.manifest) return setRun('Run ENERGY SYNC TO COMPANION from Revit first.', 'bad');
+  if (!sourceState?.manifest) return setRun('Run ENERGY SYNC from Revit first.', 'bad');
   const weather = $('#energy-weather')?.files?.[0];
   if (!weather || !/\.epw$/i.test(weather.name)) return setRun('Choose the exact LaGuardia TMY3 .epw file.', 'bad');
   if (!window.chrome?.webview?.postMessage) return setRun('Open this project from the REVEX Revit add-in to run the local Energy worker.', 'bad');
