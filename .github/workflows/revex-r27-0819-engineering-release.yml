@@ -1,0 +1,118 @@
+name: REVEX r27 / 0.8.19 Engineering release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/revex-r27-0819-engineering-release.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: revex-r27-0819-engineering-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download exact REVEX 0.8.19 live Companion files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/revex-r27
+          fetch_drive() {
+            local id="$1" out="$2" sha="$3"
+            curl -L --fail --retry 4 --retry-delay 2 \
+              "https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t" \
+              -o "/tmp/revex-r27/${out}"
+            echo "${sha}  /tmp/revex-r27/${out}" | sha256sum -c -
+          }
+          fetch_drive '1kvRhwCEPWzUyc-0kK8Q0t2KemyJtX4p0' 'index.html' '0452f91ac8ca971232c18fea1a0eef5ab755221739526899dca8bccb8c2950ee'
+          fetch_drive '1ELpV95mdDzLI8XWemMNSphXAVll19fko' 'app.js' 'feea232bc64583634d37fd6456dbe99fe3a7a98529b44cd017c51680202bcb8b'
+          fetch_drive '10cAgG1uDl7MAcuaUsgXEz3VdJ6AfTojd' 'store.js' '51dc540823ebe6760f3bdc7cb0fca4c6c771aeecf6c624c1d7178e3ace1d15a5'
+          fetch_drive '1lCABFvA380DYNyqK5W7vuAKMDTYJifdE' 'energy-r27.js' 'a5390c6c253ba2c34a7ba3e7a57c5062495127ea8e6876aa876f65bee32bfb78'
+          fetch_drive '1n8F0yAs0LcItGUO9DmUDs2VBTznQRisb' 'energy-r27.css' '5630c16ccdc40a74309c2998fd43daa562ca619e14d232e2b60fc8687b1f14c4'
+          fetch_drive '1g58NvJ7aN3WBEupBe0gc8UIvlWPaJ54p' 'shell-integrity.js' '76210a49699a4e40fd944e419d8c88e17251af8bc584607af3b9c6e9ee4ec7b2'
+
+      - name: Install r27 Engineering Companion without touching Design/BIM/Spec internals
+        shell: bash
+        run: |
+          set -euo pipefail
+          DST='docs/liber-apps/apps/revex'
+          install -m 0644 /tmp/revex-r27/index.html "$DST/index.html"
+          install -m 0644 /tmp/revex-r27/app.js "$DST/app.js"
+          install -m 0644 /tmp/revex-r27/store.js "$DST/store.js"
+          install -m 0644 /tmp/revex-r27/energy-r27.js "$DST/energy-r27.js"
+          install -m 0644 /tmp/revex-r27/energy-r27.css "$DST/energy-r27.css"
+          install -m 0644 /tmp/revex-r27/shell-integrity.js "$DST/shell-integrity.js"
+
+      - name: Align LIBER Apps launcher to REVEX 0.8.19
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('docs/liber-apps/js/apps.js')
+          s = p.read_text(encoding='utf-8')
+          pat = re.compile(r"(id:\s*'revex'[\s\S]{0,700}?version:\s*')[^']+('[\s\S]{0,700}?lastUpdated:\s*')[^']+('")
+          s2, n = pat.subn(r"\g<1>0.8.19\g<2>2026-08-11\g<3>", s, count=1)
+          if n != 1:
+              raise SystemExit('Could not update REVEX launcher metadata exactly once')
+          p.write_text(s2, encoding='utf-8')
+          PY
+
+      - name: Static architecture QA
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp docs/liber-apps/apps/revex/app.js /tmp/revex-app.mjs
+          cp docs/liber-apps/apps/revex/store.js /tmp/revex-store.mjs
+          cp docs/liber-apps/apps/revex/energy-r27.js /tmp/revex-energy.mjs
+          node --check /tmp/revex-app.mjs
+          node --check /tmp/revex-store.mjs
+          node --check /tmp/revex-energy.mjs
+          node --check docs/liber-apps/apps/revex/shell-integrity.js
+          grep -q 'data-view="engineering"' docs/liber-apps/apps/revex/index.html
+          grep -q 'id="view-engineering"' docs/liber-apps/apps/revex/index.html
+          grep -q '>Energy</button>' docs/liber-apps/apps/revex/index.html
+          grep -q 'data-liber-revex-energy-input="1"' docs/liber-apps/apps/revex/index.html
+          ! grep -q 'data-energy-applicant' docs/liber-apps/apps/revex/index.html
+          ! grep -q 'id="energy-seal"' docs/liber-apps/apps/revex/index.html
+          grep -q 'syncEngineeringPackage' docs/liber-apps/apps/revex/store.js
+          grep -q 'getEngineeringState' docs/liber-apps/apps/revex/store.js
+          grep -q 'publishEnergyResult' docs/liber-apps/apps/revex/store.js
+          grep -q 'manifest.projectId && manifest.projectId !== projectId' docs/liber-apps/apps/revex/store.js
+          grep -q "applicant: {}" docs/liber-apps/apps/revex/energy-r27.js
+          grep -q "sealDataUrl: ''" docs/liber-apps/apps/revex/energy-r27.js
+          grep -q "VERSION='0.8.19'" docs/liber-apps/apps/revex/shell-integrity.js
+          grep -q "BUILD='20260811r27'" docs/liber-apps/apps/revex/shell-integrity.js
+          grep -q "version: '0.8.19'" docs/liber-apps/js/apps.js
+
+      - name: Commit live Engineering release
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'REVEX release bot'
+          git config user.email 'revex-release@users.noreply.github.com'
+          git add docs/liber-apps/apps/revex/index.html \
+                  docs/liber-apps/apps/revex/app.js \
+                  docs/liber-apps/apps/revex/store.js \
+                  docs/liber-apps/apps/revex/energy-r27.js \
+                  docs/liber-apps/apps/revex/energy-r27.css \
+                  docs/liber-apps/apps/revex/shell-integrity.js \
+                  docs/liber-apps/js/apps.js
+          if git diff --cached --quiet; then
+            echo 'REVEX r27 Engineering Companion already live in main'
+            exit 0
+          fi
+          git commit -m 'REVEX 0.8.19 Engineering tab and Energy chain'
+          git push origin HEAD:main
