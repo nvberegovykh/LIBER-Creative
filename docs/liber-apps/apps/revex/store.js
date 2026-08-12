@@ -387,6 +387,111 @@
       return { ...localPackage, ...state, cloud: true, specProjectId };
     },
 
+    async syncEngineeringPackage(fileList, preferredProjectId) {
+      const files = Array.from(fileList || []);
+      const manifestFile = byName(files, 'engineering-sync.json');
+      const gbxmlFile = files.find((file) => /\.xml$/i.test(file.name)) || null;
+      if (!manifestFile || !gbxmlFile) throw new Error('The Engineering Sync package must include engineering-sync.json and the Revit gbXML.');
+      const manifest = await readJson(manifestFile);
+      if (manifest?.schema !== 'liber.revex.engineering-sync.v1' || manifest?.architecture !== 'REVIT_EVIDENCE_GRAPH_V1')
+        throw new Error('This is not a compatible REVIT_EVIDENCE_GRAPH_V1 Engineering Sync revision.');
+      if (Number(manifest?.publicationIntegrity?.threshold || 0) < 0.98 ||
+          Object.values(manifest?.publicationIntegrity?.ratios || {}).some((value) => Number(value) < 0.98))
+        throw new Error('Energy Sync requires at least 98% integrity in every Revit evidence domain.');
+      const projectId = preferredProjectId || manifest.projectId || null;
+      if (!projectId) throw new Error('Choose a LIBER project before importing Engineering Sync.');
+      if (manifest.projectId && manifest.projectId !== projectId) throw new Error('The Engineering Sync revision belongs to a different REVEX project.');
+      if (manifest.writeBackToRevitAfterExport !== false || manifest.pdfInsertion !== false)
+        throw new Error('The Engineering Sync authority boundary is invalid.');
+
+      const revision = docId(manifest.revision || `eng_${Date.now()}`);
+      const at = iso();
+      const localArtifacts = files.map((file, index) => ({
+        name: file.name, bytes: file.size || 0, kind: index === 0 ? 'manifest' : 'engineering-evidence',
+        url: URL.createObjectURL(file), cloud: false
+      }));
+      const state = {
+        schema: 'liber.revex.engineering-state.v1', projectId, revision, syncedAt: at,
+        manifest, artifacts: localArtifacts, cloud: false, writeBackToRevitAfterExport: false, pdfInsertion: false
+      };
+      localStorage.setItem(`liber.revex.engineering.${projectId}`, JSON.stringify({
+        ...state, artifacts: localArtifacts.map(({ url, ...row }) => row), localOnly: true
+      }));
+      if (!this.isCloud()) return state;
+      if (!this.fs.storage) throw new Error('LIBER Storage is not available in this session.');
+
+      const base = `projects/${projectId}/revex/engineering/revisions/${revision}`;
+      const artifacts = [];
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        const uploaded = await this.uploadFile(`${base}/${String(index + 1).padStart(3, '0')}_${safe(file.name)}`, file);
+        artifacts.push({ name: file.name, bytes: file.size || 0, kind: index === 0 ? 'manifest' : 'engineering-evidence', url: uploaded.url, path: uploaded.path, cloud: true });
+      }
+      const cloudState = plain({ ...state, artifacts, cloud: true, syncedBy: this.user.uid });
+      await this.api.setDoc(this.api.doc(this.db, 'projects', projectId, 'revex', 'engineering'), cloudState, plain({ merge: false }));
+      await this.api.setDoc(this.api.doc(this.db, 'projects', projectId, 'revexEngineeringRevisions', revision), cloudState, plain({ merge: false }));
+      return cloudState;
+    },
+
+    async getEngineeringState(projectId) {
+      if (!projectId) return null;
+      if (!this.isCloud()) {
+        try { return JSON.parse(localStorage.getItem(`liber.revex.engineering.${projectId}`) || 'null'); } catch (_) { return null; }
+      }
+      const snap = await this.api.getDoc(this.api.doc(this.db, 'projects', projectId, 'revex', 'engineering'));
+      return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+    },
+
+    async publishEnergyResult(fileList, preferredProjectId) {
+      const files = Array.from(fileList || []);
+      const manifestFile = byName(files, 'energy-result.json');
+      if (!manifestFile) throw new Error('The Energy result must include energy-result.json.');
+      const manifest = await readJson(manifestFile);
+      if (manifest?.schema !== 'liber.revex.energy-result.v1') throw new Error('This is not a compatible REVEX Energy result.');
+      const projectId = preferredProjectId || manifest.projectId || null;
+      if (!projectId) throw new Error('Choose a LIBER project before publishing an Energy result.');
+      if (manifest.projectId && manifest.projectId !== projectId) throw new Error('The Energy result belongs to a different REVEX project.');
+      if (manifest.revitWriteBack !== false || manifest.pdfInsertion !== false)
+        throw new Error('The Energy result attempts to cross the Revit authority boundary.');
+
+      const revision = docId(manifest.resultRevision || `energy_${Date.now()}`);
+      const resultFiles = files.filter((file) => file !== manifestFile);
+      const declared = Array.isArray(manifest.artifacts) ? manifest.artifacts : [];
+      const at = iso();
+      const localArtifacts = resultFiles.map((file, index) => ({
+        ...(declared[index] || {}), name: declared[index]?.name || file.name, bytes: file.size || 0,
+        url: URL.createObjectURL(file), cloud: false
+      }));
+      const state = { schema: 'liber.revex.energy-state.v1', projectId, revision, publishedAt: at, manifest, artifacts: localArtifacts, cloud: false };
+      localStorage.setItem(`liber.revex.energy-result.${projectId}`, JSON.stringify({
+        ...state, artifacts: localArtifacts.map(({ url, ...row }) => row), localOnly: true
+      }));
+      if (!this.isCloud()) return state;
+      if (!this.fs.storage) throw new Error('LIBER Storage is not available in this session.');
+
+      const base = `projects/${projectId}/revex/energy/results/${revision}`;
+      const artifacts = [];
+      for (let index = 0; index < resultFiles.length; index += 1) {
+        const file = resultFiles[index];
+        const uploaded = await this.uploadFile(`${base}/${String(index + 1).padStart(3, '0')}_${safe(file.name)}`, file);
+        artifacts.push({ ...(declared[index] || {}), name: declared[index]?.name || file.name, bytes: file.size || 0, url: uploaded.url, path: uploaded.path, cloud: true });
+      }
+      const manifestUpload = await this.uploadFile(`${base}/000_energy-result.json`, manifestFile);
+      const cloudState = plain({ ...state, artifacts, manifestUrl: manifestUpload.url, manifestPath: manifestUpload.path, cloud: true, publishedBy: this.user.uid });
+      await this.api.setDoc(this.api.doc(this.db, 'projects', projectId, 'revex', 'energy'), cloudState, plain({ merge: false }));
+      await this.api.setDoc(this.api.doc(this.db, 'projects', projectId, 'revexEnergyResults', revision), cloudState, plain({ merge: false }));
+      return cloudState;
+    },
+
+    async getEnergyResult(projectId) {
+      if (!projectId) return null;
+      if (!this.isCloud()) {
+        try { return JSON.parse(localStorage.getItem(`liber.revex.energy-result.${projectId}`) || 'null'); } catch (_) { return null; }
+      }
+      const snap = await this.api.getDoc(this.api.doc(this.db, 'projects', projectId, 'revex', 'energy'));
+      return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+    },
+
     async listDesignEdits(projectId) {
       if (!this.isCloud() || !projectId) return [];
       const snap = await this.api.getDocs(this.api.collection(this.db, 'projects', projectId, 'revexDesignItems'));

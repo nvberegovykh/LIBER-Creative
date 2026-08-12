@@ -1,7 +1,7 @@
 (function(root){
   'use strict';
-  const BUILD='20260811r26';
-  const VERSION='0.8.18';
+  const BUILD='20260811r27';
+  const VERSION='0.8.19';
   if(root.__revexShellR20) return;
   root.__revexShellR20=true;
 
@@ -87,7 +87,7 @@
           return original(app,url);
         }; manager.__revexR20FreshLaunch=true;
       }
-      if(Array.isArray(manager.apps)){const app=manager.apps.find(row=>row?.id==='revex');if(app){app.version=VERSION;app.lastUpdated='2026-08-10';app.path='apps/revex/index.html?build='+BUILD;}}
+      if(Array.isArray(manager.apps)){const app=manager.apps.find(row=>row?.id==='revex');if(app){app.version=VERSION;app.lastUpdated='2026-08-11';app.path='apps/revex/index.html?build='+BUILD;}}
       const card=parent.document?.querySelector?.('.app-card[data-app-id="revex"] .app-version');if(card)card.textContent='v'+VERSION;
     }catch(error){console.warn('[REVEX] shell alignment',error);}
   }

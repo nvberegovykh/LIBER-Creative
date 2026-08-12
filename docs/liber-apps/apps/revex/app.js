@@ -128,16 +128,28 @@ function activeBimViewer(){ return window.__revexViewerR26Instance || window.__r
 
 function showView(name) {
   closeWorkspaceRail();
+  let requestedSpecSection = '';
+  if (name === 'energy' || name === 'engineering' || name === 'spec-energy') {
+    name = 'spec';
+    requestedSpecSection = 'energy';
+  } else if (name === 'spec') {
+    requestedSpecSection = new URLSearchParams(location.search).get('specSection') || '';
+  }
   const hasProject = Boolean(state.projectId);
   $('#view-empty').hidden = hasProject;
   for (const view of ['bim', 'design', 'spec', 'docs', 'chat', 'history']) $(`#view-${view}`).hidden = !hasProject || view !== name;
   $$('.main-nav [data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === name));
   if (hasProject) {
-    history.replaceState(null, '', `${location.pathname}?${new URLSearchParams({ ...(params.get('inShell') ? { inShell: '1' } : {}), projectId: state.projectId, ...(state.preferredSpecId ? { specProjectId: state.preferredSpecId } : {}), view: name })}`);
+    const route = { ...(params.get('inShell') ? { inShell: '1' } : {}), projectId: state.projectId, ...(state.preferredSpecId ? { specProjectId: state.preferredSpecId } : {}), view: name };
+    if (name === 'spec' && requestedSpecSection === 'energy') route.specSection = 'energy';
+    history.replaceState(null, '', `${location.pathname}?${new URLSearchParams(route)}`);
     const av = activeBimViewer();
     av?.setActive?.(name === 'bim');
     if (name === 'bim') setTimeout(() => { av?.resize?.(); av?.requestRender?.(); }, 0);
-    if (name === 'spec') renderSpec();
+    if (name === 'spec') {
+      renderSpec();
+      window.dispatchEvent(new CustomEvent('revex:spec-section-route', { detail: { section: requestedSpecSection === 'energy' ? 'energy' : 'book', projectId: state.projectId } }));
+    }
     if (name === 'chat') { renderChatContext(); setTimeout(() => ensureChatEmbedded(state.selectedContext), 0); }
     if (name === 'history') window.dispatchEvent(new CustomEvent('revex:history-open', { detail: { projectId: state.projectId } }));
   }
