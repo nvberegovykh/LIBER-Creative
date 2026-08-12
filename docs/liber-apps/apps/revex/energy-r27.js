@@ -52,10 +52,11 @@ function renderSource() {
     ['Architecture', manifest.architecture || '—'],
     ['Publication integrity', '≥98% in every evidence domain'],
     ['Revit writes', 'Spaces · EADM · EN/Energy tags'],
+    ['Weather', manifest.companionProcessing?.weather?.name || manifest.companionProcessing?.weather || 'EPW attached from REVEX'],
     ['Post-export writeback', 'None']
   ];
   facts.innerHTML = rows.map(([key, value]) => `<dt>${esc(key)}</dt><dd>${esc(value)}</dd>`).join('');
-  setRun('Ready. Choose the exact LaGuardia TMY3 EPW, then run the Companion-side package.');
+  setRun('Evidence attached. The full managed Energy run starts automatically from REVEX.');
 }
 
 function renderResult() {
@@ -121,42 +122,20 @@ async function importResult(files) {
   } finally { resultBusy = false; }
 }
 
-function dataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error || new Error(`Could not read ${file.name}.`));
-    reader.readAsDataURL(file);
-  });
-}
-
 async function runEnergy(event) {
-  event.preventDefault();
-  if (!sourceState?.manifest) return setRun('Run ENERGY SYNC from Revit first.', 'bad');
-  const weather = $('#energy-weather')?.files?.[0];
-  if (!weather || !/\.epw$/i.test(weather.name)) return setRun('Choose the exact LaGuardia TMY3 .epw file.', 'bad');
-  if (!window.chrome?.webview?.postMessage) return setRun('Open this project from the REVEX Revit add-in to run the local Energy worker.', 'bad');
+  event?.preventDefault?.();
+  if (!sourceState?.manifest) { setRun('Run ENERGY SYNC + RUN in REVEX first.', 'bad'); return; }
+  if (!window.chrome?.webview?.postMessage) { setRun('Open this project inside REVEX to run the managed Energy worker.', 'bad'); return; }
   const button = $('#energy-run');
   button.disabled = true;
-  setRun('Reading local inputs. Revit will not be accessed during this run…', 'busy');
-  try {
-    window.chrome.webview.postMessage({
-      type: 'liber:revex-energy-run',
-      projectId: projectId(),
-      projectName: state().project?.name || state().project?.title || sourceState.manifest?.sourceModel?.title || 'REVEX Energy',
-      sourceEngineeringRevision: sourceState.revision,
-      weatherFileName: weather.name,
-      weatherDataUrl: await dataUrl(weather),
-      openStudioCli: $('#energy-openstudio').value.trim(),
-      standardVersion: $('#energy-standard').value,
-      applicant: {},
-      sealDataUrl: ''
-    });
-    setRun('Energy worker started outside Revit. GeometryCo and both EnergyPlus runs may take several minutes.', 'busy');
-  } catch (error) {
-    button.disabled = false;
-    setRun(error.message || 'Energy package could not start.', 'bad');
-  }
+  setRun('Requesting a full managed rerun…', 'busy');
+  window.chrome.webview.postMessage({
+    type: 'liber:revex-energy-run',
+    projectId: projectId(),
+    projectName: state().project?.name || state().project?.title || sourceState.manifest?.sourceModel?.title || 'REVEX Energy',
+    sourceEngineeringRevision: sourceState.revision || sourceState.manifest.revision,
+    applicant: {}
+  });
 }
 
 async function hydrate() {
@@ -202,7 +181,7 @@ function showSpecSection(section = 'book', updateRoute = true) {
 }
 
 $$('[data-spec-section]').forEach((button) => button.addEventListener('click', () => showSpecSection(button.dataset.specSection || 'book')));
-$('#energy-run-form')?.addEventListener('submit', runEnergy);
+$('#energy-run')?.addEventListener('click', runEnergy);
 window.addEventListener('revex:spec-section-route', (event) => showSpecSection(event.detail?.section || 'book', false));
 window.addEventListener('revex:energy-open', () => showSpecSection('energy'));
 $('#project-select')?.addEventListener('change', () => setTimeout(() => { if (!$('#spec-energy-section')?.hidden) hydrate(); }, 0));
