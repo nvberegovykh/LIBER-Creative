@@ -1,3 +1,5 @@
+import './energy-contract-r40.js?v=20260812r40';
+
 const Store = window.RevexStore;
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -9,8 +11,8 @@ let resultBusy = false;
 let serverBusy = false;
 let lastSourceRevision = '';
 let lastResultRevision = '';
-const ENERGY_HARD_STOP = 0.98;
-const ENERGY_QUALITY_TARGET = 0.98;
+const ENERGY_HARD_STOP = 0.80;
+const ENERGY_QUALITY_TARGET = 0.95;
 
 function state() { return window.__revexState || {}; }
 function projectId() { return String(state().projectId || new URLSearchParams(location.search).get('projectId') || '').trim(); }
@@ -59,7 +61,7 @@ function renderSource() {
   if (!id) {
     sourceState = null;
     setBadge('Choose project', 'quiet');
-    summary.innerHTML = 'Create or choose the same REVEX project used by Design. Then click <b>SYNC ENGINEERING</b> in Revit; the full downstream Energy chain runs automatically after the ≥98% publication gate. Sub-98% evidence is preserved for repair as diagnostic evidence and is never published or sent to managed processing.';
+    summary.innerHTML = 'Create or choose the same REVEX project used by Design. Then click <b>SYNC ENGINEERING</b> in Revit; the full downstream Energy chain runs automatically after the ≥80% hard-stop gate. Results below 95% continue with a visible quality warning; sub-80% evidence is preserved for repair and is not published.';
     facts.innerHTML = '';
     setRun('Choose or create a REVEX project to begin Engineering Sync.');
     return;
@@ -68,17 +70,27 @@ function renderSource() {
     setBadge('Ready for Engineering Sync', 'quiet');
     summary.innerHTML = 'Project connected. In Revit Engineering, click <b>SYNC ENGINEERING</b>. Revit evidence will attach here automatically and the downstream pipeline will continue without a second button.';
     facts.innerHTML = '';
-    setRun('Waiting for an Engineering Sync revision that clears the ≥98% publication gate. Sub-98% evidence remains diagnostic only and will not be published.');
+    setRun('Waiting for an Engineering Sync revision that clears the ≥80% hard-stop gate. Results below 95% will be flagged for review.');
     return;
   }
   const manifest = sourceState.manifest;
   const integrity = integrityState(manifest);
   const exported = manifest.gbxmlStatus === 'EXPORTED';
-  const belowGate = !exported || !integrity.ratios.length || integrity.ratios.some(([, value]) => value < ENERGY_HARD_STOP);
-  setBadge(belowGate ? `Diagnostic ${pct(integrity.lowest)} · not published` : 'Evidence ready', belowGate ? 'blocked' : 'ready');
-  summary.textContent = belowGate
-    ? `Engineering evidence is preserved for repair, but it does not clear the ≥${pct(ENERGY_HARD_STOP)} publication gate in every evidence domain. It is not published and managed processing will not start.`
-    : 'Immutable Engineering evidence and Weather file (.EPW) are attached. Revit writes are finished; downstream GeometryCo/EnergyPlus work has no RVT return path.';
+  const publishable = exported &&
+    integrity.hardStop >= ENERGY_HARD_STOP &&
+    integrity.qualityTarget >= ENERGY_QUALITY_TARGET &&
+    integrity.ratios.length > 0 &&
+    integrity.ratios.every(([, value]) => value >= ENERGY_HARD_STOP);
+  const reviewRequired = publishable && integrity.belowQuality.length > 0;
+  setBadge(
+    publishable ? (reviewRequired ? `Evidence ${pct(integrity.lowest)} · review` : 'Evidence ready') : `Diagnostic ${pct(integrity.lowest)} · not published`,
+    publishable ? (reviewRequired ? 'quiet' : 'ready') : 'blocked'
+  );
+  summary.textContent = !publishable
+    ? `Engineering evidence is preserved for repair, but it does not clear the ≥${pct(ENERGY_HARD_STOP)} hard-stop gate in every evidence domain. It is not published and managed processing will not start.`
+    : reviewRequired
+      ? `Immutable Engineering evidence passed the ${pct(integrity.hardStop)} hard stop, but ${integrity.belowQuality.length} evidence domain(s) are below the ${pct(integrity.qualityTarget)} quality target. Managed processing continues; review this quality warning.`
+      : 'Immutable Engineering evidence and Weather file (.EPW) are attached. Revit writes are finished; downstream GeometryCo/EnergyPlus work has no RVT return path.';
   const weather = manifest.weather || {};
   const weatherLocation = [weather.city, weather.stateProvince, weather.country].filter(Boolean).join(', ') || '—';
   const belowQualityText = integrity.belowQuality.length
@@ -90,7 +102,7 @@ function renderSource() {
     ['Engine', manifest.engine || '—'],
     ['Architecture', manifest.architecture || '—'],
     ['Integrity hard stop', `≥${pct(integrity.hardStop)} in every evidence domain`],
-    ['Publication / quality target', `≥${pct(ENERGY_HARD_STOP)} in every evidence domain`],
+    ['Quality target', `≥${pct(integrity.qualityTarget)} · warning below this level`],
     ['Lowest integrity', pct(integrity.lowest)],
     ['Below quality target', belowQualityText],
     ['Weather file (.EPW)', weather.sourceFile || weather.file || '—'],
@@ -99,11 +111,15 @@ function renderSource() {
     ['Post-export writeback', 'None']
   ];
   facts.innerHTML = rows.map(([key, value]) => `<dt>${esc(key)}</dt><dd>${esc(value)}</dd>`).join('');
-  setRun(belowGate
-    ? `Diagnostic only: this revision is preserved but blocked below the ≥${pct(ENERGY_HARD_STOP)} publication gate.`
-    : 'Engineering evidence attached. The managed REVEX Energy server is processing this immutable revision; the workstation is no longer part of the simulation environment.', belowGate ? 'bad' : '');
+  setRun(
+    !publishable
+      ? `Diagnostic only: this revision is preserved but blocked below the ≥${pct(ENERGY_HARD_STOP)} hard-stop gate.`
+      : reviewRequired
+        ? `Quality warning: evidence below ${pct(integrity.qualityTarget)} is being processed because every domain cleared the ${pct(integrity.hardStop)} hard stop.`
+        : 'Engineering evidence attached. The managed REVEX Energy server is processing this immutable revision; the workstation is no longer part of the simulation environment.',
+    !publishable ? 'bad' : (reviewRequired ? 'busy' : '')
+  );
 }
-
 
 async function runManagedServerForSource() {
   const id = projectId();
@@ -114,9 +130,13 @@ async function runManagedServerForSource() {
     return;
   }
   const integrity = integrityState(sourceState?.manifest);
-  const publishable = sourceState?.manifest?.gbxmlStatus === 'EXPORTED' && integrity.ratios.length > 0 && integrity.ratios.every(([, value]) => value >= ENERGY_HARD_STOP);
+  const publishable = sourceState?.manifest?.gbxmlStatus === 'EXPORTED' &&
+    integrity.hardStop >= ENERGY_HARD_STOP &&
+    integrity.qualityTarget >= ENERGY_QUALITY_TARGET &&
+    integrity.ratios.length > 0 &&
+    integrity.ratios.every(([, value]) => value >= ENERGY_HARD_STOP);
   if (!publishable) {
-    setRun(`Diagnostic only: every Engineering evidence domain must be ≥${pct(ENERGY_HARD_STOP)} before managed processing can start.`, 'bad');
+    setRun(`Diagnostic only: every Engineering evidence domain must clear the ≥${pct(ENERGY_HARD_STOP)} hard-stop gate before managed processing can start.`, 'bad');
     return;
   }
   const existingSource = String(resultState?.manifest?.sourceEngineeringRevision || '').trim();
@@ -225,7 +245,6 @@ async function importResult(files) {
     setRun(error.message || 'Energy result could not be published.', 'bad');
   } finally { resultBusy = false; }
 }
-
 
 async function hydrate() {
   const id = projectId();
