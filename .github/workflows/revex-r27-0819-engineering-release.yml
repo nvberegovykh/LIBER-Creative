@@ -35,10 +35,10 @@ jobs:
               -o "/tmp/revex-r27/${out}"
             echo "${sha}  /tmp/revex-r27/${out}" | sha256sum -c -
           }
-          fetch_drive '1kvRhwCEPWzUyc-0kK8Q0t2KemyJtX4p0' 'index.html' '8b827d24a53f56fdb5588a1ff9170ddd4cde3d35e9908b4c5b30933f47ab04d9'
+          fetch_drive '1kvRhwCEPWzUyc-0kK8Q0t2KemyJtX4p0' 'index.html' 'dba1d6227d2ee863be090196e056ded0a2033c5c341c463b0bf1b915bc817612'
           fetch_drive '1ELpV95mdDzLI8XWemMNSphXAVll19fko' 'app.js' 'df4f321deefa1521483787fac64306de44d694e88c73b103f941beeefa3dba9f'
-          fetch_drive '10cAgG1uDl7MAcuaUsgXEz3VdJ6AfTojd' 'store.js' '51dc540823ebe6760f3bdc7cb0fca4c6c771aeecf6c624c1d7178e3ace1d15a5'
-          fetch_drive '1lCABFvA380DYNyqK5W7vuAKMDTYJifdE' 'energy-r27.js' 'dfff0fa07975a7025ab95d9ac643c1cace092806a173b6f430de25cc4fb957c0'
+          fetch_drive '10cAgG1uDl7MAcuaUsgXEz3VdJ6AfTojd' 'store.js' '72556aa335c5a29ccc6247bcbe626da82f015502962b6c74dc357816e2b1f966'
+          fetch_drive '1lCABFvA380DYNyqK5W7vuAKMDTYJifdE' 'energy-r27.js' '0580f13329a6a25a6fead118bff32a705e337a6e32de0962292ce11f17b07846'
           fetch_drive '1n8F0yAs0LcItGUO9DmUDs2VBTznQRisb' 'energy-r27.css' 'e630617006fc22daf4c4e9dd6a9009ac2186a83494bdbcf11b4ffc33238fbc86'
           fetch_drive '1g58NvJ7aN3WBEupBe0gc8UIvlWPaJ54p' 'shell-integrity.js' '34361df874e8b291bf882afd2e5ad7daf3a9a308f5007153ca46caf1deb68f1f'
           fetch_drive '1ZoNuM2FzbzCcsq2e24IIvdrjEVeaIwGj' 'README.txt' '6930658a66353bfb554c381b12014cca0574dfc567b2721638bc4a11dd39c50d'
@@ -131,5 +131,5 @@ jobs:
             echo 'REVEX r27 Spec Energy Companion already live in main'
             exit 0
           fi
-          git commit -m 'REVEX 0.8.19 move Energy under Spec'
+          git commit -m 'REVEX 0.8.19 unified Energy sync under Spec'
           git push origin HEAD:main
