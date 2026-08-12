@@ -5,14 +5,14 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="color-scheme" content="dark" />
   <title>REVEX Companion — LIBER Apps</title>
-  <link rel="stylesheet" href="../specifications/styles.css?v=20260811r27" />
-  <link rel="stylesheet" href="styles.css?v=20260811r27" />
-  <link rel="stylesheet" href="runtime.css?v=20260811r27" />
-  <link rel="stylesheet" href="render-agent.css?v=20260811r27" />
-  <link rel="stylesheet" href="history-r24.css?v=20260811r27" />
-  <link rel="stylesheet" href="integrity.css?v=20260811r27" />
-  <link rel="stylesheet" href="r20.css?v=20260811r27" />
-  <link rel="stylesheet" href="energy-r27.css?v=20260811r27" />
+  <link rel="stylesheet" href="../specifications/styles.css?v=20260812r28" />
+  <link rel="stylesheet" href="styles.css?v=20260812r28" />
+  <link rel="stylesheet" href="runtime.css?v=20260812r28" />
+  <link rel="stylesheet" href="render-agent.css?v=20260812r28" />
+  <link rel="stylesheet" href="history-r24.css?v=20260812r28" />
+  <link rel="stylesheet" href="integrity.css?v=20260812r28" />
+  <link rel="stylesheet" href="r20.css?v=20260812r28" />
+  <link rel="stylesheet" href="energy-r27.css?v=20260812r28" />
   <style id="revex-action-label-integrity">
     .main-nav .utility { font-size: 12px !important; }
     .main-nav .utility::before,
@@ -40,7 +40,7 @@
       <input id="revex-sync-upload" data-liber-revex-sync-upload="1" type="file" multiple
         accept=".json,.ifc,.fbx,.gz,.pdf,application/json,application/pdf,application/gzip,application/octet-stream" hidden />
       <input id="revex-energy-sync-upload" data-liber-revex-energy-input="1" type="file" multiple
-        accept=".json,.xml,.txt,application/json,application/xml,text/xml,text/plain" hidden />
+        accept=".json,.xml,.epw,.txt,application/json,application/xml,text/xml,text/plain" hidden />
       <input id="revex-energy-result-upload" data-liber-revex-energy-output="1" type="file" multiple hidden />
     </header>
 
@@ -174,16 +174,14 @@
               <div id="energy-source-summary" class="energy-summary">In Revit, choose <b>ENERGY SYNC</b>.</div>
               <dl id="energy-source-facts" class="energy-facts"></dl>
             </section>
-            <form id="energy-run-form" class="energy-card energy-form">
-              <div class="eyebrow">02 · RUN PACKAGE</div>
-              <h2>Baseline + Proposed</h2>
-              <label>LaGuardia TMY3 weather (.epw)<input id="energy-weather" type="file" accept=".epw" required /></label>
-              <label>OpenStudio CLI <input id="energy-openstudio" type="text" placeholder="Auto-detect, or C:\OpenStudio…\bin\openstudio.exe" /></label>
-              <label>Code standard<select id="energy-standard"><option>NYCECC 2020</option><option>ASHRAE 90.1-2016</option></select></label>
-              <div class="energy-identity-note">Applicant/modeler fields and professional seal are intentionally not collected here. Filing forms remain blank for those fields.</div>
-              <button id="energy-run" class="button sp-btn" type="submit">Run Energy package</button>
+            <section id="energy-run-form" class="energy-card energy-form">
+              <div class="eyebrow">02 · MANAGED FULL RUN</div>
+              <h2>OpenStudio + COMcheck</h2>
+              <p class="energy-summary">The EPW chosen in REVEX travels with this Energy revision. OpenStudio/EnergyPlus, GeometryCo, Baseline/Proposed simulation, review packaging, EN-1 and COMcheck processing start automatically after evidence attachment.</p>
+              <div class="energy-identity-note">No CLI path, code selector, applicant/modeler identity or professional seal is requested here. Filing identity and seal remain blank for completion outside REVEX.</div>
+              <button id="energy-run" class="button sp-btn" type="button">Rerun full Energy package</button>
               <div id="energy-run-status" class="energy-run-status" role="status">Waiting for a published ≥98% Energy Sync revision.</div>
-            </form>
+            </section>
             <section class="energy-card energy-results-card">
               <div class="eyebrow">03 · READY TO INSERT</div>
               <h2>Review package</h2>
@@ -317,23 +315,23 @@
   <script src="../../js/firebase-loader.js"></script>
   <script src="../../js/firebase-service.js"></script>
   <script src="../../js/chat-iframe-bridge.js"></script>
-  <script src="../../js/wallt-agent.js?v=20260811r27"></script>
-  <script src="store.js?v=20260811r27"></script>
-  <script src="cache-r21.js?v=20260811r27"></script>
-  <script src="runtime.js?v=20260811r27"></script>
-  <script src="integrity.js?v=20260811r27"></script>
-  <script src="firestore-compat.js?v=20260811r27"></script>
-  <script src="shell-integrity.js?v=20260811r27"></script>
-  <script src="ui-integrity.js?v=20260811r27"></script>
-  <script src="projection-integrity.js?v=20260811r27"></script>
+  <script src="../../js/wallt-agent.js?v=20260812r28"></script>
+  <script src="store.js?v=20260812r28"></script>
+  <script src="cache-r21.js?v=20260812r28"></script>
+  <script src="runtime.js?v=20260812r28"></script>
+  <script src="integrity.js?v=20260812r28"></script>
+  <script src="firestore-compat.js?v=20260812r28"></script>
+  <script src="shell-integrity.js?v=20260812r28"></script>
+  <script src="ui-integrity.js?v=20260812r28"></script>
+  <script src="projection-integrity.js?v=20260812r28"></script>
   <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.179.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.179.1/examples/jsm/"}}</script>
-  <script src="sync-docs-r24.js?v=20260811r27"></script>
-  <script src="workflow-r20.js?v=20260811r27"></script>
-  <script src="viewer-host-guard-r21.js?v=20260811r27"></script>
-  <script type="module" src="app.js?v=20260811r27"></script>
-  <script type="module" src="viewer-r26.js?v=20260811r27"></script>
-  <script type="module" src="render-agent.js?v=20260811r27"></script>
-  <script type="module" src="history-r24.js?v=20260811r27"></script>
-  <script type="module" src="energy-r27.js?v=20260811r27"></script>
+  <script src="sync-docs-r24.js?v=20260812r28"></script>
+  <script src="workflow-r20.js?v=20260812r28"></script>
+  <script src="viewer-host-guard-r21.js?v=20260812r28"></script>
+  <script type="module" src="app.js?v=20260812r28"></script>
+  <script type="module" src="viewer-r26.js?v=20260812r28"></script>
+  <script type="module" src="render-agent.js?v=20260812r28"></script>
+  <script type="module" src="history-r24.js?v=20260812r28"></script>
+  <script type="module" src="energy-r27.js?v=20260812r28"></script>
 </body>
 </html>
