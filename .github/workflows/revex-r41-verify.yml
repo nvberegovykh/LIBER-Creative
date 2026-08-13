@@ -1,0 +1,13 @@
+name: REVEX r41 staging verify
+on:
+  push:
+    branches: [revex-r41-source-sync-20260812]
+    paths: ['.github/workflows/revex-r41-verify.yml']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo 'REVEX r41 staging verification active'
