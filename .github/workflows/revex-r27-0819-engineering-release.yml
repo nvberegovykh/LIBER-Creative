@@ -41,6 +41,21 @@ jobs:
       - name: Checkout exact candidate
         uses: actions/checkout@v4
 
+      - name: Parse production publisher
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PWD 'PUBLISH_REVEX_R49.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+
       - name: Set up Node 22
         uses: actions/setup-node@v4
         with:
