@@ -1,0 +1,66 @@
+OPENSTUDIO ENERGY MODEL GEOMETRY COMPILER v4.3.1 — LOCAL QA
+================================================================
+Inputs: supplied OpenStudio 3.10.0 Winthrop geometry, Baseline, and Proposed OSMs.
+
+LOCAL ARCHITECTURAL AGENT
+- Bundled model: onnx-community/all-MiniLM-L6-v2-ONNX, quantized q4.
+- Pinned revision: aff7a1dc4e8a1ea593e6ea21e95c22ef0a25966f.
+- Test execution provider: CPUExecutionProvider.
+- Windows release selects DirectML GPU when available, with CPU fallback.
+- 159/159 new spaces mapped in Baseline and Proposed.
+- Minimum profile confidence: 0.90.
+- Assignments below the hard 0.75 floor: 0.
+- Ambiguous assignments: 0.
+- Behavior distribution in both models:
+  - Residential/conditioned template profile: 133.
+  - Unconditioned-core template profile: 26.
+- sp-219amenityspace:
+  - architectural use = amenity
+  - assigned logic = Residential
+  - confidence = 0.99
+  - representative behavior source = sp-33residentialcoworking
+- Unknown-label escalation stress test:
+  - sp-219multipurpose (no lexicon match) gathered 16 adjacent spaces,
+    pretrained semantic context, template prior, and geometry.
+  - assigned Residential logic at 0.762920 confidence.
+  - no unresolved row remained.
+
+NEW-SPACE IDENTITY
+- Baseline output OS:Space handle/name set exactly equals the new geometry input.
+- Proposed output OS:Space handle/name set exactly equals the new geometry input.
+- Missing new spaces: 0.
+- Old-only spaces inserted into either output: 0.
+
+STATIC COMPILATION RESULT
+- Baseline and Proposed compiled atomically.
+- 159/159 new spaces retained in each output.
+- 27 lossless EnergyPlus-compatibility repairs.
+- 309 exterior/shading casting surfaces evaluated.
+- Remaining non-convex casting surfaces: 0.
+- Missing/extra decomposition area: 0.0 m2.
+- Repair-created triangles with an EnergyPlus-fatal <0.01 m short edge: 0.
+- su-s-140-e-w-561 decomposition reduced from 9 pieces to 6 exact convex
+  pieces by recombining adjacent triangles; area change: 0.0 m2.
+- OSM scalar-prefix / vertex-count / coordinate-layout errors: 0.
+- Dangling handles: 0.
+- Invalid opening-parent references: 0.
+- Nonreciprocal surface/opening pairs: 0.
+- Paired-construction integrity errors: 0.
+- Schedule objects changed: 0.
+- Protected schedule references changed: 0.
+- Serialized OSM round-trip validation passed for both outputs.
+- Warnings: 0.
+
+NATIVE LIMITATION OF THIS TEST ENVIRONMENT
+OpenStudio 3.10.0 / EnergyPlus 25.1.0 executables are not installed here. The
+compiler keeps exact-version native Model::load, ForwardTranslator, and
+EnergyPlus design-day checks mandatory on the Windows workstation before final
+commit.
+
+WORKSTATION FAILURE REPRODUCTION ADDRESSED
+- v4.3.0 reached native Baseline validation with 159/159 mappings, zero
+  ambiguous rows, zero compiler warnings, and lossless geometry locks.
+- EnergyPlus then dropped one endpoint of the 0.0022626 m short edge on
+  su-s-140-e-w-561__EP_convex_part_07, leaving a two-vertex degenerate face.
+- v4.3.1 absorbs that triangle into its adjacent convex piece and separately
+  checks the effective vertex count after EnergyPlus's 0.01 m cleanup rule.

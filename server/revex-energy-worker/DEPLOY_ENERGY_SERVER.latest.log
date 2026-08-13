@@ -1,0 +1,49 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20260813012112
+Username: DESKTOP-76ORO0N\New User
+RunAs User: DESKTOP-76ORO0N\New User
+Configuration Name: 
+Machine: DESKTOP-76ORO0N (Microsoft Windows NT 10.0.26200.0)
+Host Application: powershell -NoProfile -ExecutionPolicy Bypass -File G:\.shortcut-targets-by-id\1N_ii1WePoyXhxQNENgSTOSzk8MVHTCmA\LIBER\LIBER-PROJECTS\programs\LIBER_REVEX\LIBER_REVEX_0.8.19_SOURCE\server\revex-energy-worker\DEPLOY_ENERGY_SERVER.ps1 -NoPause
+Process ID: 49628
+PSVersion: 5.1.26100.8875
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.8875
+BuildVersion: 10.0.26100.8875
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+REVEX managed Energy deployment 0.8.19-r41
+Production target: private Google Cloud Run + Firebase broker
+Project: liber-apps-cca20  Region: us-central1
+Log: G:\.shortcut-targets-by-id\1N_ii1WePoyXhxQNENgSTOSzk8MVHTCmA\LIBER\LIBER-PROJECTS\programs\LIBER_REVEX\LIBER_REVEX_0.8.19_SOURCE\server\revex-energy-worker\DEPLOY_ENERGY_SERVER.latest.log
+>> Verify Google Cloud project access
+>> Set active Google Cloud project
+>> Enable required managed-service APIs
+>> Allow the administrator to deploy the private worker
+>> Allow the administrator to deploy the Firebase broker
+>> Grant worker result-object access
+>> Grant worker managed page-scan access
+>> Grant broker Firestore access
+>> Grant the actual Cloud Build identity its standard builder role
+>> Grant the actual Cloud Build identity image-push access
+Cloud Functions service-agent creation is delegated to the real Firebase deployment; ACTIVE broker verification remains mandatory.
+Pinned r41 private worker is already ready; skipping duplicate image build and Cloud Run deployment.
+>> Grant broker-only private worker invocation
+>> Install Firebase broker dependencies
+
+>> Deploy Firebase runRevexEnergy broker
+
+
+REVEX Energy server deployed and verified.
+Worker: https://revex-energy-worker-hkhtxasofa-uc.a.run.app
+Broker: https://runrevexenergy-hkhtxasofa-uc.a.run.app
+Cloud Run is private; only the REVEX Energy broker identity can invoke it.
+The workstation is not a production simulation host.
+**********************
+Windows PowerShell transcript end
+End time: 20260813012446
+**********************

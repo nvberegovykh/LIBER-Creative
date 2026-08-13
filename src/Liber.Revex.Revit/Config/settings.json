@@ -1,0 +1,10 @@
+{
+  "rendairUrl": "https://rendair.ai/sign-in",
+  "rendair3DToolUrl": "https://rendair.ai/tools/3d-model-to-render",
+  "liberAppsUrl": "https://liberpict.com/liber-apps/",
+  "liberRevexUrl": "https://liberpict.com/liber-apps/apps/revex/index.html",
+  "batchViewNameContains": "RND",
+  "defaultPixelSize": 2560,
+  "liberProjectId": "",
+  "liberSpecProjectId": ""
+}

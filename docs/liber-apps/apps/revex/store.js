@@ -174,6 +174,14 @@
     }
   }
 
+  async function sha256File(file) {
+    if (!file?.arrayBuffer || !root.crypto?.subtle)
+      throw new Error(`SHA-256 is unavailable for ${file?.name || 'an Engineering artifact'}.`);
+    const bytes = await file.arrayBuffer();
+    const digest = await root.crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('');
+  }
+
   function readDataUrl(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -523,6 +531,9 @@
       const manifest = await readJson(manifestFile);
       if (manifest?.schema !== 'liber.revex.engineering-sync.v1' || manifest?.architecture !== 'REVIT_EVIDENCE_GRAPH_V1')
         throw new Error('This is not a compatible REVIT_EVIDENCE_GRAPH_V1 Engineering Sync revision.');
+      const binding = manifest?.projectBinding || {};
+      if (binding.version !== 'active-revit-evidence-v1' || !String(binding.identityEvidenceDigest || '').trim() || !String(binding.documentUniqueId || '').trim())
+        throw new Error('Engineering Sync has no evidence-verified active Revit document binding. Re-sync from the active model.');
       const publication = manifest?.publicationIntegrity || {};
       const integrityRatios = Object.values(publication.ratios || {}).map((value) => Number(value));
       const declaredQualityTarget = Number(publication.qualityTarget || publication.threshold || 0);
@@ -536,11 +547,34 @@
       if (manifest.writeBackToRevitAfterExport !== false || manifest.pdfInsertion !== false)
         throw new Error('The Engineering Sync authority boundary is invalid.');
 
+      const declaredArtifacts = Array.isArray(manifest.artifacts) ? manifest.artifacts : [];
+      const declaredByName = new Map(declaredArtifacts.map((row) => [String(row?.name || '').toLowerCase(), row]));
+      if (!declaredArtifacts.length || declaredByName.size !== declaredArtifacts.length)
+        throw new Error('Engineering Sync has no unique immutable artifact manifest.');
+      const transferFiles = files.filter((file) => String(file?.name || '').toLowerCase() !== 'engineering-sync.json');
+      const transferNames = new Set(transferFiles.map((file) => String(file?.name || '').toLowerCase()));
+      const undeclared = transferFiles.filter((file) => !declaredByName.has(String(file?.name || '').toLowerCase()));
+      const missing = declaredArtifacts.filter((row) => !transferNames.has(String(row?.name || '').toLowerCase()));
+      if (undeclared.length || missing.length)
+        throw new Error(`Engineering artifact manifest mismatch: undeclared=${undeclared.map((file) => file.name).join(',') || 'none'}; missing=${missing.map((row) => row.name).join(',') || 'none'}.`);
+
+      const fileIntegrity = new Map();
+      for (const file of files) {
+        const hash = await sha256File(file);
+        fileIntegrity.set(String(file.name || '').toLowerCase(), hash);
+        const declared = declaredByName.get(String(file.name || '').toLowerCase());
+        if (!declared) continue;
+        if (Number(declared.bytes || 0) !== Number(file.size || 0) ||
+            !/^[a-f0-9]{64}$/i.test(String(declared.sha256 || '')) ||
+            String(declared.sha256).toLowerCase() !== hash)
+          throw new Error(`Engineering artifact failed immutable byte/hash validation: ${file.name}.`);
+      }
+
       const revision = docId(manifest.revision || `eng_${Date.now()}`);
       const at = iso();
       const localArtifacts = files.map((file, index) => ({
         name: file.name, bytes: file.size || 0, kind: index === 0 ? 'manifest' : 'engineering-evidence',
-        url: URL.createObjectURL(file), cloud: false
+        sha256: fileIntegrity.get(String(file.name || '').toLowerCase()), url: URL.createObjectURL(file), cloud: false
       }));
       const state = {
         schema: 'liber.revex.engineering-state.v1', projectId, revision, syncedAt: at,
@@ -557,19 +591,29 @@
       for (let index = 0; index < files.length; index += 1) {
         const file = files[index];
         const uploaded = await this.uploadFile(`${base}/${String(index + 1).padStart(3, '0')}_${safe(file.name)}`, file);
-        artifacts.push({ name: file.name, bytes: file.size || 0, kind: index === 0 ? 'manifest' : 'engineering-evidence', url: uploaded.url, path: uploaded.path, cloud: true });
+        artifacts.push({
+          name: file.name, bytes: file.size || 0,
+          sha256: fileIntegrity.get(String(file.name || '').toLowerCase()),
+          kind: index === 0 ? 'manifest' : 'engineering-evidence',
+          url: uploaded.url, path: uploaded.path, cloud: true
+        });
       }
       const cloudState = plain({ ...state, artifacts, cloud: true, syncedBy: this.user.uid });
-      await this.api.setDoc(
-        this.api.doc(this.db, 'projects', projectId, 'library', ENGINEERING_CURRENT_ID),
-        revexRecord('engineering', cloudState, at),
-        plain({ merge: false })
-      );
-      await this.api.setDoc(
-        this.api.doc(this.db, 'projects', projectId, 'library', `revex_engineering_revision_${revision}`),
-        revexRecord('engineering-revision', { ...cloudState, immutable: true }, at),
-        plain({ merge: false })
-      );
+      const currentRef = this.api.doc(this.db, 'projects', projectId, 'library', ENGINEERING_CURRENT_ID);
+      const immutableRef = this.api.doc(this.db, 'projects', projectId, 'library', `revex_engineering_revision_${revision}`);
+      const currentRecord = revexRecord('engineering', cloudState, at);
+      const immutableRecord = revexRecord('engineering-revision', { ...cloudState, immutable: true }, at);
+      if (this.api.writeBatch) {
+        const batch = this.api.writeBatch(this.db);
+        batch.set(immutableRef, immutableRecord, plain({ merge: false }));
+        batch.set(currentRef, currentRecord, plain({ merge: false }));
+        await batch.commit();
+      } else {
+        // Safe fallback for older shared Firebase wrappers: an orphan immutable
+        // revision is recoverable; a current pointer without its immutable source is not.
+        await this.api.setDoc(immutableRef, immutableRecord, plain({ merge: false }));
+        await this.api.setDoc(currentRef, currentRecord, plain({ merge: false }));
+      }
       return cloudState;
     },
 
@@ -581,30 +625,18 @@
       const canonicalRef = this.api.doc(this.db, 'projects', projectId, 'library', ENGINEERING_CURRENT_ID);
       const snap = await this.api.getDoc(canonicalRef);
       if (snap.exists()) return { id: snap.id, ...snap.data() };
+      // Legacy r41-r48 records never establish project identity. Only a fresh
+      // active-document evidence revision may become the managed Energy source.
+      return null;
+    },
 
-      // r41-r44 native bridges wrote the immutable Engineering state through
-      // the legacy compatibility collection. Recover that exact revision and
-      // mirror it into the canonical REVEX library so an already-published
-      // Engineering Sync can resume after a page refresh without another
-      // Revit export.
-      const legacyCurrent = this.api.doc(this.db, 'projects', projectId, 'revex', 'engineering');
-      const legacySnap = await this.api.getDoc(legacyCurrent);
-      if (!legacySnap.exists()) return null;
-      const legacy = plain(legacySnap.data() || {});
-      const recoveredRevision = String(legacy.revision || legacy.manifest?.revision || '').trim();
-      if (!recoveredRevision) throw new Error('Recovered Engineering evidence has no immutable revision.');
-      const revision = docId(recoveredRevision);
-      const at = iso();
-      const currentRecord = revexRecord('engineering', { ...legacy, cloud: true }, at);
-      const revisionRecord = revexRecord('engineering-revision', { ...legacy, revision, cloud: true, immutable: true }, at);
-      await this.api.setDoc(canonicalRef, currentRecord, plain({ merge: false }));
-      await this.api.setDoc(
-        this.api.doc(this.db, 'projects', projectId, 'library', `revex_engineering_revision_${revision}`),
-        revisionRecord,
-        plain({ merge: false })
+    subscribeEngineeringState(projectId, callback) {
+      if (!this.isCloud() || !projectId || !this.api.onSnapshot) return () => {};
+      return this.api.onSnapshot(
+        this.api.doc(this.db, 'projects', projectId, 'library', ENGINEERING_CURRENT_ID),
+        (snap) => callback(snap.exists() ? { id: snap.id, ...snap.data() } : null),
+        (error) => console.warn('[REVEX] Engineering state subscription', error)
       );
-      console.info('[REVEX] recovered legacy Engineering revision', { projectId, revision });
-      return { id: ENGINEERING_CURRENT_ID, ...currentRecord };
     },
 
     async recordEnergyConsent(projectId, sourceRevision) {
@@ -671,7 +703,7 @@
         schema: 'liber.revex.energy-broker-request.v1',
         projectId,
         sourceRevision,
-        clientBuild: '20260813r48'
+        clientBuild: '20260813r49'
       }));
       if (!response?.ok) throw new Error(response?.message || response?.error || 'REVEX managed Energy worker did not complete.');
       return response;
@@ -733,6 +765,15 @@
       }
       const snap = await this.api.getDoc(this.api.doc(this.db, 'projects', projectId, 'library', ENERGY_CURRENT_ID));
       return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+    },
+
+    subscribeEnergyResult(projectId, callback) {
+      if (!this.isCloud() || !projectId || !this.api.onSnapshot) return () => {};
+      return this.api.onSnapshot(
+        this.api.doc(this.db, 'projects', projectId, 'library', ENERGY_CURRENT_ID),
+        (snap) => callback(snap.exists() ? { id: snap.id, ...snap.data() } : null),
+        (error) => console.warn('[REVEX] Energy result subscription', error)
+      );
     },
 
     async listDesignEdits(projectId) {

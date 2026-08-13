@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>LIBER REVEX</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">LIBER <strong>REVEX</strong></div>
+  <div id="project-name" class="project">Project</div>
+  <div id="sync-state" class="sync">Local sync</div>
+  <nav>
+    <button data-mode="viewer">BIM</button>
+    <button data-mode="design">Design Book</button>
+    <button data-mode="comments">Comments</button>
+  </nav>
+  <div class="account">LIBER ACCOUNT</div>
+</header>
+<main>
+  <section id="viewer-pane" class="pane">
+    <aside class="rail">
+      <input id="search" type="search" placeholder="Room, element, material...">
+      <div id="tree"></div>
+    </aside>
+    <div class="stage"><div id="viewer"></div><div class="viewer-help">Orbit: drag · Pan: right-drag · Zoom: wheel</div></div>
+    <aside id="inspector" class="inspector"><h2>Design item</h2><p>Select an item.</p></aside>
+  </section>
+  <section id="design-pane" class="pane book" hidden><aside class="chapters" id="chapters"></aside><article id="book"></article></section>
+  <section id="comments-pane" class="pane comments" hidden>
+    <div class="comments-head"><h2>Project comments</h2><button id="new-comment">Leave a comment</button></div>
+    <div id="comments-list"></div>
+  </section>
+</main>
+<div id="comment-modal" class="modal" hidden>
+  <form id="comment-form" class="card">
+    <h3>Leave a comment</h3>
+    <textarea id="comment-text" required placeholder="What needs attention?"></textarea>
+    <input id="comment-link" placeholder="Design item / room / element ID (optional)">
+    <div class="row"><button type="button" id="comment-cancel">Cancel</button><button type="submit">Save comment</button></div>
+  </form>
+</div>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.179.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.179.1/examples/jsm/"}}</script>
+<script type="module" src="app.js"></script>
+</body></html>
+

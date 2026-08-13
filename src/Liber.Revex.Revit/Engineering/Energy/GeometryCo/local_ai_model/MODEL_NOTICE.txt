@@ -1,0 +1,26 @@
+Bundled local AI model
+======================
+
+Model:
+  onnx-community/all-MiniLM-L6-v2-ONNX
+
+Pinned revision:
+  aff7a1dc4e8a1ea593e6ea21e95c22ef0a25966f
+
+Bundled variant:
+  onnx/model_q4.onnx
+  onnx/model_q4.onnx_data
+
+Upstream model:
+  sentence-transformers/all-MiniLM-L6-v2
+
+Model pages:
+  https://huggingface.co/onnx-community/all-MiniLM-L6-v2-ONNX
+  https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
+
+License:
+  Apache License 2.0
+  https://www.apache.org/licenses/LICENSE-2.0
+
+The model runs locally through ONNX Runtime. The compiler does not send model
+inputs, space names, geometry, or template data to any external AI service.

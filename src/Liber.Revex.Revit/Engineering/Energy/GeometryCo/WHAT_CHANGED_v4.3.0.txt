@@ -1,0 +1,42 @@
+OPENSTUDIO ENERGY MODEL GEOMETRY COMPILER v4.3.0
+=================================================
+
+ROOT CAUSE
+v4.2.0 correctly refused weak geometry-only mappings, but the review table still
+displayed the highest raw overlap as a "suggestion." A relocated amenity space
+could overlap an old shaft and display that shaft even though the competing
+occupied profile was nearly tied. Raw geometric overlap was not a calibrated
+behavior-profile confidence.
+
+PROFILE-FIRST LOCAL AI
+- Adds a bundled, offline, quantized all-MiniLM-L6-v2 ONNX model.
+- Adds an explainable architectural room-use vocabulary.
+- Learns room-use -> anonymous behavior-profile relationships separately from
+  the approved Baseline and Proposed templates.
+- Selects behavior first, then limits old source selection to that profile.
+- Adds adjacency, level, size, exterior exposure, pretrained semantic examples,
+  geometry, and template-prior evidence for unfamiliar labels.
+- Uses GPU execution providers when available and CPU otherwise.
+- Sends no project data to an external AI service.
+
+CONFIDENCE
+- Enforces 0.75 as a hard minimum; config cannot lower it.
+- Separates profile confidence from raw old-space geometric compatibility.
+- The Winthrop regression maps every space at 0.90–0.99.
+- A deliberately unfamiliar "multipurpose" label still reaches 0.762920 from
+  pretrained context + 16 adjacent spaces + geometry + template evidence.
+
+REVIEW UX
+- Review remains available after a clean preflight for full audit.
+- Adds USE ALL SUGGESTED (N) across both models.
+- Bulk acceptance includes only >=75% rows.
+- Renames columns to New Model Space, Template Behavior Source, and Assigned
+  Logic so an old source can never be mistaken for output geometry.
+
+WINTHROP RESULT
+- 159 exact new spaces in each output.
+- 133 Residential/conditioned profile assignments.
+- 26 Unconditioned-core assignments.
+- Amenity -> Residential at 99%, never shaft.
+- 0 ambiguous or sub-75% mappings.
+- Geometry, schedule, reference, and serialized-roundtrip locks pass.

@@ -1,0 +1,35 @@
+OPENSTUDIO ENERGY MODEL GEOMETRY COMPILER v4.1.0
+=================================================
+
+ROOT CAUSE FIXED
+The v4.0.1 native smoke test reached EnergyPlus successfully, but EnergyPlus
+reported four Severe errors in DetermineShadowingCombinations because four
+outdoor shadow-casting polygons were strongly non-convex. OSM loading and the
+OpenStudio ForwardTranslator do not reliably reject these polygons, so the old
+static integrity gate missed them.
+
+NEW GENERIC REPAIR
+- Detects non-convex OS:Surface objects that are Outdoors + SunExposed and all
+  OS:ShadingSurface objects using projected planar polygon geometry.
+- Replaces each repairable polygon with an exact coplanar union of convex
+  triangles/quads.
+- Preserves construction, space, boundary condition, sun/wind exposure,
+  orientation, area, and AdditionalProperties.
+- Does not use surface names, room names, or project-specific identifiers.
+- Refuses to guess when a strongly non-convex casting surface contains child
+  openings or has semantic references that cannot be safely duplicated.
+- Reports original area, piece area, missing area, extra area, convex-hull area,
+  and convexity ratio for every decomposition.
+
+WINTHROP REGRESSION
+- 24 non-convex casting surfaces decomposed losslessly in each model.
+- The four polygons that caused the EnergyPlus Severe error are included.
+- One five-vertex opening remains losslessly decomposed into three pieces.
+- 159 spaces, 1,965 convex-compatible surfaces, and 295 openings.
+- 0 missing/extra decomposition area.
+- 0 dangling references or reciprocal-pair errors.
+- 0 changed schedule objects or protected schedule references.
+- Serialized OSM round-trip validation passed for Baseline and Proposed.
+
+Native OpenStudio 3.10.0 / EnergyPlus 25.1.0 validation still runs on the user's
+workstation before either final model is committed.

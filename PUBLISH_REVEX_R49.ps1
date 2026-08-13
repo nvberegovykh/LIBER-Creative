@@ -1,0 +1,558 @@
+param(
+  [string]$ProjectId = "liber-apps-cca20",
+  [string]$Region = "us-central1",
+  [string]$Repository = "revex",
+  [string]$Service = "revex-energy-worker",
+  [string]$GitHubRepository = "nvberegovykh/LIBER-Creative",
+  [switch]$NoPause
+)
+
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version 3.0
+$Root = (Resolve-Path $PSScriptRoot).Path
+$RunId = Get-Date -Format "yyyyMMdd-HHmmss"
+$ReleaseTag = "0.8.19-r49"
+$Build = "20260813r49"
+$StageRoot = Join-Path $env:LOCALAPPDATA "LIBER\REVEX-R49-Publish\$RunId"
+$StageSource = Join-Path $StageRoot "source"
+$StageFunctions = Join-Path $StageSource "server\firebase-functions"
+$StagePayload = Join-Path $StageRoot "addin-payload"
+$RepoRoot = Join-Path $StageRoot "LIBER-Creative"
+$InstalledRoot = Join-Path $env:LOCALAPPDATA "LIBER\REVEX\App"
+$BackupRoot = Join-Path $env:LOCALAPPDATA "LIBER\REVEX\App.before-r49.$RunId"
+$AddinPath = Join-Path $env:APPDATA "Autodesk\Revit\Addins\2026\LIBER.REVEX.addin"
+$RevitDir = "C:\Program Files\Autodesk\Revit 2026"
+$LiveUrl = "https://liberpict.com/liber-apps/apps/revex/index.html"
+$LogPath = Join-Path $Root "PUBLISH_REVEX_R49.$RunId.log"
+$LatestLogPath = Join-Path $Root "PUBLISH_REVEX_R49.latest.log"
+$PreflightLatestPath = Join-Path $Root "REVEX-R49-PREFLIGHT.latest.json"
+$PreflightStagePath = Join-Path $StageRoot "REVEX-R49-PREFLIGHT.json"
+$CompanionSimulationReport = Join-Path $StageRoot "REVEX-R49-COMPANION-SIMULATION.json"
+$BuildBinlog = Join-Path $StageRoot "REVEX-R49-BUILD.binlog"
+$Preflight = [ordered]@{
+  schema = "liber.revex.release-preflight.v1"
+  build = $Build
+  release = $ReleaseTag
+  runId = $RunId
+  status = "STARTED"
+  stage = "LOCAL_RELEASE_GATE"
+  startedAt = [DateTime]::UtcNow.ToString("o")
+  finishedAt = $null
+  safety = [ordered]@{
+    revitWrites = $false
+    githubMutations = $false
+    cloudMutations = $false
+    officialComcheckProjectTransmission = $false
+  }
+  checkpoints = @()
+}
+
+[IO.File]::WriteAllText($LogPath, "", [Text.UTF8Encoding]::new($false))
+try { [IO.File]::WriteAllText($LatestLogPath, "", [Text.UTF8Encoding]::new($false)) } catch { }
+
+function Write-Log {
+  param([Parameter(ValueFromPipeline=$true)][AllowNull()][object]$Message, [ConsoleColor]$Color = [ConsoleColor]::Gray)
+  process {
+    $line = if ($null -eq $Message) { "" } else { [string]$Message }
+    Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
+    try { Add-Content -LiteralPath $LatestLogPath -Value $line -Encoding UTF8 } catch { }
+    Write-Host $line -ForegroundColor $Color
+  }
+}
+
+function Write-Step([string]$Message) { Write-Log ">> $Message" DarkCyan }
+
+function Save-PreflightReport {
+  $json = $script:Preflight | ConvertTo-Json -Depth 30
+  [IO.File]::WriteAllText($PreflightLatestPath, $json, [Text.UTF8Encoding]::new($false))
+  if (Test-Path -LiteralPath $StageRoot -PathType Container) {
+    [IO.File]::WriteAllText($PreflightStagePath, $json, [Text.UTF8Encoding]::new($false))
+  }
+}
+
+function Add-PreflightCheckpoint([string]$Name, [object]$Detail) {
+  $script:Preflight.checkpoints += [ordered]@{
+    name = $Name
+    status = "PASSED"
+    at = [DateTime]::UtcNow.ToString("o")
+    detail = $Detail
+  }
+  Save-PreflightReport
+}
+
+function Resolve-Executable([string[]]$Names) {
+  foreach ($name in $Names) {
+    $found = Get-Command $name -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($found) { return $found.Source }
+  }
+  return $null
+}
+
+function Refresh-ToolPath {
+  $paths = @(
+    "$env:ProgramFiles\Git\cmd", "$env:ProgramFiles\GitHub CLI", "$env:ProgramFiles\dotnet",
+    "$env:LOCALAPPDATA\Google\Cloud SDK\google-cloud-sdk\bin",
+    "$env:ProgramFiles\Google\Cloud SDK\google-cloud-sdk\bin",
+    "$env:ProgramFiles\nodejs", "$env:APPDATA\npm",
+    "$env:LOCALAPPDATA\Programs\Python\Python312", "$env:LOCALAPPDATA\Programs\Python\Python312\Scripts"
+  ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+  foreach ($path in $paths) {
+    if (($env:Path -split ';') -notcontains $path) { $env:Path += ";$path" }
+  }
+}
+
+function Invoke-Native {
+  param(
+    [Parameter(Mandatory=$true)][string]$Step,
+    [Parameter(Mandatory=$true)][string]$Command,
+    [string[]]$Arguments = @(),
+    [string]$WorkingDirectory = ""
+  )
+  Write-Step $Step
+  if ($WorkingDirectory) { Push-Location $WorkingDirectory }
+  $oldPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    & $Command @Arguments 2>&1 | ForEach-Object { Write-Log ([string]$_) }
+    $code = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+  } finally {
+    $ErrorActionPreference = $oldPreference
+    if ($WorkingDirectory) { Pop-Location }
+  }
+  if ($code -ne 0) { throw "$Step failed with exit code $code." }
+}
+
+function Invoke-Captured {
+  param(
+    [Parameter(Mandatory=$true)][string]$Step,
+    [Parameter(Mandatory=$true)][string]$Command,
+    [string[]]$Arguments = @(),
+    [string]$WorkingDirectory = "",
+    [switch]$AllowFailure
+  )
+  Write-Step $Step
+  if ($WorkingDirectory) { Push-Location $WorkingDirectory }
+  $oldPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  $lines = @()
+  try {
+    & $Command @Arguments 2>&1 | ForEach-Object { $lines += [string]$_; Write-Log ([string]$_) }
+    $code = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+  } finally {
+    $ErrorActionPreference = $oldPreference
+    if ($WorkingDirectory) { Pop-Location }
+  }
+  if ($code -ne 0 -and -not $AllowFailure) { throw "$Step failed with exit code $code." }
+  return [pscustomobject]@{ ExitCode = $code; Text = ($lines -join [Environment]::NewLine); Lines = $lines }
+}
+
+function Install-WingetPackage([string]$Id, [string]$Label) {
+  $winget = Resolve-Executable @("winget.exe", "winget")
+  if (-not $winget) { throw "$Label is required and WinGet is unavailable." }
+  Invoke-Native "Install $Label" $winget @("install", "--exact", "--id", $Id, "--accept-package-agreements", "--accept-source-agreements", "--silent")
+  Refresh-ToolPath
+}
+
+function Assert-SourceHash([string]$RelativePath, [string]$Expected) {
+  $path = Join-Path $Root $RelativePath
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required r49 source is missing: $RelativePath" }
+  $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($actual -ne $Expected) { throw "Stale or partial r49 source: $RelativePath`nExpected $Expected`nActual   $actual" }
+}
+
+function Copy-SourceTree([string]$Source, [string]$Destination) {
+  New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+  $sourcePath = (Resolve-Path $Source).Path.TrimEnd('\')
+  foreach ($file in Get-ChildItem -LiteralPath $sourcePath -Recurse -File) {
+    $relative = $file.FullName.Substring($sourcePath.Length).TrimStart('\')
+    if ($relative -match '(^|\\)(bin|obj|node_modules|__pycache__|\.pytest_cache)(\\|$)' -or $relative -match '\.pyc$') { continue }
+    $target = Join-Path $Destination $relative
+    New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+    Copy-Item -LiteralPath $file.FullName -Destination $target -Force
+  }
+}
+
+function Add-ProjectRole([string]$Gcloud, [string]$Member, [string]$Role, [string]$Label) {
+  Invoke-Native $Label $Gcloud @("projects", "add-iam-policy-binding", $ProjectId, "--member=$Member", "--role=$Role", "--quiet")
+}
+
+function Add-ServiceAccountUser([string]$Gcloud, [string]$Account, [string]$Member, [string]$Label) {
+  Invoke-Native $Label $Gcloud @("iam", "service-accounts", "add-iam-policy-binding", $Account, "--project=$ProjectId", "--member=$Member", "--role=roles/iam.serviceAccountUser", "--quiet")
+}
+
+function Ensure-ServiceAccount([string]$Gcloud, [string]$Email, [string]$DisplayName) {
+  $probe = Invoke-Captured "Verify service identity $Email" $Gcloud @("iam", "service-accounts", "describe", $Email, "--project=$ProjectId", "--format=value(email)") -AllowFailure
+  if ($probe.ExitCode -eq 0) { return }
+  $accountId = $Email.Split('@')[0]
+  Invoke-Native "Create service identity $Email" $Gcloud @("iam", "service-accounts", "create", $accountId, "--project=$ProjectId", "--display-name=$DisplayName", "--quiet")
+}
+
+function Verify-LiveCompanion {
+  for ($attempt = 1; $attempt -le 60; $attempt++) {
+    Write-Log "Live r49 verification attempt $attempt/60 (three bounded requests)."
+    try {
+      $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+      $headers = @{ "Cache-Control" = "no-cache, no-store"; "Pragma" = "no-cache" }
+      $index = Invoke-WebRequest -UseBasicParsing -Uri ($LiveUrl + "?r49_verify=" + $stamp) -TimeoutSec 20 -Headers $headers
+      $base = $LiveUrl.Substring(0, $LiveUrl.LastIndexOf('/') + 1)
+      $app = Invoke-WebRequest -UseBasicParsing -Uri ($base + "app.js?r49_verify=" + $stamp) -TimeoutSec 20 -Headers $headers
+      $viewer = Invoke-WebRequest -UseBasicParsing -Uri ($base + "viewer-r26.js?r49_verify=" + $stamp) -TimeoutSec 20 -Headers $headers
+      if ($index.StatusCode -eq 200 -and $index.Content.Contains($Build) -and $index.Content.Contains("Show hidden only") -and
+          $app.Content.Contains("activationToken") -and $app.Content.Contains("revex:native-project-binding") -and
+          $viewer.Content.Contains("REVEX_PAGED_MISSING_GEOMETRY_PROXY") -and $viewer.Content.Contains("clearEditGroups")) {
+        Write-Log "Live Companion verified: $Build with project cancellation, progressive geometry, reversible visibility and fullscreen Design Book images." Green
+        return
+      }
+    } catch { Write-Log ("Live verification pending: " + $_.Exception.Message) Yellow }
+    if ($attempt -lt 60) { Start-Sleep -Seconds 10 }
+  }
+  throw "GitHub merged r49, but the complete Companion build was not visible within ten minutes. Rerun this idempotent publisher; the backend and source remain safe."
+}
+
+try {
+  Save-PreflightReport
+  Write-Log "REVEX 0.8.19 r49 production publisher" White
+  Write-Log "Authority: active Revit document -> evidence-verified project -> immutable BIM/Spec/Energy revisions"
+  Write-Log "Energy: T/Z identity + EN facts -> GeometryCo -> two OSMs -> two EnergyPlus runs -> official COMcheck -> EN-1"
+  Write-Log "Project: $ProjectId  Region: $Region  Repository: $GitHubRepository"
+  Write-Log "Log: $LogPath"
+
+  Write-Step "Verify Revit is closed for the final atomic add-in replacement"
+  if (Get-Process -Name Revit -ErrorAction SilentlyContinue) { throw "Close every Revit window, then rerun PUBLISH_REVEX_R49.cmd. This is the only required manual preparation." }
+  if (-not (Test-Path -LiteralPath (Join-Path $RevitDir "RevitAPI.dll") -PathType Leaf)) { throw "Autodesk Revit 2026 was not found at $RevitDir." }
+
+  Write-Step "Verify hash-locked r49 source"
+  $Expected = [ordered]@{
+    ".github\scripts\verify-revex-r49.js" = "f5ea9dbec681147eb5333387eb4775b70674113f736f61f82b18ec73182ccf5f"
+    "src\Liber.Revex.Revit\Liber.Revex.Revit.csproj" = "4cca18fe25c936d7bbde564549a7765baeacfede08835fc76a033d2f812dabfa"
+    "src\Liber.Revex.Revit\App.cs" = "da962524e69247fdc48d73cc10cb9b8998f465df5f551b09ada35c989f38a276"
+    "src\Liber.Revex.Revit\Models\RevitRequest.cs" = "54173d73c948d29a1c77360f696d3f27212a43bd4fc584e7f6f9ff8d81f8d359"
+    "src\Liber.Revex.Revit\Models\RevexSyncModels.cs" = "5699e3d81f1dfb98be9b2d18c620867281e7a47043a99ceb0520ff2cd396ff3b"
+    "src\Liber.Revex.Revit\Revit\RevitRequestHandler.cs" = "068dd2a78799ce4e2da2c94d399ca2131ec79563298c82def2362ab26945f932"
+    "src\Liber.Revex.Revit\UI\RendairWindow.cs" = "03ad436ab81540e59625caad89e1774251d08ff58700c29be553cfffb7a1911f"
+    "src\Liber.Revex.Revit\UI\RendairWindowManager.cs" = "e2b21d9c49b599bd3214299e3d472bee2cc39464ee708d6641afb074cc26b14e"
+    "src\Liber.Revex.Revit\Services\SettingsService.cs" = "bec8072046e9a7f1bb09b79db5d7ac5f87cae30edbc75bc47fcff3311ec3311f"
+    "src\Liber.Revex.Revit\Services\ProjectIdentityEvidenceService.cs" = "6cef37b8ee6be7d3a9a9b6df08bbb7cae814fa8cc28316ce64a9d23048cb704a"
+    "src\Liber.Revex.Revit\Services\RevexSyncService.cs" = "3f8fe253aa2bce8655176fbe96cd14e571f6aaa4ef78ff5d50780b6247e9e45d"
+    "src\Liber.Revex.Revit\Services\RevexMeshExportService.cs" = "a5759ee9e386fcd5b0459d9ec9aa3344ffc9b358deaef56fd3c3e77cd1f18024"
+    "src\Liber.Revex.Revit\Services\ViewerExportService.cs" = "7712e5a610ae3421ce1c23bfddcb4de8f48c0ceedc89bb9854b059605e1de088"
+    "src\Liber.Revex.Revit\Services\DesignBookScheduleService.cs" = "c9f0c97b1f91131a61119f7dc88199408e8c5ab1ab92397d9845448d6680b6bb"
+    "src\Liber.Revex.Revit\Services\EngineeringSyncService.cs" = "bb6255c9a39e722d82c37ee46d0357a70cca6fd8e9886aa4bebb300bab20731e"
+    "src\Liber.Revex.Revit\Services\GbxmlEngineeringService.cs" = "fdb9001818ca558b069bb49fb5dc39317a73554d3763a33ba4e404b5c8e3c3c6"
+    "src\Liber.Revex.Revit\Services\EngineeringCompanionWebBridge.cs" = "f763c77c0b514a9d404e2f98cefccd323deb98c73edc248dd741d5d133449184"
+    "src\Liber.Revex.Revit\Engineering\Companion\native-managed-energy-bridge.js" = "82d6442254f468533532d88eedd63112f30a2fc1e407b47e1f86ac1b9ba726d2"
+    "src\Liber.Revex.Revit\Engineering\Energy\revex_energy_pipeline.py" = "fbbf6d9e2554239e756a9825a21791e3aa453a9388d6550a7c5c24924d203483"
+    "src\Liber.Revex.Revit\Engineering\Energy\comcheck_backstop.py" = "ed817d0832f64fc9c1f6bfabc3bc79d010b4cd84d192884d41d494df77809d10"
+    "src\Liber.Revex.Revit\Engineering\Energy\verify_revex_r49_energy.py" = "c2414d96df22f8385ca2270038792466ed5295b7a206f1c14156e32da04c5ff8"
+    "src\Liber.Revex.Revit\Engineering\Energy\requirements.txt" = "e9dde285ed5fa05c6161325ccdd2906d9d9f6d6693979f1df9078c82eb98e673"
+    "src\Liber.Revex.Revit\Engineering\Energy\GeometryCo\OpenStudio_Energy_Model_Geometry_Compiler.py" = "0152e06c447b36457fc973b2896d82b68596a03bdc855a519dbcd0bda253ee9f"
+    "src\Liber.Revex.Revit\Engineering\Energy\Packager\EnergyPlusReviewPackager.py" = "30ba0b2f3e1fee952382d016c68caa5dea85d7d68b439296797da5adf7f412f2"
+    "src\Liber.Revex.Revit\Engineering\Energy\gbxml_to_osm.rb" = "d8e5532f147fc71f76e4b0378737caacce6722dbc477687c9e0d0331a87e1c4c"
+    "src\Liber.Revex.Revit\Engineering\Energy\References\79_WINTHROP_APPROVED_BASELINE.osm" = "cd4c7ec73a04a8e08d4cee052df70ab67c15d22b62595211f397fca08ebb8a64"
+    "src\Liber.Revex.Revit\Engineering\Energy\References\79_WINTHROP_APPROVED_PROPOSED.osm" = "6c4954f5427e4bebec7cf2a26681161be96407646ebf6902a38b1d2f62a7abdb"
+    "src\Liber.Revex.Revit\Engineering\Energy\References\EN-1_79_WINTHROP_AMENDMENT.xlsx" = "3468acae967ac123a19c3d0f3232c39f701df09c914df8a144184afbd4a7524e"
+    "src\Liber.Revex.Revit\Engineering\Energy\References\COMcheck_250_MIDWOOD_STRUCTURE_REFERENCE.cxl" = "b3259682b844c7d7b03c2bd5adabd0930c0a6d98708cec21e09ab17354022657"
+    "src\Live-Companion\index.html" = "53e652e7b0b2bdf20e2db9521ae29e00ece3dfe4e05967e4b28fe4dae3ed7a50"
+    "src\Live-Companion\app.js" = "70efca1351401ec24bb297963a0f447ad1af07c1f5eb4f7acb89360c68dead97"
+    "src\Live-Companion\store.js" = "d06e50a604486b912462995b33d154769fa4e3c763d1e6253450b47270de8cd3"
+    "src\Live-Companion\integrity.js" = "365e5a378bb1c579a75e2c41c3c4683f043c843e5af26b2bc64ad5ca37c4042f"
+    "src\Live-Companion\firestore-compat.js" = "ad9a85884cb66fb72d6f4591ba9d5cbf2c685f3e2c5b01ae062b5de3a3465259"
+    "src\Live-Companion\viewer-r26.js" = "3052d63a16b9f861d9c0b71e80ccb13c0dbd41112b7056287c0b2dab73507174"
+    "src\Live-Companion\history-r24.js" = "046c279d78f0eb2ed58c32c291d94fb3affcd81d26101f7873674a411d338aac"
+    "src\Live-Companion\styles.css" = "1d5c2d11a800e967b1d9e5d2cd92a6eebbb209b8183f927eba7d2267d8a734e9"
+    "src\Live-Companion\energy-r27.js" = "32bfa614b955e02fdf7652f517b874fe384041d5e5b61361cefcd3e2d18771e0"
+    "server\revex-energy-worker\app.py" = "c605b77f220bc854cef57c2cafaf116b54a61bcd4ec2873e3b93d595af1791bb"
+    "server\revex-energy-worker\verify_revex_r49_worker.py" = "67e529c6537adb90edf68ca3f48d37f4c155b4d0fcadbfb9f455b0aafa07eeac"
+    "server\revex-energy-worker\Dockerfile" = "391914808925175516845312d329b229af970c86e7fabc5d380ef33fa9594a86"
+    "server\revex-energy-worker\cloudbuild.yaml" = "447f2e67bcc22cfb498a352d6d95ba9061f7c282df176464b492c3458130acc5"
+    "server\revex-energy-worker\requirements-server.txt" = "f35c6f0f9355c7008cee71e693f729b66b138ed63b8be9a124659a31e24b5863"
+    "server\firebase-functions\index.js" = "f959e6ce14e38b1de6c2a8b8f4e53e3499d1f588014c09d3eb46c249b47696c1"
+    "server\firebase-functions\package.json" = "a9e7a391f77fd89bff95a5f128bcc5e86c7897b077b511c0eddd75c078b3075e"
+    "server\firebase-functions\package-lock.json" = "4f3fc020ae4a4552d2de948ba7a90c94744c8ba20d0218f9eff7fb21acaa1c98"
+    "server\firebase-functions\firebase.json" = "e4ede752096eb1da43d1ec097dd3aca7f420efe85edd913fb392005150f6df96"
+  }
+  foreach ($entry in $Expected.GetEnumerator()) { Assert-SourceHash $entry.Key $entry.Value }
+
+  Refresh-ToolPath
+  $Node = Resolve-Executable @("node.exe", "node")
+  if (-not $Node) { Install-WingetPackage "OpenJS.NodeJS.LTS" "Node.js LTS"; $Node = Resolve-Executable @("node.exe", "node") }
+  $Npm = Resolve-Executable @("npm.cmd", "npm.exe", "npm")
+  $Python = Resolve-Executable @("py.exe", "python.exe", "py", "python")
+  if (-not $Python) { Install-WingetPackage "Python.Python.3.12" "Python 3.12"; $Python = Resolve-Executable @("py.exe", "python.exe", "py", "python") }
+  $Dotnet = Resolve-Executable @("dotnet.exe", "dotnet")
+  if (-not $Dotnet) { Install-WingetPackage "Microsoft.DotNet.SDK.8" ".NET 8 SDK"; $Dotnet = Resolve-Executable @("dotnet.exe", "dotnet") }
+  foreach ($tool in @($Node,$Npm,$Python,$Dotnet)) { if (-not $tool) { throw "A required offline-preflight tool did not become available." } }
+
+  Write-Step "Create isolated r49 offline preflight stage"
+  New-Item -ItemType Directory -Path $StageSource, $StagePayload -Force | Out-Null
+  Copy-SourceTree (Join-Path $Root "server\revex-energy-worker") (Join-Path $StageSource "server\revex-energy-worker")
+  Copy-SourceTree (Join-Path $Root "server\firebase-functions") $StageFunctions
+  Copy-SourceTree (Join-Path $Root "src\Liber.Revex.Revit\Engineering\Energy") (Join-Path $StageSource "src\Liber.Revex.Revit\Engineering\Energy")
+
+  Invoke-Native "Simulate recorded-Revit BIM, Books, viewer and managed-Energy handoff" $Node @(".github\scripts\verify-revex-r49.js", "--report", $CompanionSimulationReport) -WorkingDirectory $Root
+  $companionSimulation = Get-Content -LiteralPath $CompanionSimulationReport -Raw -Encoding UTF8 | ConvertFrom-Json
+  if ([string]$companionSimulation.status -ne "PASSED" -or $companionSimulation.cloudMutations -ne $false -or $companionSimulation.officialComcheckProjectTransmission -ne $false) {
+    throw "The recorded-Revit Companion simulation did not produce a safe PASSED contract."
+  }
+  Add-PreflightCheckpoint "RECORDED_REVIT_COMPANION_SIMULATION" ([ordered]@{
+    mode = [string]$companionSimulation.mode
+    report = $CompanionSimulationReport
+    checkpointCount = @($companionSimulation.checkpoints).Count
+    independentNativeSchedules = $true
+    pagedGeometryAndCurtainParts = $true
+    reversibleVisibility = $true
+    exactProjectRevisionHandoff = $true
+  })
+  Invoke-Native "Parse live Companion" $Node @("--check", (Join-Path $Root "src\Live-Companion\app.js"))
+  Invoke-Native "Parse progressive BIM viewer" $Node @("--check", (Join-Path $Root "src\Live-Companion\viewer-r26.js"))
+  Invoke-Native "Parse Engineering cloud store" $Node @("--check", (Join-Path $Root "src\Live-Companion\store.js"))
+  Invoke-Native "Parse revision-scoped managed Energy bridge" $Node @("--check", (Join-Path $Root "src\Liber.Revex.Revit\Engineering\Companion\native-managed-energy-bridge.js"))
+  Invoke-Native "Parse Firebase broker" $Node @("--check", (Join-Path $StageFunctions "index.js"))
+
+  $projectFile = Join-Path $Root "src\Liber.Revex.Revit\Liber.Revex.Revit.csproj"
+  Invoke-Native "Restore locked .NET dependencies" $Dotnet @("restore", $projectFile)
+  Invoke-Native "Compile REVEX r49 against Revit 2026 (full binlog retained)" $Dotnet @("build", $projectFile, "-c", "Release", "--no-restore", "-nologo", "-clp:ErrorsOnly;Summary", "-bl:$BuildBinlog", "-p:RevitInstallDir=$RevitDir", "-o", $StagePayload)
+  foreach ($relative in @("Liber.Revex.Revit.dll", "Microsoft.Web.WebView2.Core.dll", "Engineering\Energy\revex_energy_pipeline.py", "Engineering\Energy\verify_revex_r49_energy.py", "Engineering\Companion\native-managed-energy-bridge.js")) {
+    if (-not (Test-Path -LiteralPath (Join-Path $StagePayload $relative) -PathType Leaf)) { throw "Compiled r49 add-in payload is incomplete: $relative" }
+  }
+  $compiledDll = Join-Path $StagePayload "Liber.Revex.Revit.dll"
+  $productVersion = (Get-Item -LiteralPath $compiledDll).VersionInfo.ProductVersion
+  if ([string]$productVersion -notmatch "0\.8\.19-r49") { throw "Compiled DLL is not r49 (ProductVersion=$productVersion)." }
+  $compiledDllHash = (Get-FileHash -LiteralPath $compiledDll -Algorithm SHA256).Hash.ToLowerInvariant()
+  Add-PreflightCheckpoint "COMPILED_REVIT_ADDIN" ([ordered]@{
+    productVersion = [string]$productVersion
+    sha256 = $compiledDllHash
+    payload = $StagePayload
+    fullBuildLog = $BuildBinlog
+  })
+
+  $VenvRoot = Join-Path $StageRoot ".venv"
+  $pythonName = [IO.Path]::GetFileName($Python).ToLowerInvariant()
+  $venvArgs = if ($pythonName -eq "py.exe") { @("-3", "-m", "venv", $VenvRoot) } else { @("-m", "venv", $VenvRoot) }
+  Invoke-Native "Create isolated r49 Python QA environment" $Python $venvArgs
+  $VenvPython = Join-Path $VenvRoot "Scripts\python.exe"
+  if (-not (Test-Path -LiteralPath $VenvPython -PathType Leaf)) { throw "Python did not create the isolated r49 QA environment." }
+  Invoke-Native "Install exact Energy and managed-worker QA dependencies" $VenvPython @("-m", "pip", "install", "--disable-pip-version-check", "--no-input", "--requirement", (Join-Path $Root "src\Liber.Revex.Revit\Engineering\Energy\requirements.txt"), "--requirement", (Join-Path $Root "server\revex-energy-worker\requirements-server.txt"))
+  Invoke-Native "Run current-project CXL, OSM identity, COMcheck protocol and EN-1 QA" $VenvPython @((Join-Path $Root "src\Liber.Revex.Revit\Engineering\Energy\verify_revex_r49_energy.py")) -WorkingDirectory (Join-Path $Root "src\Liber.Revex.Revit\Engineering\Energy")
+  Add-PreflightCheckpoint "OFFLINE_ENERGY_CHAIN_SIMULATION" ([ordered]@{
+    activeRevitTzIdentity = $true
+    enTechnicalFacts = $true
+    exactRevisionConsent = $true
+    currentProjectCxl = $true
+    officialComcheckProtocol = "local protocol-compatible mock; no project transmission"
+    compiledOsmCount = 2
+    energyPlusCompletionContracts = 2
+    en1AndPrmPackaging = $true
+  })
+  Invoke-Native "Run managed worker artifact, binding, T/Z and revision-consent QA" $VenvPython @((Join-Path $Root "server\revex-energy-worker\verify_revex_r49_worker.py")) -WorkingDirectory (Join-Path $Root "server\revex-energy-worker")
+  Add-PreflightCheckpoint "PRIVATE_WORKER_CONTRACT" ([ordered]@{
+    artifactIntegrity = $true
+    activeDocumentBinding = $true
+    crossRevisionConsentRejected = $true
+    cloudCredentialsUsed = $false
+  })
+  Invoke-Native "Install exact Firebase broker dependencies" $Npm @("ci", "--omit=dev", "--no-audit", "--no-fund") -WorkingDirectory $StageFunctions
+  Invoke-Native "Reject moderate, high or critical Firebase broker dependency advisories" $Npm @("audit", "--omit=dev", "--audit-level=moderate") -WorkingDirectory $StageFunctions
+  Add-PreflightCheckpoint "FIREBASE_BROKER_DEPENDENCIES" ([ordered]@{
+    lockfileInstall = $true
+    moderateHighCriticalAdvisories = 0
+    productionDependenciesOnly = $true
+  })
+
+  $script:Preflight.status = "PASSED"
+  $script:Preflight.finishedAt = [DateTime]::UtcNow.ToString("o")
+  Save-PreflightReport
+  Write-Log "Offline r49 release gate PASSED before GitHub or production-cloud mutation." Green
+  Write-Log "Recorded preflight: $PreflightLatestPath" Green
+
+  $Git = Resolve-Executable @("git.exe", "git")
+  if (-not $Git) { Install-WingetPackage "Git.Git" "Git"; $Git = Resolve-Executable @("git.exe", "git") }
+  $Gh = Resolve-Executable @("gh.exe", "gh")
+  if (-not $Gh) { Install-WingetPackage "GitHub.cli" "GitHub CLI"; $Gh = Resolve-Executable @("gh.exe", "gh") }
+  $Gcloud = Resolve-Executable @("gcloud.cmd", "gcloud.exe", "gcloud")
+  if (-not $Gcloud) { Install-WingetPackage "Google.CloudSDK" "Google Cloud CLI"; $Gcloud = Resolve-Executable @("gcloud.cmd", "gcloud.exe", "gcloud") }
+  $Firebase = Resolve-Executable @("firebase.cmd", "firebase.exe", "firebase")
+  if (-not $Firebase) {
+    Invoke-Native "Install current Firebase CLI" $Npm @("install", "--global", "firebase-tools@latest", "--no-audit", "--no-fund")
+    Refresh-ToolPath
+    $Firebase = Resolve-Executable @("firebase.cmd", "firebase.exe", "firebase")
+  }
+  foreach ($tool in @($Git,$Gh,$Gcloud,$Firebase)) { if (-not $tool) { throw "A required publishing tool did not become available after the offline gate." } }
+
+  $ghAuth = Invoke-Captured "Verify GitHub authentication" $Gh @("auth", "status", "--hostname", "github.com") -AllowFailure
+  if ($ghAuth.ExitCode -ne 0) { Invoke-Native "Essential GitHub approval" $Gh @("auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web") }
+  Invoke-Native "Configure GitHub authentication for Git" $Gh @("auth", "setup-git")
+
+  Invoke-Native "Clone the authoritative GitHub repository" $Gh @("repo", "clone", $GitHubRepository, $RepoRoot, "--", "--depth", "1")
+  $branch = "agent/revex-r49-final-$RunId"
+  Invoke-Native "Create isolated r49 publication branch" $Git @("checkout", "-b", $branch) -WorkingDirectory $RepoRoot
+  Copy-SourceTree (Join-Path $Root "src\Live-Companion") (Join-Path $RepoRoot "docs\liber-apps\apps\revex")
+  Copy-SourceTree (Join-Path $Root "src\Liber.Revex.Revit") (Join-Path $RepoRoot "src\Liber.Revex.Revit")
+  Copy-SourceTree (Join-Path $Root "server\revex-energy-worker") (Join-Path $RepoRoot "server\revex-energy-worker")
+  Copy-SourceTree (Join-Path $Root "server\firebase-functions") (Join-Path $RepoRoot "server\firebase-functions")
+  New-Item -ItemType Directory -Path (Join-Path $RepoRoot ".github\scripts") -Force | Out-Null
+  Copy-Item -LiteralPath (Join-Path $Root ".github\scripts\verify-revex-r49.js") -Destination (Join-Path $RepoRoot ".github\scripts\verify-revex-r49.js") -Force
+  Copy-Item -LiteralPath (Join-Path $Root "PUBLISH_REVEX_R49.ps1") -Destination (Join-Path $RepoRoot "PUBLISH_REVEX_R49.ps1") -Force
+  Copy-Item -LiteralPath (Join-Path $Root "PUBLISH_REVEX_R49.cmd") -Destination (Join-Path $RepoRoot "PUBLISH_REVEX_R49.cmd") -Force
+  $changes = Invoke-Captured "Inspect exact r49 publication diff" $Git @("status", "--porcelain") -WorkingDirectory $RepoRoot
+  if ($changes.Text.Trim()) {
+    $login = (Invoke-Captured "Resolve GitHub release identity" $Gh @("api", "user", "--jq", ".login")).Text.Trim()
+    $name = (Invoke-Captured "Resolve GitHub release name" $Gh @("api", "user", "--jq", ".name // .login")).Text.Trim()
+    Invoke-Native "Set release author" $Git @("config", "user.name", $name) -WorkingDirectory $RepoRoot
+    Invoke-Native "Set release email" $Git @("config", "user.email", "$login@users.noreply.github.com") -WorkingDirectory $RepoRoot
+    Invoke-Native "Stage only the r49 release" $Git @("add", "--", "docs/liber-apps/apps/revex", "src/Liber.Revex.Revit", "server/revex-energy-worker", "server/firebase-functions", ".github/scripts/verify-revex-r49.js", "PUBLISH_REVEX_R49.ps1", "PUBLISH_REVEX_R49.cmd") -WorkingDirectory $RepoRoot
+    Invoke-Native "Commit REVEX r49" $Git @("commit", "-m", "REVEX 0.8.19 r49: finalize active-document sync and managed Energy chain") -WorkingDirectory $RepoRoot
+    Invoke-Native "Push r49 release branch" $Git @("push", "--set-upstream", "origin", $branch) -WorkingDirectory $RepoRoot
+    $pr = (Invoke-Captured "Open r49 publication PR" $Gh @("pr", "create", "--repo", $GitHubRepository, "--base", "main", "--head", $branch, "--title", "REVEX 0.8.19 r49: final active-document and Energy chain", "--body", "Hash-locked r49: active-document project binding, progressive paged BIM, reversible visibility, native schedules, fullscreen Design Book images, and strict managed Energy outputs with per-revision COMcheck consent.") -WorkingDirectory $RepoRoot).Text.Trim().Split([Environment]::NewLine)[-1]
+    $merge = Invoke-Captured "Merge r49 publication PR" $Gh @("pr", "merge", $pr, "--repo", $GitHubRepository, "--squash", "--delete-branch") -WorkingDirectory $RepoRoot -AllowFailure
+    if ($merge.ExitCode -ne 0) {
+      Write-Log "Required GitHub checks are pending; bounded polling started." Yellow
+      $headSha = (Invoke-Captured "Resolve r49 release commit" $Git @("rev-parse", "HEAD") -WorkingDirectory $RepoRoot).Text.Trim()
+      for ($attempt = 1; $attempt -le 80; $attempt++) {
+        $checks = Invoke-Captured "GitHub check status $attempt/80" $Gh @("api", "repos/$GitHubRepository/commits/$headSha/check-runs") -AllowFailure
+        if ($checks.ExitCode -eq 0) {
+          $json = $checks.Text | ConvertFrom-Json
+          $runs = @($json.check_runs)
+          $failed = @($runs | Where-Object { $_.status -eq 'completed' -and $_.conclusion -notin @('success','neutral','skipped') })
+          $pending = @($runs | Where-Object { $_.status -ne 'completed' })
+          if ($failed.Count) { throw "GitHub rejected r49: " + (($failed | ForEach-Object { "$($_.name)=$($_.conclusion)" }) -join ', ') }
+          if ($runs.Count -gt 0 -and $pending.Count -eq 0) { break }
+          if ($runs.Count -eq 0 -and $attempt -ge 4) { break }
+        }
+        Start-Sleep -Seconds 15
+      }
+      Invoke-Native "Merge verified r49 publication PR" $Gh @("pr", "merge", $pr, "--repo", $GitHubRepository, "--squash", "--delete-branch") -WorkingDirectory $RepoRoot
+    }
+  } else { Write-Log "GitHub main already contains the exact r49 source; continuing idempotently." Green }
+
+  $gcloudAuth = Invoke-Captured "Verify Google Cloud authentication" $Gcloud @("auth", "list", "--filter=status:ACTIVE", "--format=value(account)") -AllowFailure
+  if ($gcloudAuth.ExitCode -ne 0 -or -not $gcloudAuth.Text.Trim()) { Invoke-Native "Essential Google Cloud approval" $Gcloud @("auth", "login") }
+  $firebaseAuth = Invoke-Captured "Verify Firebase authentication" $Firebase @("login:list", "--json") -AllowFailure
+  if ($firebaseAuth.ExitCode -ne 0 -or $firebaseAuth.Text -notmatch '"user"') { Invoke-Native "Essential Firebase approval" $Firebase @("login") }
+  $projects = Invoke-Captured "Verify Firebase project access" $Firebase @("projects:list", "--json")
+  if ($projects.Text -notmatch [regex]::Escape($ProjectId)) { throw "The authenticated Firebase account cannot access $ProjectId." }
+  $deployer = (Invoke-Captured "Resolve publisher identity" $Gcloud @("auth", "list", "--filter=status:ACTIVE", "--format=value(account)")).Text.Trim().Split([Environment]::NewLine)[0]
+  if (-not $deployer) { throw "Google Cloud did not identify the active publisher." }
+  $deployerMember = if ($deployer.EndsWith('.gserviceaccount.com')) { "serviceAccount:$deployer" } else { "user:$deployer" }
+
+  Invoke-Native "Set active Google Cloud project" $Gcloud @("config", "set", "project", $ProjectId)
+  Invoke-Native "Enable managed Energy APIs" $Gcloud @("services", "enable", "run.googleapis.com", "cloudbuild.googleapis.com", "artifactregistry.googleapis.com", "cloudfunctions.googleapis.com", "firebase.googleapis.com", "aiplatform.googleapis.com", "iamcredentials.googleapis.com", "--project=$ProjectId")
+  $WorkerSa = "revex-energy-worker@$ProjectId.iam.gserviceaccount.com"
+  $BrokerSa = "revex-energy-broker@$ProjectId.iam.gserviceaccount.com"
+  Ensure-ServiceAccount $Gcloud $WorkerSa "REVEX private Energy worker"
+  Ensure-ServiceAccount $Gcloud $BrokerSa "REVEX authenticated Energy broker"
+  Add-ServiceAccountUser $Gcloud $WorkerSa $deployerMember "Allow publisher to deploy the private worker"
+  Add-ServiceAccountUser $Gcloud $BrokerSa $deployerMember "Allow publisher to deploy the Firebase broker"
+  Add-ProjectRole $Gcloud "serviceAccount:$WorkerSa" "roles/storage.objectAdmin" "Grant worker immutable evidence/result object access"
+  Add-ProjectRole $Gcloud "serviceAccount:$WorkerSa" "roles/aiplatform.user" "Grant worker managed T/Z/EN page scan access"
+  Add-ProjectRole $Gcloud "serviceAccount:$BrokerSa" "roles/datastore.user" "Grant broker project-data access"
+  $ProjectNumber = (Invoke-Captured "Resolve Google Cloud project number" $Gcloud @("projects", "describe", $ProjectId, "--format=value(projectNumber)")).Text.Trim()
+  $CloudBuildSa = (Invoke-Captured "Resolve actual Cloud Build identity" $Gcloud @("builds", "get-default-service-account", "--project=$ProjectId", "--format=value(serviceAccountEmail)")).Text.Trim().Split('/')[-1]
+  Add-ProjectRole $Gcloud "serviceAccount:$CloudBuildSa" "roles/cloudbuild.builds.builder" "Grant Cloud Build its builder role"
+  Add-ProjectRole $Gcloud "serviceAccount:$CloudBuildSa" "roles/artifactregistry.writer" "Grant Cloud Build image-push access"
+  $FunctionsAgent = "service-$ProjectNumber@gcf-admin-robot.iam.gserviceaccount.com"
+  Add-ServiceAccountUser $Gcloud $BrokerSa "serviceAccount:$FunctionsAgent" "Allow Cloud Functions to attach the broker identity"
+
+  $repoProbe = Invoke-Captured "Verify REVEX Artifact Registry repository" $Gcloud @("artifacts", "repositories", "describe", $Repository, "--project=$ProjectId", "--location=$Region", "--format=value(name)") -AllowFailure
+  if ($repoProbe.ExitCode -ne 0) { Invoke-Native "Create REVEX Artifact Registry repository" $Gcloud @("artifacts", "repositories", "create", $Repository, "--project=$ProjectId", "--location=$Region", "--repository-format=docker", "--description=REVEX managed production images", "--quiet") }
+
+  Write-Step "Verify the official COMcheck service is reachable without sending project data"
+  $comcheckProbe = Invoke-WebRequest -UseBasicParsing -Uri "https://legacy-comcheck.energycode.pnl.gov/CheckWeb/" -Method Get -TimeoutSec 20
+  if ($comcheckProbe.StatusCode -ne 200) { throw "The official COMcheck service did not pass its non-project availability probe." }
+  Write-Log "Official COMcheck availability probe passed. No project CXL was transmitted." Green
+
+  Invoke-Native "Build, test and push the immutable r49 worker image" $Gcloud @("builds", "submit", "--project=$ProjectId", "--config=server/revex-energy-worker/cloudbuild.yaml", "--substitutions=_REGION=$Region,_REPOSITORY=$Repository,_IMAGE=revex-energy-worker,_TAG=$ReleaseTag", ".") -WorkingDirectory $StageSource
+  $Image = "$Region-docker.pkg.dev/$ProjectId/$Repository/revex-energy-worker`:$ReleaseTag"
+  Invoke-Native "Deploy the private r49 Energy worker" $Gcloud @("run", "deploy", $Service, "--project=$ProjectId", "--region=$Region", "--image=$Image", "--service-account=$WorkerSa", "--no-allow-unauthenticated", "--cpu=4", "--memory=8Gi", "--concurrency=1", "--min-instances=0", "--max-instances=3", "--timeout=3600", "--set-env-vars=REVEX_ENERGY_TIMEOUT_SECONDS=3500,REVEX_VERTEX_PROJECT=$ProjectId,REVEX_VERTEX_LOCATION=global", "--quiet")
+  $WorkerUrl = (Invoke-Captured "Resolve deployed worker URL" $Gcloud @("run", "services", "describe", $Service, "--project=$ProjectId", "--region=$Region", "--format=value(status.url)")).Text.Trim()
+  if (-not $WorkerUrl) { throw "Cloud Run did not expose the private r49 worker URL." }
+  $policy = ((Invoke-Captured "Inspect private worker invocation policy" $Gcloud @("run", "services", "get-iam-policy", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
+  foreach ($binding in @($policy.bindings | Where-Object { $_.role -eq 'roles/run.invoker' })) {
+    foreach ($member in @($binding.members)) {
+      if ([string]$member -ne "serviceAccount:$BrokerSa") { Invoke-Native "Remove non-broker worker invoker $member" $Gcloud @("run", "services", "remove-iam-policy-binding", $Service, "--project=$ProjectId", "--region=$Region", "--member=$member", "--role=roles/run.invoker", "--quiet") }
+    }
+  }
+  Invoke-Native "Grant broker-only private worker invocation" $Gcloud @("run", "services", "add-iam-policy-binding", $Service, "--project=$ProjectId", "--region=$Region", "--member=serviceAccount:$BrokerSa", "--role=roles/run.invoker", "--quiet")
+  try {
+    $unexpected = Invoke-WebRequest -UseBasicParsing -Uri ($WorkerUrl + "/healthz") -TimeoutSec 15
+    if ($unexpected.StatusCode -eq 200) { throw "Private worker unexpectedly allowed unauthenticated invocation." }
+  } catch {
+    $status = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
+    if ($status -notin @(401,403)) { throw }
+    Write-Log "Private worker correctly denied the unauthenticated health probe ($status)." Green
+  }
+  $runState = ((Invoke-Captured "Verify ready r49 Cloud Run revision" $Gcloud @("run", "services", "describe", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
+  $deployedImage = [string]$runState.spec.template.spec.containers[0].image
+  $ready = @($runState.status.conditions | Where-Object { $_.type -eq 'Ready' -and [string]$_.status -eq 'True' }).Count -gt 0
+  if (-not $ready -or $deployedImage -notmatch [regex]::Escape($ReleaseTag)) { throw "Cloud Run is not ready on the immutable r49 image (image=$deployedImage)." }
+
+  Set-Content -LiteralPath (Join-Path $StageFunctions ".env.$ProjectId") -Encoding ascii -Value @("REVEX_ENERGY_WORKER_URL=$WorkerUrl", "REVEX_ENERGY_BROKER_SERVICE_ACCOUNT=$BrokerSa")
+  $env:FUNCTIONS_DISCOVERY_TIMEOUT = "90"
+  Invoke-Native "Deploy the authenticated r49 Firebase broker" $Firebase @("deploy", "--only", "functions:revex-energy:runRevexEnergy", "--project", $ProjectId, "--force") -WorkingDirectory $StageFunctions
+  $function = ((Invoke-Captured "Verify ACTIVE r49 broker" $Gcloud @("functions", "describe", "runRevexEnergy", "--gen2", "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
+  if ([string]$function.state -ne 'ACTIVE' -or [string]$function.serviceConfig.serviceAccountEmail -ne $BrokerSa) { throw "runRevexEnergy is not ACTIVE on the broker-only identity." }
+  if ([int]$function.serviceConfig.timeoutSeconds -lt 3500) { throw "runRevexEnergy does not preserve the full managed-chain timeout." }
+
+  Verify-LiveCompanion
+
+  Write-Step "Install the verified r49 add-in atomically"
+  New-Item -ItemType Directory -Path (Split-Path -Parent $InstalledRoot) -Force | Out-Null
+  $oldMoved = $false
+  try {
+    if (Test-Path -LiteralPath $InstalledRoot) { Move-Item -LiteralPath $InstalledRoot -Destination $BackupRoot; $oldMoved = $true }
+    Move-Item -LiteralPath $StagePayload -Destination $InstalledRoot
+    New-Item -ItemType Directory -Path (Split-Path -Parent $AddinPath) -Force | Out-Null
+    $assemblyPath = Join-Path $InstalledRoot "Liber.Revex.Revit.dll"
+    $manifest = @"
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>LIBER REVEX</Name>
+    <Assembly>$assemblyPath</Assembly>
+    <AddInId>DECFCABB-63FD-4E1B-9A98-2B646874D487</AddInId>
+    <FullClassName>Liber.Revex.Revit.App</FullClassName>
+    <VendorId>LIBR</VendorId>
+    <VendorDescription>LIBER Creative LLC</VendorDescription>
+  </AddIn>
+</RevitAddIns>
+"@
+    Set-Content -LiteralPath $AddinPath -Value $manifest -Encoding utf8
+    if (-not (Test-Path -LiteralPath $assemblyPath -PathType Leaf) -or -not (Select-String -LiteralPath $AddinPath -SimpleMatch $assemblyPath -Quiet)) { throw "The installed add-in or its Revit manifest failed final verification." }
+  } catch {
+    if (Test-Path -LiteralPath $InstalledRoot) { Move-Item -LiteralPath $InstalledRoot -Destination ($InstalledRoot + ".failed.$RunId") -ErrorAction SilentlyContinue }
+    if ($oldMoved -and (Test-Path -LiteralPath $BackupRoot)) { Move-Item -LiteralPath $BackupRoot -Destination $InstalledRoot }
+    throw
+  }
+
+  Write-Log "" 
+  Write-Log "REVEX r49 is published, deployed, verified and installed." Green
+  Write-Log "Worker: $WorkerUrl"
+  Write-Log "Broker: $($function.serviceConfig.uri)"
+  Write-Log "Installed add-in: $InstalledRoot"
+  if ($oldMoved) { Write-Log "Recoverable pre-r49 add-in backup: $BackupRoot" }
+  $script:Preflight["publicationStatus"] = "COMPLETED"
+  $script:Preflight["publicationFinishedAt"] = [DateTime]::UtcNow.ToString("o")
+  Save-PreflightReport
+  Write-Log "Reopen Revit 2026 and run each sync once from the intended active document. The only workflow approval is the modal current-revision COMcheck authorization; it cannot approve later revisions."
+  if (-not $NoPause) { try { Read-Host "Press Enter to close" | Out-Null } catch { } }
+} catch {
+  $failure = $_
+  try {
+    if ([string]$script:Preflight.status -ne "PASSED") {
+      $script:Preflight.status = "FAILED"
+      $script:Preflight.finishedAt = [DateTime]::UtcNow.ToString("o")
+    } else {
+      $script:Preflight["publicationStatus"] = "FAILED_AFTER_LOCAL_PREFLIGHT"
+      $script:Preflight["publicationFinishedAt"] = [DateTime]::UtcNow.ToString("o")
+    }
+    $script:Preflight["error"] = [ordered]@{ message = [string]$failure.Exception.Message; type = [string]$failure.Exception.GetType().FullName }
+    Save-PreflightReport
+  } catch { }
+  Write-Log ""
+  Write-Log "REVEX r49 publication stopped safely." Red
+  Write-Log $failure.Exception.Message Red
+  Write-Log "No local production server was created. Rerunning PUBLISH_REVEX_R49.cmd is safe."
+  Write-Log "Exact log: $LogPath"
+  if (-not $NoPause) { try { Read-Host "Press Enter to close" | Out-Null } catch { } }
+  exit 1
+}

@@ -1,0 +1,43 @@
+OPENSTUDIO GEOMETRY COMPILER v3.3.3 — MATCHED CONSTRUCTION + DIAGNOSTIC FIX
+============================================================================
+Date: 2026-07-24
+
+WHAT THE SCREENSHOT MEANT
+The visible ForwardTranslator messages saying "not symmetric, creating a reversed
+copy" are warnings, not translation failures. v3.3.2 displayed the last part of the
+native log in the failure popup, so a long block of benign warnings could hide the
+actual blocking line. That made the popup misleading.
+
+CORRECTIONS
+1. Matched layered constructions are now explicitly oriented as reciprocal pairs.
+   When both sides use the same non-symmetric construction, the compiler finds an
+   existing reverse-layer assembly or generates one and assigns it to the mate.
+2. The logic is handle/fingerprint based. Surface, opening, room, and construction
+   names are used only in audit text.
+3. Benign ForwardTranslator reversed-copy warnings are never treated as failures.
+4. The popup now extracts only FT_ERROR, FAIL, EnergyPlus Severe/Fatal, translator
+   blocking messages, or non-zero process results. It no longer dumps a warning tail.
+5. Full warnings remain available in the live log and FAILED_COMPILE folder.
+
+WINTHROP STATIC REGRESSION
+Baseline:
+- 159 spaces
+- 1,854 surfaces
+- 295 openings after exact 5-sided opening decomposition
+- 101 matched-pair behavior reconciliations
+- 91 explicit orientation repairs
+- 1 anonymous reverse-layer construction generated and reused
+- 0 incompatible matched construction pairs after serialization
+- 0 geometry, reference, or schedule-lock errors
+
+Proposed:
+- 159 spaces
+- 1,854 surfaces
+- 295 openings
+- 0 incompatible matched construction pairs
+- 0 geometry, reference, or schedule-lock errors
+
+NATIVE LIMIT
+The exact OpenStudio 3.10.0 / EnergyPlus 25.1.0 pipeline must still run on the
+Windows workstation. If it fails, v3.3.3 now shows the actual blocking error rather
+than the surrounding harmless warnings.

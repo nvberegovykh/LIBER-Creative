@@ -1,0 +1,38 @@
+OPENSTUDIO ENERGY MODEL GEOMETRY COMPILER v4.3.1
+=================================================
+
+WORKSTATION REPORT REVIEWED
+The v4.3.0 Winthrop run passed the mapping and internal integrity stages:
+- 159/159 spaces mapped in Baseline and Proposed.
+- 0 ambiguous or sub-75% assignments.
+- 0 compiler warnings.
+- New-space identity, exact geometry, schedules, references, constructions,
+  and serialized OSM round-trip locks passed.
+
+The native Baseline smoke test then found one repair-created degenerate face.
+The failure was not caused by space mapping or the small wall containing
+op-197. The actual cause was the constrained decomposition of
+su-s-140-e-w-561: one remainder triangle had a 0.0022626 m edge. EnergyPlus
+drops consecutive vertices less than 0.01 m apart, reducing that triangle to
+two vertices.
+
+FIX
+- Recombines adjacent decomposition triangles across their longest shared edge.
+- Accepts a merge only when the exact union is one valid, hole-free, convex
+  triangle or quad.
+- Preserves original boundary, openings, area, construction, space assignment,
+  and all semantic references.
+- Adds an explicit EnergyPlus short-edge cleanup simulation to preflight and
+  serialized validation.
+- su-s-140-e-w-561 is now represented by 6 exact convex pieces instead of 9.
+- Missing area: 0.0 m2.
+- Extra area: 0.0 m2.
+- EnergyPlus-fatal repair triangles remaining: 0.
+
+UNCHANGED
+- Hard 75% mapping-confidence floor.
+- Local architectural AI and GPU/CPU provider selection.
+- USE ALL SUGGESTED behavior.
+- New-model OS:Space identity lock.
+- Template schedules/HVAC/loads/controls preservation.
+- Mandatory exact-version native OpenStudio/EnergyPlus validation.

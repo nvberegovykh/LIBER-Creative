@@ -1,0 +1,40 @@
+namespace Liber.Revex.Revit.Models;
+
+public sealed record RevexSyncOutput(
+    string Revision,
+    string RootFolder,
+    string ProjectJson,
+    string DesignBookJson,
+    string SpecPushJson,
+    string? ViewerIfc,
+    string? ViewerFbx,
+    string? ViewerMesh,
+    string? ViewerMeshManifest,
+    IReadOnlyList<string> ViewerMeshPages,
+    string? ViewerMetadata,
+    string? PrintingSetsManifest,
+    IReadOnlyList<string> PrintingSetPdfs,
+    string? AffectedPlansManifest,
+    IReadOnlyList<string> AffectedPlanPdfs,
+    string IntegrityJson,
+    int ScheduleCount,
+    int ElementCount,
+    int PrintingSetCount,
+    int PrintingSheetCount,
+    int AffectedPlanViewCount,
+    int ChangedElementCount);
+
+public sealed record RevexCentralBinding(
+    string DocumentTitle,
+    string DocumentUniqueId,
+    string DocumentFingerprint,
+    string CentralPath,
+    bool IsWorkshared,
+    string? ProjectId,
+    string? SpecProjectId,
+    string BindingVersion,
+    string BindingSource,
+    string IdentityEvidenceDigest,
+    string IdentityDisplayName,
+    IReadOnlyList<string> IdentityEvidenceSheets,
+    DateTime ExportedAtUtc);

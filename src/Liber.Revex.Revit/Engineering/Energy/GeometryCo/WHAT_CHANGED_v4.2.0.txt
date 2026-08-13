@@ -1,0 +1,50 @@
+OPENSTUDIO ENERGY MODEL GEOMETRY COMPILER v4.2.0
+=================================================
+
+ROOT CAUSE
+The final v4.1.0 native report identified two remaining non-convex
+shadow-casting surfaces. Both contained child openings. v4.1.0 safely skipped
+that class because ordinary triangulation would cut through an opening.
+
+GENERIC OPENING-AWARE REPAIR
+- Detects all Outdoors + SunExposed OS:Surface objects and OS:ShadingSurface
+  objects geometrically. Object names and project identifiers are diagnostics
+  only and never drive a decision.
+- For a concave parent with openings, constructs disjoint convex carrier
+  polygons that contain the unchanged opening polygons.
+- Keeps the original parent handle on the first carrier, so the ordinary
+  one-opening case preserves the opening-parent handle exactly.
+- Constrained-triangulates the remaining opaque area, including remainders with
+  holes, so no triangle crosses or fills an opening carrier.
+- Verifies the union against the original parent with independent missing-area,
+  extra-area, and total-area checks.
+- Refuses the repair if an opening lies outside the parent, spans a concave
+  recess that cannot fit in a convex carrier, or another semantic object makes
+  handle duplication unsafe.
+
+INTEGRITY ALGORITHM CORRECTIONS
+- OS:Surface Number of Vertices is validated at field 10.
+- OS:SubSurface Number of Vertices is validated at field 9.
+- Every rewritten Surface/SubSurface explicitly receives the correct declared
+  vertex count.
+- Static validation now fails if even one non-convex casting surface remains
+  after compatibility repair or serialized round-trip.
+- `use_semantic_fallback` now defaults to false everywhere, including direct
+  infiltration transfer. Labels are used only when explicitly enabled.
+- The GUI exposes that opt-in as a clearly labeled Advanced Options checkbox.
+- The exact-coordinate digest no longer includes object names.
+
+WINTHROP REGRESSION
+- 27 total lossless compatibility repairs:
+  - 1 five-vertex opening decomposition.
+  - 24 non-convex casting surfaces without openings.
+  - 2 non-convex casting surfaces with openings.
+- 159 spaces, 1,985 surfaces, and 295 openings in each compiled model.
+- 0 remaining non-convex casting surfaces.
+- 0 missing/extra decomposition area.
+- 0 geometry-layout, dangling-reference, reciprocal-pair, or construction-pair errors.
+- 0 changed schedule objects or protected schedule references.
+- Serialized OSM round-trip validation passed for Baseline and Proposed.
+
+Native OpenStudio 3.10.0 / EnergyPlus 25.1.0 validation remains mandatory on
+the workstation before the Baseline/Proposed pair is committed.
