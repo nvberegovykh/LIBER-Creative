@@ -14,6 +14,7 @@ STABILITY CONTRACT
 - Design Book source is fetched concurrently with the BIM index and rendered independently of detailed 3D.
 - If authored Design Book data is temporarily unavailable, REVEX forms a deterministic read-only fallback from current BIM metadata.
 - BIM rendering/Walk pauses while BIM is hidden; repeated WebView2 renderer failures still trigger controlled same-project recovery.
+- If hardware-accelerated WebGL cannot initialize, BIM-only controls disable and REVEX records a correlated `VIEWER_INIT` warning while Design Book, Spec Book, Docs, Energy, Chat, and History remain usable.
 - Revit remains source authority; Companion edits remain explicit overlays until reconciled.
 
 SPEC / ENERGY CONTRACT

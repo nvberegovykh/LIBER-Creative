@@ -95,6 +95,11 @@
             instanceFilter: Boolean(document.getElementById('model-instance-filter'))
           }
         });
+    } else if (window.__revexViewerR26Unavailable) {
+      emit('WARN', 'VIEWER_CONTRACT', `BIM viewer controlled fallback active: ${clean(window.__revexViewerR26Unavailable.reason || 'WebGL unavailable')}`, {
+        initiator: 'browser dependency audit',
+        detail: { build: window.__revexViewerR26Unavailable.build || VERSION, failSoft: true }
+      });
     } else {
       emit('WARN', 'VIEWER_CONTRACT', 'BIM viewer instance is not ready yet; deferred audit will retry.', { initiator: 'browser dependency audit' });
     }
