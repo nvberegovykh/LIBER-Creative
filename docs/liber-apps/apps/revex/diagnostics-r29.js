@@ -160,6 +160,8 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(auditContracts, 250), { once: true });
   else setTimeout(auditContracts, 250);
   setTimeout(auditContracts, 2500);
-  setTimeout(() => { if (!sanitizeLegacyViewerBindings()) setTimeout(sanitizeLegacyViewerBindings, 2500); }, 1200);
+  let ownershipAttempts = 0;
+  const ensureOwnership = () => { if (sanitizeLegacyViewerBindings()) return; ownershipAttempts += 1; if (ownershipAttempts < 12) setTimeout(ensureOwnership, 1000); };
+  setTimeout(ensureOwnership, 1200);
   emit('INFO', 'PUBLIC_COMPAT', 'Public REVEX is using the r41 compatibility boundary over the older hosted core until the canonical large-file mirror is replaced atomically.', { initiator: 'public compatibility boundary' });
 })();
