@@ -14,7 +14,10 @@ const {
 } = require('../../server/firebase-functions/project-access');
 
 const root = path.resolve(__dirname, '../..');
-const live = path.join(root, 'src/Live-Companion');
+const sourceLive = path.join(root, 'src/Live-Companion');
+const live = fs.existsSync(sourceLive)
+  ? sourceLive
+  : path.join(root, 'docs/liber-apps/apps/revex');
 const revit = path.join(root, 'src/Liber.Revex.Revit');
 const read = (file) => fs.readFileSync(file, 'utf8');
 const reportFlag = process.argv.indexOf('--report');
