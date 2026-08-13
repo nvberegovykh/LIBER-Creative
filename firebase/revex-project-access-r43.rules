@@ -54,7 +54,10 @@ function revexR43SpecMember(specProjectId) {
 }
 
 match /projects/{projectId} {
-  allow get, list: if revexR43IsAdmin() || revexR43MemberOf(resource.data);
+  allow get: if revexR43IsAdmin() || revexR43MemberOf(resource.data);
+  allow list: if revexR43IsAdmin()
+    || (revexR43SignedIn() && resource.data.ownerId == request.auth.uid)
+    || (revexR43SignedIn() && request.auth.uid in resource.data.memberIds);
   allow create: if revexR43IsAdmin() || (
     revexR43MemberOf(request.resource.data)
     && request.resource.data.ownerId == request.auth.uid
@@ -72,8 +75,12 @@ match /projects/{projectId} {
 }
 
 match /specProjects/{specProjectId} {
-  allow get, list: if revexR43IsAdmin()
+  allow get: if revexR43IsAdmin()
     || revexR43MemberOf(resource.data)
+    || revexR43LinkedProjectMember(resource.data);
+  allow list: if revexR43IsAdmin()
+    || (revexR43SignedIn() && resource.data.ownerId == request.auth.uid)
+    || (revexR43SignedIn() && request.auth.uid in resource.data.memberIds)
     || revexR43LinkedProjectMember(resource.data);
   allow create: if revexR43IsAdmin() || (
     revexR43MemberOf(request.resource.data)
