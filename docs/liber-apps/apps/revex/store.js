@@ -15,6 +15,10 @@
   const ENERGY_QUALITY_TARGET = 0.95;
   const ENGINEERING_CURRENT_ID = 'revex_engineering';
   const ENERGY_CURRENT_ID = 'revex_energy';
+  const COMCHECK_CONSENT_SCHEMA = 'liber.revex.comcheck-consent.v1';
+  const COMCHECK_SERVICE = 'PNNL_COMCHECK_BACKSTOP';
+  const COMCHECK_ENDPOINT = 'https://legacy-comcheck.energycode.pnl.gov/CheckWeb/';
+  const COMCHECK_SCOPE = 'GENERATED_CURRENT_PROJECT_CXL_ONLY';
 
   function plain(value) {
     const json = JSON.stringify(value === undefined ? null : value);
@@ -546,15 +550,71 @@
       return { id: ENGINEERING_CURRENT_ID, ...currentRecord };
     },
 
+    async recordEnergyConsent(projectId, sourceRevision) {
+      if (!String(sourceRevision || '').trim()) throw new Error('Project and Engineering revision are required for COMcheck authorization.');
+      const revision = docId(sourceRevision);
+      if (!projectId || !revision) throw new Error('Project and Engineering revision are required for COMcheck authorization.');
+      if (!this.isCloud() || !this.user?.uid) throw new Error('Sign in to authorize official COMcheck processing.');
+      const engineeringRef = this.api.doc(this.db, 'projects', projectId, 'library', `revex_engineering_revision_${revision}`);
+      const engineeringSnap = await this.api.getDoc(engineeringRef);
+      if (!engineeringSnap.exists()) throw new Error('Publish the immutable Engineering revision before authorizing COMcheck processing.');
+      const engineering = plain(engineeringSnap.data() || {});
+      if (String(engineering.revision || engineering.manifest?.revision || '') !== revision)
+        throw new Error('COMcheck authorization cannot be attached to a different Engineering revision.');
+      const consent = plain({
+        schema: COMCHECK_CONSENT_SCHEMA,
+        projectId,
+        sourceEngineeringRevision: revision,
+        service: COMCHECK_SERVICE,
+        endpoint: COMCHECK_ENDPOINT,
+        scope: COMCHECK_SCOPE,
+        approved: true,
+        approvedAt: iso(),
+        approvedByUid: String(this.user.uid),
+        immutable: true
+      });
+      const consentRef = this.api.doc(this.db, 'projects', projectId, 'revexEnergyConsents', revision, 'approvers', String(this.user.uid));
+      const existing = await this.api.getDoc(consentRef);
+      if (existing.exists()) {
+        const recorded = plain(existing.data() || {});
+        const same = recorded.schema === COMCHECK_CONSENT_SCHEMA && recorded.approved === true &&
+          recorded.projectId === projectId && recorded.sourceEngineeringRevision === revision &&
+          recorded.service === COMCHECK_SERVICE && recorded.endpoint === COMCHECK_ENDPOINT &&
+          recorded.scope === COMCHECK_SCOPE && recorded.approvedByUid === String(this.user.uid);
+        if (!same) throw new Error('An incompatible COMcheck authorization record already exists for this user and Engineering revision.');
+        return recorded;
+      }
+      await this.api.setDoc(consentRef, consent, plain({ merge: false }));
+      return consent;
+    },
+
+    async getEnergyConsent(projectId, sourceRevision) {
+      if (!String(sourceRevision || '').trim()) return null;
+      const revision = docId(sourceRevision);
+      if (!projectId || !revision || !this.isCloud() || !this.user?.uid) return null;
+      const snap = await this.api.getDoc(
+        this.api.doc(this.db, 'projects', projectId, 'revexEnergyConsents', revision, 'approvers', String(this.user.uid))
+      );
+      if (!snap.exists()) return null;
+      const consent = plain(snap.data() || {});
+      const valid = consent.schema === COMCHECK_CONSENT_SCHEMA && consent.approved === true &&
+        consent.projectId === projectId && consent.sourceEngineeringRevision === revision &&
+        consent.service === COMCHECK_SERVICE && consent.endpoint === COMCHECK_ENDPOINT &&
+        consent.scope === COMCHECK_SCOPE && consent.approvedByUid === String(this.user.uid);
+      return valid ? consent : null;
+    },
+
     async runEnergyServer(projectId, sourceRevision) {
       if (!projectId || !sourceRevision) throw new Error('Project and Engineering revision are required for managed Energy processing.');
       if (!this.isCloud()) throw new Error('Managed Energy processing requires a signed-in REVEX cloud session.');
+      const consent = await this.getEnergyConsent(projectId, sourceRevision);
+      if (!consent) throw new Error('Authorize official COMcheck processing for this exact Engineering revision. No current-project CXL was transmitted.');
       const fs = this.fs || getService();
       const response = await callEnergyBroker(fs, plain({
         schema: 'liber.revex.energy-broker-request.v1',
         projectId,
         sourceRevision,
-        clientBuild: '20260813r46'
+        clientBuild: '20260813r47'
       }));
       if (!response?.ok) throw new Error(response?.message || response?.error || 'REVEX managed Energy worker did not complete.');
       return response;

@@ -24,8 +24,8 @@ function rejectText(source, pattern, label) {
 }
 
 for (const [name, source] of Object.entries({ app, viewer, store, integrity, html })) {
-  requireText(source, '20260813r46', `${name} build pin`);
-  rejectText(source, /20260813r4[1-5]/, `${name} stale build pin`);
+  requireText(source, '20260813r47', `${name} build pin`);
+  rejectText(source, /20260813r4[1-6]/, `${name} stale build pin`);
 }
 
 requireText(history, 'window.__revexViewerR26Instance', 'history current viewer binding');
@@ -46,7 +46,11 @@ requireText(store, "modular.httpsCallable(functions, 'runRevexEnergy', { timeout
 requireText(store, 'throw energyCallableError(error)', 'broker error propagation');
 requireText(store, "this.api.doc(this.db, 'projects', projectId, 'revex', 'engineering')", 'legacy Engineering recovery read');
 requireText(store, '`revex_engineering_revision_${revision}`', 'legacy Engineering canonical revision mirror');
-requireText(store, "clientBuild: '20260813r46'", 'r46 managed broker client');
+requireText(store, "clientBuild: '20260813r47'", 'r47 managed broker client');
+requireText(store, "'revexEnergyConsents', revision, 'approvers', String(this.user.uid)", 'per-user immutable-revision consent path');
+requireText(store, 'async recordEnergyConsent(projectId, sourceRevision)', 'revision consent writer');
+requireText(store, 'async getEnergyConsent(projectId, sourceRevision)', 'revision consent reader');
+requireText(store, 'Authorize official COMcheck processing for this exact Engineering revision', 'broker call consent gate');
 requireText(sharedFirebase, "if (name === 'runRevexEnergy')", 'shared Firebase dedicated Energy path');
 requireText(sharedFirebase, "this.functionsByRegion?.['us-central1']", 'shared Firebase Energy region lock');
 requireText(sharedFirebase, "{ timeout: 3600000 }", 'shared Firebase Energy timeout');
@@ -67,6 +71,18 @@ requireText(energy, 'autoRetryRevision !== currentSource', 'single automatic ret
 requireText(energy, "['filing-output', 'Official filing outputs']", 'official filing output group');
 requireText(energy, 'COMcheck_OFFICIAL_BACKSTOP_REPORT', 'official Backstop report rendering');
 requireText(energy, 'BASELINE|PROPOSED', 'compiled OSM rendering');
+requireText(energy, "requestRevisionConsent(id, revision)", 'Energy Sync consent modal');
+requireText(energy, "await requestRevisionConsent(id, revision)", 'pre-processing modal wait');
+requireText(energy, "sourceState = await Store.syncEngineeringPackage(files, id)", 'evidence preservation after consent choice');
+requireText(energy, "await authorizeRevision(id, lastSourceRevision, { prompt: false })", 'exact published revision consent binding');
+requireText(html, 'id="energy-consent-dialog"', 'native modal dialog');
+requireText(html, 'Authorization applies only to this immutable Engineering revision', 'revision-only consent explanation');
+requireText(html, 'A later Energy Sync creates a new revision and asks again.', 'no future-revision authorization');
+requireText(html, 'value="cancel">Keep evidence only', 'non-transmission evidence path');
+requireText(html, 'value="approve">Authorize this revision', 'explicit revision authorization action');
+
+const consentSurface = [store, energy, html].join('\n');
+rejectText(consentSurface, /REVEX_COMCHECK_EXTERNAL_APPROVED|authorize all subsequent|project-wide COMcheck approval/i, 'blanket COMcheck authorization');
 
 const userVisible = [html, readme, read('energy-r27.js'), read('energy-contract-r40.js')].join('\n');
 rejectText(userVisible, /79\s+Winthrop|2306\s+Ocean|31-00\s+47th|Faybyshenko|Chosen\s+MEP|B01304513/i, 'user-visible reference identity');
@@ -126,7 +142,7 @@ async function verifyLegacyRevisionRecovery() {
 }
 
 verifyLegacyRevisionRecovery().then(() => {
-  console.log('REVEX r46 Companion QA passed:', {
+  console.log('REVEX r47 Companion QA passed:', {
     currentViewerBinding: true,
     hideAndInverseShow: true,
     instancedVisibility: true,
@@ -138,6 +154,8 @@ verifyLegacyRevisionRecovery().then(() => {
     legacyRevisionRecovery: true,
     officialBackstopAndOsmOutputs: true,
     sameRealmFirestoreWrites: true,
+    perRevisionComcheckConsent: true,
+    evidenceOnlyCancelPath: true,
     referenceIdentityExcluded: true,
   });
 }).catch((error) => {
