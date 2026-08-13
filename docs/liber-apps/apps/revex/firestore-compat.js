@@ -4,8 +4,9 @@
   if(!Store||Store.__revexFirestoreCompatR18Installed) return;
 
   const clone=(value)=>JSON.parse(JSON.stringify(value===undefined?null:value));
+  const firestorePlain=(value)=>typeof Store.toFirestorePlain==='function'?Store.toFirestorePlain(value):clone(value);
   const post=(stage,detail={})=>{
-    try{ root.chrome?.webview?.postMessage({type:'liber:revex-sync-progress',stage,build:'20260811r26',...detail}); }catch(_){ }
+    try{ root.chrome?.webview?.postMessage({type:'liber:revex-sync-progress',stage,build:'20260813r42',...detail}); }catch(_){ }
     console.log('[REVEX publish]',stage,detail);
   };
 
@@ -60,17 +61,20 @@
     Store.api.setDoc=async function revexFirestoreSafeSetDoc(ref,data,options){
       const path=String(ref?.path||'');
       const isRevexSpecSource=/\/sources\/revex-revit$/i.test(path)||/\/library\/revex_spec_source$/i.test(path);
+      const isRevexLibrary=/^projects\/[^/]+\/library\/revex_/i.test(path);
+      if(!isRevexSpecSource&&!isRevexLibrary)return originalSetDoc(ref,data,options);
+      const nextOptions=options===undefined?undefined:firestorePlain(options);
       if(!isRevexSpecSource||!data||!Array.isArray(data.payload))
-        return originalSetDoc(ref,data,options);
+        return originalSetDoc(ref,firestorePlain(data),nextOptions);
 
-      const next=clone(data);
+      const next=firestorePlain(data);
       next.payload=safeSpecPayload(next.payload);
       next.payloadEncoding='revex-firestore-row-objects-v2';
       next.rawPayloadStoragePath=next.storagePath||next.rawPayloadStoragePath||null;
       next.rawPayloadPreserved=Boolean(next.rawPayloadStoragePath);
       post('spec-write-start',{path,payloadSchedules:next.payload.length});
       try{
-        const result=await originalSetDoc(ref,next,options);
+        const result=await originalSetDoc(ref,firestorePlain(next),nextOptions);
         post('spec-write-complete',{path});
         return result;
       }catch(error){
@@ -84,9 +88,10 @@
       const path=String(ref?.fullPath||ref?._location?.path_||file?.name||'upload');
       const bytes=Number(file?.size||0);
       const t0=performance.now();
+      const nextMetadata=/^projects\/[^/]+\/(?:library\/revex|revex\/)/i.test(path)&&metadata!==undefined?firestorePlain(metadata):metadata;
       post('upload-start',{path,bytes});
       try{
-        const result=await originalUploadBytes(ref,file,metadata);
+        const result=await originalUploadBytes(ref,file,nextMetadata);
         post('upload-complete',{path,bytes,uploadMs:Math.round(performance.now()-t0)});
         return result;
       }catch(error){

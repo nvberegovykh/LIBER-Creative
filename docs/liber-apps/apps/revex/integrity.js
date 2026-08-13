@@ -3,11 +3,12 @@
 
   const Store = root.RevexStore;
   if (!Store) return;
-  const BUILD = '20260812r41';
+  const BUILD = '20260813r42';
   const iso = () => new Date().toISOString();
   const safe = (value) => String(value || '').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || 'file';
   const docId = (value) => safe(value).replace(/\./g, '_');
   const clone = (value) => JSON.parse(JSON.stringify(value === undefined ? null : value));
+  const firestorePlain = (value) => typeof Store.toFirestorePlain === 'function' ? Store.toFirestorePlain(value) : clone(value);
   const originalEnsureSpecProject = Store.ensureSpecProject.bind(Store);
   const originalCreateProject = Store.createProject.bind(Store);
 
@@ -24,14 +25,14 @@
   }
 
   async function setRecord(projectId, id, kind, data, merge = true) {
-    const payload = clone({
+    const payload = firestorePlain({
       ...data,
       type: 'revex',
       hidden: true,
       revexKind: kind,
       updatedAt: data?.updatedAt || iso()
     });
-    await Store.api.setDoc(libraryDoc(projectId, id), payload, clone({ merge }));
+    await Store.api.setDoc(libraryDoc(projectId, id), payload, firestorePlain({ merge }));
     return payload;
   }
 
@@ -49,7 +50,7 @@
     const name = safe(file.name || 'file');
     const path = `projects/${projectId}/library/revex/${area}/${Date.now()}_${name}`;
     const ref = f.ref(Store.fs.storage, path);
-    await f.uploadBytes(ref, file, clone({ contentType: file.type || (/\.json$/i.test(name) ? 'application/json' : 'application/octet-stream') }));
+    await f.uploadBytes(ref, file, firestorePlain({ contentType: file.type || (/\.json$/i.test(name) ? 'application/json' : 'application/octet-stream') }));
     return { path, url: await f.getDownloadURL(ref), name, size: file.size };
   }
 
@@ -292,7 +293,7 @@
     const specProjectId = await this.ensureSpecProject(projectId, preferredSpecProjectId || project?.central?.specProjectId);
     let specSync = { status: 'unlinked', projectId: null, rev: specPush?.rev || revision };
     if (specProjectId) {
-      const source = clone({
+      const source = firestorePlain({
         type: 'revit',
         name: 'REVEX controlled Revit sync',
         rev: specPush?.rev || revision,
@@ -302,7 +303,7 @@
         centralDocumentUniqueId: project?.central?.documentUniqueId || null,
         storagePath: uploads['spec-revit-push.json']?.path || null
       });
-      await this.api.setDoc(this.api.doc(this.db, 'specProjects', specProjectId, 'sources', 'revex-revit'), source, clone({ merge: true }));
+      await this.api.setDoc(this.api.doc(this.db, 'specProjects', specProjectId, 'sources', 'revex-revit'), source, firestorePlain({ merge: true }));
       specSync = { status: 'published', projectId: specProjectId, rev: source.rev, pushedAt: source.pushedAt };
     }
 
@@ -313,7 +314,7 @@
         const uploaded = pdf ? uploads[pdf.name] : null;
         if (!uploaded) continue;
         const recordId = `revex_print_${docId(set.id || set.name || 'set')}_${revision}`;
-        const record = clone({
+        const record = firestorePlain({
           type: 'file', hidden: false, folderPath: 'record_out/printing_sets',
           name: `${set.name || 'Printing Set'} · ${revision}.pdf`, originalName: set.fileName || pdf.name,
           storagePath: uploaded.path, size: uploaded.size || pdf.size, mimeType: 'application/pdf',
@@ -322,7 +323,7 @@
           sheetIndex: (set.pages || []).map((page) => ({ page: Number(page.page || 0), sheetId: page.sheetId || null, sheetUniqueId: page.sheetUniqueId || null, sheetNumber: page.sheetNumber || '', sheetName: page.sheetName || '', currentRevision: page.currentRevision || null })),
           createdAt: iso(), updatedAt: iso(), createdBy: this.user.uid
         });
-        await this.api.setDoc(libraryDoc(projectId, recordId), record, clone({ merge: true }));
+        await this.api.setDoc(libraryDoc(projectId, recordId), record, firestorePlain({ merge: true }));
         printingDocs.push({ id: recordId, ...record });
       }
     }
