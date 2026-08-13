@@ -1,6 +1,7 @@
-name: REVEX r27 / 0.8.19 Spec Energy release
+name: REVEX 0.8.19 r41 canonical Companion deploy
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -11,11 +12,11 @@ permissions:
   contents: write
 
 concurrency:
-  group: revex-r27-0819-spec-energy-release
+  group: revex-0819-r41-canonical-deploy
   cancel-in-progress: false
 
 jobs:
-  release:
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -23,97 +24,117 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download exact REVEX 0.8.19 Companion files
+      - name: Download hash-locked canonical REVEX Companion from Drive
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p /tmp/revex-r27
+          mkdir -p /tmp/revex-r41
           fetch_drive() {
             local id="$1" out="$2" sha="$3"
             curl -L --fail --retry 4 --retry-delay 2 \
               "https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t" \
-              -o "/tmp/revex-r27/${out}"
-            echo "${sha}  /tmp/revex-r27/${out}" | sha256sum -c -
+              -o "/tmp/revex-r41/${out}"
+            echo "${sha}  /tmp/revex-r41/${out}" | sha256sum -c -
           }
-          fetch_drive '1kvRhwCEPWzUyc-0kK8Q0t2KemyJtX4p0' 'index.html' 'dba1d6227d2ee863be090196e056ded0a2033c5c341c463b0bf1b915bc817612'
-          fetch_drive '1ELpV95mdDzLI8XWemMNSphXAVll19fko' 'app.js' 'df4f321deefa1521483787fac64306de44d694e88c73b103f941beeefa3dba9f'
-          fetch_drive '10cAgG1uDl7MAcuaUsgXEz3VdJ6AfTojd' 'store.js' '72556aa335c5a29ccc6247bcbe626da82f015502962b6c74dc357816e2b1f966'
-          fetch_drive '1lCABFvA380DYNyqK5W7vuAKMDTYJifdE' 'energy-r27.js' '0580f13329a6a25a6fead118bff32a705e337a6e32de0962292ce11f17b07846'
-          fetch_drive '1n8F0yAs0LcItGUO9DmUDs2VBTznQRisb' 'energy-r27.css' 'e630617006fc22daf4c4e9dd6a9009ac2186a83494bdbcf11b4ffc33238fbc86'
-          fetch_drive '1g58NvJ7aN3WBEupBe0gc8UIvlWPaJ54p' 'shell-integrity.js' '34361df874e8b291bf882afd2e5ad7daf3a9a308f5007153ca46caf1deb68f1f'
-          fetch_drive '1ZoNuM2FzbzCcsq2e24IIvdrjEVeaIwGj' 'README.txt' '6930658a66353bfb554c381b12014cca0574dfc567b2721638bc4a11dd39c50d'
+          fetch_drive '1kvRhwCEPWzUyc-0kK8Q0t2KemyJtX4p0' 'index.html' '42fd0370522d7db7edd6bb6a0ccd1f0d61c52b6ac57402febcac305c5aef29b3'
+          fetch_drive '1ELpV95mdDzLI8XWemMNSphXAVll19fko' 'app.js' 'dd2905f0d5983b1473edd0c8ef865c695251ac311ab77831cf441120cec06b04'
+          fetch_drive '10cAgG1uDl7MAcuaUsgXEz3VdJ6AfTojd' 'store.js' 'd7f28db9273136bc20fa5a273b1966d783bcf24ada4d244132143aa669a04990'
+          fetch_drive '1YHqaZXp-lcLgj2RrjkjUp7HUhmjPEYgl' 'viewer-r26.js' '41a5d87563f4ccde9c689587113eb3df54402398ff0bc7d6c6b08f97b360268c'
+          fetch_drive '1KgyV2nBDLCQTzC1T8fKium5aR7ifu4vp' 'styles.css' 'dff7473320088a9be0a8d68e26f69c32a2630ac5080191c0fe40ad9923e68f07'
+          fetch_drive '10MXqTaH_3ETuWSH8oQQVQcEplYPMM2CS' 'integrity.js' 'b1082874bf8d8934f1c18a84cb448f2cf855ddccdfb99575ba4339ddbada8ac2'
+          fetch_drive '1UR21DaYg2EGfbwXuenavLuDgjmmxIzB7' 'ui-integrity.js' 'c2b546d8e92b40ae0d9e5e319c33903380d3988afb77041f6fef12caf44d3d2e'
+          fetch_drive '1zHfAtG7ccQZaSPN1zQ-ZLyT_v29v3Lck' 'diagnostics-r29.js' '6e506657b16c2059e36e3db2987b4649b14c7a87e56a362b3566907745cf4c83'
+          fetch_drive '1lCABFvA380DYNyqK5W7vuAKMDTYJifdE' 'energy-r27.js' 'f2a938adafd5f0b58edfb87bf66777696a2670a62facab0331bf687188328d58'
+          fetch_drive '1g58NvJ7aN3WBEupBe0gc8UIvlWPaJ54p' 'shell-integrity.js' '09074405256c4dd7e52eb3ee76fe1a49b4ec4c0488567e772603ea570594a3e6'
+          fetch_drive '1v52VjG7kJz-WzQI38iCevHzsKR14hp7B' 'manifest.webmanifest' '456477c0adfc9c8df81a80065f6ad2b68f56ed7de1d7c30b181be107a36a6e9c'
+          fetch_drive '1ZoNuM2FzbzCcsq2e24IIvdrjEVeaIwGj' 'README.txt' 'dbaa1c3d08bd1f8e83215ead31d4bba9e64b37ea0c8f1349d5db5260063d42bf'
 
-      - name: Install r27 Spec Energy Companion files
+      - name: Canonical r41 static QA
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp /tmp/revex-r41/app.js /tmp/revex-app.mjs
+          cp /tmp/revex-r41/store.js /tmp/revex-store.mjs
+          cp /tmp/revex-r41/viewer-r26.js /tmp/revex-viewer.mjs
+          cp /tmp/revex-r41/integrity.js /tmp/revex-integrity.mjs
+          cp /tmp/revex-r41/ui-integrity.js /tmp/revex-ui.mjs
+          cp /tmp/revex-r41/diagnostics-r29.js /tmp/revex-diagnostics.mjs
+          cp /tmp/revex-r41/energy-r27.js /tmp/revex-energy.mjs
+          cp /tmp/revex-r41/shell-integrity.js /tmp/revex-shell.mjs
+          node --check /tmp/revex-app.mjs
+          node --check /tmp/revex-store.mjs
+          node --check /tmp/revex-viewer.mjs
+          node --check /tmp/revex-integrity.mjs
+          node --check /tmp/revex-ui.mjs
+          node --check /tmp/revex-diagnostics.mjs
+          node --check /tmp/revex-energy.mjs
+          node --check /tmp/revex-shell.mjs
+          python -m json.tool /tmp/revex-r41/manifest.webmanifest >/dev/null
+
+          # r41 shell and cache identity
+          grep -q '20260812r41' /tmp/revex-r41/index.html
+          grep -q 'diagnostics-r29.js?v=20260812r41' /tmp/revex-r41/index.html
+          grep -q 'store.js?v=20260812r41' /tmp/revex-r41/index.html
+          grep -q 'app.js?v=20260812r41' /tmp/revex-r41/index.html
+          grep -q 'viewer-r26.js?v=20260812r41' /tmp/revex-r41/index.html
+          grep -q 'energy-r27.js?v=20260812r41' /tmp/revex-r41/index.html
+
+          # Current navigation: Energy is its own REVEX view, not the retired Spec sub-tab.
+          grep -q 'data-view="energy"' /tmp/revex-r41/index.html
+          grep -q 'id="view-energy"' /tmp/revex-r41/index.html
+          ! grep -q 'id="spec-energy-section"' /tmp/revex-r41/index.html
+
+          # Current Energy authority contract: 80% hard stop / 95% quality target.
+          grep -q 'const ENERGY_HARD_STOP = 0.80' /tmp/revex-r41/store.js
+          grep -q 'const ENERGY_QUALITY_TARGET = 0.95' /tmp/revex-r41/store.js
+          grep -q 'const ENERGY_HARD_STOP = 0.80' /tmp/revex-r41/energy-r27.js
+          grep -q 'const ENERGY_QUALITY_TARGET = 0.95' /tmp/revex-r41/energy-r27.js
+          ! grep -E -q '0\.98|98%' /tmp/revex-r41/index.html /tmp/revex-r41/store.js /tmp/revex-r41/energy-r27.js
+          grep -q 'writeBackToRevitAfterExport' /tmp/revex-r41/store.js
+          grep -q 'pdfInsertion' /tmp/revex-r41/store.js
+          ! grep -q 'data-energy-applicant' /tmp/revex-r41/index.html
+          ! grep -q 'id="energy-seal"' /tmp/revex-r41/index.html
+
+          # Store/API regressions that caused the Aug-12 browser crash.
+          grep -q 'resolveSpecProject' /tmp/revex-r41/store.js
+          grep -q 'ensureSpecProject' /tmp/revex-r41/store.js
+          grep -q 'listLibrary' /tmp/revex-r41/store.js
+          grep -q 'listHistory' /tmp/revex-r41/store.js
+          grep -q 'appendHistory' /tmp/revex-r41/store.js
+          grep -q 'Promise.allSettled' /tmp/revex-r41/app.js
+
+          # BIM: exact instance picking + Family Type/Instance hierarchy + real six-face section box.
+          grep -q 'revexElementIds' /tmp/revex-r41/viewer-r26.js
+          grep -q 'instanceId' /tmp/revex-r41/viewer-r26.js
+          grep -q 'Family type' /tmp/revex-r41/app.js
+          grep -q 'section-left' /tmp/revex-r41/index.html
+          grep -q 'section-right' /tmp/revex-r41/index.html
+          grep -q 'section-front' /tmp/revex-r41/index.html
+          grep -q 'section-back' /tmp/revex-r41/index.html
+          grep -q 'section-bottom' /tmp/revex-r41/index.html
+          grep -q 'section-top' /tmp/revex-r41/index.html
+          grep -q 'section-width' /tmp/revex-r41/index.html
+          grep -q 'section-length' /tmp/revex-r41/index.html
+          grep -q 'section-height' /tmp/revex-r41/index.html
+          ! grep -q 'id="section-x"' /tmp/revex-r41/index.html
+          ! grep -q 'id="section-y"' /tmp/revex-r41/index.html
+          ! grep -q 'id="section-z"' /tmp/revex-r41/index.html
+
+          # PWA banner is browser-only and suppressed inside the Revit WebView2 host.
+          grep -q 'revex-install-banner' /tmp/revex-r41/index.html
+          grep -q 'chrome?.webview' /tmp/revex-r41/index.html
+          grep -q 'manifest.webmanifest?v=20260812r41' /tmp/revex-r41/index.html
+
+      - name: Install exact canonical files into Pages source
         shell: bash
         run: |
           set -euo pipefail
           DST='docs/liber-apps/apps/revex'
-          install -m 0644 /tmp/revex-r27/index.html "$DST/index.html"
-          install -m 0644 /tmp/revex-r27/app.js "$DST/app.js"
-          install -m 0644 /tmp/revex-r27/store.js "$DST/store.js"
-          install -m 0644 /tmp/revex-r27/energy-r27.js "$DST/energy-r27.js"
-          install -m 0644 /tmp/revex-r27/energy-r27.css "$DST/energy-r27.css"
-          install -m 0644 /tmp/revex-r27/shell-integrity.js "$DST/shell-integrity.js"
-          install -m 0644 /tmp/revex-r27/README.txt "$DST/README.txt"
+          for f in index.html app.js store.js viewer-r26.js styles.css integrity.js ui-integrity.js diagnostics-r29.js energy-r27.js shell-integrity.js manifest.webmanifest README.txt; do
+            install -m 0644 "/tmp/revex-r41/$f" "$DST/$f"
+          done
 
-      - name: Align LIBER Apps launcher to REVEX 0.8.19
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          import re
-          p = Path('docs/liber-apps/js/apps.js')
-          s = p.read_text(encoding='utf-8')
-          m = re.search(r"id:\s*'revex'", s)
-          if not m:
-              raise SystemExit('REVEX launcher entry not found')
-          start = m.start()
-          end = min(len(s), start + 1800)
-          block = s[start:end]
-          block, n1 = re.subn(r"version:\s*'[^']+'", "version: '0.8.19'", block, count=1)
-          block, n2 = re.subn(r"lastUpdated:\s*'[^']+'", "lastUpdated: '2026-08-11'", block, count=1)
-          if n1 != 1 or n2 != 1:
-              raise SystemExit(f'Could not align REVEX launcher metadata: version={n1}, date={n2}')
-          p.write_text(s[:start] + block + s[end:], encoding='utf-8')
-          PY
-
-      - name: Static architecture QA
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp docs/liber-apps/apps/revex/app.js /tmp/revex-app.mjs
-          cp docs/liber-apps/apps/revex/store.js /tmp/revex-store.mjs
-          cp docs/liber-apps/apps/revex/energy-r27.js /tmp/revex-energy.mjs
-          cp docs/liber-apps/apps/revex/shell-integrity.js /tmp/revex-shell.mjs
-          node --check /tmp/revex-app.mjs
-          node --check /tmp/revex-store.mjs
-          node --check /tmp/revex-energy.mjs
-          node --check /tmp/revex-shell.mjs
-          grep -q 'data-view="spec">Spec</button>' docs/liber-apps/apps/revex/index.html
-          grep -q 'data-spec-section="book"' docs/liber-apps/apps/revex/index.html
-          grep -q 'data-spec-section="energy"' docs/liber-apps/apps/revex/index.html
-          grep -q 'id="spec-energy-section"' docs/liber-apps/apps/revex/index.html
-          grep -q 'id="view-docs"' docs/liber-apps/apps/revex/index.html
-          ! grep -q 'data-view="engineering"' docs/liber-apps/apps/revex/index.html
-          ! grep -q 'id="view-engineering"' docs/liber-apps/apps/revex/index.html
-          ! grep -q 'data-view="energy"' docs/liber-apps/apps/revex/index.html
-          ! grep -q 'id="view-energy"' docs/liber-apps/apps/revex/index.html
-          ! grep -q 'data-energy-applicant' docs/liber-apps/apps/revex/index.html
-          ! grep -q 'id="energy-seal"' docs/liber-apps/apps/revex/index.html
-          grep -q 'data-liber-revex-energy-input="1"' docs/liber-apps/apps/revex/index.html
-          grep -q 'syncEngineeringPackage' docs/liber-apps/apps/revex/store.js
-          grep -q 'getEngineeringState' docs/liber-apps/apps/revex/store.js
-          grep -q 'publishEnergyResult' docs/liber-apps/apps/revex/store.js
-          grep -q 'manifest.projectId && manifest.projectId !== projectId' docs/liber-apps/apps/revex/store.js
-          grep -q "applicant: {}" docs/liber-apps/apps/revex/energy-r27.js
-          grep -q "sealDataUrl: ''" docs/liber-apps/apps/revex/energy-r27.js
-          grep -q "VERSION='0.8.19'" docs/liber-apps/apps/revex/shell-integrity.js
-          grep -q "BUILD='20260811r27'" docs/liber-apps/apps/revex/shell-integrity.js
-          grep -q "version: '0.8.19'" docs/liber-apps/js/apps.js
-          grep -q 'Energy is a section inside the REVEX Companion Spec tab' docs/liber-apps/apps/revex/README.txt
-
-      - name: Commit live Spec Energy release
+      - name: Commit canonical r41 Companion
         shell: bash
         run: |
           set -euo pipefail
@@ -122,14 +143,18 @@ jobs:
           git add docs/liber-apps/apps/revex/index.html \
                   docs/liber-apps/apps/revex/app.js \
                   docs/liber-apps/apps/revex/store.js \
+                  docs/liber-apps/apps/revex/viewer-r26.js \
+                  docs/liber-apps/apps/revex/styles.css \
+                  docs/liber-apps/apps/revex/integrity.js \
+                  docs/liber-apps/apps/revex/ui-integrity.js \
+                  docs/liber-apps/apps/revex/diagnostics-r29.js \
                   docs/liber-apps/apps/revex/energy-r27.js \
-                  docs/liber-apps/apps/revex/energy-r27.css \
                   docs/liber-apps/apps/revex/shell-integrity.js \
-                  docs/liber-apps/apps/revex/README.txt \
-                  docs/liber-apps/js/apps.js
+                  docs/liber-apps/apps/revex/manifest.webmanifest \
+                  docs/liber-apps/apps/revex/README.txt
           if git diff --cached --quiet; then
-            echo 'REVEX r27 Spec Energy Companion already live in main'
+            echo 'Canonical r41 REVEX Companion is already live.'
             exit 0
           fi
-          git commit -m 'REVEX 0.8.19 unified Energy sync under Spec'
+          git commit -m 'REVEX 0.8.19 r41: publish canonical Drive Companion'
           git push origin HEAD:main
