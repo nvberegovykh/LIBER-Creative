@@ -66,7 +66,7 @@ match /projects/{projectId} {
   );
   allow delete: if revexR43IsAdmin() || revexR43ProjectOwner(projectId);
 
-  match /{projectDocument=**} {
+  match /{projectCollection}/{projectDocument=**} {
     allow read, write: if revexR43ProjectMember(projectId);
   }
 }
@@ -93,7 +93,7 @@ match /specProjects/{specProjectId} {
     revexR43SignedIn() && resource.data.ownerId == request.auth.uid
   );
 
-  match /{specDocument=**} {
+  match /{specCollection}/{specDocument=**} {
     allow read, write: if revexR43SpecMember(specProjectId);
   }
 }

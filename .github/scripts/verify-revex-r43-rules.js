@@ -21,7 +21,9 @@ const {
 const projectId = 'demo-revex-r43';
 
 (async () => {
-  const env = await initializeTestEnvironment({ projectId });
+  let env;
+  try {
+  env = await initializeTestEnvironment({ projectId });
   await env.clearFirestore();
   await env.withSecurityRulesDisabled(async (context) => {
     const db = context.firestore();
@@ -71,7 +73,6 @@ const projectId = 'demo-revex-r43';
   await assertSucceeds(updateDoc(doc(admin, 'projects', 'alpha'), { memberIds: ['owner', 'member', 'new_member'] }));
   await assertSucceeds(deleteDoc(doc(owner, 'projects', 'alpha')));
 
-  await env.cleanup();
   console.log('REVEX r43 project-member security rules QA passed:', {
     memberContentAccess: true,
     linkedSpecAccess: true,
@@ -80,6 +81,9 @@ const projectId = 'demo-revex-r43';
     crossProjectDenied: true,
     adminAccess: true
   });
+  } finally {
+    if (env) await env.cleanup();
+  }
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

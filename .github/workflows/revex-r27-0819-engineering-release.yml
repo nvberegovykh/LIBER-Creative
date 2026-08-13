@@ -21,7 +21,7 @@ permissions:
 
 concurrency:
   group: revex-0819-r43-canonical-deploy
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   deploy:
@@ -83,7 +83,7 @@ jobs:
           grep -q 'if (root.firebaseService)' /tmp/revex-r43/store.js
           grep -q 'fs === root.firebaseService' /tmp/revex-r43/store.js
           grep -q 'REVEX_PROJECT_ACCESS_R43_BEGIN' /tmp/revex-r43/revex-project-access-r43.rules
-          grep -Fq 'match /{projectDocument=**}' /tmp/revex-r43/revex-project-access-r43.rules
+          grep -Fq 'match /{projectCollection}/{projectDocument=**}' /tmp/revex-r43/revex-project-access-r43.rules
           grep -Fq 'request.resource.data.memberIds == resource.data.memberIds' /tmp/revex-r43/revex-project-access-r43.rules
           grep -q 'const ENERGY_HARD_STOP = 0.80' /tmp/revex-r43/store.js
           grep -q 'const ENERGY_QUALITY_TARGET = 0.95' /tmp/revex-r43/store.js
@@ -120,6 +120,7 @@ jobs:
           java-version: '21'
 
       - name: Verify project-member rules in Firestore emulator
+        timeout-minutes: 8
         shell: bash
         run: |
           set -euo pipefail
