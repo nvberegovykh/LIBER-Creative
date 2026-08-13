@@ -64,13 +64,59 @@ function Write-Log {
 function Write-Step([string]$Message) { Write-Log ">> $Message" DarkCyan }
 
 function Protect-DeploymentLogs {
-  foreach ($path in @($LogPath, $LatestLogPath)) {
+  $paths = @($LogPath, $LatestLogPath)
+  try {
+    $paths += @(Get-ChildItem -LiteralPath $Root -File -Filter "PUBLISH_REVEX_R49*.log" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+  } catch { }
+  foreach ($path in @($paths | Where-Object { $_ } | Select-Object -Unique)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
     $content = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)
     $content = [regex]::Replace($content, '("(?:access_token|refresh_token|id_token)"\s*:\s*")[^"]*(")', '$1<REDACTED>$2', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
     $content = [regex]::Replace($content, 'ya29\.[A-Za-z0-9._-]+', '<REDACTED_ACCESS_TOKEN>')
     $content = [regex]::Replace($content, '1//[A-Za-z0-9._-]+', '<REDACTED_REFRESH_TOKEN>')
     [IO.File]::WriteAllText($path, $content, [Text.UTF8Encoding]::new($false))
+  }
+}
+
+function Get-FirebaseRefreshTokenForRotation([string]$Firebase) {
+  $state = Invoke-SecretCaptured "Read current Firebase CLI credential in-memory for secure rotation" $Firebase @("login:list", "--json") -AllowFailure
+  if ($state.ExitCode -ne 0 -or -not $state.Text.Trim()) {
+    throw "Firebase CLI credential rotation could not read the current local login state. No cloud mutation was attempted."
+  }
+  try { $payload = $state.Text | ConvertFrom-Json } catch {
+    throw "Firebase CLI credential rotation could not parse the local login state. No credential material was logged."
+  }
+  $accounts = if ($payload.PSObject.Properties.Name -contains "result") { @($payload.result) } else { @($payload) }
+  $tokens = @($accounts | ForEach-Object {
+    if ($null -ne $_.tokens -and -not [string]::IsNullOrWhiteSpace([string]$_.tokens.refresh_token)) { [string]$_.tokens.refresh_token }
+  } | Sort-Object -Unique)
+  if ($tokens.Count -eq 0) {
+    throw "Firebase CLI has no cached refresh token to rotate. Run Firebase login once, then rerun this publisher."
+  }
+  if ($tokens.Count -gt 1) {
+    throw "Multiple Firebase CLI credentials are cached; refusing to revoke unrelated accounts automatically. Keep only the REVEX publisher account signed in, then rerun."
+  }
+  return [string]$tokens[0]
+}
+
+function Revoke-GoogleOAuthToken([string]$Token) {
+  Write-Step "Revoke the Firebase CLI credential exposed by the prior r49 diagnostic log"
+  try {
+    $response = Invoke-WebRequest -UseBasicParsing -Method Post -Uri "https://oauth2.googleapis.com/revoke" -ContentType "application/x-www-form-urlencoded" -Body @{ token = $Token } -TimeoutSec 30
+    if ([int]$response.StatusCode -ne 200) { throw "unexpected status" }
+    return "REVOKED"
+  } catch {
+    $status = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
+    $body = ""
+    try {
+      $stream = $_.Exception.Response.GetResponseStream()
+      if ($null -ne $stream) {
+        $reader = New-Object IO.StreamReader($stream)
+        try { $body = $reader.ReadToEnd() } finally { $reader.Dispose(); $stream.Dispose() }
+      }
+    } catch { }
+    if ($status -eq 400 -and $body -match 'invalid_token') { return "ALREADY_REVOKED" }
+    throw "Firebase credential revocation failed at the Google OAuth endpoint (HTTP $status). Sensitive credential material was not logged."
   }
 }
 
@@ -259,16 +305,41 @@ function Verify-LiveCompanion {
 
 function Verify-LiveProjectAccessRules([string]$Gcloud) {
   Write-Step "Verify live owner/member/admin Firestore access and outsider denial"
-  $tokenResult = Invoke-SecretCaptured "Acquire bounded Google access token without logging it" $Gcloud @("auth", "print-access-token", "--quiet")
-  $token = [string]($tokenResult.Lines | Where-Object { [string]$_ -match '^[A-Za-z0-9._-]{20,}$' } | Select-Object -Last 1)
-  $token = $token.Trim()
-  if (-not $token) { throw "Google Cloud could not provide a bounded access token for the read-only live-rules check." }
-  $headers = @{ Authorization = "Bearer $([string]$token)" }
   $releaseUri = "https://firebaserules.googleapis.com/v1/projects/$ProjectId/releases/cloud.firestore"
-  $release = Invoke-RestMethod -Method Get -Uri $releaseUri -Headers $headers -TimeoutSec 30
-  $rulesetName = [string]$release.rulesetName
-  if (-not $rulesetName.StartsWith("projects/$ProjectId/rulesets/")) { throw "The live Firestore release did not identify its active ruleset." }
-  $ruleset = Invoke-RestMethod -Method Get -Uri ("https://firebaserules.googleapis.com/v1/" + $rulesetName) -Headers $headers -TimeoutSec 30
+  $release = $null
+  $ruleset = $null
+  $rulesetName = ""
+  $lastStatus = 0
+  $lastMessage = ""
+
+  for ($attempt = 1; $attempt -le 12; $attempt++) {
+    $token = $null
+    try {
+      $tokenResult = Invoke-SecretCaptured "Acquire bounded Google access token without logging it" $Gcloud @("auth", "print-access-token", "--quiet")
+      $token = [string]($tokenResult.Lines | Where-Object { [string]$_ -match '^[A-Za-z0-9._-]{20,}$' } | Select-Object -Last 1)
+      $token = $token.Trim()
+      if (-not $token) { throw "Google Cloud could not provide a bounded access token for the read-only live-rules check." }
+      $headers = @{ Authorization = "Bearer $([string]$token)" }
+      $release = Invoke-RestMethod -Method Get -Uri $releaseUri -Headers $headers -TimeoutSec 30
+      $rulesetName = [string]$release.rulesetName
+      if (-not $rulesetName.StartsWith("projects/$ProjectId/rulesets/")) { throw "The live Firestore release did not identify its active ruleset." }
+      $ruleset = Invoke-RestMethod -Method Get -Uri ("https://firebaserules.googleapis.com/v1/" + $rulesetName) -Headers $headers -TimeoutSec 30
+      break
+    } catch {
+      $lastStatus = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
+      $lastMessage = [string]$_.Exception.Message
+      $transient = $lastStatus -in @(403,404,409,429,500,502,503,504)
+      if (-not $transient -or $attempt -eq 12) { throw }
+      Write-Log "Firebase Rules read verification pending after API/IAM propagation (HTTP $lastStatus, attempt $attempt/12)." Yellow
+      Start-Sleep -Seconds 5
+    } finally {
+      $token = $null
+    }
+  }
+
+  if ($null -eq $ruleset) {
+    throw "Firebase Rules API did not become readable after bounded propagation retry (HTTP $lastStatus): $lastMessage"
+  }
   $source = (@($ruleset.source.files) | ForEach-Object { [string]$_.content }) -join "`n"
   $beginCount = ([regex]::Matches($source, 'REVEX_PROJECT_ACCESS_R43_BEGIN')).Count
   $endCount = ([regex]::Matches($source, 'REVEX_PROJECT_ACCESS_R43_END')).Count
@@ -380,11 +451,18 @@ try {
   }
   if (-not $Firebase) { throw "Firebase CLI did not become available for credential cleanup." }
   if (-not (Test-Path -LiteralPath $CredentialRotationMarker -PathType Leaf)) {
-    Invoke-SecretCaptured "Revoke the Firebase CLI credential exposed by the prior r49 diagnostic log" $Firebase @("logout") | Out-Null
-    Invoke-InteractiveNoLog "Essential Firebase reauthentication after credential revocation" $Firebase @("login")
+    $firebaseRefreshToken = Get-FirebaseRefreshTokenForRotation $Firebase
+    $revocationState = Revoke-GoogleOAuthToken $firebaseRefreshToken
+    $firebaseRefreshToken = $null
+    Protect-DeploymentLogs
+    Invoke-InteractiveNoLog "Essential Firebase reauthentication after credential revocation" $Firebase @("login", "--reauth")
+    $rotationProbe = Invoke-SecretCaptured "Verify Firebase project access after secure credential rotation" $Firebase @("projects:list", "--json")
+    if ($rotationProbe.Text -notmatch [regex]::Escape($ProjectId)) { throw "Firebase reauthentication succeeded, but the renewed account cannot access $ProjectId." }
     New-Item -ItemType Directory -Path (Split-Path -Parent $CredentialRotationMarker) -Force | Out-Null
     [IO.File]::WriteAllText($CredentialRotationMarker, [DateTime]::UtcNow.ToString("o"), [Text.UTF8Encoding]::new($false))
-    Write-Log "Firebase CLI credential revoked and replaced; authentication material was not written to the deployment log." Green
+    Write-Log "Firebase CLI credential rotation verified ($revocationState); historical r49 publisher logs were redacted and authentication material was not logged." Green
+  } else {
+    Protect-DeploymentLogs
   }
 
   Write-Step "Create isolated r49 offline preflight stage"
@@ -506,13 +584,13 @@ try {
   Copy-Item -LiteralPath (Join-Path $Root ".github\scripts\verify-revex-r49.js") -Destination (Join-Path $RepoRoot ".github\scripts\verify-revex-r49.js") -Force
   Copy-Item -LiteralPath (Join-Path $Root "PUBLISH_REVEX_R49.ps1") -Destination (Join-Path $RepoRoot "PUBLISH_REVEX_R49.ps1") -Force
   Copy-Item -LiteralPath (Join-Path $Root "PUBLISH_REVEX_R49.cmd") -Destination (Join-Path $RepoRoot "PUBLISH_REVEX_R49.cmd") -Force
-  $changes = Invoke-Captured "Inspect exact r49 publication diff" $Git @("status", "--porcelain") -WorkingDirectory $RepoRoot
-  if ($changes.Text.Trim()) {
+  Invoke-Native "Stage only the r49 release" $Git @("add", "--", "docs/liber-apps/apps/revex", "src/Liber.Revex.Revit", "server/revex-energy-worker", "server/firebase-functions", "firebase/revex-project-access-r43.rules", ".github/scripts/verify-revex-r49.js", "PUBLISH_REVEX_R49.ps1", "PUBLISH_REVEX_R49.cmd") -WorkingDirectory $RepoRoot
+  $staged = Invoke-Captured "Inspect exact staged r49 publication diff" $Git @("diff", "--cached", "--name-only") -WorkingDirectory $RepoRoot
+  if ($staged.Text.Trim()) {
     $login = (Invoke-Captured "Resolve GitHub release identity" $Gh @("api", "user", "--jq", ".login")).Text.Trim()
     $name = (Invoke-Captured "Resolve GitHub release name" $Gh @("api", "user", "--jq", ".name // .login")).Text.Trim()
     Invoke-Native "Set release author" $Git @("config", "user.name", $name) -WorkingDirectory $RepoRoot
     Invoke-Native "Set release email" $Git @("config", "user.email", "$login@users.noreply.github.com") -WorkingDirectory $RepoRoot
-    Invoke-Native "Stage only the r49 release" $Git @("add", "--", "docs/liber-apps/apps/revex", "src/Liber.Revex.Revit", "server/revex-energy-worker", "server/firebase-functions", "firebase/revex-project-access-r43.rules", ".github/scripts/verify-revex-r49.js", "PUBLISH_REVEX_R49.ps1", "PUBLISH_REVEX_R49.cmd") -WorkingDirectory $RepoRoot
     Invoke-Native "Commit REVEX r49" $Git @("commit", "-m", "REVEX 0.8.19 r49: finalize active-document sync and managed Energy chain") -WorkingDirectory $RepoRoot
     Invoke-Native "Push r49 release branch" $Git @("push", "--set-upstream", "origin", $branch) -WorkingDirectory $RepoRoot
     $pr = (Invoke-Captured "Open r49 publication PR" $Gh @("pr", "create", "--repo", $GitHubRepository, "--base", "main", "--head", $branch, "--title", "REVEX 0.8.19 r49: final active-document and Energy chain", "--body", "Hash-locked r49: active-document project binding, progressive paged BIM, reversible visibility, native schedules, fullscreen Design Book images, and strict managed Energy outputs with per-revision COMcheck consent.") -WorkingDirectory $RepoRoot).Text.Trim().Split([Environment]::NewLine)[-1]
@@ -535,7 +613,9 @@ try {
       }
       Invoke-Native "Merge verified r49 publication PR" $Gh @("pr", "merge", $pr, "--repo", $GitHubRepository, "--squash", "--delete-branch") -WorkingDirectory $RepoRoot
     }
-  } else { Write-Log "GitHub main already contains the exact r49 source; continuing idempotently." Green }
+  } else {
+    Write-Log "GitHub main already contains the exact staged r49 content; working-tree line-ending noise is ignored and publication continues idempotently." Green
+  }
 
   $gcloudAuth = Invoke-Captured "Verify Google Cloud authentication" $Gcloud @("auth", "list", "--filter=status:ACTIVE", "--format=value(account)") -AllowFailure
   if ($gcloudAuth.ExitCode -ne 0 -or -not $gcloudAuth.Text.Trim()) { Invoke-InteractiveNoLog "Essential Google Cloud approval" $Gcloud @("auth", "login") }
@@ -551,6 +631,7 @@ try {
 
   Invoke-Native "Set active Google Cloud project" $Gcloud @("config", "set", "project", $ProjectId)
   Invoke-Native "Enable managed Energy APIs" $Gcloud @("services", "enable", "run.googleapis.com", "cloudbuild.googleapis.com", "artifactregistry.googleapis.com", "cloudfunctions.googleapis.com", "firebase.googleapis.com", "firebaserules.googleapis.com", "aiplatform.googleapis.com", "iamcredentials.googleapis.com", "--project=$ProjectId")
+  Add-ProjectRole $Gcloud $deployerMember "roles/firebaserules.viewer" "Grant publisher read-only Firebase Rules verification"
   Verify-LiveProjectAccessRules $Gcloud
   $WorkerSa = "revex-energy-worker@$ProjectId.iam.gserviceaccount.com"
   $BrokerSa = "revex-energy-broker@$ProjectId.iam.gserviceaccount.com"
