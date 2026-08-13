@@ -13,10 +13,22 @@
   const docId = (value) => safe(value).replace(/\./g, '_');
   const ENERGY_HARD_STOP = 0.80;
   const ENERGY_QUALITY_TARGET = 0.95;
+  const ENGINEERING_CURRENT_ID = 'revex_engineering';
+  const ENERGY_CURRENT_ID = 'revex_energy';
 
   function plain(value) {
     const json = JSON.stringify(value === undefined ? null : value);
     try { return (REALM.JSON || JSON).parse(json); } catch (_) { return JSON.parse(json); }
+  }
+
+  function revexRecord(kind, value, updatedAt = iso()) {
+    return plain({
+      ...value,
+      type: 'revex',
+      hidden: true,
+      revexKind: kind,
+      updatedAt
+    });
   }
 
   function getService() {
@@ -68,6 +80,10 @@
     user: null,
     mode: 'local',
     lastLocalPackage: null,
+
+    // Firebase's modular SDK rejects otherwise-plain objects created in a
+    // different Window realm. Keep every REVEX writer on the SDK's own realm.
+    toFirestorePlain(value) { return plain(value); },
 
     async init() {
       for (let i = 0; i < 50; i += 1) {
@@ -434,8 +450,16 @@
         artifacts.push({ name: file.name, bytes: file.size || 0, kind: index === 0 ? 'manifest' : 'engineering-evidence', url: uploaded.url, path: uploaded.path, cloud: true });
       }
       const cloudState = plain({ ...state, artifacts, cloud: true, syncedBy: this.user.uid });
-      await this.api.setDoc(this.api.doc(this.db, 'projects', projectId, 'revex', 'engineering'), cloudState, plain({ merge: false }));
-      await this.api.setDoc(this.api.doc(this.db, 'projects', projectId, 'revexEngineeringRevisions', revision), cloudState, plain({ merge: false }));
+      await this.api.setDoc(
+        this.api.doc(this.db, 'projects', projectId, 'library', ENGINEERING_CURRENT_ID),
+        revexRecord('engineering', cloudState, at),
+        plain({ merge: false })
+      );
+      await this.api.setDoc(
+        this.api.doc(this.db, 'projects', projectId, 'library', `revex_engineering_revision_${revision}`),
+        revexRecord('engineering-revision', { ...cloudState, immutable: true }, at),
+        plain({ merge: false })
+      );
       return cloudState;
     },
 
@@ -444,7 +468,7 @@
       if (!this.isCloud()) {
         try { return JSON.parse(localStorage.getItem(`liber.revex.engineering.${projectId}`) || 'null'); } catch (_) { return null; }
       }
-      const snap = await this.api.getDoc(this.api.doc(this.db, 'projects', projectId, 'revex', 'engineering'));
+      const snap = await this.api.getDoc(this.api.doc(this.db, 'projects', projectId, 'library', ENGINEERING_CURRENT_ID));
       return snap.exists() ? { id: snap.id, ...snap.data() } : null;
     },
 
@@ -499,8 +523,16 @@
       }
       const manifestUpload = await this.uploadFile(`${base}/000_energy-result.json`, manifestFile);
       const cloudState = plain({ ...state, artifacts, manifestUrl: manifestUpload.url, manifestPath: manifestUpload.path, cloud: true, publishedBy: this.user.uid });
-      await this.api.setDoc(this.api.doc(this.db, 'projects', projectId, 'revex', 'energy'), cloudState, plain({ merge: false }));
-      await this.api.setDoc(this.api.doc(this.db, 'projects', projectId, 'revexEnergyResults', revision), cloudState, plain({ merge: false }));
+      await this.api.setDoc(
+        this.api.doc(this.db, 'projects', projectId, 'library', ENERGY_CURRENT_ID),
+        revexRecord('energy', cloudState, at),
+        plain({ merge: false })
+      );
+      await this.api.setDoc(
+        this.api.doc(this.db, 'projects', projectId, 'library', `revex_energy_result_${revision}`),
+        revexRecord('energy-result', { ...cloudState, immutable: true }, at),
+        plain({ merge: false })
+      );
       return cloudState;
     },
 
@@ -509,7 +541,7 @@
       if (!this.isCloud()) {
         try { return JSON.parse(localStorage.getItem(`liber.revex.energy-result.${projectId}`) || 'null'); } catch (_) { return null; }
       }
-      const snap = await this.api.getDoc(this.api.doc(this.db, 'projects', projectId, 'revex', 'energy'));
+      const snap = await this.api.getDoc(this.api.doc(this.db, 'projects', projectId, 'library', ENERGY_CURRENT_ID));
       return snap.exists() ? { id: snap.id, ...snap.data() } : null;
     },
 

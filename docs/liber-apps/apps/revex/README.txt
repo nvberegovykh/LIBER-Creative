@@ -1,5 +1,5 @@
 LIBER REVEX LIVE COMPANION 0.8.19
-Hosted Companion build: 20260812r41
+Hosted Companion build: 20260813r42
 
 MODEL CONTRACT
 - Revit Fine-detail geometry is the primary BIM representation through `model.rvxmesh.gz`.
@@ -21,5 +21,10 @@ SPEC / ENERGY CONTRACT
 - Spec Book and Energy are separate top-level REVEX Companion workspaces under the same active REVEX Project ID; there is no separate LIBER Specifications app in the project workflow.
 - Revit Engineering exposes the controlled ENERGY SYNC TO COMPANION workflow; downstream processing continues in the top-level Energy workspace.
 - Energy evidence and results are bound to the active REVEX Project ID; a mismatched project is rejected.
+- Private Engineering/Energy metadata uses the existing project-library authorization boundary; immutable evidence files remain in their revision-scoped Storage prefix and the broker rejects paths outside it.
 - Applicant/modeler identity and professional seal are not collected by REVEX and remain blank in prepared filing forms.
 - Downstream Energy processing has no Revit writeback; only the Revit-side Energy Sync may create/fix Spaces, EADM, and EN/ENERGY tags before evidence publication.
+
+FIRESTORE COMPATIBILITY
+- Every BIM, Design Book, Spec Book, Docs, History, Render and Energy write is converted into the Firebase SDK Window realm before validation.
+- REVEX library records remain hidden implementation records and do not replace the user-visible project document library.

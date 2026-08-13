@@ -1,4 +1,4 @@
-name: REVEX 0.8.19 r41 canonical Companion deploy
+name: REVEX 0.8.19 r42 canonical Companion deploy
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: revex-0819-r41-canonical-deploy
+  group: revex-0819-r42-canonical-deploy
   cancel-in-progress: false
 
 jobs:
@@ -28,116 +28,128 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p /tmp/revex-r41
+          mkdir -p /tmp/revex-r42
           fetch_drive() {
             local id="$1" out="$2" sha="$3"
             curl -L --fail --retry 4 --retry-delay 2 \
               "https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t" \
-              -o "/tmp/revex-r41/${out}"
-            echo "${sha}  /tmp/revex-r41/${out}" | sha256sum -c -
+              -o "/tmp/revex-r42/${out}"
+            echo "${sha}  /tmp/revex-r42/${out}" | sha256sum -c -
           }
-          fetch_drive '1kvRhwCEPWzUyc-0kK8Q0t2KemyJtX4p0' 'index.html' '42fd0370522d7db7edd6bb6a0ccd1f0d61c52b6ac57402febcac305c5aef29b3'
+          fetch_drive '1kvRhwCEPWzUyc-0kK8Q0t2KemyJtX4p0' 'index.html' '6030b1527ab3ba78187ceee319cc586769b40e3ca7deb51462dee88a0ed06659'
           fetch_drive '1ELpV95mdDzLI8XWemMNSphXAVll19fko' 'app.js' 'dd2905f0d5983b1473edd0c8ef865c695251ac311ab77831cf441120cec06b04'
-          fetch_drive '10cAgG1uDl7MAcuaUsgXEz3VdJ6AfTojd' 'store.js' 'd7f28db9273136bc20fa5a273b1966d783bcf24ada4d244132143aa669a04990'
+          fetch_drive '10cAgG1uDl7MAcuaUsgXEz3VdJ6AfTojd' 'store.js' '03a40e1ba2e3f8a87da747820084b0d6bc12bec4df1ee52422a377374967444d'
           fetch_drive '1YHqaZXp-lcLgj2RrjkjUp7HUhmjPEYgl' 'viewer-r26.js' '56b2c0e09edeab686b126eaa6bcc3f3075b8d11739f81a151b6743f7decd9846'
           fetch_drive '1KgyV2nBDLCQTzC1T8fKium5aR7ifu4vp' 'styles.css' 'dff7473320088a9be0a8d68e26f69c32a2630ac5080191c0fe40ad9923e68f07'
-          fetch_drive '10MXqTaH_3ETuWSH8oQQVQcEplYPMM2CS' 'integrity.js' 'b1082874bf8d8934f1c18a84cb448f2cf855ddccdfb99575ba4339ddbada8ac2'
+          fetch_drive '10MXqTaH_3ETuWSH8oQQVQcEplYPMM2CS' 'integrity.js' 'a03bbe63dfa9cbbaeb8d950948d8eefd8783ae6ccdac8f35b9bd8973ff6f7fa8'
+          fetch_drive '1t0vUXJFOtC8TX3A5NgwKvXKvaxPjx0jB' 'firestore-compat.js' 'f813aaab6d4f801879adb3b60e0864b9b2f4b7477479b055b66dfa7709ad5ffd'
           fetch_drive '1UR21DaYg2EGfbwXuenavLuDgjmmxIzB7' 'ui-integrity.js' 'c2b546d8e92b40ae0d9e5e319c33903380d3988afb77041f6fef12caf44d3d2e'
           fetch_drive '1zHfAtG7ccQZaSPN1zQ-ZLyT_v29v3Lck' 'diagnostics-r29.js' '1b3484a1e3a8eda8d59c583375a84feaf79738333d4ccc5fff0b41c7d621585b'
           fetch_drive '1lCABFvA380DYNyqK5W7vuAKMDTYJifdE' 'energy-r27.js' 'f2a938adafd5f0b58edfb87bf66777696a2670a62facab0331bf687188328d58'
           fetch_drive '1g58NvJ7aN3WBEupBe0gc8UIvlWPaJ54p' 'shell-integrity.js' '09074405256c4dd7e52eb3ee76fe1a49b4ec4c0488567e772603ea570594a3e6'
           fetch_drive '1v52VjG7kJz-WzQI38iCevHzsKR14hp7B' 'manifest.webmanifest' '456477c0adfc9c8df81a80065f6ad2b68f56ed7de1d7c30b181be107a36a6e9c'
-          fetch_drive '1ZoNuM2FzbzCcsq2e24IIvdrjEVeaIwGj' 'README.txt' 'b480f08f1ff011a5fa4062ccabc93d469be6bcca68541b34b3ccae00a81920df'
+          fetch_drive '1ZoNuM2FzbzCcsq2e24IIvdrjEVeaIwGj' 'README.txt' 'c1b649e409066780a2261f28768d0117bbe085a1834e6f2c35a6a885aa90cb36'
 
-      - name: Canonical r41 static QA
+      - name: Canonical r42 static QA
         shell: bash
         run: |
           set -euo pipefail
-          cp /tmp/revex-r41/app.js /tmp/revex-app.mjs
-          cp /tmp/revex-r41/store.js /tmp/revex-store.mjs
-          cp /tmp/revex-r41/viewer-r26.js /tmp/revex-viewer.mjs
-          cp /tmp/revex-r41/integrity.js /tmp/revex-integrity.mjs
-          cp /tmp/revex-r41/ui-integrity.js /tmp/revex-ui.mjs
-          cp /tmp/revex-r41/diagnostics-r29.js /tmp/revex-diagnostics.mjs
-          cp /tmp/revex-r41/energy-r27.js /tmp/revex-energy.mjs
-          cp /tmp/revex-r41/shell-integrity.js /tmp/revex-shell.mjs
+          cp /tmp/revex-r42/app.js /tmp/revex-app.mjs
+          cp /tmp/revex-r42/store.js /tmp/revex-store.mjs
+          cp /tmp/revex-r42/viewer-r26.js /tmp/revex-viewer.mjs
+          cp /tmp/revex-r42/integrity.js /tmp/revex-integrity.mjs
+          cp /tmp/revex-r42/firestore-compat.js /tmp/revex-firestore-compat.mjs
+          cp /tmp/revex-r42/ui-integrity.js /tmp/revex-ui.mjs
+          cp /tmp/revex-r42/diagnostics-r29.js /tmp/revex-diagnostics.mjs
+          cp /tmp/revex-r42/energy-r27.js /tmp/revex-energy.mjs
+          cp /tmp/revex-r42/shell-integrity.js /tmp/revex-shell.mjs
           node --check /tmp/revex-app.mjs
           node --check /tmp/revex-store.mjs
           node --check /tmp/revex-viewer.mjs
           node --check /tmp/revex-integrity.mjs
+          node --check /tmp/revex-firestore-compat.mjs
           node --check /tmp/revex-ui.mjs
           node --check /tmp/revex-diagnostics.mjs
           node --check /tmp/revex-energy.mjs
           node --check /tmp/revex-shell.mjs
-          python -m json.tool /tmp/revex-r41/manifest.webmanifest >/dev/null
+          python -m json.tool /tmp/revex-r42/manifest.webmanifest >/dev/null
 
-          # r41 shell and cache identity
-          grep -q '20260812r41' /tmp/revex-r41/index.html
-          grep -q 'diagnostics-r29.js?v=20260812r41' /tmp/revex-r41/index.html
-          grep -q 'store.js?v=20260812r41' /tmp/revex-r41/index.html
-          grep -q 'app.js?v=20260812r41' /tmp/revex-r41/index.html
-          grep -q 'viewer-r26.js?v=20260812r41' /tmp/revex-r41/index.html
-          grep -q 'energy-r27.js?v=20260812r41' /tmp/revex-r41/index.html
+          # r42 shell and cache identity
+          grep -q '20260813r42' /tmp/revex-r42/index.html
+          grep -q 'diagnostics-r29.js?v=20260813r42' /tmp/revex-r42/index.html
+          grep -q 'store.js?v=20260813r42' /tmp/revex-r42/index.html
+          grep -q 'app.js?v=20260813r42' /tmp/revex-r42/index.html
+          grep -q 'viewer-r26.js?v=20260813r42' /tmp/revex-r42/index.html
+          grep -q 'energy-r27.js?v=20260813r42' /tmp/revex-r42/index.html
 
           # Current navigation: Energy is its own REVEX view, not the retired Spec sub-tab.
-          grep -q 'data-view="energy"' /tmp/revex-r41/index.html
-          grep -q 'id="view-energy"' /tmp/revex-r41/index.html
-          ! grep -q 'id="spec-energy-section"' /tmp/revex-r41/index.html
+          grep -q 'data-view="energy"' /tmp/revex-r42/index.html
+          grep -q 'id="view-energy"' /tmp/revex-r42/index.html
+          ! grep -q 'id="spec-energy-section"' /tmp/revex-r42/index.html
 
           # Current Energy authority contract: 80% hard stop / 95% quality target.
-          grep -q 'const ENERGY_HARD_STOP = 0.80' /tmp/revex-r41/store.js
-          grep -q 'const ENERGY_QUALITY_TARGET = 0.95' /tmp/revex-r41/store.js
-          grep -q 'const ENERGY_HARD_STOP = 0.80' /tmp/revex-r41/energy-r27.js
-          grep -q 'const ENERGY_QUALITY_TARGET = 0.95' /tmp/revex-r41/energy-r27.js
-          ! grep -E -q '0\.98|98%' /tmp/revex-r41/index.html /tmp/revex-r41/store.js /tmp/revex-r41/energy-r27.js
-          grep -q 'writeBackToRevitAfterExport' /tmp/revex-r41/store.js
-          grep -q 'pdfInsertion' /tmp/revex-r41/store.js
-          ! grep -q 'data-energy-applicant' /tmp/revex-r41/index.html
-          ! grep -q 'id="energy-seal"' /tmp/revex-r41/index.html
+          grep -q 'const ENERGY_HARD_STOP = 0.80' /tmp/revex-r42/store.js
+          grep -q 'const ENERGY_QUALITY_TARGET = 0.95' /tmp/revex-r42/store.js
+          grep -q 'const ENERGY_HARD_STOP = 0.80' /tmp/revex-r42/energy-r27.js
+          grep -q 'const ENERGY_QUALITY_TARGET = 0.95' /tmp/revex-r42/energy-r27.js
+          ! grep -E -q '0\.98|98%' /tmp/revex-r42/index.html /tmp/revex-r42/store.js /tmp/revex-r42/energy-r27.js
+          grep -q 'writeBackToRevitAfterExport' /tmp/revex-r42/store.js
+          grep -q 'pdfInsertion' /tmp/revex-r42/store.js
+          ! grep -q 'data-energy-applicant' /tmp/revex-r42/index.html
+          ! grep -q 'id="energy-seal"' /tmp/revex-r42/index.html
 
           # Store/API regressions that caused the Aug-12 browser crash.
-          grep -q 'resolveSpecProject' /tmp/revex-r41/store.js
-          grep -q 'ensureSpecProject' /tmp/revex-r41/store.js
-          grep -q 'listLibrary' /tmp/revex-r41/store.js
-          grep -q 'listHistory' /tmp/revex-r41/store.js
-          grep -q 'appendHistory' /tmp/revex-r41/store.js
-          grep -q 'Promise.allSettled' /tmp/revex-r41/app.js
+          grep -q 'resolveSpecProject' /tmp/revex-r42/store.js
+          grep -q 'ensureSpecProject' /tmp/revex-r42/store.js
+          grep -q 'listLibrary' /tmp/revex-r42/store.js
+          grep -q 'listHistory' /tmp/revex-r42/store.js
+          grep -q 'appendHistory' /tmp/revex-r42/store.js
+          grep -q 'Promise.allSettled' /tmp/revex-r42/app.js
+          grep -q 'toFirestorePlain' /tmp/revex-r42/store.js
+          grep -q "'library', ENGINEERING_CURRENT_ID" /tmp/revex-r42/store.js
+          grep -q 'revex_engineering_revision_' /tmp/revex-r42/store.js
+          grep -q 'firestorePlain' /tmp/revex-r42/integrity.js
+          ! grep -q "'revexEngineeringRevisions'" /tmp/revex-r42/store.js
 
           # BIM: exact instance picking + Family Type/Instance hierarchy + real six-face section box.
-          grep -q 'revexElementIds' /tmp/revex-r41/viewer-r26.js
-          grep -q 'instanceId' /tmp/revex-r41/viewer-r26.js
-          grep -q 'activateViewerFallback' /tmp/revex-r41/viewer-r26.js
-          grep -q '__revexViewerR26Unavailable' /tmp/revex-r41/viewer-r26.js
-          grep -q 'VIEWER_INIT' /tmp/revex-r41/viewer-r26.js
-          grep -q 'Family type' /tmp/revex-r41/app.js
-          grep -q 'section-left' /tmp/revex-r41/index.html
-          grep -q 'section-right' /tmp/revex-r41/index.html
-          grep -q 'section-front' /tmp/revex-r41/index.html
-          grep -q 'section-back' /tmp/revex-r41/index.html
-          grep -q 'section-bottom' /tmp/revex-r41/index.html
-          grep -q 'section-top' /tmp/revex-r41/index.html
-          grep -q 'section-width' /tmp/revex-r41/index.html
-          grep -q 'section-length' /tmp/revex-r41/index.html
-          grep -q 'section-height' /tmp/revex-r41/index.html
-          ! grep -q 'id="section-x"' /tmp/revex-r41/index.html
-          ! grep -q 'id="section-y"' /tmp/revex-r41/index.html
-          ! grep -q 'id="section-z"' /tmp/revex-r41/index.html
+          grep -q 'revexElementIds' /tmp/revex-r42/viewer-r26.js
+          grep -q 'instanceId' /tmp/revex-r42/viewer-r26.js
+          grep -q 'activateViewerFallback' /tmp/revex-r42/viewer-r26.js
+          grep -q '__revexViewerR26Unavailable' /tmp/revex-r42/viewer-r26.js
+          grep -q 'VIEWER_INIT' /tmp/revex-r42/viewer-r26.js
+          grep -q 'Family type' /tmp/revex-r42/app.js
+          grep -q 'section-left' /tmp/revex-r42/index.html
+          grep -q 'section-right' /tmp/revex-r42/index.html
+          grep -q 'section-front' /tmp/revex-r42/index.html
+          grep -q 'section-back' /tmp/revex-r42/index.html
+          grep -q 'section-bottom' /tmp/revex-r42/index.html
+          grep -q 'section-top' /tmp/revex-r42/index.html
+          grep -q 'section-width' /tmp/revex-r42/index.html
+          grep -q 'section-length' /tmp/revex-r42/index.html
+          grep -q 'section-height' /tmp/revex-r42/index.html
+          ! grep -q 'id="section-x"' /tmp/revex-r42/index.html
+          ! grep -q 'id="section-y"' /tmp/revex-r42/index.html
+          ! grep -q 'id="section-z"' /tmp/revex-r42/index.html
 
           # PWA banner is browser-only and suppressed inside the Revit WebView2 host.
-          grep -q 'revex-install-banner' /tmp/revex-r41/index.html
-          grep -q 'chrome?.webview' /tmp/revex-r41/index.html
-          grep -q 'manifest.webmanifest?v=20260812r41' /tmp/revex-r41/index.html
+          grep -q 'revex-install-banner' /tmp/revex-r42/index.html
+          grep -q 'chrome?.webview' /tmp/revex-r42/index.html
+          grep -q 'manifest.webmanifest?v=20260813r42' /tmp/revex-r42/index.html
 
       - name: Install exact canonical files into Pages source
         shell: bash
         run: |
           set -euo pipefail
           DST='docs/liber-apps/apps/revex'
-          for f in index.html app.js store.js viewer-r26.js styles.css integrity.js ui-integrity.js diagnostics-r29.js energy-r27.js shell-integrity.js manifest.webmanifest README.txt; do
-            install -m 0644 "/tmp/revex-r41/$f" "$DST/$f"
+          for f in index.html app.js store.js viewer-r26.js styles.css integrity.js firestore-compat.js ui-integrity.js diagnostics-r29.js energy-r27.js shell-integrity.js manifest.webmanifest README.txt; do
+            install -m 0644 "/tmp/revex-r42/$f" "$DST/$f"
           done
 
-      - name: Commit canonical r41 Companion
+      - name: Verify cross-realm Firestore and private-state boundary
+        shell: bash
+        run: node .github/scripts/verify-revex-r42-firestore.js
+
+      - name: Commit canonical r42 Companion
         shell: bash
         run: |
           set -euo pipefail
@@ -149,6 +161,7 @@ jobs:
                   docs/liber-apps/apps/revex/viewer-r26.js \
                   docs/liber-apps/apps/revex/styles.css \
                   docs/liber-apps/apps/revex/integrity.js \
+                  docs/liber-apps/apps/revex/firestore-compat.js \
                   docs/liber-apps/apps/revex/ui-integrity.js \
                   docs/liber-apps/apps/revex/diagnostics-r29.js \
                   docs/liber-apps/apps/revex/energy-r27.js \
@@ -156,8 +169,8 @@ jobs:
                   docs/liber-apps/apps/revex/manifest.webmanifest \
                   docs/liber-apps/apps/revex/README.txt
           if git diff --cached --quiet; then
-            echo 'Canonical r41 REVEX Companion is already live.'
+            echo 'Canonical r42 REVEX Companion is already live.'
             exit 0
           fi
-          git commit -m 'REVEX 0.8.19 r41: publish canonical Drive Companion'
+          git commit -m 'REVEX 0.8.19 r42: publish canonical Drive Companion'
           git push origin HEAD:main
