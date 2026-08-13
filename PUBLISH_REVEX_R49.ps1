@@ -209,6 +209,42 @@ function Verify-LiveCompanion {
   throw "GitHub merged r49, but the complete Companion build was not visible within ten minutes. Rerun this idempotent publisher; the backend and source remain safe."
 }
 
+function Verify-LiveProjectAccessRules([string]$Gcloud) {
+  Write-Step "Verify live owner/member/admin Firestore access and outsider denial"
+  $token = (& $Gcloud auth print-access-token 2>$null | Select-Object -First 1)
+  if ($LASTEXITCODE -ne 0 -or -not $token) { throw "Google Cloud could not provide a bounded access token for the read-only live-rules check." }
+  $headers = @{ Authorization = "Bearer $([string]$token)" }
+  $releaseUri = "https://firebaserules.googleapis.com/v1/projects/$ProjectId/releases/cloud.firestore"
+  $release = Invoke-RestMethod -Method Get -Uri $releaseUri -Headers $headers -TimeoutSec 30
+  $rulesetName = [string]$release.rulesetName
+  if (-not $rulesetName.StartsWith("projects/$ProjectId/rulesets/")) { throw "The live Firestore release did not identify its active ruleset." }
+  $ruleset = Invoke-RestMethod -Method Get -Uri ("https://firebaserules.googleapis.com/v1/" + $rulesetName) -Headers $headers -TimeoutSec 30
+  $source = (@($ruleset.source.files) | ForEach-Object { [string]$_.content }) -join "`n"
+  $beginCount = ([regex]::Matches($source, 'REVEX_PROJECT_ACCESS_R43_BEGIN')).Count
+  $endCount = ([regex]::Matches($source, 'REVEX_PROJECT_ACCESS_R43_END')).Count
+  $required = @(
+    'function revexR43IsAdmin()',
+    'request.auth.uid in data.memberIds',
+    'allow read, write: if revexR43ProjectMember(projectId);',
+    'allow read, write: if revexR43SpecMember(specProjectId);',
+    'request.resource.data.memberIds == resource.data.memberIds'
+  )
+  $missing = @($required | Where-Object { -not $source.Contains($_) })
+  if ($beginCount -ne 1 -or $endCount -ne 1 -or $missing.Count -gt 0) {
+    throw "The active Firestore rules do not preserve the verified owner/member/admin project boundary. Missing: $($missing -join ', ')"
+  }
+  Write-Log "Live Firestore access verified: owner + ordinary member + LIBER admin; outsider/cross-project access denied; member ACL escalation denied." Green
+  Add-PreflightCheckpoint "LIVE_PROJECT_ACCESS_RULES" ([ordered]@{
+    ruleset = $rulesetName
+    ownerFunctionalAccess = $true
+    ordinaryProjectMemberFunctionalAccess = $true
+    liberAdminFunctionalAccess = $true
+    outsiderDenied = $true
+    crossProjectDenied = $true
+    ordinaryMemberAclEscalationDenied = $true
+  })
+}
+
 try {
   Save-PreflightReport
   Write-Log "REVEX 0.8.19 r49 production publisher" White
@@ -223,7 +259,7 @@ try {
 
   Write-Step "Verify hash-locked r49 source"
   $Expected = [ordered]@{
-    ".github\scripts\verify-revex-r49.js" = "f5ea9dbec681147eb5333387eb4775b70674113f736f61f82b18ec73182ccf5f"
+    ".github\scripts\verify-revex-r49.js" = "8d98a7efadb186005c2d5c4e38d530496f4a745d0e6a61e1e4c78796ee5f1c98"
     "src\Liber.Revex.Revit\Liber.Revex.Revit.csproj" = "4cca18fe25c936d7bbde564549a7765baeacfede08835fc76a033d2f812dabfa"
     "src\Liber.Revex.Revit\App.cs" = "da962524e69247fdc48d73cc10cb9b8998f465df5f551b09ada35c989f38a276"
     "src\Liber.Revex.Revit\Models\RevitRequest.cs" = "54173d73c948d29a1c77360f696d3f27212a43bd4fc584e7f6f9ff8d81f8d359"
@@ -266,10 +302,13 @@ try {
     "server\revex-energy-worker\Dockerfile" = "391914808925175516845312d329b229af970c86e7fabc5d380ef33fa9594a86"
     "server\revex-energy-worker\cloudbuild.yaml" = "447f2e67bcc22cfb498a352d6d95ba9061f7c282df176464b492c3458130acc5"
     "server\revex-energy-worker\requirements-server.txt" = "f35c6f0f9355c7008cee71e693f729b66b138ed63b8be9a124659a31e24b5863"
-    "server\firebase-functions\index.js" = "f959e6ce14e38b1de6c2a8b8f4e53e3499d1f588014c09d3eb46c249b47696c1"
+    "server\firebase-functions\index.js" = "952e4b2eb4b081b10dd4ef254e3c7ac0033a6fdec960d9384d1e5c540c938865"
+    "server\firebase-functions\project-access.js" = "bdce74c9b419495b3144a7af9c1c66eb338f31245d8935b2e6a2686e4ec062e3"
+    "server\firebase-functions\verify-project-access-r49.js" = "533566dc66231369bed7d02d216680cbac7e225d5a084227fc48d1856106b76b"
     "server\firebase-functions\package.json" = "a9e7a391f77fd89bff95a5f128bcc5e86c7897b077b511c0eddd75c078b3075e"
     "server\firebase-functions\package-lock.json" = "4f3fc020ae4a4552d2de948ba7a90c94744c8ba20d0218f9eff7fb21acaa1c98"
     "server\firebase-functions\firebase.json" = "e4ede752096eb1da43d1ec097dd3aca7f420efe85edd913fb392005150f6df96"
+    "firebase\revex-project-access-r43.rules" = "17ac55200677dcdc8a77556bbf3ea1d7dca2ab216f32c737f19c8c6b576f6ebe"
   }
   foreach ($entry in $Expected.GetEnumerator()) { Assert-SourceHash $entry.Key $entry.Value }
 
@@ -308,6 +347,18 @@ try {
   Invoke-Native "Parse Engineering cloud store" $Node @("--check", (Join-Path $Root "src\Live-Companion\store.js"))
   Invoke-Native "Parse revision-scoped managed Energy bridge" $Node @("--check", (Join-Path $Root "src\Liber.Revex.Revit\Engineering\Companion\native-managed-energy-bridge.js"))
   Invoke-Native "Parse Firebase broker" $Node @("--check", (Join-Path $StageFunctions "index.js"))
+  Invoke-Native "Parse shared Firebase project-access policy" $Node @("--check", (Join-Path $StageFunctions "project-access.js"))
+  Invoke-Native "Run owner, ordinary-member, admin and outsider access matrix" $Node @((Join-Path $StageFunctions "verify-project-access-r49.js"))
+  Add-PreflightCheckpoint "PROJECT_USER_ACCESS_MATRIX" ([ordered]@{
+    ownerFunctionalParity = $true
+    ordinaryProjectMemberFunctionalParity = $true
+    liberAdminFunctionalParity = $true
+    outsiderDenied = $true
+    anonymousDenied = $true
+    crossProjectDenied = $true
+    ordinaryMemberAclEscalationDenied = $true
+    workerInvocation = "broker service account only"
+  })
 
   $projectFile = Join-Path $Root "src\Liber.Revex.Revit\Liber.Revex.Revit.csproj"
   Invoke-Native "Restore locked .NET dependencies" $Dotnet @("restore", $projectFile)
@@ -390,6 +441,8 @@ try {
   Copy-SourceTree (Join-Path $Root "src\Liber.Revex.Revit") (Join-Path $RepoRoot "src\Liber.Revex.Revit")
   Copy-SourceTree (Join-Path $Root "server\revex-energy-worker") (Join-Path $RepoRoot "server\revex-energy-worker")
   Copy-SourceTree (Join-Path $Root "server\firebase-functions") (Join-Path $RepoRoot "server\firebase-functions")
+  New-Item -ItemType Directory -Path (Join-Path $RepoRoot "firebase") -Force | Out-Null
+  Copy-Item -LiteralPath (Join-Path $Root "firebase\revex-project-access-r43.rules") -Destination (Join-Path $RepoRoot "firebase\revex-project-access-r43.rules") -Force
   New-Item -ItemType Directory -Path (Join-Path $RepoRoot ".github\scripts") -Force | Out-Null
   Copy-Item -LiteralPath (Join-Path $Root ".github\scripts\verify-revex-r49.js") -Destination (Join-Path $RepoRoot ".github\scripts\verify-revex-r49.js") -Force
   Copy-Item -LiteralPath (Join-Path $Root "PUBLISH_REVEX_R49.ps1") -Destination (Join-Path $RepoRoot "PUBLISH_REVEX_R49.ps1") -Force
@@ -400,7 +453,7 @@ try {
     $name = (Invoke-Captured "Resolve GitHub release name" $Gh @("api", "user", "--jq", ".name // .login")).Text.Trim()
     Invoke-Native "Set release author" $Git @("config", "user.name", $name) -WorkingDirectory $RepoRoot
     Invoke-Native "Set release email" $Git @("config", "user.email", "$login@users.noreply.github.com") -WorkingDirectory $RepoRoot
-    Invoke-Native "Stage only the r49 release" $Git @("add", "--", "docs/liber-apps/apps/revex", "src/Liber.Revex.Revit", "server/revex-energy-worker", "server/firebase-functions", ".github/scripts/verify-revex-r49.js", "PUBLISH_REVEX_R49.ps1", "PUBLISH_REVEX_R49.cmd") -WorkingDirectory $RepoRoot
+    Invoke-Native "Stage only the r49 release" $Git @("add", "--", "docs/liber-apps/apps/revex", "src/Liber.Revex.Revit", "server/revex-energy-worker", "server/firebase-functions", "firebase/revex-project-access-r43.rules", ".github/scripts/verify-revex-r49.js", "PUBLISH_REVEX_R49.ps1", "PUBLISH_REVEX_R49.cmd") -WorkingDirectory $RepoRoot
     Invoke-Native "Commit REVEX r49" $Git @("commit", "-m", "REVEX 0.8.19 r49: finalize active-document sync and managed Energy chain") -WorkingDirectory $RepoRoot
     Invoke-Native "Push r49 release branch" $Git @("push", "--set-upstream", "origin", $branch) -WorkingDirectory $RepoRoot
     $pr = (Invoke-Captured "Open r49 publication PR" $Gh @("pr", "create", "--repo", $GitHubRepository, "--base", "main", "--head", $branch, "--title", "REVEX 0.8.19 r49: final active-document and Energy chain", "--body", "Hash-locked r49: active-document project binding, progressive paged BIM, reversible visibility, native schedules, fullscreen Design Book images, and strict managed Energy outputs with per-revision COMcheck consent.") -WorkingDirectory $RepoRoot).Text.Trim().Split([Environment]::NewLine)[-1]
@@ -436,7 +489,8 @@ try {
   $deployerMember = if ($deployer.EndsWith('.gserviceaccount.com')) { "serviceAccount:$deployer" } else { "user:$deployer" }
 
   Invoke-Native "Set active Google Cloud project" $Gcloud @("config", "set", "project", $ProjectId)
-  Invoke-Native "Enable managed Energy APIs" $Gcloud @("services", "enable", "run.googleapis.com", "cloudbuild.googleapis.com", "artifactregistry.googleapis.com", "cloudfunctions.googleapis.com", "firebase.googleapis.com", "aiplatform.googleapis.com", "iamcredentials.googleapis.com", "--project=$ProjectId")
+  Invoke-Native "Enable managed Energy APIs" $Gcloud @("services", "enable", "run.googleapis.com", "cloudbuild.googleapis.com", "artifactregistry.googleapis.com", "cloudfunctions.googleapis.com", "firebase.googleapis.com", "firebaserules.googleapis.com", "aiplatform.googleapis.com", "iamcredentials.googleapis.com", "--project=$ProjectId")
+  Verify-LiveProjectAccessRules $Gcloud
   $WorkerSa = "revex-energy-worker@$ProjectId.iam.gserviceaccount.com"
   $BrokerSa = "revex-energy-broker@$ProjectId.iam.gserviceaccount.com"
   Ensure-ServiceAccount $Gcloud $WorkerSa "REVEX private Energy worker"
@@ -461,9 +515,21 @@ try {
   if ($comcheckProbe.StatusCode -ne 200) { throw "The official COMcheck service did not pass its non-project availability probe." }
   Write-Log "Official COMcheck availability probe passed. No project CXL was transmitted." Green
 
-  Invoke-Native "Build, test and push the immutable r49 worker image" $Gcloud @("builds", "submit", "--project=$ProjectId", "--config=server/revex-energy-worker/cloudbuild.yaml", "--substitutions=_REGION=$Region,_REPOSITORY=$Repository,_IMAGE=revex-energy-worker,_TAG=$ReleaseTag", ".") -WorkingDirectory $StageSource
   $Image = "$Region-docker.pkg.dev/$ProjectId/$Repository/revex-energy-worker`:$ReleaseTag"
-  Invoke-Native "Deploy the private r49 Energy worker" $Gcloud @("run", "deploy", $Service, "--project=$ProjectId", "--region=$Region", "--image=$Image", "--service-account=$WorkerSa", "--no-allow-unauthenticated", "--cpu=4", "--memory=8Gi", "--concurrency=1", "--min-instances=0", "--max-instances=3", "--timeout=3600", "--set-env-vars=REVEX_ENERGY_TIMEOUT_SECONDS=3500,REVEX_VERTEX_PROJECT=$ProjectId,REVEX_VERTEX_LOCATION=global", "--quiet")
+  $workerProbe = Invoke-Captured "Inspect existing r49 worker revision" $Gcloud @("run", "services", "describe", $Service, "--project=$ProjectId", "--region=$Region", "--format=json") -AllowFailure
+  $reuseWorker = $false
+  if ($workerProbe.ExitCode -eq 0) {
+    $existingWorker = $workerProbe.Text | ConvertFrom-Json
+    $existingImage = [string]$existingWorker.spec.template.spec.containers[0].image
+    $existingReady = @($existingWorker.status.conditions | Where-Object { $_.type -eq 'Ready' -and [string]$_.status -eq 'True' }).Count -gt 0
+    $reuseWorker = $existingReady -and $existingImage.Contains($ReleaseTag)
+  }
+  if ($reuseWorker) {
+    Write-Log "Pinned r49 private worker is already ready; skipping duplicate image build and Cloud Run deployment." Green
+  } else {
+    Invoke-Native "Build, test and push the immutable r49 worker image" $Gcloud @("builds", "submit", "--project=$ProjectId", "--config=server/revex-energy-worker/cloudbuild.yaml", "--substitutions=_REGION=$Region,_REPOSITORY=$Repository,_IMAGE=revex-energy-worker,_TAG=$ReleaseTag", ".") -WorkingDirectory $StageSource
+    Invoke-Native "Deploy the private r49 Energy worker" $Gcloud @("run", "deploy", $Service, "--project=$ProjectId", "--region=$Region", "--image=$Image", "--service-account=$WorkerSa", "--no-allow-unauthenticated", "--cpu=4", "--memory=8Gi", "--concurrency=1", "--min-instances=0", "--max-instances=3", "--timeout=3600", "--set-env-vars=REVEX_ENERGY_TIMEOUT_SECONDS=3500,REVEX_VERTEX_PROJECT=$ProjectId,REVEX_VERTEX_LOCATION=global", "--quiet")
+  }
   $WorkerUrl = (Invoke-Captured "Resolve deployed worker URL" $Gcloud @("run", "services", "describe", $Service, "--project=$ProjectId", "--region=$Region", "--format=value(status.url)")).Text.Trim()
   if (-not $WorkerUrl) { throw "Cloud Run did not expose the private r49 worker URL." }
   $policy = ((Invoke-Captured "Inspect private worker invocation policy" $Gcloud @("run", "services", "get-iam-policy", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
@@ -473,13 +539,19 @@ try {
     }
   }
   Invoke-Native "Grant broker-only private worker invocation" $Gcloud @("run", "services", "add-iam-policy-binding", $Service, "--project=$ProjectId", "--region=$Region", "--member=serviceAccount:$BrokerSa", "--role=roles/run.invoker", "--quiet")
+  $verifiedPolicy = ((Invoke-Captured "Verify exact broker-only worker invocation policy" $Gcloud @("run", "services", "get-iam-policy", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
+  $invokerMembers = @($verifiedPolicy.bindings | Where-Object { $_.role -eq 'roles/run.invoker' } | ForEach-Object { @($_.members) } | ForEach-Object { [string]$_ } | Sort-Object -Unique)
+  $expectedInvoker = "serviceAccount:$BrokerSa"
+  if ($invokerMembers.Count -ne 1 -or $invokerMembers[0] -ne $expectedInvoker) {
+    throw "Private worker invokers are not exactly broker-only: $($invokerMembers -join ', ')"
+  }
   try {
     $unexpected = Invoke-WebRequest -UseBasicParsing -Uri ($WorkerUrl + "/healthz") -TimeoutSec 15
     if ($unexpected.StatusCode -eq 200) { throw "Private worker unexpectedly allowed unauthenticated invocation." }
   } catch {
     $status = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
-    if ($status -notin @(401,403)) { throw }
-    Write-Log "Private worker correctly denied the unauthenticated health probe ($status)." Green
+    if ($status -notin @(401,403,404)) { throw }
+    Write-Log "Private worker correctly denied or concealed the unauthenticated health probe ($status); exact invoker policy is broker-only." Green
   }
   $runState = ((Invoke-Captured "Verify ready r49 Cloud Run revision" $Gcloud @("run", "services", "describe", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
   $deployedImage = [string]$runState.spec.template.spec.containers[0].image
