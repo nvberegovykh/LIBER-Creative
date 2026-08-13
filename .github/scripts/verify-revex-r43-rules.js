@@ -56,6 +56,7 @@ const projectId = 'demo-revex-r43';
   await assertSucceeds(getDocs(query(collection(member, 'projects'), where('memberIds', 'array-contains', 'member'))));
 
   await assertSucceeds(getDoc(doc(member, 'specProjects', 'spec_alpha')));
+  await assertSucceeds(getDocs(query(collection(member, 'specProjects'), where('linkedProjectId', '==', 'alpha'))));
   await assertSucceeds(setDoc(doc(member, 'specProjects', 'spec_alpha', 'items', 'window'), { finish: 'bronze' }));
   await assertSucceeds(updateDoc(doc(member, 'specProjects', 'spec_alpha'), { name: 'Alpha Specifications' }));
 
@@ -68,6 +69,8 @@ const projectId = 'demo-revex-r43';
 
   const memberProjectQuery = await getDocs(query(collection(member, 'projects'), where('memberIds', 'array-contains', 'member')));
   assert.equal(memberProjectQuery.size, 1);
+  const ownerProjectQuery = await getDocs(query(collection(owner, 'projects'), where('ownerId', '==', 'owner')));
+  assert.equal(ownerProjectQuery.size, 1);
 
   await assertSucceeds(getDocs(collection(admin, 'projects')));
   await assertSucceeds(updateDoc(doc(admin, 'projects', 'alpha'), { memberIds: ['owner', 'member', 'new_member'] }));
