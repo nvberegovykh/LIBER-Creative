@@ -113,6 +113,12 @@ jobs:
           node .github/scripts/verify-revex-r43-firestore.js
           node .github/scripts/verify-revex-r43-rules-patcher.js
 
+      - name: Set up Java 21 for Firestore emulator
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
       - name: Verify project-member rules in Firestore emulator
         shell: bash
         run: |
