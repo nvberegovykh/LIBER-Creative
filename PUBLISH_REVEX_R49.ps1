@@ -319,7 +319,13 @@ function Verify-LiveProjectAccessRules([string]$Gcloud) {
       $token = [string]($tokenResult.Lines | Where-Object { [string]$_ -match '^[A-Za-z0-9._-]{20,}$' } | Select-Object -Last 1)
       $token = $token.Trim()
       if (-not $token) { throw "Google Cloud could not provide a bounded access token for the read-only live-rules check." }
-      $headers = @{ Authorization = "Bearer $([string]$token)" }
+      # Direct Google REST calls made with end-user gcloud credentials may require an explicit
+      # consumer/quota project. Keep the bearer token in memory only and identify REVEX as the
+      # user project without ever putting the token in a URL or deployment log.
+      $headers = @{
+        Authorization = "Bearer $([string]$token)"
+        "x-goog-user-project" = $ProjectId
+      }
       $release = Invoke-RestMethod -Method Get -Uri $releaseUri -Headers $headers -TimeoutSec 30
       $rulesetName = [string]$release.rulesetName
       if (-not $rulesetName.StartsWith("projects/$ProjectId/rulesets/")) { throw "The live Firestore release did not identify its active ruleset." }
@@ -327,10 +333,61 @@ function Verify-LiveProjectAccessRules([string]$Gcloud) {
       break
     } catch {
       $lastStatus = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
-      $lastMessage = [string]$_.Exception.Message
+
+      # Preserve the Google API denial reason, but never credentials. Invoke-RestMethod normally
+      # places the JSON error body in ErrorDetails.Message on Windows PowerShell; the stream path
+      # is a bounded fallback for older hosts.
+      $rawGoogleError = ""
+      try {
+        if ($null -ne $_.ErrorDetails -and -not [string]::IsNullOrWhiteSpace([string]$_.ErrorDetails.Message)) {
+          $rawGoogleError = [string]$_.ErrorDetails.Message
+        }
+      } catch { }
+      if (-not $rawGoogleError) {
+        try {
+          $stream = $_.Exception.Response.GetResponseStream()
+          if ($null -ne $stream) {
+            $reader = New-Object IO.StreamReader($stream)
+            try { $rawGoogleError = $reader.ReadToEnd() } finally { $reader.Dispose(); $stream.Dispose() }
+          }
+        } catch { }
+      }
+
+      $googleStatus = ""
+      $googleReason = ""
+      $googleMessage = ""
+      if ($rawGoogleError) {
+        try {
+          $googlePayload = $rawGoogleError | ConvertFrom-Json
+          if ($null -ne $googlePayload.error) {
+            $googleStatus = [string]$googlePayload.error.status
+            $googleMessage = [string]$googlePayload.error.message
+            $reasonValues = @($googlePayload.error.details | ForEach-Object {
+              if ($null -ne $_.reason) { [string]$_.reason }
+              elseif ($null -ne $_.metadata -and $null -ne $_.metadata.reason) { [string]$_.metadata.reason }
+            } | Where-Object { $_ } | Sort-Object -Unique)
+            if ($reasonValues.Count) { $googleReason = ($reasonValues -join ',') }
+          }
+        } catch { }
+      }
+
+      $lastMessage = if ($googleMessage) { $googleMessage } else { [string]$_.Exception.Message }
+      $safeDetailParts = @()
+      if ($googleStatus) { $safeDetailParts += "status=$googleStatus" }
+      if ($googleReason) { $safeDetailParts += "reason=$googleReason" }
+      if ($lastMessage) { $safeDetailParts += "message=$lastMessage" }
+      $safeDetail = ($safeDetailParts -join '; ')
+      if (-not $safeDetail) { $safeDetail = "message=$([string]$_.Exception.Message)" }
+      $safeDetail = [regex]::Replace($safeDetail, 'ya29\.[A-Za-z0-9._-]+', '<REDACTED_ACCESS_TOKEN>')
+      $safeDetail = [regex]::Replace($safeDetail, '1//[A-Za-z0-9._-]+', '<REDACTED_REFRESH_TOKEN>')
+      $safeDetail = [regex]::Replace($safeDetail, '(?i)(Bearer\s+)[A-Za-z0-9._-]+', '$1<REDACTED>')
+      if ($safeDetail.Length -gt 900) { $safeDetail = $safeDetail.Substring(0,900) + '...' }
+
       $transient = $lastStatus -in @(403,404,409,429,500,502,503,504)
-      if (-not $transient -or $attempt -eq 12) { throw }
-      Write-Log "Firebase Rules read verification pending after API/IAM propagation (HTTP $lastStatus, attempt $attempt/12)." Yellow
+      if (-not $transient -or $attempt -eq 12) {
+        throw "Firebase Rules REST verification failed (HTTP $lastStatus): $safeDetail"
+      }
+      Write-Log "Firebase Rules read verification pending (HTTP $lastStatus, attempt $attempt/12): $safeDetail" Yellow
       Start-Sleep -Seconds 5
     } finally {
       $token = $null
