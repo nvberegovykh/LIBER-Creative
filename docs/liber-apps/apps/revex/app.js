@@ -38,7 +38,7 @@ window.__revexState = state;
 function storeCall(name, args = [], fallback = null) {
   const fn = Store?.[name];
   if (typeof fn !== 'function') {
-    console.warn(`[REVEX] Store.${name} unavailable; continuing with fallback.`, { build: '20260813r46' });
+    console.warn(`[REVEX] Store.${name} unavailable; continuing with fallback.`, { build: '20260813r47' });
     return Promise.resolve(fallback);
   }
   try { return Promise.resolve(fn.apply(Store, args)); }

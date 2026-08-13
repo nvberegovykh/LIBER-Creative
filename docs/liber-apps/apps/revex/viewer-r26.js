@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
-const BUILD='20260813r46', Store=window.RevexStore;
+const BUILD='20260813r47', Store=window.RevexStore;
 const $=(s,r=document)=>r.querySelector(s);
 if(!Store||window.__revexViewerR26){}else{
 window.__revexViewerR26=true;THREE.Cache.enabled=true;

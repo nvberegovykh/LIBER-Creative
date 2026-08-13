@@ -86,6 +86,25 @@
 .energy-run-status[data-tone="good"] { color: #86dfb2; }
 .energy-run-status[data-tone="bad"] { color: #ffadad; }
 
+.energy-consent-dialog {
+  width: min(620px, calc(100vw - 28px));
+  padding: 0;
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 16px;
+  color: #e8ecf2;
+  background: #11151b;
+  box-shadow: 0 28px 90px rgba(0,0,0,.6);
+}
+.energy-consent-dialog::backdrop { background: rgba(4,7,11,.78); backdrop-filter: blur(3px); }
+.energy-consent-dialog form { display: grid; gap: 15px; padding: 24px; }
+.energy-consent-dialog h2 { margin: 0; font-size: 22px; }
+.energy-consent-dialog p { margin: 0; color: #b6bdc8; line-height: 1.55; }
+.energy-consent-dialog dl { display: grid; grid-template-columns: 145px minmax(0,1fr); gap: 9px 13px; margin: 0; padding: 14px; border-radius: 10px; background: rgba(255,255,255,.035); }
+.energy-consent-dialog dt { color: #818b99; }
+.energy-consent-dialog dd { margin: 0; overflow-wrap: anywhere; }
+.energy-consent-dialog .energy-consent-note { color: #f1d980; }
+.energy-consent-actions { display: flex; justify-content: flex-end; gap: 9px; flex-wrap: wrap; }
+
 .energy-result-summary { margin: 14px 0; padding: 11px 12px; border-left: 2px solid rgba(255,255,255,.2); color: #cbd1da; background: rgba(255,255,255,.025); }
 .energy-artifacts { display: grid; gap: 7px; }
 .energy-artifact { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 10px 11px; border: 1px solid rgba(255,255,255,.08); border-radius: 9px; color: #dfe4eb; text-decoration: none; background: rgba(255,255,255,.02); }

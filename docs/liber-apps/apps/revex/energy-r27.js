@@ -12,6 +12,8 @@ let lastSourceRevision = '';
 let lastResultRevision = '';
 const ENERGY_HARD_STOP = 0.80;
 const ENERGY_QUALITY_TARGET = 0.95;
+const COMCHECK_ENDPOINT = 'https://legacy-comcheck.energycode.pnl.gov/CheckWeb/';
+const COMCHECK_SCOPE = 'GENERATED_CURRENT_PROJECT_CXL_ONLY';
 
 function state() { return window.__revexState || {}; }
 function projectId() { return String(state().projectId || new URLSearchParams(location.search).get('projectId') || '').trim(); }
@@ -39,6 +41,44 @@ function pct(value) {
   const n = Number(value);
   return Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : '—';
 }
+
+function consentApproved(consent, id, revision) {
+  return consent?.schema === 'liber.revex.comcheck-consent.v1' && consent.approved === true &&
+    consent.projectId === id && consent.sourceEngineeringRevision === revision &&
+    consent.service === 'PNNL_COMCHECK_BACKSTOP' && consent.endpoint === COMCHECK_ENDPOINT &&
+    consent.scope === COMCHECK_SCOPE;
+}
+
+function setConsentAction(visible) {
+  const button = $('#energy-authorize-backstop');
+  if (button) button.hidden = !visible;
+}
+
+function requestRevisionConsent(id, revision) {
+  const dialog = $('#energy-consent-dialog');
+  if (!dialog?.showModal) {
+    return Promise.resolve(window.confirm(
+      `Authorize this Engineering revision only (${revision}) to send its generated current-project CXL to the official PNNL COMcheck service? Revit files, gbXML, EPW, credentials, applicant, modeler, signature and seal are not sent.`
+    ));
+  }
+  $('#energy-consent-project').textContent = id;
+  $('#energy-consent-revision').textContent = revision;
+  $('#energy-consent-endpoint').textContent = COMCHECK_ENDPOINT;
+  dialog.returnValue = 'cancel';
+  return new Promise((resolve) => {
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'approve'), { once: true });
+    dialog.showModal();
+  });
+}
+
+async function authorizeRevision(id, revision, { prompt = true } = {}) {
+  if (!id || !revision || !Store?.isCloud?.()) return null;
+  if (prompt && !(await requestRevisionConsent(id, revision))) return null;
+  const consent = await Store.recordEnergyConsent(id, revision);
+  if (sourceState && String(sourceState.revision || sourceState.manifest?.revision || '') === revision)
+    sourceState.externalProcessingConsent = consent;
+  return consent;
+}
 function integrityState(manifest) {
   const publication = manifest?.publicationIntegrity || {};
   const ratios = Object.entries(publication.ratios || {})
@@ -58,6 +98,7 @@ function renderSource() {
   const id = projectId();
   if (gate) gate.hidden = Boolean(id);
   if (!id) {
+    setConsentAction(false);
     sourceState = null;
     setBadge('Choose project', 'quiet');
     summary.innerHTML = 'Create or choose the same REVEX project used by Design. Then click <b>SYNC ENGINEERING</b> in Revit; the full downstream Energy chain runs automatically after the ≥80% hard-stop gate. Results below 95% continue with a visible quality warning; sub-80% evidence is preserved for repair and is not published.';
@@ -66,6 +107,7 @@ function renderSource() {
     return;
   }
   if (!sourceState?.manifest) {
+    setConsentAction(false);
     setBadge('Ready for Engineering Sync', 'quiet');
     summary.innerHTML = 'Project connected. In Revit Engineering, click <b>SYNC ENGINEERING</b>. Revit evidence will attach here automatically and the downstream pipeline will continue without a second button.';
     facts.innerHTML = '';
@@ -73,6 +115,9 @@ function renderSource() {
     return;
   }
   const manifest = sourceState.manifest;
+  const revision = String(sourceState.revision || manifest.revision || '').trim();
+  const authorized = consentApproved(sourceState.externalProcessingConsent, id, revision);
+  setConsentAction(Boolean(sourceState.cloud && revision && !authorized));
   const integrity = integrityState(manifest);
   const exported = manifest.gbxmlStatus === 'EXPORTED';
   const publishable = exported &&
@@ -106,6 +151,7 @@ function renderSource() {
     ['Below quality target', belowQualityText],
     ['Weather file (.EPW)', weather.sourceFile || weather.file || '—'],
     ['Weather location', weatherLocation],
+    ['Official COMcheck transmission', authorized ? `Authorized for this revision only · ${sourceState.externalProcessingConsent.approvedAt || 'recorded'}` : 'Not authorized · no CXL transmission'],
     ['Revit writes', 'Spaces · EADM · EN/Energy tags'],
     ['Post-export writeback', 'None']
   ];
@@ -115,8 +161,10 @@ function renderSource() {
       ? `Diagnostic only: this revision is preserved but blocked below the ≥${pct(ENERGY_HARD_STOP)} hard-stop gate.`
       : reviewRequired
         ? `Quality warning: evidence below ${pct(integrity.qualityTarget)} is being processed because every domain cleared the ${pct(integrity.hardStop)} hard stop.`
-        : 'Engineering evidence attached. The managed REVEX Energy server is processing this immutable revision; the workstation is no longer part of the simulation environment.',
-    !publishable ? 'bad' : (reviewRequired ? 'busy' : '')
+        : authorized
+          ? 'Engineering evidence attached and this revision is authorized. The managed REVEX Energy server is processing it.'
+          : 'Engineering evidence is preserved, but official COMcheck transmission is not authorized for this revision.',
+    !publishable ? 'bad' : (authorized ? (reviewRequired ? 'busy' : '') : 'bad')
   );
 }
 
@@ -139,6 +187,15 @@ async function runManagedServerForSource() {
     setRun(`Diagnostic only: every Engineering evidence domain must clear the ≥${pct(ENERGY_HARD_STOP)} hard-stop gate before managed processing can start.`, 'bad');
     return;
   }
+  const consent = sourceState.externalProcessingConsent || await Store.getEnergyConsent(id, revision);
+  if (!consentApproved(consent, id, revision)) {
+    sourceState.externalProcessingConsent = null;
+    setConsentAction(true);
+    setRun('Authorization required for this exact Engineering revision. No current-project CXL was transmitted.', 'bad');
+    return;
+  }
+  sourceState.externalProcessingConsent = consent;
+  setConsentAction(false);
   const existingSource = String(resultState?.manifest?.sourceEngineeringRevision || '').trim();
   if (existingSource === revision && String(resultState?.manifest?.status || '').toUpperCase() === 'COMPLETE') {
     setRun('Managed Energy package already complete for this Engineering revision.', 'good');
@@ -227,15 +284,22 @@ async function importSource(files) {
   sourceBusy = true;
   try {
     const manifestFile = [...files].find((file) => file.name.toLowerCase() === 'engineering-sync.json');
+    let probe = null;
     if (manifestFile) {
-      const probe = JSON.parse(await manifestFile.text());
+      probe = JSON.parse(await manifestFile.text());
       if (probe.revision && probe.revision === lastSourceRevision) return;
     }
+    const id = projectId();
+    const revision = String(probe?.revision || '').trim();
+    let approved = false;
+    if (Store?.isCloud?.() && id && revision) approved = await requestRevisionConsent(id, revision);
     setBadge('Importing evidence…', 'quiet');
-    sourceState = await Store.syncEngineeringPackage(files, projectId());
+    sourceState = await Store.syncEngineeringPackage(files, id);
     lastSourceRevision = sourceState.revision || sourceState.manifest?.revision || '';
+    if (approved) sourceState.externalProcessingConsent = await authorizeRevision(id, lastSourceRevision, { prompt: false });
     renderSource();
-    void runManagedServerForSource();
+    if (sourceState.externalProcessingConsent) void runManagedServerForSource();
+    else setRun('Engineering evidence preserved. Official COMcheck transmission was not authorized for this revision.', 'bad');
   } catch (error) {
     setBadge('Engineering Sync rejected', 'blocked');
     setRun(error.message || 'Engineering Sync could not be imported.', 'bad');
@@ -268,6 +332,8 @@ async function hydrate() {
     [sourceState, resultState] = await Promise.all([Store.getEngineeringState(id), Store.getEnergyResult(id)]);
     lastSourceRevision = sourceState?.revision || sourceState?.manifest?.revision || '';
     lastResultRevision = resultState?.revision || resultState?.manifest?.resultRevision || '';
+    if (sourceState?.cloud && lastSourceRevision)
+      sourceState.externalProcessingConsent = await Store.getEnergyConsent(id, lastSourceRevision);
   } catch (_) { sourceState = null; resultState = null; }
   renderSource();
   renderResult();
@@ -282,6 +348,23 @@ async function hydrate() {
 
 const sourceInput = $('#revex-energy-sync-upload');
 const resultInput = $('#revex-energy-result-upload');
+$('#energy-authorize-backstop')?.addEventListener('click', async () => {
+  const id = projectId();
+  const revision = String(sourceState?.revision || sourceState?.manifest?.revision || '').trim();
+  if (!id || !revision) return;
+  try {
+    const consent = await authorizeRevision(id, revision);
+    if (!consent) {
+      setRun('Official COMcheck transmission remains blocked for this revision.', 'bad');
+      return;
+    }
+    autoRetryRevision = '';
+    renderSource();
+    void runManagedServerForSource();
+  } catch (error) {
+    setRun(error?.message || 'COMcheck authorization could not be recorded.', 'bad');
+  }
+});
 if (sourceInput) {
   sourceInput.dataset.liberRevexEnergyHandlerReady = '1';
   sourceInput.addEventListener('change', () => { if (sourceInput.files?.length) importSource(sourceInput.files); });

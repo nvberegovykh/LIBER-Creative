@@ -1,4 +1,4 @@
-name: REVEX 0.8.19 r46 validation
+name: REVEX 0.8.19 r47 validation
 
 on:
   workflow_dispatch:
@@ -23,7 +23,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: revex-0819-r46-validation-${{ github.ref }}
+  group: revex-0819-r47-validation-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -49,7 +49,7 @@ jobs:
             node --check "/tmp/${file%.js}.mjs"
           done
           python -m json.tool "$APP/manifest.webmanifest" >/dev/null
-          node .github/scripts/verify-revex-r46-companion.js
+          node .github/scripts/verify-revex-r47-companion.js
           node .github/scripts/verify-revex-r43-firestore.js
           node .github/scripts/verify-revex-r43-rules-patcher.js
 
