@@ -1,10 +1,12 @@
 LIBER REVEX LIVE COMPANION 0.8.19
-Hosted Companion build: 20260813r44
+Hosted Companion build: 20260813r45
 
-r44 preserves the r43 project access boundary and completes element-level BIM
-visibility, inverse Show hidden filtering, managed Energy retry diagnostics, and
-current-project Z/EN filing identity. Authenticated project owners, members, and
-LIBER admins can use project content; outsiders remain denied.
+r45 preserves the r43 project access boundary and completes element-level BIM
+visibility, inverse Show hidden filtering, legacy Engineering revision recovery,
+regional broker error propagation, official COMcheck Backstop execution, both
+compiled OSM outputs, and current-project Z/EN filing identity. Authenticated
+project owners, members, and LIBER admins can use project content; outsiders
+remain denied.
 
 MODEL CONTRACT
 - Revit Fine-detail geometry is the primary BIM representation through `model.rvxmesh.gz`.
@@ -28,6 +30,7 @@ SPEC / ENERGY CONTRACT
 - Energy evidence and results are bound to the active REVEX Project ID; a mismatched project is rejected.
 - Private Engineering/Energy metadata uses the existing project-library authorization boundary; immutable evidence files remain in their revision-scoped Storage prefix and the broker rejects paths outside it.
 - Current project identity is populated only from immutable Revit Z pages; current model facts come from EN pages. Applicant/modeler fields remain blank and professional execution is never fabricated.
+- A COMPLETE Energy result requires the official 2020 NYCECC Appendix CA Modeling Envelope Backstop report, the current-project CXL, both compiled Baseline/Proposed OSMs, both successful simulations, and the 16-page EN-1 PDF.
 - Downstream Energy processing has no Revit writeback; only the Revit-side Energy Sync may create/fix Spaces, EADM, and EN/ENERGY tags before evidence publication.
 
 FIRESTORE COMPATIBILITY

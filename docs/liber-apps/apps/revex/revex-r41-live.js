@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260813r44';
+  const BUILD='20260813r45';
   if(root.__revexR41Live)return;
   root.__revexR41Live=true;
 
@@ -86,20 +86,24 @@
 
     // The hosted pre-r41 Store has the Energy evidence/result readers but lacks the
     // managed broker call used by energy-r27.js. Restore the canonical method here.
-    Store.runEnergyServer=async function(projectId,sourceRevision){
-      if(!projectId||!sourceRevision)throw new Error('Project and Engineering revision are required for managed Energy processing.');
-      if(!this.isCloud?.())throw new Error('Managed Energy processing requires a signed-in REVEX cloud session.');
-      const fs=this.fs;
-      if(!fs?.callFunction)throw new Error('REVEX managed Energy broker is unavailable in this session.');
-      const response=await fs.callFunction('runRevexEnergy',clone({
-        schema:'liber.revex.energy-broker-request.v1',
-        projectId,
-        sourceRevision,
-        clientBuild:BUILD
-      }));
-      if(!response?.ok)throw new Error(response?.message||response?.error||'REVEX managed Energy worker did not complete.');
-      return response;
-    };
+    // Compatibility assets may still be cached by an older shell. Never replace
+    // the canonical regional/bounded implementation supplied by store.js.
+    if(typeof Store.runEnergyServer!=='function'){
+      Store.runEnergyServer=async function(projectId,sourceRevision){
+        if(!projectId||!sourceRevision)throw new Error('Project and Engineering revision are required for managed Energy processing.');
+        if(!this.isCloud?.())throw new Error('Managed Energy processing requires a signed-in REVEX cloud session.');
+        const fs=this.fs;
+        const modular=root.firebaseModular;
+        const functions=fs?.functionsByRegion?.['us-central1']||(modular?.getFunctions&&fs?.app?modular.getFunctions(fs.app,'us-central1'):null);
+        if(!modular?.httpsCallable||!functions)throw new Error('REVEX managed Energy broker is unavailable in this session.');
+        const response=await modular.httpsCallable(functions,'runRevexEnergy',{timeout:3600000})(clone({
+          schema:'liber.revex.energy-broker-request.v1',projectId,sourceRevision,clientBuild:BUILD
+        }));
+        const data=response?.data;
+        if(!data?.ok)throw new Error(data?.message||data?.error||'REVEX managed Energy worker did not complete.');
+        return data;
+      };
+    }
   }
 
   function claim(buttonId,handler){

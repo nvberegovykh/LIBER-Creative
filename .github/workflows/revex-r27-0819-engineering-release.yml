@@ -1,4 +1,4 @@
-name: REVEX 0.8.19 r44 validation
+name: REVEX 0.8.19 r45 validation
 
 on:
   workflow_dispatch:
@@ -9,6 +9,7 @@ on:
       - '.github/scripts/**'
       - 'firebase/**'
       - 'docs/liber-apps/apps/revex/**'
+      - 'docs/liber-apps/js/firebase-service.js'
   push:
     branches: [main]
     paths:
@@ -16,12 +17,13 @@ on:
       - '.github/scripts/**'
       - 'firebase/**'
       - 'docs/liber-apps/apps/revex/**'
+      - 'docs/liber-apps/js/firebase-service.js'
 
 permissions:
   contents: read
 
 concurrency:
-  group: revex-0819-r44-validation-${{ github.ref }}
+  group: revex-0819-r45-validation-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -47,7 +49,7 @@ jobs:
             node --check "/tmp/${file%.js}.mjs"
           done
           python -m json.tool "$APP/manifest.webmanifest" >/dev/null
-          node .github/scripts/verify-revex-r44-companion.js
+          node .github/scripts/verify-revex-r45-companion.js
           node .github/scripts/verify-revex-r43-firestore.js
           node .github/scripts/verify-revex-r43-rules-patcher.js
 

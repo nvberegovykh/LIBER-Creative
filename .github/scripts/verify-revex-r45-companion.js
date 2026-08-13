@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 
 const root = path.resolve(__dirname, '../..');
 const appRoot = path.join(root, 'docs/liber-apps/apps/revex');
@@ -13,6 +14,7 @@ const integrity = read('integrity.js');
 const html = read('index.html');
 const readme = read('README.txt');
 const energy = read('energy-r27.js');
+const sharedFirebase = fs.readFileSync(path.join(root, 'docs/liber-apps/js/firebase-service.js'), 'utf8');
 
 function requireText(source, needle, label) {
   if (!source.includes(needle)) throw new Error(`${label}: missing ${needle}`);
@@ -22,7 +24,7 @@ function rejectText(source, pattern, label) {
 }
 
 for (const [name, source] of Object.entries({ app, viewer, store, integrity, html })) {
-  requireText(source, '20260813r44', `${name} build pin`);
+  requireText(source, '20260813r45', `${name} build pin`);
   rejectText(source, /20260813r4[123]/, `${name} stale build pin`);
 }
 
@@ -38,9 +40,19 @@ requireText(viewer, 'this.instanceSlots.get(key)?.length', 'instanced transform 
 requireText(store, "modular.getFunctions(fs.app, 'us-central1')", 'direct broker region');
 requireText(store, "modular.httpsCallable(functions, 'runRevexEnergy', { timeout: 3600000 })", 'bounded managed retry');
 requireText(store, 'throw energyCallableError(error)', 'broker error propagation');
+requireText(store, "this.api.doc(this.db, 'projects', projectId, 'revex', 'engineering')", 'legacy Engineering recovery read');
+requireText(store, '`revex_engineering_revision_${revision}`', 'legacy Engineering canonical revision mirror');
+requireText(store, "clientBuild: '20260813r45'", 'r45 managed broker client');
+requireText(sharedFirebase, "if (name === 'runRevexEnergy')", 'shared Firebase dedicated Energy path');
+requireText(sharedFirebase, "this.functionsByRegion?.['us-central1']", 'shared Firebase Energy region lock');
+requireText(sharedFirebase, "{ timeout: 3600000 }", 'shared Firebase Energy timeout');
+requireText(sharedFirebase, "if (name === 'runRevexEnergy' ||", 'shared Firebase Energy error propagation');
 requireText(integrity, "firestorePlain({ merge", 'same-realm Firestore options');
 requireText(energy, 'const resultComplete = resultSource === currentSource', 'failed-result retry eligibility');
 requireText(energy, 'autoRetryRevision !== currentSource', 'single automatic retry per page session');
+requireText(energy, "['filing-output', 'Official filing outputs']", 'official filing output group');
+requireText(energy, 'COMcheck_OFFICIAL_BACKSTOP_REPORT', 'official Backstop report rendering');
+requireText(energy, 'BASELINE|PROPOSED', 'compiled OSM rendering');
 
 const userVisible = [html, readme, read('energy-r27.js'), read('energy-contract-r40.js')].join('\n');
 rejectText(userVisible, /79\s+Winthrop|2306\s+Ocean|31-00\s+47th|Faybyshenko|Chosen\s+MEP|B01304513/i, 'user-visible reference identity');
@@ -61,11 +73,46 @@ for (const [mode, overlay, expected] of cases) {
   if (visible(mode, overlay) !== expected) throw new Error(`visibility truth table failed for ${mode} ${JSON.stringify(overlay)}`);
 }
 
-console.log('REVEX r44 Companion QA passed:', {
-  currentViewerBinding: true,
-  hideAndInverseShow: true,
-  instancedVisibility: true,
-  directManagedRetry: true,
-  sameRealmFirestoreWrites: true,
-  referenceIdentityExcluded: true,
+async function verifyLegacyRevisionRecovery() {
+  const sandbox = { window: {}, console, setTimeout, clearTimeout };
+  vm.runInNewContext(store, sandbox, { filename: 'store.js' });
+  const candidate = sandbox.window.RevexStore;
+  const writes = [];
+  const legacy = {
+    schema: 'liber.revex.engineering-state.v1', projectId: 'project_qa',
+    revision: 'eng_20260813T092919850Z', cloud: true,
+    manifest: { revision: 'eng_20260813T092919850Z' }, artifacts: []
+  };
+  candidate.mode = 'cloud';
+  candidate.db = {};
+  candidate.api = {
+    doc: (_db, ...parts) => ({ path: parts.join('/') }),
+    getDoc: async (ref) => ref.path.endsWith('/library/revex_engineering')
+      ? { exists: () => false }
+      : ref.path.endsWith('/revex/engineering')
+        ? { exists: () => true, data: () => legacy }
+        : { exists: () => false },
+    setDoc: async (ref, data, options) => writes.push({ ref, data, options })
+  };
+  const recovered = await candidate.getEngineeringState('project_qa');
+  if (recovered.revision !== legacy.revision) throw new Error('legacy recovery changed the immutable revision');
+  if (writes.length !== 2) throw new Error(`legacy recovery expected 2 canonical writes, got ${writes.length}`);
+  if (!writes.some((row) => row.ref.path.endsWith(`/library/revex_engineering_revision_${legacy.revision}`)))
+    throw new Error('legacy recovery did not mirror the immutable canonical revision');
+}
+
+verifyLegacyRevisionRecovery().then(() => {
+  console.log('REVEX r45 Companion QA passed:', {
+    currentViewerBinding: true,
+    hideAndInverseShow: true,
+    instancedVisibility: true,
+    directManagedRetry: true,
+    legacyRevisionRecovery: true,
+    officialBackstopAndOsmOutputs: true,
+    sameRealmFirestoreWrites: true,
+    referenceIdentityExcluded: true,
+  });
+}).catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
 });
