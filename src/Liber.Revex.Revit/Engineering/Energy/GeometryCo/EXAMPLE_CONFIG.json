@@ -1,0 +1,18 @@
+{
+  "global": {
+    "minimum_match_score": 0.75,
+    "semantic_profile_confidence": 0.75,
+    "ambiguity_margin": 0.08,
+    "allow_version_mismatch": false,
+    "allow_bbox_only": false,
+    "use_name_hints": false,
+    "use_semantic_fallback": true,
+    "use_pretrained_local_ai": true
+  },
+  "baseline": {
+    "space_overrides": {}
+  },
+  "proposed": {
+    "space_overrides": {}
+  }
+}

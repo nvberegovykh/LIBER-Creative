@@ -1,0 +1,319 @@
+[
+  {
+    "name": "Glass / glazing",
+    "priority": 100,
+    "semantic": "Glazing",
+    "matchAny": [
+      "glass",
+      "glazing",
+      "vision",
+      "clear",
+      "low-e",
+      "low e"
+    ],
+    "categories": [],
+    "rgb": [
+      135,
+      165,
+      175
+    ],
+    "transparency": 55,
+    "prompt": "neutral clear architectural glazing, realistic reflection and transmission, subtle low-e tint; do not turn opaque"
+  },
+  {
+    "name": "Curtain panel default",
+    "priority": 95,
+    "semantic": "Glazing",
+    "matchAny": [],
+    "categories": [
+      "Curtain Panels"
+    ],
+    "rgb": [
+      135,
+      165,
+      175
+    ],
+    "transparency": 55,
+    "prompt": "neutral clear architectural glazing with realistic reflections and low-e tint"
+  },
+  {
+    "name": "Window default",
+    "priority": 90,
+    "semantic": "Glazing / window assembly",
+    "matchAny": [],
+    "categories": [
+      "Windows"
+    ],
+    "rgb": [
+      145,
+      165,
+      170
+    ],
+    "transparency": 35,
+    "prompt": "realistic architectural window assembly; transparent glazing with crisp frame boundaries, no invented mullions"
+  },
+  {
+    "name": "Black metal",
+    "priority": 88,
+    "semantic": "Black metal",
+    "matchAny": [
+      "black",
+      "charcoal",
+      "anodized black",
+      "bronze dark"
+    ],
+    "categories": [],
+    "rgb": [
+      55,
+      58,
+      60
+    ],
+    "transparency": 0,
+    "prompt": "dark matte powder-coated or anodized architectural metal, subtle roughness, crisp edges"
+  },
+  {
+    "name": "Wood",
+    "priority": 85,
+    "semantic": "Wood",
+    "matchAny": [
+      "wood",
+      "oak",
+      "walnut",
+      "ash",
+      "maple",
+      "plywood",
+      "timber",
+      "veneer"
+    ],
+    "categories": [],
+    "rgb": [
+      158,
+      123,
+      86
+    ],
+    "transparency": 0,
+    "prompt": "real wood at believable architectural scale, subtle grain and low-gloss finish; preserve panel and joint boundaries"
+  },
+  {
+    "name": "Brick",
+    "priority": 85,
+    "semantic": "Brick masonry",
+    "matchAny": [
+      "brick",
+      "masonry brick"
+    ],
+    "categories": [],
+    "rgb": [
+      156,
+      91,
+      72
+    ],
+    "transparency": 0,
+    "prompt": "real brick masonry with believable module, mortar joints and restrained natural variation"
+  },
+  {
+    "name": "Concrete",
+    "priority": 82,
+    "semantic": "Concrete",
+    "matchAny": [
+      "concrete",
+      "cement",
+      "cast-in-place",
+      "cast in place",
+      "cip"
+    ],
+    "categories": [],
+    "rgb": [
+      158,
+      158,
+      151
+    ],
+    "transparency": 0,
+    "prompt": "architectural concrete with believable scale, subtle pores and restrained variation; no oversized texture"
+  },
+  {
+    "name": "Stucco / plaster",
+    "priority": 80,
+    "semantic": "Stucco / plaster",
+    "matchAny": [
+      "stucco",
+      "plaster",
+      "gypsum",
+      "gwb",
+      "paint white",
+      "white paint"
+    ],
+    "categories": [],
+    "rgb": [
+      222,
+      219,
+      209
+    ],
+    "transparency": 0,
+    "prompt": "warm-white mineral plaster/stucco or painted gypsum as appropriate, fine realistic texture, matte finish"
+  },
+  {
+    "name": "Stone",
+    "priority": 80,
+    "semantic": "Stone",
+    "matchAny": [
+      "stone",
+      "limestone",
+      "travertine",
+      "marble",
+      "granite",
+      "terrazzo"
+    ],
+    "categories": [],
+    "rgb": [
+      190,
+      177,
+      151
+    ],
+    "transparency": 0,
+    "prompt": "real architectural stone at correct slab/tile scale with restrained natural veining and believable joints"
+  },
+  {
+    "name": "Tile",
+    "priority": 78,
+    "semantic": "Tile",
+    "matchAny": [
+      "tile",
+      "porcelain",
+      "ceramic"
+    ],
+    "categories": [],
+    "rgb": [
+      195,
+      191,
+      180
+    ],
+    "transparency": 0,
+    "prompt": "real porcelain/ceramic finish at plausible tile scale with clean grout joints and restrained reflection"
+  },
+  {
+    "name": "Metal",
+    "priority": 76,
+    "semantic": "Metal",
+    "matchAny": [
+      "metal",
+      "steel",
+      "aluminum",
+      "aluminium",
+      "zinc",
+      "copper",
+      "iron"
+    ],
+    "categories": [],
+    "rgb": [
+      130,
+      134,
+      136
+    ],
+    "transparency": 0,
+    "prompt": "architectural metal with physically plausible roughness/reflection and clean fabrication joints"
+  },
+  {
+    "name": "Railings default",
+    "priority": 74,
+    "semantic": "Metal railing",
+    "matchAny": [],
+    "categories": [
+      "Railings"
+    ],
+    "rgb": [
+      75,
+      78,
+      80
+    ],
+    "transparency": 0,
+    "prompt": "precise architectural metal railing, realistic finish, preserve exact picket/post/guard geometry"
+  },
+  {
+    "name": "Vegetation",
+    "priority": 70,
+    "semantic": "Vegetation",
+    "matchAny": [
+      "grass",
+      "plant",
+      "tree",
+      "shrub",
+      "vegetation",
+      "landscape"
+    ],
+    "categories": [
+      "Planting"
+    ],
+    "rgb": [
+      104,
+      132,
+      83
+    ],
+    "transparency": 0,
+    "prompt": "natural restrained vegetation, botanically plausible density and scale; do not obscure architecture"
+  },
+  {
+    "name": "Water",
+    "priority": 70,
+    "semantic": "Water",
+    "matchAny": [
+      "water",
+      "pool"
+    ],
+    "categories": [],
+    "rgb": [
+      92,
+      148,
+      170
+    ],
+    "transparency": 35,
+    "prompt": "physically plausible clean water with realistic reflection/refraction and subtle depth"
+  },
+  {
+    "name": "Fabric",
+    "priority": 65,
+    "semantic": "Fabric",
+    "matchAny": [
+      "fabric",
+      "upholstery",
+      "linen",
+      "velvet",
+      "textile"
+    ],
+    "categories": [],
+    "rgb": [
+      176,
+      164,
+      146
+    ],
+    "transparency": 0,
+    "prompt": "real upholstery/textile with believable weave scale and soft roughness"
+  },
+  {
+    "name": "Generic white finish",
+    "priority": 25,
+    "semantic": "Neutral architectural finish",
+    "matchAny": [
+      "generic",
+      "default",
+      "by category"
+    ],
+    "categories": [
+      "Walls",
+      "Floors",
+      "Roofs",
+      "Ceilings",
+      "Doors",
+      "Casework",
+      "Furniture",
+      "Generic Models"
+    ],
+    "rgb": [
+      204,
+      201,
+      192
+    ],
+    "transparency": 0,
+    "prompt": "neutral realistic architectural finish inferred from element type/name; keep restrained and physically plausible"
+  }
+]

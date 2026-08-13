@@ -1,0 +1,14 @@
+GEOMETRY COMPILER PACKAGING REFRESH — 2026-07-24
+================================================
+
+- Added a dedicated Windows application icon for the Geometry Compiler.
+- Added GeometryCompiler.exe for one-click startup of the current release.
+- Embedded the dedicated icon directly in the Windows EXE resources so Explorer,
+  the taskbar, and the application window use the Geometry Compiler identity.
+- The launcher keeps the existing first-run dependency installation and GPU/CPU
+  selection behavior by starting the validated Start Compiler.bat workflow.
+- The application window and taskbar now load GeometryCompiler.ico directly.
+- Added BUILD_STANDALONE_EXE.bat and GeometryCompiler_release.spec for a
+  reproducible self-contained Windows PyInstaller build.
+- No geometry, mapping, confidence-floor, schedule-lock, or validation logic
+  was changed by this packaging refresh.

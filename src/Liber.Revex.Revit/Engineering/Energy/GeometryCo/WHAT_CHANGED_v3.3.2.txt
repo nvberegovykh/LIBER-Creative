@@ -1,0 +1,23 @@
+OPENSTUDIO GEOMETRY COMPILER v3.3.2 — SERIALIZATION HOTFIX
+=========================================================
+
+The repair algorithm itself found and decomposed the five-sided opening correctly.
+The failure happened afterward while serializing OS:SubSurface back to OSM.
+
+OS:SubSurface field layout:
+0 Handle
+1 Name
+2 Sub Surface Type
+3 Construction
+4 Parent Surface
+5 Adjacent SubSurface
+6 View Factor to Ground
+7 Frame and Divider
+8 Multiplier
+9 Number of Vertices
+10+ Vertex coordinates
+
+v3.3.1 incorrectly started repaired coordinates at field 8. v3.3.2 starts them at
+field 10 and validates the exact saved file by reparsing it before OpenStudio runs.
+
+The fix is schema-based and independent of names such as op-132.

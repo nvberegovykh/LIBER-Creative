@@ -1,0 +1,23 @@
+OpenStudio Energy Model Geometry Compiler v4.0.1 — FINAL FIX
+================================================================
+
+1. Native exit-code-3 diagnosis is no longer discarded.
+   Full native logs and the complete staged failure folder are retained.
+
+2. Matched constructions are canonicalized generically.
+   Both sides of each matched Surface/SubSurface use the same selected physical
+   construction handle. OpenStudio performs its supported internal reversal.
+   No op-xxx, su-xxx, construction name, or project name is used in the logic.
+
+3. Mapping confidence is honest.
+   Anonymous behavior-profile confidence is separated from the confidence of the
+   old source space used to clone direct space objects. A weak source match can no
+   longer appear as a perfect 1.0 geometry match.
+
+4. Names are optional evidence, never persistent keys.
+   Handles/source IDs and geometry are primary. Learned room-label categories are
+   an optional fallback only; missing labels produce geometry matching/review.
+
+5. Failed compilations preserve everything required to repair the next issue:
+   staged Baseline/Proposed OSM, native logs, translated IDF, EnergyPlus output,
+   interim audit, mappings, and traceback.

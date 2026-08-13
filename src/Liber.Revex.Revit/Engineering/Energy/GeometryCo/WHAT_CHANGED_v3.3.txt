@@ -1,0 +1,17 @@
+WHY v3.2 PASSED A MODEL THAT ENERGYPLUS REJECTED
+================================================
+The old integrity suite checked OSM-level structure: handles, parent links, pairing,
+planarity, and schedule preservation. It did not run the complete OSM -> IDF ->
+EnergyPlus geometry path.
+
+The failed Baseline exposed two blind spots:
+1. op-132 had five vertices. OpenStudio omitted it during forward translation.
+2. Ten matched interior door pairs had physically conflicting constructions.
+
+v3.3 fixes the model before release and then validates the same path used by the
+simulation:
+- lossless opening decomposition,
+- pair-aware construction reconciliation,
+- ForwardTranslator error/warning gate,
+- EnergyPlus design-day geometry smoke test,
+- no output commit unless both Baseline and Proposed pass.

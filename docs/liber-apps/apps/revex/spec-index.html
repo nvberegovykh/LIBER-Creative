@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="dark light" />
+<title>Specifications — LIBER Apps</title>
+<link rel="stylesheet" href="styles.css?v=20260813r48" />
+</head>
+<body>
+<div id="app" class="spec-app">
+
+  <!-- ================= HEADER ================= -->
+  <header class="sp-header">
+    <button class="sp-icon-btn only-mobile" id="btn-rail" aria-label="Divisions">☰</button>
+    <div class="sp-title">
+      <strong>Specifications</strong>
+      <span class="sp-crumb" id="crumb"></span>
+    </div>
+    <div class="sp-head-actions">
+      <span class="sp-badge" id="mode-badge" title="Storage mode">…</span>
+      <button class="sp-btn sp-btn-ghost" id="btn-home">Projects</button>
+      <button class="sp-btn" id="btn-import">Import</button>
+      <button class="sp-icon-btn" id="btn-menu" aria-label="More">⋯</button>
+    </div>
+  </header>
+
+  <!-- ================= PROJECTS VIEW ================= -->
+  <section id="view-projects" class="sp-view">
+    <div class="sp-panel">
+      <div class="sp-panel-head">
+        <h2>Specification projects</h2>
+        <button class="sp-btn" id="btn-new-project">New</button>
+      </div>
+      <div id="projects-list" class="sp-cards"></div>
+      <p class="sp-empty" id="projects-empty" hidden>No specification projects yet. Create one, then batch-import your Revit schedules.</p>
+    </div>
+  </section>
+
+  <!-- ================= BOOK VIEW ================= -->
+  <section id="view-book" class="sp-view" hidden>
+    <div class="sp-layout">
+      <aside class="sp-rail" id="rail">
+        <div class="sp-rail-head">
+          <input type="search" id="rail-search" placeholder="Filter sections / items" />
+        </div>
+        <nav id="rail-tree" class="sp-tree"></nav>
+        <div class="sp-rail-foot">
+          <button class="sp-btn sp-btn-ghost sp-w" id="btn-sources">Sync sources</button>
+          <button class="sp-btn sp-btn-ghost sp-w" id="btn-inbox">Link inbox <span class="sp-pill" id="inbox-count">0</span></button>
+          <button class="sp-btn sp-btn-ghost sp-w" id="btn-history">History <span class="sp-pill" id="history-count">0</span></button>
+          <button class="sp-btn sp-btn-ghost sp-w" id="btn-export">Export</button>
+        </div>
+      </aside>
+
+      <main class="sp-main" id="main">
+        <div class="sp-toolbar">
+          <div class="sp-seg" role="group" aria-label="View">
+            <button data-view="book" class="active">Book</button>
+            <button data-view="table">Table</button>
+            <button data-view="issues">Issues <span class="sp-pill" id="issue-count">0</span></button>
+          </div>
+          <label class="sp-field">Group
+            <select id="group-by">
+              <option value="none">None</option>
+              <option value="level">Level</option>
+              <option value="group">Schedule group</option>
+              <option value="category">Category</option>
+              <option value="family">Family</option>
+              <option value="itemSection">CSI section</option>
+            </select>
+          </label>
+          <label class="sp-field">Sort
+            <select id="sort-by">
+              <option value="order">Schedule order</option>
+              <option value="label">Name</option>
+              <option value="mark">Mark / number</option>
+              <option value="qty">Quantity</option>
+              <option value="area">Area</option>
+            </select>
+          </label>
+          <label class="sp-check"><input type="checkbox" id="show-removed" /> Show removed</label>
+        </div>
+        <div id="content" class="sp-content"></div>
+      </main>
+    </div>
+  </section>
+
+  <!-- ================= ITEM DRAWER ================= -->
+  <aside id="drawer" class="sp-drawer" hidden>
+    <div class="sp-drawer-head">
+      <div>
+        <div class="sp-drawer-title" id="dr-title">Item</div>
+        <div class="sp-drawer-sub" id="dr-sub"></div>
+      </div>
+      <button class="sp-icon-btn" id="dr-close" aria-label="Close">✕</button>
+    </div>
+    <div class="sp-drawer-body" id="dr-body"></div>
+  </aside>
+
+  <div id="scrim" class="sp-scrim" hidden></div>
+
+  <!-- ================= MODAL HOST ================= -->
+  <div id="modal" class="sp-modal" hidden>
+    <div class="sp-modal-card" id="modal-card"></div>
+  </div>
+
+  <div id="toast" class="sp-toast" hidden></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
+<script src="masterformat.js"></script>
+<script src="parser.js"></script>
+<script src="store.js"></script>
+<script src="sync.js?v=20260813r48"></script>
+<script src="app.js?v=20260813r48"></script>
+</body>
+</html>

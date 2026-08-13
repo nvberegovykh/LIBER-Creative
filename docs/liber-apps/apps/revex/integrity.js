@@ -3,7 +3,7 @@
 
   const Store = root.RevexStore;
   if (!Store) return;
-  const BUILD = '20260813r48';
+  const BUILD = '20260813r49';
   const iso = () => new Date().toISOString();
   const safe = (value) => String(value || '').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || 'file';
   const docId = (value) => safe(value).replace(/\./g, '_');
@@ -44,11 +44,27 @@
     return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
   }
 
-  async function upload(projectId, area, file) {
+  Store.subscribeKind = function subscribeControlledKind(projectId, kind, callback, max = 500) {
+    if (!cloudReady() || !projectId || !kind || !this.api.onSnapshot) return () => {};
+    const f = this.api;
+    const q = f.query(library(projectId), f.where('revexKind', '==', kind), f.limit(max));
+    return f.onSnapshot(q,
+      (snap) => callback(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      (error) => console.warn(`[REVEX] ${kind} subscription`, error));
+  };
+
+  Store.subscribeLibraryFiles = function subscribeControlledLibrary(projectId, callback) {
+    if (!cloudReady() || !projectId || !this.api.onSnapshot) return () => {};
+    return this.api.onSnapshot(library(projectId),
+      (snap) => callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((row) => row.type === 'file')),
+      (error) => console.warn('[REVEX] project library subscription', error));
+  };
+
+  async function upload(projectId, area, file, immutableName = false) {
     if (!Store.fs?.storage) throw new Error('LIBER Storage is not available in this session.');
     const f = Store.api;
     const name = safe(file.name || 'file');
-    const path = `projects/${projectId}/library/revex/${area}/${Date.now()}_${name}`;
+    const path = `projects/${projectId}/library/revex/${area}/${immutableName ? name : `${Date.now()}_${name}`}`;
     const ref = f.ref(Store.fs.storage, path);
     await f.uploadBytes(ref, file, firestorePlain({ contentType: file.type || (/\.json$/i.test(name) ? 'application/json' : 'application/octet-stream') }));
     return { path, url: await f.getDownloadURL(ref), name, size: file.size };
@@ -75,7 +91,7 @@
     }
   }
 
-  async function publishSpecScheduleSources(store, specProjectId, projectId, specPush, project, storagePath, revision) {
+  async function publishSpecScheduleSources(store, specProjectId, projectId, specPush, project, storagePath, storageUrl, revision) {
     const collection = store.api.collection(store.db, 'specProjects', specProjectId, 'sources');
     const manifestRef = store.api.doc(collection, 'revex-revit');
     let previousIds = [];
@@ -97,7 +113,10 @@
         name: schedule?.schedule || 'REVEX Revit schedule',
         rev: specPush?.rev || revision,
         pushedAt: specPush?.pushedAt || iso(),
-        payload: [schedule],
+        payload: [],
+        payloadEncoding: 'revex-storage-index-v1',
+        payloadUrl: storageUrl,
+        payloadIndex: sourceIds.length - 1,
         linkedProjectId: projectId,
         sourceScheduleId: identity,
         centralDocumentUniqueId: project?.central?.documentUniqueId || null,
@@ -121,7 +140,7 @@
       rev: specPush?.rev || revision, pushedAt: specPush?.pushedAt || iso(),
       payload: [], linkedProjectId: projectId, scheduleSourceIds: sourceIds,
       scheduleCount: sourceIds.length, centralDocumentUniqueId: project?.central?.documentUniqueId || null,
-      storagePath
+      storagePath, payloadUrl: storageUrl, payloadEncoding: 'revex-storage-index-v1'
     });
     await store.api.setDoc(manifestRef, manifest, firestorePlain({ merge: false }));
     return manifest;
@@ -153,6 +172,8 @@
     const requestedProjectId = String(preferredProjectId || '').trim();
     if (!packageProjectId)
       throw new Error('project.json has no authoritative Revit project binding. Re-sync the active Revit model.');
+    if (project?.central?.bindingVersion !== 'active-revit-evidence-v1' || !String(project?.central?.identityEvidenceDigest || '').trim() || !String(project?.central?.documentUniqueId || '').trim())
+      throw new Error('project.json has no evidence-verified active Revit document binding. Re-sync the active model.');
     if (requestedProjectId && requestedProjectId !== packageProjectId)
       throw new Error(`Blocked a mixed-project publish: the open Companion selected ${requestedProjectId}, but this immutable Revit revision belongs to ${packageProjectId}.`);
 
@@ -353,7 +374,9 @@
     const printingFile = byName(files, 'printing-sets.json');
     const pdfFiles = files.filter((file) => /\.pdf$/i.test(file.name));
     const ifcFile = files.find((file) => /\.ifc$/i.test(file.name)) || null;
-    const rvxMeshFile = files.find((file) => /\.rvxmesh\.gz$/i.test(file.name)) || null;
+    const rvxMeshFile = files.find((file) => /^model\.rvxmesh\.gz$/i.test(file.name)) || null;
+    const meshManifestFile = byName(files, 'model.rvxpages.json');
+    const meshPageFiles = files.filter((file) => /^model-page-\d+\.rvxmesh\.gz$/i.test(file.name)).sort((a,b)=>a.name.localeCompare(b.name));
     const fbxFile = files.find((file) => /\.fbx$/i.test(file.name)) || null;
 
     if (!projectFile || !designFile || !viewerFile || !specFile || !integrityFile) {
@@ -366,7 +389,8 @@
     const packageBinding = resolveAtomicPackageProject(project, preferredProjectId, preferredSpecProjectId);
     const projectId = packageBinding.projectId;
     if (!ifcFile) throw new Error('This revision has no IFC authority model. Re-sync with REVEX 0.7.0 or newer.');
-    if (!rvxMeshFile) throw new Error('This revision has no exact Revit geometry stream (model.rvxmesh.gz). The BIM pointer was not advanced.');
+    if ((!meshManifestFile || !meshPageFiles.length) && !rvxMeshFile)
+      throw new Error('This revision has neither paged exact Revit geometry nor a compatible legacy geometry stream. The BIM pointer was not advanced.');
     await verifyIntegrity(files, integrity);
 
     const revision = docId(integrity?.revision || `rev_${Date.now()}`);
@@ -374,8 +398,9 @@
       projectId, revision, project, design, viewer, specPush, integrity, printingSets,
       printingDocs: pdfFiles.map((file) => ({ name: file.name, url: URL.createObjectURL(file), size: file.size })),
       ifcUrl: URL.createObjectURL(ifcFile),
-      modelUrl: URL.createObjectURL(rvxMeshFile),
-      modelFormat: 'rvxmesh-gzip',
+      modelUrl: meshManifestFile ? URL.createObjectURL(meshManifestFile) : URL.createObjectURL(rvxMeshFile),
+      modelPages: meshPageFiles.map((file,index)=>({index:index+1,name:file.name,url:URL.createObjectURL(file),bytes:file.size})),
+      modelFormat: meshManifestFile ? 'rvxmesh-gzip-pages' : 'rvxmesh-gzip',
       fallbackModelUrl: fbxFile ? URL.createObjectURL(fbxFile) : null,
       assetRevision: revision,
       modelRevision: revision,
@@ -394,10 +419,11 @@
     }
 
     const area = `revisions/${revision}`;
-    const packageFiles = [projectFile, designFile, viewerFile, specFile, integrityFile, printingFile, ifcFile, rvxMeshFile, fbxFile, ...pdfFiles].filter(Boolean);
+    const packageFiles = [projectFile, designFile, viewerFile, specFile, integrityFile, printingFile, ifcFile, meshManifestFile, rvxMeshFile, ...meshPageFiles, fbxFile, ...pdfFiles].filter(Boolean);
     const uploads = {};
-    for (const file of packageFiles) uploads[file.name] = await upload(projectId, area, file);
-    await verifyUploadedAsset(uploads[rvxMeshFile.name], rvxMeshFile, 'Exact Revit geometry');
+    for (const file of packageFiles) uploads[file.name] = await upload(projectId, area, file, true);
+    for (const file of meshPageFiles) await verifyUploadedAsset(uploads[file.name], file, `Exact Revit geometry page ${file.name}`);
+    if (rvxMeshFile) await verifyUploadedAsset(uploads[rvxMeshFile.name], rvxMeshFile, 'Exact Revit geometry');
     await verifyUploadedAsset(uploads['viewer-model.json'], viewerFile, 'BIM metadata');
     await verifyUploadedAsset(uploads['design-book.json'], designFile, 'Design Book source');
 
@@ -406,7 +432,8 @@
     if (specProjectId) {
       const source = await publishSpecScheduleSources(
         this, specProjectId, projectId, specPush, project,
-        uploads['spec-revit-push.json']?.path || null, revision);
+        uploads['spec-revit-push.json']?.path || null,
+        uploads['spec-revit-push.json']?.url || null, revision);
       specSync = { status: 'published', projectId: specProjectId, rev: source.rev, pushedAt: source.pushedAt, scheduleCount: source.scheduleCount };
     }
 
@@ -446,9 +473,10 @@
       integrity: integrity || null,
       ifcUrl: uploads[ifcFile.name]?.url || null,
       ifcPath: uploads[ifcFile.name]?.path || null,
-      modelUrl: uploads[rvxMeshFile.name]?.url || null,
-      modelPath: uploads[rvxMeshFile.name]?.path || null,
-      modelFormat: 'rvxmesh-gzip',
+      modelUrl: meshManifestFile ? uploads[meshManifestFile.name]?.url || null : uploads[rvxMeshFile?.name]?.url || null,
+      modelPath: meshManifestFile ? uploads[meshManifestFile.name]?.path || null : uploads[rvxMeshFile?.name]?.path || null,
+      modelPages: meshPageFiles.map((file,index)=>({ index:index+1, name:file.name, url:uploads[file.name]?.url||null, path:uploads[file.name]?.path||null, bytes:file.size })),
+      modelFormat: meshManifestFile ? 'rvxmesh-gzip-pages' : 'rvxmesh-gzip',
       fallbackModelUrl: fbxFile ? uploads[fbxFile.name]?.url || null : null,
       fallbackModelPath: fbxFile ? uploads[fbxFile.name]?.path || null : null,
       viewerUrl: uploads['viewer-model.json']?.url || null,
@@ -468,12 +496,14 @@
     // The current pointer is a complete immutable-revision projection. Replacing
     // it prevents missing new assets from silently retaining URLs from an older
     // revision. Older revision records and files remain append-only/offloaded.
-    await setRecord(projectId, 'revex_state', 'state', state, false);
     await setRecord(projectId, `revex_revision_${revision}`, 'revision', {
       ...state, revision, syncedAt: state.syncedAt, ifcPath: state.ifcPath, modelPath: state.modelPath,
       viewerUrl: state.viewerUrl, designUrl: state.designUrl, projectUrl: state.projectUrl,
       specPushUrl: state.specPushUrl, printingSetsUrl: state.printingSetsUrl, integrity: state.integrity, createdAt: state.syncedAt
     }, false);
+    // Publish the single current pointer last. Readers keep the prior complete
+    // revision visible until every new immutable asset and projection is ready.
+    await setRecord(projectId, 'revex_state', 'state', state, false);
     root.__revexCloudState = state;
     return { ...localPackage, ...state, cloud: true, specProjectId, printingDocs };
   };
