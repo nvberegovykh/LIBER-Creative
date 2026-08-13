@@ -563,7 +563,7 @@ try {
   Write-Step "Verify hash-locked r49 source"
   $Expected = [ordered]@{
     ".github\workflows\revex-r27-0819-engineering-release.yml" = "65c50bb6299c3bfb1fe39f10b9527c7bb126008b6acf687d9e0f9650ba269fcb"
-    ".github\scripts\verify-revex-r49.js" = "8d98a7efadb186005c2d5c4e38d530496f4a745d0e6a61e1e4c78796ee5f1c98"
+    ".github\scripts\verify-revex-r49.js" = "8e5d64ae4cd23bffc143665b0268ab2fea7dfd43262378e8e27d3bda77f37c12"
     ".github\scripts\verify-revex-r49-live-rules.js" = "8e4bf1e40eb44256dad8969849a0ac3bd91c74895492e648c07ea696503b93ae"
     ".github\scripts\patch-live-firestore-rules.js" = "8662ad8bb3a9c1090d25421538161245e534306f894839113a50a7f5ab803d2d"
     ".github\scripts\fixtures\live-firestore-base.rules" = "ba4ee3c8757dd6e745809214b2b6008e430d54dcdc585900124a38d7db6acf01"
