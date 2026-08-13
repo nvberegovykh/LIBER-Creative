@@ -1,5 +1,10 @@
 LIBER REVEX LIVE COMPANION 0.8.19
-Hosted Companion build: 20260813r42
+Hosted Companion build: 20260813r43
+
+r43 keeps Firebase calls inside the REVEX iframe realm and deploys the
+project-member Firestore access overlay. Authenticated project owners, members,
+and LIBER admins can use project content and linked Spec Book content; outsiders
+and cross-project access remain denied. Project membership fields stay protected.
 
 MODEL CONTRACT
 - Revit Fine-detail geometry is the primary BIM representation through `model.rvxmesh.gz`.

@@ -32,8 +32,16 @@
   }
 
   function getService() {
+    // REVEX loads its own Firebase service before Store.init(). Keep that
+    // service authoritative even while it is still initializing. Borrowing an
+    // already-ready parent service pairs the parent's SDK with objects created
+    // in this iframe, which Firestore correctly rejects as custom Objects.
+    if (root.firebaseService) {
+      REALM = root;
+      return root.firebaseService;
+    }
     try {
-      for (const w of [root, root.parent, root.top].filter(Boolean)) {
+      for (const w of [root.parent, root.top].filter(Boolean)) {
         if (w.firebaseService && w.firebaseService.isInitialized) {
           REALM = w;
           return w.firebaseService;
@@ -44,9 +52,15 @@
   }
 
   function getApi(fs) {
+    if (fs && fs === root.firebaseService) {
+      REALM = root;
+      if (fs.firebase?.collection) return fs.firebase;
+      if (root.firebase?.collection) return root.firebase;
+      return null;
+    }
     try {
       if (fs?.firebase?.collection) return fs.firebase;
-      for (const w of [root, root.parent, root.top].filter(Boolean)) {
+      for (const w of [root.parent, root.top].filter(Boolean)) {
         if (w.firebase?.collection) { REALM = w; return w.firebase; }
       }
     } catch (_) {}
@@ -481,7 +495,7 @@
         schema: 'liber.revex.energy-broker-request.v1',
         projectId,
         sourceRevision,
-        clientBuild: '20260812r41'
+        clientBuild: '20260813r43'
       }));
       if (!response?.ok) throw new Error(response?.message || response?.error || 'REVEX managed Energy worker did not complete.');
       return response;

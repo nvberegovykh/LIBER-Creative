@@ -1,0 +1,107 @@
+/* REVEX_PROJECT_ACCESS_R43_BEGIN
+ * Project data is collaborative inside the existing LIBER owner/member/admin
+ * boundary. This block is injected into the live database match by the r43
+ * publisher; it is deliberately not a standalone ruleset.
+ */
+function revexR43SignedIn() {
+  return request.auth != null;
+}
+
+function revexR43IsAdmin() {
+  return revexR43SignedIn()
+    && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+    && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+}
+
+function revexR43MemberOf(data) {
+  return revexR43SignedIn() && (
+    (data.keys().hasAny(['ownerId']) && data.ownerId == request.auth.uid)
+    || (data.keys().hasAny(['memberIds']) && data.memberIds is list && request.auth.uid in data.memberIds)
+  );
+}
+
+function revexR43ProjectRecordMember(projectId) {
+  return exists(/databases/$(database)/documents/projects/$(projectId))
+    && revexR43MemberOf(get(/databases/$(database)/documents/projects/$(projectId)).data);
+}
+
+function revexR43ProjectMember(projectId) {
+  return revexR43IsAdmin() || revexR43ProjectRecordMember(projectId);
+}
+
+function revexR43ProjectOwner(projectId) {
+  return revexR43SignedIn()
+    && exists(/databases/$(database)/documents/projects/$(projectId))
+    && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == request.auth.uid;
+}
+
+function revexR43LinkedProjectMember(data) {
+  return data.keys().hasAny(['linkedProjectId'])
+    && data.linkedProjectId is string
+    && revexR43ProjectRecordMember(data.linkedProjectId);
+}
+
+function revexR43SpecRecordMember(specProjectId) {
+  return exists(/databases/$(database)/documents/specProjects/$(specProjectId))
+    && (
+      revexR43MemberOf(get(/databases/$(database)/documents/specProjects/$(specProjectId)).data)
+      || revexR43LinkedProjectMember(get(/databases/$(database)/documents/specProjects/$(specProjectId)).data)
+    );
+}
+
+function revexR43SpecMember(specProjectId) {
+  return revexR43IsAdmin() || revexR43SpecRecordMember(specProjectId);
+}
+
+match /projects/{projectId} {
+  allow get: if revexR43IsAdmin() || revexR43MemberOf(resource.data);
+  allow list: if revexR43IsAdmin()
+    || (revexR43SignedIn() && resource.data.ownerId == request.auth.uid)
+    || (revexR43SignedIn() && request.auth.uid in resource.data.memberIds);
+  allow create: if revexR43IsAdmin() || (
+    revexR43MemberOf(request.resource.data)
+    && request.resource.data.ownerId == request.auth.uid
+  );
+  allow update: if revexR43IsAdmin() || (
+    revexR43MemberOf(resource.data)
+    && request.resource.data.ownerId == resource.data.ownerId
+    && request.resource.data.memberIds == resource.data.memberIds
+  );
+  allow delete: if revexR43IsAdmin() || revexR43ProjectOwner(projectId);
+
+  match /{projectCollection}/{projectDocument=**} {
+    allow read, write: if revexR43ProjectMember(projectId);
+  }
+}
+
+match /specProjects/{specProjectId} {
+  allow get: if revexR43IsAdmin()
+    || revexR43MemberOf(resource.data)
+    || revexR43LinkedProjectMember(resource.data);
+  allow list: if revexR43IsAdmin()
+    || (revexR43SignedIn() && resource.data.ownerId == request.auth.uid)
+    || (revexR43SignedIn() && request.auth.uid in resource.data.memberIds)
+    || revexR43LinkedProjectMember(resource.data);
+  allow create: if revexR43IsAdmin() || (
+    revexR43MemberOf(request.resource.data)
+    && (
+      !request.resource.data.keys().hasAny(['linkedProjectId'])
+      || request.resource.data.linkedProjectId == null
+      || revexR43LinkedProjectMember(request.resource.data)
+    )
+  );
+  allow update: if revexR43IsAdmin() || (
+    (revexR43MemberOf(resource.data) || revexR43LinkedProjectMember(resource.data))
+    && request.resource.data.ownerId == resource.data.ownerId
+    && request.resource.data.memberIds == resource.data.memberIds
+    && request.resource.data.linkedProjectId == resource.data.linkedProjectId
+  );
+  allow delete: if revexR43IsAdmin() || (
+    revexR43SignedIn() && resource.data.ownerId == request.auth.uid
+  );
+
+  match /{specCollection}/{specDocument=**} {
+    allow read, write: if revexR43SpecMember(specProjectId);
+  }
+}
+/* REVEX_PROJECT_ACCESS_R43_END */
