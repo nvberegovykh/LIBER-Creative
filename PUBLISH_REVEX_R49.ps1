@@ -29,6 +29,7 @@ $PreflightLatestPath = Join-Path $Root "REVEX-R49-PREFLIGHT.latest.json"
 $PreflightStagePath = Join-Path $StageRoot "REVEX-R49-PREFLIGHT.json"
 $CompanionSimulationReport = Join-Path $StageRoot "REVEX-R49-COMPANION-SIMULATION.json"
 $BuildBinlog = Join-Path $StageRoot "REVEX-R49-BUILD.binlog"
+$CredentialRotationMarker = Join-Path $env:LOCALAPPDATA "LIBER\REVEX\r49-firebase-cli-credential-rotated.marker"
 $Preflight = [ordered]@{
   schema = "liber.revex.release-preflight.v1"
   build = $Build
@@ -61,6 +62,17 @@ function Write-Log {
 }
 
 function Write-Step([string]$Message) { Write-Log ">> $Message" DarkCyan }
+
+function Protect-DeploymentLogs {
+  foreach ($path in @($LogPath, $LatestLogPath)) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+    $content = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)
+    $content = [regex]::Replace($content, '("(?:access_token|refresh_token|id_token)"\s*:\s*")[^"]*(")', '$1<REDACTED>$2', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    $content = [regex]::Replace($content, 'ya29\.[A-Za-z0-9._-]+', '<REDACTED_ACCESS_TOKEN>')
+    $content = [regex]::Replace($content, '1//[A-Za-z0-9._-]+', '<REDACTED_REFRESH_TOKEN>')
+    [IO.File]::WriteAllText($path, $content, [Text.UTF8Encoding]::new($false))
+  }
+}
 
 function Save-PreflightReport {
   $json = $script:Preflight | ConvertTo-Json -Depth 30
@@ -146,6 +158,42 @@ function Invoke-Captured {
   return [pscustomobject]@{ ExitCode = $code; Text = ($lines -join [Environment]::NewLine); Lines = $lines }
 }
 
+function Invoke-SecretCaptured {
+  param(
+    [Parameter(Mandatory=$true)][string]$Step,
+    [Parameter(Mandatory=$true)][string]$Command,
+    [string[]]$Arguments = @(),
+    [string]$WorkingDirectory = "",
+    [switch]$AllowFailure
+  )
+  Write-Step $Step
+  if ($WorkingDirectory) { Push-Location $WorkingDirectory }
+  $oldPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  $lines = @()
+  try {
+    & $Command @Arguments 2>&1 | ForEach-Object { $lines += [string]$_ }
+    $code = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+  } finally {
+    $ErrorActionPreference = $oldPreference
+    if ($WorkingDirectory) { Pop-Location }
+  }
+  if ($code -ne 0 -and -not $AllowFailure) { throw "$Step failed with exit code $code. Sensitive output was intentionally not logged." }
+  return [pscustomobject]@{ ExitCode = $code; Text = ($lines -join [Environment]::NewLine); Lines = $lines }
+}
+
+function Invoke-InteractiveNoLog {
+  param(
+    [Parameter(Mandatory=$true)][string]$Step,
+    [Parameter(Mandatory=$true)][string]$Command,
+    [string[]]$Arguments = @()
+  )
+  Write-Step $Step
+  & $Command @Arguments
+  $code = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+  if ($code -ne 0) { throw "$Step failed with exit code $code. Authentication output was intentionally not logged." }
+}
+
 function Install-WingetPackage([string]$Id, [string]$Label) {
   $winget = Resolve-Executable @("winget.exe", "winget")
   if (-not $winget) { throw "$Label is required and WinGet is unavailable." }
@@ -211,8 +259,10 @@ function Verify-LiveCompanion {
 
 function Verify-LiveProjectAccessRules([string]$Gcloud) {
   Write-Step "Verify live owner/member/admin Firestore access and outsider denial"
-  $token = (& $Gcloud auth print-access-token 2>$null | Select-Object -First 1)
-  if ($LASTEXITCODE -ne 0 -or -not $token) { throw "Google Cloud could not provide a bounded access token for the read-only live-rules check." }
+  $tokenResult = Invoke-SecretCaptured "Acquire bounded Google access token without logging it" $Gcloud @("auth", "print-access-token", "--quiet")
+  $token = [string]($tokenResult.Lines | Where-Object { [string]$_ -match '^[A-Za-z0-9._-]{20,}$' } | Select-Object -Last 1)
+  $token = $token.Trim()
+  if (-not $token) { throw "Google Cloud could not provide a bounded access token for the read-only live-rules check." }
   $headers = @{ Authorization = "Bearer $([string]$token)" }
   $releaseUri = "https://firebaserules.googleapis.com/v1/projects/$ProjectId/releases/cloud.firestore"
   $release = Invoke-RestMethod -Method Get -Uri $releaseUri -Headers $headers -TimeoutSec 30
@@ -322,6 +372,21 @@ try {
   if (-not $Dotnet) { Install-WingetPackage "Microsoft.DotNet.SDK.8" ".NET 8 SDK"; $Dotnet = Resolve-Executable @("dotnet.exe", "dotnet") }
   foreach ($tool in @($Node,$Npm,$Python,$Dotnet)) { if (-not $tool) { throw "A required offline-preflight tool did not become available." } }
 
+  $Firebase = Resolve-Executable @("firebase.cmd", "firebase.exe", "firebase")
+  if (-not $Firebase) {
+    Invoke-Native "Install current Firebase CLI" $Npm @("install", "--global", "firebase-tools@latest", "--no-audit", "--no-fund")
+    Refresh-ToolPath
+    $Firebase = Resolve-Executable @("firebase.cmd", "firebase.exe", "firebase")
+  }
+  if (-not $Firebase) { throw "Firebase CLI did not become available for credential cleanup." }
+  if (-not (Test-Path -LiteralPath $CredentialRotationMarker -PathType Leaf)) {
+    Invoke-SecretCaptured "Revoke the Firebase CLI credential exposed by the prior r49 diagnostic log" $Firebase @("logout") | Out-Null
+    Invoke-InteractiveNoLog "Essential Firebase reauthentication after credential revocation" $Firebase @("login")
+    New-Item -ItemType Directory -Path (Split-Path -Parent $CredentialRotationMarker) -Force | Out-Null
+    [IO.File]::WriteAllText($CredentialRotationMarker, [DateTime]::UtcNow.ToString("o"), [Text.UTF8Encoding]::new($false))
+    Write-Log "Firebase CLI credential revoked and replaced; authentication material was not written to the deployment log." Green
+  }
+
   Write-Step "Create isolated r49 offline preflight stage"
   New-Item -ItemType Directory -Path $StageSource, $StagePayload -Force | Out-Null
   Copy-SourceTree (Join-Path $Root "server\revex-energy-worker") (Join-Path $StageSource "server\revex-energy-worker")
@@ -422,16 +487,10 @@ try {
   if (-not $Gh) { Install-WingetPackage "GitHub.cli" "GitHub CLI"; $Gh = Resolve-Executable @("gh.exe", "gh") }
   $Gcloud = Resolve-Executable @("gcloud.cmd", "gcloud.exe", "gcloud")
   if (-not $Gcloud) { Install-WingetPackage "Google.CloudSDK" "Google Cloud CLI"; $Gcloud = Resolve-Executable @("gcloud.cmd", "gcloud.exe", "gcloud") }
-  $Firebase = Resolve-Executable @("firebase.cmd", "firebase.exe", "firebase")
-  if (-not $Firebase) {
-    Invoke-Native "Install current Firebase CLI" $Npm @("install", "--global", "firebase-tools@latest", "--no-audit", "--no-fund")
-    Refresh-ToolPath
-    $Firebase = Resolve-Executable @("firebase.cmd", "firebase.exe", "firebase")
-  }
   foreach ($tool in @($Git,$Gh,$Gcloud,$Firebase)) { if (-not $tool) { throw "A required publishing tool did not become available after the offline gate." } }
 
   $ghAuth = Invoke-Captured "Verify GitHub authentication" $Gh @("auth", "status", "--hostname", "github.com") -AllowFailure
-  if ($ghAuth.ExitCode -ne 0) { Invoke-Native "Essential GitHub approval" $Gh @("auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web") }
+  if ($ghAuth.ExitCode -ne 0) { Invoke-InteractiveNoLog "Essential GitHub approval" $Gh @("auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web") }
   Invoke-Native "Configure GitHub authentication for Git" $Gh @("auth", "setup-git")
 
   Invoke-Native "Clone the authoritative GitHub repository" $Gh @("repo", "clone", $GitHubRepository, $RepoRoot, "--", "--depth", "1")
@@ -479,11 +538,13 @@ try {
   } else { Write-Log "GitHub main already contains the exact r49 source; continuing idempotently." Green }
 
   $gcloudAuth = Invoke-Captured "Verify Google Cloud authentication" $Gcloud @("auth", "list", "--filter=status:ACTIVE", "--format=value(account)") -AllowFailure
-  if ($gcloudAuth.ExitCode -ne 0 -or -not $gcloudAuth.Text.Trim()) { Invoke-Native "Essential Google Cloud approval" $Gcloud @("auth", "login") }
-  $firebaseAuth = Invoke-Captured "Verify Firebase authentication" $Firebase @("login:list", "--json") -AllowFailure
-  if ($firebaseAuth.ExitCode -ne 0 -or $firebaseAuth.Text -notmatch '"user"') { Invoke-Native "Essential Firebase approval" $Firebase @("login") }
-  $projects = Invoke-Captured "Verify Firebase project access" $Firebase @("projects:list", "--json")
+  if ($gcloudAuth.ExitCode -ne 0 -or -not $gcloudAuth.Text.Trim()) { Invoke-InteractiveNoLog "Essential Google Cloud approval" $Gcloud @("auth", "login") }
+  $firebaseAuth = Invoke-SecretCaptured "Verify Firebase authentication without logging credentials" $Firebase @("login:list") -AllowFailure
+  if ($firebaseAuth.ExitCode -ne 0 -or -not $firebaseAuth.Text.Trim() -or $firebaseAuth.Text -match 'No authorized') { Invoke-InteractiveNoLog "Essential Firebase approval" $Firebase @("login") }
+  Write-Log "Firebase authentication verified without logging credentials." Green
+  $projects = Invoke-SecretCaptured "Verify Firebase project access without logging account data" $Firebase @("projects:list", "--json")
   if ($projects.Text -notmatch [regex]::Escape($ProjectId)) { throw "The authenticated Firebase account cannot access $ProjectId." }
+  Write-Log "Firebase project access verified: $ProjectId" Green
   $deployer = (Invoke-Captured "Resolve publisher identity" $Gcloud @("auth", "list", "--filter=status:ACTIVE", "--format=value(account)")).Text.Trim().Split([Environment]::NewLine)[0]
   if (-not $deployer) { throw "Google Cloud did not identify the active publisher." }
   $deployerMember = if ($deployer.EndsWith('.gserviceaccount.com')) { "serviceAccount:$deployer" } else { "user:$deployer" }
@@ -606,6 +667,7 @@ try {
   $script:Preflight["publicationFinishedAt"] = [DateTime]::UtcNow.ToString("o")
   Save-PreflightReport
   Write-Log "Reopen Revit 2026 and run each sync once from the intended active document. The only workflow approval is the modal current-revision COMcheck authorization; it cannot approve later revisions."
+  Protect-DeploymentLogs
   if (-not $NoPause) { try { Read-Host "Press Enter to close" | Out-Null } catch { } }
 } catch {
   $failure = $_
@@ -625,6 +687,7 @@ try {
   Write-Log $failure.Exception.Message Red
   Write-Log "No local production server was created. Rerunning PUBLISH_REVEX_R49.cmd is safe."
   Write-Log "Exact log: $LogPath"
+  Protect-DeploymentLogs
   if (-not $NoPause) { try { Read-Host "Press Enter to close" | Out-Null } catch { } }
   exit 1
 }
