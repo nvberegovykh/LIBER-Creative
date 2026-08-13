@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '20260812r39';
+  const VERSION = '20260812r41';
   const LIMIT = 200;
   const entries = [];
   const native = () => window.chrome?.webview?.postMessage;
