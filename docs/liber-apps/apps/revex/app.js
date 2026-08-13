@@ -38,7 +38,7 @@ window.__revexState = state;
 function storeCall(name, args = [], fallback = null) {
   const fn = Store?.[name];
   if (typeof fn !== 'function') {
-    console.warn(`[REVEX] Store.${name} unavailable; continuing with fallback.`, { build: '20260813r45' });
+    console.warn(`[REVEX] Store.${name} unavailable; continuing with fallback.`, { build: '20260813r46' });
     return Promise.resolve(fallback);
   }
   try { return Promise.resolve(fn.apply(Store, args)); }
@@ -528,6 +528,16 @@ function normalizeDesignSource(data, viewerData) {
   return formDesignFallback(viewerData) || data || null;
 }
 
+function assertRevisionAssets(cloudState, revision) {
+  if (!cloudState || cloudState.schema !== 'liber.revex.cloud-state.v3') return;
+  if (String(cloudState.latestRevision || '') !== String(revision) ||
+      String(cloudState.assetRevision || '') !== String(revision) ||
+      String(cloudState.modelRevision || '') !== String(revision))
+    throw new Error(`BIM revision ${revision} has mismatched geometry assets; the previous active revision remains isolated.`);
+  if (!cloudState.viewerUrl || !cloudState.designUrl || !cloudState.modelUrl || cloudState.modelFormat !== 'rvxmesh-gzip')
+    throw new Error(`BIM revision ${revision} is incomplete; the active revision pointer was not accepted.`);
+}
+
 function mergedItem(item) {
   return { ...item, ...(state.designEdits.get(item.id) || {}) };
 }
@@ -690,6 +700,7 @@ async function saveDesign(event) {
     description: $('#design-description').value.trim(),
     source: $('#design-source').value.trim(),
     images: item.images || [],
+    sourceRevision: state.cloudState?.revision || state.loadingRevision || null,
     sourceSnapshot: { id: item.id, label: item.label, chapterTitle: item.chapterTitle, revit: item.revit || null }
   };
   try {
@@ -1057,7 +1068,9 @@ async function loadCloudState(cloudState,localPackage=null){
   if(!cloudState&&!localPackage){revisionHydrationToken++;state.viewerData=null;state.designData=null;state.designEdits=new Map();state.chapterEdits=new Map();state.issues=[];state.library=[];state.historyEvents=[];state.bimOverlays=new Map();state.derivedPlans=[];renderAll();setSync('No Revit sync yet','quiet');return;}
   const revision=localPackage?.revision||cloudState?.revision||'unknown';
   if(state.loadingRevision===revision&&!localPackage&&state.viewerData&&state.designData)return;
+  assertRevisionAssets(cloudState,revision);
   state.loadingRevision=revision;setSync('Loading project revision…','busy');
+  activeBimViewer()?.beginRevision?.(revision);
   const viewerPromise=localPackage?.viewer?Promise.resolve(localPackage.viewer):(cloudState?.viewerUrl?Store.fetchJson(cloudState.viewerUrl):Promise.resolve(null));
   const designPromise=localPackage?.design?Promise.resolve(localPackage.design):(cloudState?.designUrl?Store.fetchJson(cloudState.designUrl):Promise.resolve(null));
   const [viewerResult,designResult]=await Promise.allSettled([viewerPromise,designPromise]);

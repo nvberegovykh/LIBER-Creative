@@ -24,8 +24,8 @@ function rejectText(source, pattern, label) {
 }
 
 for (const [name, source] of Object.entries({ app, viewer, store, integrity, html })) {
-  requireText(source, '20260813r45', `${name} build pin`);
-  rejectText(source, /20260813r4[123]/, `${name} stale build pin`);
+  requireText(source, '20260813r46', `${name} build pin`);
+  rejectText(source, /20260813r4[1-5]/, `${name} stale build pin`);
 }
 
 requireText(history, 'window.__revexViewerR26Instance', 'history current viewer binding');
@@ -37,17 +37,31 @@ requireText(viewer, "this.visibilityMode==='hidden-only'?hidden:!hidden&&!overla
 requireText(viewer, 'revexBaseInstanceMatrices', 'instance matrix preservation');
 requireText(viewer, 'if(!visible)scale.set(0,0,0)', 'per-instance hide implementation');
 requireText(viewer, 'this.instanceSlots.get(key)?.length', 'instanced transform eligibility');
+requireText(viewer, 'beginRevision(revision)', 'prior geometry teardown on revision advance');
+requireText(viewer, 'rows.filter(r=>!this.isCoarseCurtainHost(r))', 'coarse curtain host suppression');
+requireText(viewer, 'missingCurtainDetails', 'curtain detail coverage check');
+requireText(viewer, 'curtainFallback:true', 'curtain panel and mullion compatibility fallback');
 requireText(store, "modular.getFunctions(fs.app, 'us-central1')", 'direct broker region');
 requireText(store, "modular.httpsCallable(functions, 'runRevexEnergy', { timeout: 3600000 })", 'bounded managed retry');
 requireText(store, 'throw energyCallableError(error)', 'broker error propagation');
 requireText(store, "this.api.doc(this.db, 'projects', projectId, 'revex', 'engineering')", 'legacy Engineering recovery read');
 requireText(store, '`revex_engineering_revision_${revision}`', 'legacy Engineering canonical revision mirror');
-requireText(store, "clientBuild: '20260813r45'", 'r45 managed broker client');
+requireText(store, "clientBuild: '20260813r46'", 'r46 managed broker client');
 requireText(sharedFirebase, "if (name === 'runRevexEnergy')", 'shared Firebase dedicated Energy path');
 requireText(sharedFirebase, "this.functionsByRegion?.['us-central1']", 'shared Firebase Energy region lock');
 requireText(sharedFirebase, "{ timeout: 3600000 }", 'shared Firebase Energy timeout');
 requireText(sharedFirebase, "if (name === 'runRevexEnergy' ||", 'shared Firebase Energy error propagation');
 requireText(integrity, "firestorePlain({ merge", 'same-realm Firestore options');
+requireText(integrity, "const rvxMeshFile = files.find", 'exact REVEX mesh selection');
+requireText(integrity, "modelFormat: 'rvxmesh-gzip'", 'exact geometry activation');
+requireText(integrity, "schema: 'liber.revex.cloud-state.v3'", 'atomic revision state schema');
+requireText(integrity, "await setRecord(projectId, 'revex_state', 'state', state, false)", 'complete current pointer replacement');
+requireText(integrity, "await verifyUploadedAsset(uploads[rvxMeshFile.name]", 'geometry readability before activation');
+requireText(integrity, "'design-item-version'", 'append-only Design Book item versions');
+requireText(integrity, "'design-chapter-version'", 'append-only Design Book chapter versions');
+requireText(app, 'assertRevisionAssets(cloudState,revision)', 'revision asset identity guard');
+requireText(app, 'activeBimViewer()?.beginRevision?.(revision)', 'revision-isolated viewer load');
+requireText(app, 'sourceRevision: state.cloudState?.revision || state.loadingRevision || null', 'Design Book overlay revision provenance');
 requireText(energy, 'const resultComplete = resultSource === currentSource', 'failed-result retry eligibility');
 requireText(energy, 'autoRetryRevision !== currentSource', 'single automatic retry per page session');
 requireText(energy, "['filing-output', 'Official filing outputs']", 'official filing output group');
@@ -72,6 +86,16 @@ const cases = [
 for (const [mode, overlay, expected] of cases) {
   if (visible(mode, overlay) !== expected) throw new Error(`visibility truth table failed for ${mode} ${JSON.stringify(overlay)}`);
 }
+
+const revisionAccepted = (state) => state.schema !== 'liber.revex.cloud-state.v3' || (
+  state.revision === state.latestRevision && state.revision === state.assetRevision &&
+  state.revision === state.modelRevision && state.modelFormat === 'rvxmesh-gzip' &&
+  Boolean(state.modelUrl && state.viewerUrl && state.designUrl)
+);
+if (!revisionAccepted({ schema: 'liber.revex.cloud-state.v3', revision: 'rev_new', latestRevision: 'rev_new', assetRevision: 'rev_new', modelRevision: 'rev_new', modelFormat: 'rvxmesh-gzip', modelUrl: 'mesh', viewerUrl: 'viewer', designUrl: 'design' }))
+  throw new Error('complete latest revision was rejected');
+if (revisionAccepted({ schema: 'liber.revex.cloud-state.v3', revision: 'rev_new', latestRevision: 'rev_new', assetRevision: 'rev_new', modelRevision: 'rev_old', modelFormat: 'rvxmesh-gzip', modelUrl: 'old-mesh', viewerUrl: 'viewer', designUrl: 'design' }))
+  throw new Error('mixed old/new geometry revision was accepted');
 
 async function verifyLegacyRevisionRecovery() {
   const sandbox = { window: {}, console, setTimeout, clearTimeout };
@@ -102,10 +126,14 @@ async function verifyLegacyRevisionRecovery() {
 }
 
 verifyLegacyRevisionRecovery().then(() => {
-  console.log('REVEX r45 Companion QA passed:', {
+  console.log('REVEX r46 Companion QA passed:', {
     currentViewerBinding: true,
     hideAndInverseShow: true,
     instancedVisibility: true,
+    latestRevisionIsolation: true,
+    exactGeometryActivation: true,
+    curtainPanelsAndMullions: true,
+    designOverlayVersions: true,
     directManagedRetry: true,
     legacyRevisionRecovery: true,
     officialBackstopAndOsmOutputs: true,

@@ -554,7 +554,7 @@
         schema: 'liber.revex.energy-broker-request.v1',
         projectId,
         sourceRevision,
-        clientBuild: '20260813r45'
+        clientBuild: '20260813r46'
       }));
       if (!response?.ok) throw new Error(response?.message || response?.error || 'REVEX managed Energy worker did not complete.');
       return response;

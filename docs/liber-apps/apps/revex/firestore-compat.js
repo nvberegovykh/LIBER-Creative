@@ -6,7 +6,7 @@
   const clone=(value)=>JSON.parse(JSON.stringify(value===undefined?null:value));
   const firestorePlain=(value)=>typeof Store.toFirestorePlain==='function'?Store.toFirestorePlain(value):clone(value);
   const post=(stage,detail={})=>{
-    try{ root.chrome?.webview?.postMessage({type:'liber:revex-sync-progress',stage,build:'20260813r45',...detail}); }catch(_){ }
+    try{ root.chrome?.webview?.postMessage({type:'liber:revex-sync-progress',stage,build:'20260813r46',...detail}); }catch(_){ }
     console.log('[REVEX publish]',stage,detail);
   };
 

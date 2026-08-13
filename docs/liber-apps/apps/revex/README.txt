@@ -1,5 +1,5 @@
 LIBER REVEX LIVE COMPANION 0.8.19
-Hosted Companion build: 20260813r45
+Hosted Companion build: 20260813r46
 
 r45 preserves the r43 project access boundary and completes element-level BIM
 visibility, inverse Show hidden filtering, legacy Engineering revision recovery,
