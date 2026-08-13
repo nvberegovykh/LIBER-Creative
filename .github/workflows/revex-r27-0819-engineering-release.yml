@@ -39,15 +39,15 @@ jobs:
           fetch_drive '1kvRhwCEPWzUyc-0kK8Q0t2KemyJtX4p0' 'index.html' '42fd0370522d7db7edd6bb6a0ccd1f0d61c52b6ac57402febcac305c5aef29b3'
           fetch_drive '1ELpV95mdDzLI8XWemMNSphXAVll19fko' 'app.js' 'dd2905f0d5983b1473edd0c8ef865c695251ac311ab77831cf441120cec06b04'
           fetch_drive '10cAgG1uDl7MAcuaUsgXEz3VdJ6AfTojd' 'store.js' 'd7f28db9273136bc20fa5a273b1966d783bcf24ada4d244132143aa669a04990'
-          fetch_drive '1YHqaZXp-lcLgj2RrjkjUp7HUhmjPEYgl' 'viewer-r26.js' '41a5d87563f4ccde9c689587113eb3df54402398ff0bc7d6c6b08f97b360268c'
+          fetch_drive '1YHqaZXp-lcLgj2RrjkjUp7HUhmjPEYgl' 'viewer-r26.js' '56b2c0e09edeab686b126eaa6bcc3f3075b8d11739f81a151b6743f7decd9846'
           fetch_drive '1KgyV2nBDLCQTzC1T8fKium5aR7ifu4vp' 'styles.css' 'dff7473320088a9be0a8d68e26f69c32a2630ac5080191c0fe40ad9923e68f07'
           fetch_drive '10MXqTaH_3ETuWSH8oQQVQcEplYPMM2CS' 'integrity.js' 'b1082874bf8d8934f1c18a84cb448f2cf855ddccdfb99575ba4339ddbada8ac2'
           fetch_drive '1UR21DaYg2EGfbwXuenavLuDgjmmxIzB7' 'ui-integrity.js' 'c2b546d8e92b40ae0d9e5e319c33903380d3988afb77041f6fef12caf44d3d2e'
-          fetch_drive '1zHfAtG7ccQZaSPN1zQ-ZLyT_v29v3Lck' 'diagnostics-r29.js' '6e506657b16c2059e36e3db2987b4649b14c7a87e56a362b3566907745cf4c83'
+          fetch_drive '1zHfAtG7ccQZaSPN1zQ-ZLyT_v29v3Lck' 'diagnostics-r29.js' '1b3484a1e3a8eda8d59c583375a84feaf79738333d4ccc5fff0b41c7d621585b'
           fetch_drive '1lCABFvA380DYNyqK5W7vuAKMDTYJifdE' 'energy-r27.js' 'f2a938adafd5f0b58edfb87bf66777696a2670a62facab0331bf687188328d58'
           fetch_drive '1g58NvJ7aN3WBEupBe0gc8UIvlWPaJ54p' 'shell-integrity.js' '09074405256c4dd7e52eb3ee76fe1a49b4ec4c0488567e772603ea570594a3e6'
           fetch_drive '1v52VjG7kJz-WzQI38iCevHzsKR14hp7B' 'manifest.webmanifest' '456477c0adfc9c8df81a80065f6ad2b68f56ed7de1d7c30b181be107a36a6e9c'
-          fetch_drive '1ZoNuM2FzbzCcsq2e24IIvdrjEVeaIwGj' 'README.txt' 'dbaa1c3d08bd1f8e83215ead31d4bba9e64b37ea0c8f1349d5db5260063d42bf'
+          fetch_drive '1ZoNuM2FzbzCcsq2e24IIvdrjEVeaIwGj' 'README.txt' 'b480f08f1ff011a5fa4062ccabc93d469be6bcca68541b34b3ccae00a81920df'
 
       - name: Canonical r41 static QA
         shell: bash
@@ -106,6 +106,9 @@ jobs:
           # BIM: exact instance picking + Family Type/Instance hierarchy + real six-face section box.
           grep -q 'revexElementIds' /tmp/revex-r41/viewer-r26.js
           grep -q 'instanceId' /tmp/revex-r41/viewer-r26.js
+          grep -q 'activateViewerFallback' /tmp/revex-r41/viewer-r26.js
+          grep -q '__revexViewerR26Unavailable' /tmp/revex-r41/viewer-r26.js
+          grep -q 'VIEWER_INIT' /tmp/revex-r41/viewer-r26.js
           grep -q 'Family type' /tmp/revex-r41/app.js
           grep -q 'section-left' /tmp/revex-r41/index.html
           grep -q 'section-right' /tmp/revex-r41/index.html
