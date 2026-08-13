@@ -1,4 +1,4 @@
-name: REVEX 0.8.19 r47 validation
+name: REVEX 0.8.19 r49 final validation
 
 on:
   workflow_dispatch:
@@ -9,7 +9,10 @@ on:
       - '.github/scripts/**'
       - 'firebase/**'
       - 'docs/liber-apps/apps/revex/**'
-      - 'docs/liber-apps/js/firebase-service.js'
+      - 'src/Liber.Revex.Revit/**'
+      - 'server/revex-energy-worker/**'
+      - 'server/firebase-functions/**'
+      - 'PUBLISH_REVEX_R49.*'
   push:
     branches: [main]
     paths:
@@ -17,19 +20,23 @@ on:
       - '.github/scripts/**'
       - 'firebase/**'
       - 'docs/liber-apps/apps/revex/**'
-      - 'docs/liber-apps/js/firebase-service.js'
+      - 'src/Liber.Revex.Revit/**'
+      - 'server/revex-energy-worker/**'
+      - 'server/firebase-functions/**'
+      - 'PUBLISH_REVEX_R49.*'
 
 permissions:
   contents: read
 
 concurrency:
-  group: revex-0819-r47-validation-${{ github.ref }}
+  group: revex-r49-final-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  validate:
+  final-gate:
+    name: REVEX r49 final gate
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout exact candidate
         uses: actions/checkout@v4
@@ -39,7 +46,7 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Static and contract QA
+      - name: Recorded-Revit, syntax, project-access and broker dependency QA
         shell: bash
         run: |
           set -euo pipefail
@@ -48,10 +55,28 @@ jobs:
             cp "$APP/$file" "/tmp/${file%.js}.mjs"
             node --check "/tmp/${file%.js}.mjs"
           done
-          python -m json.tool "$APP/manifest.webmanifest" >/dev/null
-          node .github/scripts/verify-revex-r47-companion.js
-          node .github/scripts/verify-revex-r43-firestore.js
-          node .github/scripts/verify-revex-r43-rules-patcher.js
+          node --check server/firebase-functions/index.js
+          node --check server/firebase-functions/project-access.js
+          node --check .github/scripts/verify-revex-r49-live-rules.js
+          node .github/scripts/verify-revex-r49.js --report /tmp/revex-r49-simulation.json
+          node server/firebase-functions/verify-project-access-r49.js
+          npm --prefix server/firebase-functions ci --omit=dev --no-audit --no-fund
+          npm --prefix server/firebase-functions audit --omit=dev --audit-level=moderate
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Current-project Energy and worker contract QA
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check \
+            -r src/Liber.Revex.Revit/Engineering/Energy/requirements.txt \
+            -r server/revex-energy-worker/requirements-server.txt
+          python src/Liber.Revex.Revit/Engineering/Energy/verify_revex_r49_energy.py
+          python server/revex-energy-worker/verify_revex_r49_worker.py
 
       - name: Set up Java 21
         uses: actions/setup-java@v4
@@ -59,20 +84,21 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Project-access Firestore emulator QA
+      - name: Exact project-access rules behavior QA
         shell: bash
         timeout-minutes: 8
         run: |
           set -euo pipefail
+          RULES='firebase/r49-live-rules'
+          npm --prefix "$RULES" ci --no-audit --no-fund
+          npm --prefix "$RULES" audit --audit-level=high
+          npm install --global firebase-tools@15.27.0 --no-audit --no-fund
           node .github/scripts/patch-live-firestore-rules.js \
             .github/scripts/fixtures/live-firestore-base.rules \
             firebase/revex-project-access-r43.rules \
-            firebase/r43-emulator/firestore.rules
-          mkdir -p /tmp/revex-rules-test
-          cd /tmp/revex-rules-test
-          npm init -y >/dev/null
-          npm install --no-audit --no-fund firebase-tools@latest @firebase/rules-unit-testing@latest firebase@latest
-          cd "$GITHUB_WORKSPACE/firebase/r43-emulator"
-          /tmp/revex-rules-test/node_modules/.bin/firebase emulators:exec \
-            --only firestore --project demo-revex-r43 \
-            "NODE_PATH=/tmp/revex-rules-test/node_modules node $GITHUB_WORKSPACE/.github/scripts/verify-revex-r43-rules.js"
+            "$RULES/firestore.rules"
+          cd "$RULES"
+          NODE_PATH="$GITHUB_WORKSPACE/$RULES/node_modules" \
+            firebase emulators:exec \
+              --only firestore --project demo-revex-r49 \
+              "node $GITHUB_WORKSPACE/.github/scripts/verify-revex-r49-live-rules.js"

@@ -1,0 +1,12 @@
+{
+  "name": "revex-r49-live-rules-gate",
+  "version": "0.8.19-r49",
+  "private": true,
+  "engines": {
+    "node": "22"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "5.0.1",
+    "firebase": "12.17.1"
+  }
+}

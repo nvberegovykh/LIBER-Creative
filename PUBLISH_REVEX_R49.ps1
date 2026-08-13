@@ -16,6 +16,7 @@ $Build = "20260813r49"
 $StageRoot = Join-Path $env:LOCALAPPDATA "LIBER\REVEX-R49-Publish\$RunId"
 $StageSource = Join-Path $StageRoot "source"
 $StageFunctions = Join-Path $StageSource "server\firebase-functions"
+$StageRules = Join-Path $StageRoot "live-rules-gate"
 $StagePayload = Join-Path $StageRoot "addin-payload"
 $RepoRoot = Join-Path $StageRoot "LIBER-Creative"
 $InstalledRoot = Join-Path $env:LOCALAPPDATA "LIBER\REVEX\App"
@@ -154,6 +155,11 @@ function Refresh-ToolPath {
     "$env:ProgramFiles\nodejs", "$env:APPDATA\npm",
     "$env:LOCALAPPDATA\Programs\Python\Python312", "$env:LOCALAPPDATA\Programs\Python\Python312\Scripts"
   ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+  try {
+    $paths += @(Get-ChildItem -LiteralPath "$env:ProgramFiles\Eclipse Adoptium" -Directory -Filter "jdk-21*" -ErrorAction SilentlyContinue |
+      ForEach-Object { Join-Path $_.FullName "bin" } |
+      Where-Object { Test-Path -LiteralPath $_ -PathType Container })
+  } catch { }
   foreach ($path in $paths) {
     if (($env:Path -split ';') -notcontains $path) { $env:Path += ";$path" }
   }
@@ -281,6 +287,106 @@ function Ensure-ServiceAccount([string]$Gcloud, [string]$Email, [string]$Display
   Invoke-Native "Create service identity $Email" $Gcloud @("iam", "service-accounts", "create", $accountId, "--project=$ProjectId", "--display-name=$DisplayName", "--quiet")
 }
 
+function Get-IamRoleMembers([object]$Policy, [string]$Role) {
+  $bindings = if ($null -ne $Policy -and $Policy.PSObject.Properties.Name -contains "bindings") { @($Policy.bindings) } else { @() }
+  return @($bindings |
+    Where-Object { [string]$_.role -eq $Role } |
+    ForEach-Object { @($_.members) } |
+    ForEach-Object { [string]$_ } |
+    Where-Object { $_ } |
+    Sort-Object -Unique)
+}
+
+function Remove-ProjectLevelWorkerInvokerGrants([string]$Gcloud, [string]$ProjectNumber, [string]$BrokerSa) {
+  Write-Step "Remove project-wide Cloud Run invocation grants that would bypass the dedicated worker policy"
+  $policy = ((Invoke-Captured "Inspect project-level Cloud Run invocation policy" $Gcloud @("projects", "get-iam-policy", $ProjectId, "--format=json")).Text | ConvertFrom-Json)
+  $invokerBindings = @($policy.bindings | Where-Object { [string]$_.role -eq "roles/run.invoker" })
+  $conditional = @($invokerBindings | Where-Object { $null -ne $_.condition })
+  if ($conditional.Count) {
+    throw "Project-level conditional roles/run.invoker bindings exist. REVEX will not guess how to remove a project-wide conditional grant; remove or scope it explicitly before publishing."
+  }
+  $members = @(Get-IamRoleMembers $policy "roles/run.invoker")
+  $knownLegacyMembers = @(
+    "serviceAccount:$ProjectNumber-compute@developer.gserviceaccount.com",
+    "serviceAccount:$BrokerSa",
+    "allUsers",
+    "allAuthenticatedUsers"
+  )
+  $unknown = @($members | Where-Object { $_ -notin $knownLegacyMembers })
+  if ($unknown.Count) {
+    throw "Unexpected project-wide Cloud Run invoker grants would reach every Cloud Run service and cannot be removed safely by REVEX: $($unknown -join ', ')"
+  }
+  foreach ($member in $members) {
+    Invoke-Native "Remove project-wide Cloud Run invoker $member" $Gcloud @(
+      "projects", "remove-iam-policy-binding", $ProjectId,
+      "--member=$member", "--role=roles/run.invoker", "--quiet"
+    )
+  }
+  $verified = ((Invoke-Captured "Verify no project-wide Cloud Run invocation grants remain" $Gcloud @("projects", "get-iam-policy", $ProjectId, "--format=json")).Text | ConvertFrom-Json)
+  $remaining = @(Get-IamRoleMembers $verified "roles/run.invoker")
+  if ($remaining.Count) {
+    throw "Project-wide Cloud Run invoker grants remain after cleanup: $($remaining -join ', ')"
+  }
+  Write-Log "Project-wide roles/run.invoker bindings are absent; the dedicated worker service policy can now be evaluated without project-level bypass grants." Green
+}
+
+function Test-BrokerIdentityWorkerInvocation(
+  [string]$Gcloud,
+  [string]$BrokerSa,
+  [string]$DeployerMember,
+  [string]$WorkerUrl
+) {
+  Write-Step "Prove the deployed broker identity can invoke the private r49 worker"
+  $saPolicy = ((Invoke-Captured "Inspect broker token-creation policy" $Gcloud @(
+    "iam", "service-accounts", "get-iam-policy", $BrokerSa, "--project=$ProjectId", "--format=json"
+  )).Text | ConvertFrom-Json)
+  $tokenCreators = @(Get-IamRoleMembers $saPolicy "roles/iam.serviceAccountTokenCreator")
+  $temporaryGrant = $DeployerMember -notin $tokenCreators
+  $identityToken = $null
+  try {
+    if ($temporaryGrant) {
+      Invoke-Native "Grant temporary broker-token test authority" $Gcloud @(
+        "iam", "service-accounts", "add-iam-policy-binding", $BrokerSa,
+        "--project=$ProjectId", "--member=$DeployerMember",
+        "--role=roles/iam.serviceAccountTokenCreator", "--quiet"
+      )
+    }
+    $tokenResult = Invoke-SecretCaptured "Mint one bounded broker identity token without logging it" $Gcloud @(
+      "auth", "print-identity-token",
+      "--impersonate-service-account=$BrokerSa",
+      "--audiences=$WorkerUrl",
+      "--include-email",
+      "--quiet"
+    )
+    $identityToken = [string]($tokenResult.Lines |
+      Where-Object { [string]$_ -match '^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$' } |
+      Select-Object -Last 1)
+    if (-not $identityToken) { throw "Google Cloud did not mint the bounded broker identity token." }
+    $response = Invoke-WebRequest -UseBasicParsing -Uri ($WorkerUrl + "/healthz") -Headers @{ Authorization = "Bearer $identityToken" } -TimeoutSec 20
+    if ([int]$response.StatusCode -ne 200) { throw "The broker identity health probe returned HTTP $($response.StatusCode)." }
+    $health = $response.Content | ConvertFrom-Json
+    if ($health.ok -ne $true -or [string]$health.version -ne $ReleaseTag -or [string]$health.service -ne "REVEX Energy Worker") {
+      throw "The broker identity reached an unexpected worker payload."
+    }
+    Add-PreflightCheckpoint "BROKER_TO_PRIVATE_WORKER_SMOKE" ([ordered]@{
+      authenticatedIdentity = $BrokerSa
+      workerVersion = [string]$health.version
+      healthStatus = 200
+      temporaryTokenCreatorGrantRemoved = $temporaryGrant
+    })
+    Write-Log "Authenticated broker-identity invocation succeeded against the exact private r49 worker." Green
+  } finally {
+    $identityToken = $null
+    if ($temporaryGrant) {
+      Invoke-Native "Remove temporary broker-token test authority" $Gcloud @(
+        "iam", "service-accounts", "remove-iam-policy-binding", $BrokerSa,
+        "--project=$ProjectId", "--member=$DeployerMember",
+        "--role=roles/iam.serviceAccountTokenCreator", "--quiet"
+      )
+    }
+  }
+}
+
 function Verify-LiveCompanion {
   for ($attempt = 1; $attempt -le 60; $attempt++) {
     Write-Log "Live r49 verification attempt $attempt/60 (three bounded requests)."
@@ -397,7 +503,11 @@ function Verify-LiveProjectAccessRules([string]$Gcloud) {
   if ($null -eq $ruleset) {
     throw "Firebase Rules API did not become readable after bounded propagation retry (HTTP $lastStatus): $lastMessage"
   }
-  $source = (@($ruleset.source.files) | ForEach-Object { [string]$_.content }) -join "`n"
+  $rulesFiles = @($ruleset.source.files)
+  if ($rulesFiles.Count -ne 1) {
+    throw "The active cloud.firestore release contains $($rulesFiles.Count) source files; REVEX requires one exact source file for deterministic behavioral verification."
+  }
+  $source = [string]$rulesFiles[0].content
   $beginCount = ([regex]::Matches($source, 'REVEX_PROJECT_ACCESS_R43_BEGIN')).Count
   $endCount = ([regex]::Matches($source, 'REVEX_PROJECT_ACCESS_R43_END')).Count
   $required = @(
@@ -411,9 +521,24 @@ function Verify-LiveProjectAccessRules([string]$Gcloud) {
   if ($beginCount -ne 1 -or $endCount -ne 1 -or $missing.Count -gt 0) {
     throw "The active Firestore rules do not preserve the verified owner/member/admin project boundary. Missing: $($missing -join ', ')"
   }
-  Write-Log "Live Firestore access verified: owner + ordinary member + LIBER admin; outsider/cross-project access denied; member ACL escalation denied." Green
+  $exactRulesPath = Join-Path $StageRules "firestore.rules"
+  [IO.File]::WriteAllText($exactRulesPath, $source, [Text.UTF8Encoding]::new($false))
+  $previousNodePath = $env:NODE_PATH
+  try {
+    $env:NODE_PATH = Join-Path $StageRules "node_modules"
+    Invoke-Native "Behaviorally test the exact active Firestore ruleset" $Firebase @(
+      "emulators:exec", "--only", "firestore", "--project", "demo-revex-r49",
+      "node verify-revex-r49-live-rules.js"
+    ) -WorkingDirectory $StageRules
+  } finally {
+    $env:NODE_PATH = $previousNodePath
+  }
+  $rulesSha256 = (Get-FileHash -LiteralPath $exactRulesPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  Write-Log "Exact live Firestore rules passed owner/member/admin CRUD, list/filter, project-library, Design Book, Spec Book, interaction, outsider, anonymous, cross-project and ACL-escalation behavior tests." Green
   Add-PreflightCheckpoint "LIVE_PROJECT_ACCESS_RULES" ([ordered]@{
     ruleset = $rulesetName
+    exactRulesSha256 = $rulesSha256
+    behavioralEmulator = $true
     ownerFunctionalAccess = $true
     ordinaryProjectMemberFunctionalAccess = $true
     liberAdminFunctionalAccess = $true
@@ -437,7 +562,11 @@ try {
 
   Write-Step "Verify hash-locked r49 source"
   $Expected = [ordered]@{
-    ".github\scripts\verify-revex-r49.js" = "8d98a7efadb186005c2d5c4e38d530496f4a745d0e6a61e1e4c78796ee5f1c98"
+    ".github\workflows\revex-r27-0819-engineering-release.yml" = "65c50bb6299c3bfb1fe39f10b9527c7bb126008b6acf687d9e0f9650ba269fcb"
+    ".github\scripts\verify-revex-r49.js" = "8e5d64ae4cd23bffc143665b0268ab2fea7dfd43262378e8e27d3bda77f37c12"
+    ".github\scripts\verify-revex-r49-live-rules.js" = "8e4bf1e40eb44256dad8969849a0ac3bd91c74895492e648c07ea696503b93ae"
+    ".github\scripts\patch-live-firestore-rules.js" = "8662ad8bb3a9c1090d25421538161245e534306f894839113a50a7f5ab803d2d"
+    ".github\scripts\fixtures\live-firestore-base.rules" = "ba4ee3c8757dd6e745809214b2b6008e430d54dcdc585900124a38d7db6acf01"
     "src\Liber.Revex.Revit\Liber.Revex.Revit.csproj" = "4cca18fe25c936d7bbde564549a7765baeacfede08835fc76a033d2f812dabfa"
     "src\Liber.Revex.Revit\App.cs" = "da962524e69247fdc48d73cc10cb9b8998f465df5f551b09ada35c989f38a276"
     "src\Liber.Revex.Revit\Models\RevitRequest.cs" = "54173d73c948d29a1c77360f696d3f27212a43bd4fc584e7f6f9ff8d81f8d359"
@@ -487,6 +616,10 @@ try {
     "server\firebase-functions\package-lock.json" = "4f3fc020ae4a4552d2de948ba7a90c94744c8ba20d0218f9eff7fb21acaa1c98"
     "server\firebase-functions\firebase.json" = "e4ede752096eb1da43d1ec097dd3aca7f420efe85edd913fb392005150f6df96"
     "firebase\revex-project-access-r43.rules" = "17ac55200677dcdc8a77556bbf3ea1d7dca2ab216f32c737f19c8c6b576f6ebe"
+    "firebase\r49-live-rules\package.json" = "2c795fafb75527997dbe5791bd3c695a9d5dc4257a7ee8a769a8e5ac6eee41aa"
+    "firebase\r49-live-rules\package-lock.json" = "789bbcc5a9716e95a1924ffbe9ad19131deacb6a53376d1f352914b67b27f7d0"
+    "firebase\r49-live-rules\firebase.json" = "6285cd269cfb42419e2f9c9f03a0f2c16f41198831c36bea941cb3f1f7b93bb3"
+    "firebase\r49-live-rules\.gitignore" = "8bbd5e0e7c8f650b9fd6ca3a4bde39fedde690a639965b0e3b46cf33d040c20a"
   }
   foreach ($entry in $Expected.GetEnumerator()) { Assert-SourceHash $entry.Key $entry.Value }
 
@@ -498,15 +631,20 @@ try {
   if (-not $Python) { Install-WingetPackage "Python.Python.3.12" "Python 3.12"; $Python = Resolve-Executable @("py.exe", "python.exe", "py", "python") }
   $Dotnet = Resolve-Executable @("dotnet.exe", "dotnet")
   if (-not $Dotnet) { Install-WingetPackage "Microsoft.DotNet.SDK.8" ".NET 8 SDK"; $Dotnet = Resolve-Executable @("dotnet.exe", "dotnet") }
-  foreach ($tool in @($Node,$Npm,$Python,$Dotnet)) { if (-not $tool) { throw "A required offline-preflight tool did not become available." } }
+  $Java = Resolve-Executable @("java.exe", "java")
+  if (-not $Java) { Install-WingetPackage "EclipseAdoptium.Temurin.21.JDK" "Java 21"; $Java = Resolve-Executable @("java.exe", "java") }
+  foreach ($tool in @($Node,$Npm,$Python,$Dotnet,$Java)) { if (-not $tool) { throw "A required offline-preflight tool did not become available." } }
 
   $Firebase = Resolve-Executable @("firebase.cmd", "firebase.exe", "firebase")
-  if (-not $Firebase) {
-    Invoke-Native "Install current Firebase CLI" $Npm @("install", "--global", "firebase-tools@latest", "--no-audit", "--no-fund")
+  $firebaseVersion = if ($Firebase) { (Invoke-Captured "Verify pinned Firebase CLI version" $Firebase @("--version") -AllowFailure).Text.Trim() } else { "" }
+  if (-not $Firebase -or $firebaseVersion -ne "15.27.0") {
+    Invoke-Native "Install pinned Firebase CLI 15.27.0" $Npm @("install", "--global", "firebase-tools@15.27.0", "--no-audit", "--no-fund")
     Refresh-ToolPath
     $Firebase = Resolve-Executable @("firebase.cmd", "firebase.exe", "firebase")
   }
   if (-not $Firebase) { throw "Firebase CLI did not become available for credential cleanup." }
+  $firebaseVersion = (Invoke-Captured "Confirm Firebase CLI 15.27.0" $Firebase @("--version")).Text.Trim()
+  if ($firebaseVersion -ne "15.27.0") { throw "Firebase CLI is not the hash-locked release-tool version (found $firebaseVersion)." }
   if (-not (Test-Path -LiteralPath $CredentialRotationMarker -PathType Leaf)) {
     $firebaseRefreshToken = Get-FirebaseRefreshTokenForRotation $Firebase
     $revocationState = Revoke-GoogleOAuthToken $firebaseRefreshToken
@@ -523,10 +661,37 @@ try {
   }
 
   Write-Step "Create isolated r49 offline preflight stage"
-  New-Item -ItemType Directory -Path $StageSource, $StagePayload -Force | Out-Null
+  New-Item -ItemType Directory -Path $StageSource, $StagePayload, $StageRules -Force | Out-Null
   Copy-SourceTree (Join-Path $Root "server\revex-energy-worker") (Join-Path $StageSource "server\revex-energy-worker")
   Copy-SourceTree (Join-Path $Root "server\firebase-functions") $StageFunctions
   Copy-SourceTree (Join-Path $Root "src\Liber.Revex.Revit\Engineering\Energy") (Join-Path $StageSource "src\Liber.Revex.Revit\Engineering\Energy")
+  Copy-SourceTree (Join-Path $Root "firebase\r49-live-rules") $StageRules
+  Copy-Item -LiteralPath (Join-Path $Root ".github\scripts\verify-revex-r49-live-rules.js") -Destination (Join-Path $StageRules "verify-revex-r49-live-rules.js") -Force
+  Invoke-Native "Install pinned Firebase Rules emulator dependencies" $Npm @("ci", "--no-audit", "--no-fund") -WorkingDirectory $StageRules
+  Invoke-Native "Reject high or critical Firebase Rules gate dependency advisories" $Npm @("audit", "--audit-level=high") -WorkingDirectory $StageRules
+  Invoke-Native "Prepare representative preserved project-access rules" $Node @(
+    ".github\scripts\patch-live-firestore-rules.js",
+    ".github\scripts\fixtures\live-firestore-base.rules",
+    "firebase\revex-project-access-r43.rules",
+    (Join-Path $StageRules "firestore.rules")
+  ) -WorkingDirectory $Root
+  $previousNodePath = $env:NODE_PATH
+  try {
+    $env:NODE_PATH = Join-Path $StageRules "node_modules"
+    Invoke-Native "Run offline owner/member/admin and outsider Firestore behavior gate" $Firebase @(
+      "emulators:exec", "--only", "firestore", "--project", "demo-revex-r49",
+      "node verify-revex-r49-live-rules.js"
+    ) -WorkingDirectory $StageRules
+  } finally {
+    $env:NODE_PATH = $previousNodePath
+  }
+  Add-PreflightCheckpoint "FIRESTORE_BEHAVIOR_GATE" ([ordered]@{
+    pinnedDependencies = $true
+    representativePreservedRules = $true
+    ownerMemberAdminFunctionalParity = $true
+    outsiderAnonymousCrossProjectDenied = $true
+    memberAclEscalationDenied = $true
+  })
 
   Invoke-Native "Simulate recorded-Revit BIM, Books, viewer and managed-Energy handoff" $Node @(".github\scripts\verify-revex-r49.js", "--report", $CompanionSimulationReport) -WorkingDirectory $Root
   $companionSimulation = Get-Content -LiteralPath $CompanionSimulationReport -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -562,7 +727,7 @@ try {
 
   $projectFile = Join-Path $Root "src\Liber.Revex.Revit\Liber.Revex.Revit.csproj"
   Invoke-Native "Restore locked .NET dependencies" $Dotnet @("restore", $projectFile)
-  Invoke-Native "Compile REVEX r49 against Revit 2026 (full binlog retained)" $Dotnet @("build", $projectFile, "-c", "Release", "--no-restore", "-nologo", "-clp:ErrorsOnly;Summary", "-bl:$BuildBinlog", "-p:RevitInstallDir=$RevitDir", "-o", $StagePayload)
+  Invoke-Native "Compile REVEX r49 against Revit 2026 (warnings, errors and full binlog retained)" $Dotnet @("build", $projectFile, "-c", "Release", "--no-restore", "-nologo", "-clp:WarningsOnly;ErrorsOnly;Summary", "-bl:$BuildBinlog", "-p:RevitInstallDir=$RevitDir", "-o", $StagePayload)
   foreach ($relative in @("Liber.Revex.Revit.dll", "Microsoft.Web.WebView2.Core.dll", "Engineering\Energy\revex_energy_pipeline.py", "Engineering\Energy\verify_revex_r49_energy.py", "Engineering\Companion\native-managed-energy-bridge.js")) {
     if (-not (Test-Path -LiteralPath (Join-Path $StagePayload $relative) -PathType Leaf)) { throw "Compiled r49 add-in payload is incomplete: $relative" }
   }
@@ -575,6 +740,7 @@ try {
     sha256 = $compiledDllHash
     payload = $StagePayload
     fullBuildLog = $BuildBinlog
+    compilerWarningsVisibleInPublisherLog = $true
   })
 
   $VenvRoot = Join-Path $StageRoot ".venv"
@@ -637,11 +803,28 @@ try {
   Copy-SourceTree (Join-Path $Root "server\firebase-functions") (Join-Path $RepoRoot "server\firebase-functions")
   New-Item -ItemType Directory -Path (Join-Path $RepoRoot "firebase") -Force | Out-Null
   Copy-Item -LiteralPath (Join-Path $Root "firebase\revex-project-access-r43.rules") -Destination (Join-Path $RepoRoot "firebase\revex-project-access-r43.rules") -Force
+  Copy-SourceTree (Join-Path $Root "firebase\r49-live-rules") (Join-Path $RepoRoot "firebase\r49-live-rules")
   New-Item -ItemType Directory -Path (Join-Path $RepoRoot ".github\scripts") -Force | Out-Null
   Copy-Item -LiteralPath (Join-Path $Root ".github\scripts\verify-revex-r49.js") -Destination (Join-Path $RepoRoot ".github\scripts\verify-revex-r49.js") -Force
+  Copy-Item -LiteralPath (Join-Path $Root ".github\scripts\verify-revex-r49-live-rules.js") -Destination (Join-Path $RepoRoot ".github\scripts\verify-revex-r49-live-rules.js") -Force
+  Copy-Item -LiteralPath (Join-Path $Root ".github\scripts\patch-live-firestore-rules.js") -Destination (Join-Path $RepoRoot ".github\scripts\patch-live-firestore-rules.js") -Force
+  New-Item -ItemType Directory -Path (Join-Path $RepoRoot ".github\scripts\fixtures") -Force | Out-Null
+  Copy-Item -LiteralPath (Join-Path $Root ".github\scripts\fixtures\live-firestore-base.rules") -Destination (Join-Path $RepoRoot ".github\scripts\fixtures\live-firestore-base.rules") -Force
+  New-Item -ItemType Directory -Path (Join-Path $RepoRoot ".github\workflows") -Force | Out-Null
+  Copy-Item -LiteralPath (Join-Path $Root ".github\workflows\revex-r27-0819-engineering-release.yml") -Destination (Join-Path $RepoRoot ".github\workflows\revex-r27-0819-engineering-release.yml") -Force
   Copy-Item -LiteralPath (Join-Path $Root "PUBLISH_REVEX_R49.ps1") -Destination (Join-Path $RepoRoot "PUBLISH_REVEX_R49.ps1") -Force
   Copy-Item -LiteralPath (Join-Path $Root "PUBLISH_REVEX_R49.cmd") -Destination (Join-Path $RepoRoot "PUBLISH_REVEX_R49.cmd") -Force
-  Invoke-Native "Stage only the r49 release" $Git @("add", "--", "docs/liber-apps/apps/revex", "src/Liber.Revex.Revit", "server/revex-energy-worker", "server/firebase-functions", "firebase/revex-project-access-r43.rules", ".github/scripts/verify-revex-r49.js", "PUBLISH_REVEX_R49.ps1", "PUBLISH_REVEX_R49.cmd") -WorkingDirectory $RepoRoot
+  Invoke-Native "Stage only the r49 release" $Git @("add", "--",
+    "docs/liber-apps/apps/revex", "src/Liber.Revex.Revit",
+    "server/revex-energy-worker", "server/firebase-functions",
+    "firebase/revex-project-access-r43.rules", "firebase/r49-live-rules",
+    ".github/scripts/verify-revex-r49.js",
+    ".github/scripts/verify-revex-r49-live-rules.js",
+    ".github/scripts/patch-live-firestore-rules.js",
+    ".github/scripts/fixtures/live-firestore-base.rules",
+    ".github/workflows/revex-r27-0819-engineering-release.yml",
+    "PUBLISH_REVEX_R49.ps1", "PUBLISH_REVEX_R49.cmd"
+  ) -WorkingDirectory $RepoRoot
   $staged = Invoke-Captured "Inspect exact staged r49 publication diff" $Git @("diff", "--cached", "--name-only") -WorkingDirectory $RepoRoot
   if ($staged.Text.Trim()) {
     $login = (Invoke-Captured "Resolve GitHub release identity" $Gh @("api", "user", "--jq", ".login")).Text.Trim()
@@ -651,25 +834,31 @@ try {
     Invoke-Native "Commit REVEX r49" $Git @("commit", "-m", "REVEX 0.8.19 r49: finalize active-document sync and managed Energy chain") -WorkingDirectory $RepoRoot
     Invoke-Native "Push r49 release branch" $Git @("push", "--set-upstream", "origin", $branch) -WorkingDirectory $RepoRoot
     $pr = (Invoke-Captured "Open r49 publication PR" $Gh @("pr", "create", "--repo", $GitHubRepository, "--base", "main", "--head", $branch, "--title", "REVEX 0.8.19 r49: final active-document and Energy chain", "--body", "Hash-locked r49: active-document project binding, progressive paged BIM, reversible visibility, native schedules, fullscreen Design Book images, and strict managed Energy outputs with per-revision COMcheck consent.") -WorkingDirectory $RepoRoot).Text.Trim().Split([Environment]::NewLine)[-1]
-    $merge = Invoke-Captured "Merge r49 publication PR" $Gh @("pr", "merge", $pr, "--repo", $GitHubRepository, "--squash", "--delete-branch") -WorkingDirectory $RepoRoot -AllowFailure
-    if ($merge.ExitCode -ne 0) {
-      Write-Log "Required GitHub checks are pending; bounded polling started." Yellow
-      $headSha = (Invoke-Captured "Resolve r49 release commit" $Git @("rev-parse", "HEAD") -WorkingDirectory $RepoRoot).Text.Trim()
-      for ($attempt = 1; $attempt -le 80; $attempt++) {
-        $checks = Invoke-Captured "GitHub check status $attempt/80" $Gh @("api", "repos/$GitHubRepository/commits/$headSha/check-runs") -AllowFailure
-        if ($checks.ExitCode -eq 0) {
-          $json = $checks.Text | ConvertFrom-Json
-          $runs = @($json.check_runs)
-          $failed = @($runs | Where-Object { $_.status -eq 'completed' -and $_.conclusion -notin @('success','neutral','skipped') })
-          $pending = @($runs | Where-Object { $_.status -ne 'completed' })
-          if ($failed.Count) { throw "GitHub rejected r49: " + (($failed | ForEach-Object { "$($_.name)=$($_.conclusion)" }) -join ', ') }
-          if ($runs.Count -gt 0 -and $pending.Count -eq 0) { break }
-          if ($runs.Count -eq 0 -and $attempt -ge 4) { break }
+    Write-Log "The r49 PR cannot merge until its named final gate is present and successful." Yellow
+    $headSha = (Invoke-Captured "Resolve r49 release commit" $Git @("rev-parse", "HEAD") -WorkingDirectory $RepoRoot).Text.Trim()
+    $requiredCheck = "REVEX r49 final gate"
+    $checksPassed = $false
+    for ($attempt = 1; $attempt -le 80; $attempt++) {
+      $checks = Invoke-Captured "GitHub check status $attempt/80" $Gh @("api", "repos/$GitHubRepository/commits/$headSha/check-runs") -AllowFailure
+      if ($checks.ExitCode -eq 0) {
+        $json = $checks.Text | ConvertFrom-Json
+        $runs = @($json.check_runs)
+        $failed = @($runs | Where-Object { $_.status -eq 'completed' -and $_.conclusion -notin @('success','neutral','skipped') })
+        if ($failed.Count) {
+          throw "GitHub rejected r49: " + (($failed | ForEach-Object { "$($_.name)=$($_.conclusion)" }) -join ', ')
         }
-        Start-Sleep -Seconds 15
+        $required = @($runs | Where-Object { [string]$_.name -eq $requiredCheck })
+        if ($required.Count -eq 1 -and [string]$required[0].status -eq "completed" -and [string]$required[0].conclusion -eq "success") {
+          $checksPassed = $true
+          break
+        }
       }
-      Invoke-Native "Merge verified r49 publication PR" $Gh @("pr", "merge", $pr, "--repo", $GitHubRepository, "--squash", "--delete-branch") -WorkingDirectory $RepoRoot
+      Start-Sleep -Seconds 15
     }
+    if (-not $checksPassed) {
+      throw "GitHub never reported the required successful '$requiredCheck' check for commit $headSha; the r49 PR was intentionally left unmerged."
+    }
+    Invoke-Native "Merge check-verified r49 publication PR" $Gh @("pr", "merge", $pr, "--repo", $GitHubRepository, "--squash", "--delete-branch") -WorkingDirectory $RepoRoot
   } else {
     Write-Log "GitHub main already contains the exact staged r49 content; working-tree line-ending noise is ignored and publication continues idempotently." Green
   }
@@ -700,6 +889,7 @@ try {
   Add-ProjectRole $Gcloud "serviceAccount:$WorkerSa" "roles/aiplatform.user" "Grant worker managed T/Z/EN page scan access"
   Add-ProjectRole $Gcloud "serviceAccount:$BrokerSa" "roles/datastore.user" "Grant broker project-data access"
   $ProjectNumber = (Invoke-Captured "Resolve Google Cloud project number" $Gcloud @("projects", "describe", $ProjectId, "--format=value(projectNumber)")).Text.Trim()
+  Remove-ProjectLevelWorkerInvokerGrants $Gcloud $ProjectNumber $BrokerSa
   $CloudBuildSa = (Invoke-Captured "Resolve actual Cloud Build identity" $Gcloud @("builds", "get-default-service-account", "--project=$ProjectId", "--format=value(serviceAccountEmail)")).Text.Trim().Split('/')[-1]
   Add-ProjectRole $Gcloud "serviceAccount:$CloudBuildSa" "roles/cloudbuild.builds.builder" "Grant Cloud Build its builder role"
   Add-ProjectRole $Gcloud "serviceAccount:$CloudBuildSa" "roles/artifactregistry.writer" "Grant Cloud Build image-push access"
@@ -732,6 +922,10 @@ try {
   $WorkerUrl = (Invoke-Captured "Resolve deployed worker URL" $Gcloud @("run", "services", "describe", $Service, "--project=$ProjectId", "--region=$Region", "--format=value(status.url)")).Text.Trim()
   if (-not $WorkerUrl) { throw "Cloud Run did not expose the private r49 worker URL." }
   $policy = ((Invoke-Captured "Inspect private worker invocation policy" $Gcloud @("run", "services", "get-iam-policy", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
+  $conditionalWorkerInvokers = @($policy.bindings | Where-Object { [string]$_.role -eq "roles/run.invoker" -and $null -ne $_.condition })
+  if ($conditionalWorkerInvokers.Count) {
+    throw "The dedicated worker has conditional roles/run.invoker bindings. REVEX will not remove or reinterpret conditional worker access automatically."
+  }
   foreach ($binding in @($policy.bindings | Where-Object { $_.role -eq 'roles/run.invoker' })) {
     foreach ($member in @($binding.members)) {
       if ([string]$member -ne "serviceAccount:$BrokerSa") { Invoke-Native "Remove non-broker worker invoker $member" $Gcloud @("run", "services", "remove-iam-policy-binding", $Service, "--project=$ProjectId", "--region=$Region", "--member=$member", "--role=roles/run.invoker", "--quiet") }
@@ -750,8 +944,10 @@ try {
   } catch {
     $status = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
     if ($status -notin @(401,403,404)) { throw }
-    Write-Log "Private worker correctly denied or concealed the unauthenticated health probe ($status); exact invoker policy is broker-only." Green
+    Write-Log "Private worker correctly denied or concealed the unauthenticated health probe ($status)." Green
   }
+  Test-BrokerIdentityWorkerInvocation $Gcloud $BrokerSa $deployerMember $WorkerUrl
+  Write-Log "The broker service account is the sole dedicated runtime invoker binding for this worker. Project administrators retain administrative authority by design." Green
   $runState = ((Invoke-Captured "Verify ready r49 Cloud Run revision" $Gcloud @("run", "services", "describe", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
   $deployedImage = [string]$runState.spec.template.spec.containers[0].image
   $ready = @($runState.status.conditions | Where-Object { $_.type -eq 'Ready' -and [string]$_.status -eq 'True' }).Count -gt 0
