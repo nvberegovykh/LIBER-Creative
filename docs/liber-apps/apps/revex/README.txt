@@ -1,10 +1,10 @@
 LIBER REVEX LIVE COMPANION 0.8.19
-Hosted Companion build: 20260813r43
+Hosted Companion build: 20260813r44
 
-r43 keeps Firebase calls inside the REVEX iframe realm and deploys the
-project-member Firestore access overlay. Authenticated project owners, members,
-and LIBER admins can use project content and linked Spec Book content; outsiders
-and cross-project access remain denied. Project membership fields stay protected.
+r44 preserves the r43 project access boundary and completes element-level BIM
+visibility, inverse Show hidden filtering, managed Energy retry diagnostics, and
+current-project Z/EN filing identity. Authenticated project owners, members, and
+LIBER admins can use project content; outsiders remain denied.
 
 MODEL CONTRACT
 - Revit Fine-detail geometry is the primary BIM representation through `model.rvxmesh.gz`.
@@ -27,7 +27,7 @@ SPEC / ENERGY CONTRACT
 - Revit Engineering exposes the controlled ENERGY SYNC TO COMPANION workflow; downstream processing continues in the top-level Energy workspace.
 - Energy evidence and results are bound to the active REVEX Project ID; a mismatched project is rejected.
 - Private Engineering/Energy metadata uses the existing project-library authorization boundary; immutable evidence files remain in their revision-scoped Storage prefix and the broker rejects paths outside it.
-- Applicant/modeler identity and professional seal are not collected by REVEX and remain blank in prepared filing forms.
+- Current project identity is populated only from immutable Revit Z pages; current model facts come from EN pages. Applicant/modeler fields remain blank and professional execution is never fabricated.
 - Downstream Energy processing has no Revit writeback; only the Revit-side Energy Sync may create/fix Spaces, EADM, and EN/ENERGY tags before evidence publication.
 
 FIRESTORE COMPATIBILITY

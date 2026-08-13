@@ -1,4 +1,4 @@
-import './diagnostics-r29.js?v=20260812r41';
+import './diagnostics-r29.js?v=20260813r44';
 
 (function(root){
   'use strict';
@@ -109,7 +109,7 @@ import './diagnostics-r29.js?v=20260812r41';
       const job=await Store.runEnergyServer(id,revision),result=await Store.getEnergyResult(id);
       if(result)renderResult(result);
       const complete=String(result?.manifest?.status||job?.status||'').toUpperCase()==='COMPLETE';
-      setStatus(complete?'Managed Energy package complete. EN-1 is prepared with applicant/modeler/signature/seal intentionally blank.':(result?.manifest?.error||job?.message||'Managed Energy worker returned a reviewable result.'),complete?'good':'bad');
+      setStatus(complete?'Managed Energy package complete. Current project identity came from Revit Z pages; applicant and modeler remain blank.':(result?.manifest?.error||job?.message||'Managed Energy worker returned a reviewable result.'),complete?'good':'bad');
     }catch(error){setStatus(error?.message||'Managed REVEX Energy server failed.','bad')}
   }
 

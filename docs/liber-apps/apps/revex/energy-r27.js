@@ -7,6 +7,7 @@ let resultState = null;
 let sourceBusy = false;
 let resultBusy = false;
 let serverBusy = false;
+let autoRetryRevision = '';
 let lastSourceRevision = '';
 let lastResultRevision = '';
 const ENERGY_HARD_STOP = 0.80;
@@ -151,7 +152,14 @@ async function runManagedServerForSource() {
     lastResultRevision = resultState?.revision || resultState?.manifest?.resultRevision || '';
     renderResult();
     const complete = String(resultState?.manifest?.status || job?.status || '').toUpperCase() === 'COMPLETE';
-    setRun(complete ? 'Managed Energy package complete. EN-1 is prepared with identity/signature/seal fields intentionally blank.' : (resultState?.manifest?.error || job?.message || 'Managed Energy worker returned a reviewable result.'), complete ? 'good' : 'bad');
+    const failedStage = resultState?.manifest?.failureContext?.failedStage || job?.details?.stage || '';
+    const blocked = resultState?.manifest?.error || job?.message || 'Managed Energy worker returned a reviewable result.';
+    setRun(
+      complete
+        ? 'Managed Energy package complete. Current project identity came from Revit Z pages; applicant and modeler fields remain blank.'
+        : `${failedStage ? `${failedStage}: ` : ''}${blocked}`,
+      complete ? 'good' : 'bad'
+    );
   } catch (error) {
     setRun(error?.message || 'Managed REVEX Energy server failed.', 'bad');
   } finally { serverBusy = false; }
@@ -178,7 +186,6 @@ function renderResult() {
     ['compiled-model', 'Compiled OSM models'],
     ['original-model', 'Original Revit-derived OSM'],
     ['source-evidence', 'Source evidence'],
-    ['reference-only', 'Approved references'],
     ['diagnostic', 'Diagnostics'],
   ];
   const byKind = new Map(groups.map(([kind]) => [kind, []]));
@@ -258,7 +265,11 @@ async function hydrate() {
   renderResult();
   const currentSource = String(sourceState?.revision || sourceState?.manifest?.revision || '').trim();
   const resultSource = String(resultState?.manifest?.sourceEngineeringRevision || '').trim();
-  if (sourceState?.cloud && currentSource && resultSource !== currentSource) setTimeout(() => { void runManagedServerForSource(); }, 0);
+  const resultComplete = resultSource === currentSource && String(resultState?.manifest?.status || '').toUpperCase() === 'COMPLETE';
+  if (sourceState?.cloud && currentSource && !resultComplete && autoRetryRevision !== currentSource) {
+    autoRetryRevision = currentSource;
+    setTimeout(() => { void runManagedServerForSource(); }, 0);
+  }
 }
 
 const sourceInput = $('#revex-energy-sync-upload');
