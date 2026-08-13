@@ -1,4 +1,4 @@
-import './diagnostics-r29.js?v=20260813r44';
+import './diagnostics-r29.js?v=20260813r45';
 
 (function(root){
   'use strict';
@@ -105,11 +105,11 @@ import './diagnostics-r29.js?v=20260813r44';
     const id=projectId(),revision=String(source?.revision||source?.manifest?.revision||'').trim();
     if(!id||!revision||!source?.cloud||!publishable(source.manifest))return;
     try{
-      setStatus('Managed REVEX Energy server: GeometryCo → Baseline/Proposed → OpenStudio/EnergyPlus → reports → EN-1…','busy');
+      setStatus('Managed REVEX Energy server: GeometryCo → compiled Baseline/Proposed OSM → OpenStudio/EnergyPlus → official Backstop COMcheck → EN-1…','busy');
       const job=await Store.runEnergyServer(id,revision),result=await Store.getEnergyResult(id);
       if(result)renderResult(result);
       const complete=String(result?.manifest?.status||job?.status||'').toUpperCase()==='COMPLETE';
-      setStatus(complete?'Managed Energy package complete. Current project identity came from Revit Z pages; applicant and modeler remain blank.':(result?.manifest?.error||job?.message||'Managed Energy worker returned a reviewable result.'),complete?'good':'bad');
+      setStatus(complete?'Managed Energy package complete with compiled OSMs, official Backstop COMcheck report, and EN-1. Current project identity came from Revit Z pages; applicant and modeler remain blank.':(result?.manifest?.error||job?.message||'Managed Energy worker returned a reviewable result.'),complete?'good':'bad');
     }catch(error){setStatus(error?.message||'Managed REVEX Energy server failed.','bad')}
   }
 

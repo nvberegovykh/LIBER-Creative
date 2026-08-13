@@ -517,8 +517,33 @@
       if (!this.isCloud()) {
         try { return JSON.parse(localStorage.getItem(`liber.revex.engineering.${projectId}`) || 'null'); } catch (_) { return null; }
       }
-      const snap = await this.api.getDoc(this.api.doc(this.db, 'projects', projectId, 'library', ENGINEERING_CURRENT_ID));
-      return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+      const canonicalRef = this.api.doc(this.db, 'projects', projectId, 'library', ENGINEERING_CURRENT_ID);
+      const snap = await this.api.getDoc(canonicalRef);
+      if (snap.exists()) return { id: snap.id, ...snap.data() };
+
+      // r41-r44 native bridges wrote the immutable Engineering state through
+      // the legacy compatibility collection. Recover that exact revision and
+      // mirror it into the canonical REVEX library so an already-published
+      // Engineering Sync can resume after a page refresh without another
+      // Revit export.
+      const legacyCurrent = this.api.doc(this.db, 'projects', projectId, 'revex', 'engineering');
+      const legacySnap = await this.api.getDoc(legacyCurrent);
+      if (!legacySnap.exists()) return null;
+      const legacy = plain(legacySnap.data() || {});
+      const recoveredRevision = String(legacy.revision || legacy.manifest?.revision || '').trim();
+      if (!recoveredRevision) throw new Error('Recovered Engineering evidence has no immutable revision.');
+      const revision = docId(recoveredRevision);
+      const at = iso();
+      const currentRecord = revexRecord('engineering', { ...legacy, cloud: true }, at);
+      const revisionRecord = revexRecord('engineering-revision', { ...legacy, revision, cloud: true, immutable: true }, at);
+      await this.api.setDoc(canonicalRef, currentRecord, plain({ merge: false }));
+      await this.api.setDoc(
+        this.api.doc(this.db, 'projects', projectId, 'library', `revex_engineering_revision_${revision}`),
+        revisionRecord,
+        plain({ merge: false })
+      );
+      console.info('[REVEX] recovered legacy Engineering revision', { projectId, revision });
+      return { id: ENGINEERING_CURRENT_ID, ...currentRecord };
     },
 
     async runEnergyServer(projectId, sourceRevision) {
@@ -529,7 +554,7 @@
         schema: 'liber.revex.energy-broker-request.v1',
         projectId,
         sourceRevision,
-        clientBuild: '20260813r44'
+        clientBuild: '20260813r45'
       }));
       if (!response?.ok) throw new Error(response?.message || response?.error || 'REVEX managed Energy worker did not complete.');
       return response;

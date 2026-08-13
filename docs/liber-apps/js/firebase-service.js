@@ -1330,6 +1330,25 @@ class FirebaseService {
     async callFunction(name, payload = {}) {
         try {
             await this.waitForInit();
+            // REVEX Energy is a single long-running, regional callable. Do not send it
+            // through the shared multi-region compatibility loop below: that loop is
+            // intentionally best-effort for legacy UI helpers and suppresses failures.
+            // Energy must preserve the exact Firebase HttpsError so the managed bridge
+            // can show the failing broker/worker stage instead of returning null.
+            if (name === 'runRevexEnergy') {
+                const user = this.auth?.currentUser || null;
+                if (!user) throw new Error('Sign in to REVEX before running Energy.');
+                const modular = window.firebaseModular;
+                const functions = this.functionsByRegion?.['us-central1'] ||
+                    (modular?.getFunctions && this.app ? modular.getFunctions(this.app, 'us-central1') : null);
+                if (!modular?.httpsCallable || !functions)
+                    throw new Error('REVEX managed Energy broker is unavailable in this session.');
+                const callable = modular.httpsCallable(functions, name, { timeout: 3600000 });
+                const response = await callable(payload);
+                if (!response || response.data == null)
+                    throw new Error('REVEX managed Energy broker returned no response.');
+                return response.data;
+            }
             if (name === 'saveFcmToken' || name === 'saveSwitchToken'){
                 const user = this.auth?.currentUser || null;
                 if (!user) return null;
@@ -1432,7 +1451,7 @@ class FirebaseService {
                 return null;
             }
             console.warn('Callable function failed:', name, e?.message || e);
-            if (name === 'sendProjectRespondEmail' || name === 'approveProject' || name === 'ensureProjectChat' || name === 'inviteProjectMemberByEmail' || name === 'removeProjectMember' || name === 'submitProjectRequest' || name === 'submitProjectReview' || name === 'deleteProjectReview' || name === 'adminDeleteUser') throw e;
+            if (name === 'runRevexEnergy' || name === 'sendProjectRespondEmail' || name === 'approveProject' || name === 'ensureProjectChat' || name === 'inviteProjectMemberByEmail' || name === 'removeProjectMember' || name === 'submitProjectRequest' || name === 'submitProjectReview' || name === 'deleteProjectReview' || name === 'adminDeleteUser') throw e;
             return null;
         }
     }

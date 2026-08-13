@@ -145,7 +145,7 @@ async function runManagedServerForSource() {
     return;
   }
   serverBusy = true;
-  setRun('Managed REVEX Energy server: GeometryCo → Baseline/Proposed → OpenStudio/EnergyPlus → reports → EN-1…', 'busy');
+  setRun('Managed REVEX Energy server: GeometryCo → compiled Baseline/Proposed OSM → OpenStudio/EnergyPlus → official Backstop COMcheck → EN-1…', 'busy');
   try {
     const job = await Store.runEnergyServer(id, revision);
     resultState = await Store.getEnergyResult(id);
@@ -156,7 +156,7 @@ async function runManagedServerForSource() {
     const blocked = resultState?.manifest?.error || job?.message || 'Managed Energy worker returned a reviewable result.';
     setRun(
       complete
-        ? 'Managed Energy package complete. Current project identity came from Revit Z pages; applicant and modeler fields remain blank.'
+        ? 'Managed Energy package complete: compiled OSMs, simulations, EN-1, and the official Backstop COMcheck report are ready. Current project identity came from Revit Z pages; applicant and modeler fields remain blank.'
         : `${failedStage ? `${failedStage}: ` : ''}${blocked}`,
       complete ? 'good' : 'bad'
     );
@@ -170,7 +170,7 @@ function renderResult() {
   const artifacts = $('#energy-artifacts');
   if (!resultState?.manifest) {
     summary.textContent = 'No result yet.';
-    artifacts.innerHTML = '<div class="energy-empty">The Baseline/Proposed review package and filing PDFs will appear here.</div>';
+    artifacts.innerHTML = '<div class="energy-empty">Compiled Baseline/Proposed OSMs, simulations, EN-1, and the official Backstop COMcheck report will appear here.</div>';
     return;
   }
   const manifest = resultState.manifest;
@@ -180,7 +180,9 @@ function renderResult() {
     : `${manifest.status || 'Blocked'}: ${manifest.error || 'Review the pipeline logs.'}`;
   const rows = Array.isArray(resultState.artifacts) ? resultState.artifacts : [];
   const groups = [
-    ['filing-input', 'Filing'],
+    ['filing-output', 'Official filing outputs'],
+    ['filing-input', 'Current-project filing inputs'],
+    ['engine-evidence', 'Official Backstop engine evidence'],
     ['review-report', 'Reports / review package'],
     ['simulation-output', 'Original simulation reports'],
     ['compiled-model', 'Compiled OSM models'],
@@ -194,9 +196,15 @@ function renderResult() {
     (byKind.get(kind) || byKind.get('diagnostic')).push(row);
   }
   const renderArtifact = (row) => {
-    const filing = /EN-1_READY_TO_INSERT\.pdf/i.test(row.name || '');
+    const filing = /(?:EN-1_READY_TO_INSERT|COMcheck_OFFICIAL_BACKSTOP_REPORT)\.pdf/i.test(row.name || '');
     const cxlReady = /COMcheck_PROJECT_INPUT_READY\.cxl/i.test(row.name || '');
-    const label = filing ? 'Ready to insert' : cxlReady ? 'Ready for COMcheck Web / review' : (row.kind || 'Energy output');
+    const officialBackstop = /COMcheck_OFFICIAL_BACKSTOP_REPORT\.pdf/i.test(row.name || '');
+    const compiledOsm = /(?:BASELINE|PROPOSED)_UPDATED_GEOMETRY\.osm/i.test(row.name || '');
+    const label = officialBackstop ? 'Official PNNL Backstop report'
+      : filing ? 'Ready to insert'
+        : cxlReady ? 'Current-project COMcheck source'
+          : compiledOsm ? 'Compiled current-project model'
+            : (row.kind || 'Energy output');
     const relative = String(row.relativePath || '').replace(/\\/g, '/');
     const detail = [label, relative && relative !== row.name ? relative : '', row.bytes ? bytes(row.bytes) : ''].filter(Boolean).join(' · ');
     const body = `<span>${esc(row.name || 'Artifact')}</span><small>${esc(detail)}</small>`;
@@ -205,7 +213,7 @@ function renderResult() {
   };
   const grouped = groups.map(([kind, title]) => {
     const items = (byKind.get(kind) || []).sort((a, b) => {
-      const rank = (row) => /EN-1_READY_TO_INSERT\.pdf/i.test(row.name || '') ? 0 : /COMcheck_PROJECT_INPUT_READY\.cxl/i.test(row.name || '') ? 1 : /\.pdf$/i.test(row.name || '') ? 2 : 3;
+      const rank = (row) => /COMcheck_OFFICIAL_BACKSTOP_REPORT\.pdf/i.test(row.name || '') ? 0 : /EN-1_READY_TO_INSERT\.pdf/i.test(row.name || '') ? 1 : /(?:BASELINE|PROPOSED)_UPDATED_GEOMETRY\.osm/i.test(row.name || '') ? 2 : /COMcheck_PROJECT_INPUT_READY\.cxl/i.test(row.name || '') ? 3 : /\.pdf$/i.test(row.name || '') ? 4 : 5;
       return rank(a) - rank(b) || String(a.relativePath || a.name || '').localeCompare(String(b.relativePath || b.name || ''));
     });
     if (!items.length) return '';
@@ -246,7 +254,7 @@ async function importResult(files) {
     resultState = await Store.publishEnergyResult(files, projectId());
     lastResultRevision = resultState.revision || resultState.manifest?.resultRevision || '';
     renderResult();
-    setRun(resultState.manifest?.status === 'COMPLETE' ? 'Energy package complete. Filing PDFs are ready to insert later.' : (resultState.manifest?.error || 'Energy package stopped with a reviewable result.'), resultState.manifest?.status === 'COMPLETE' ? 'good' : 'bad');
+    setRun(resultState.manifest?.status === 'COMPLETE' ? 'Energy package complete. Official filing PDFs and compiled Baseline/Proposed OSMs are ready.' : (resultState.manifest?.error || 'Energy package stopped with a reviewable result.'), resultState.manifest?.status === 'COMPLETE' ? 'good' : 'bad');
   } catch (error) {
     setRun(error.message || 'Energy result could not be published.', 'bad');
   } finally { resultBusy = false; }
