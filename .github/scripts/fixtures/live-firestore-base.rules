@@ -1,0 +1,13 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Representative pre-r43 rules. Production deployment injects into the
+    // exact live ruleset fetched from Firebase instead of replacing it.
+    match /users/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+    }
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

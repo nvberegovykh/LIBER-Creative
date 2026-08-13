@@ -1,7 +1,15 @@
-name: REVEX 0.8.19 r42 canonical Companion deploy
+name: REVEX 0.8.19 r43 canonical Companion deploy
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/revex-r27-0819-engineering-release.yml'
+      - '.github/scripts/**'
+      - 'firebase/**'
+      - 'docs/liber-apps/apps/revex/**'
   push:
     branches:
       - main
@@ -12,7 +20,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: revex-0819-r42-canonical-deploy
+  group: revex-0819-r43-canonical-deploy
   cancel-in-progress: false
 
 jobs:
@@ -24,132 +32,106 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download hash-locked canonical REVEX Companion from Drive
+      - name: Download hash-locked canonical REVEX r43 from Drive
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p /tmp/revex-r42
+          mkdir -p /tmp/revex-r43
           fetch_drive() {
             local id="$1" out="$2" sha="$3"
             curl -L --fail --retry 4 --retry-delay 2 \
               "https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t" \
-              -o "/tmp/revex-r42/${out}"
-            echo "${sha}  /tmp/revex-r42/${out}" | sha256sum -c -
+              -o "/tmp/revex-r43/${out}"
+            echo "${sha}  /tmp/revex-r43/${out}" | sha256sum -c -
           }
-          fetch_drive '1kvRhwCEPWzUyc-0kK8Q0t2KemyJtX4p0' 'index.html' '6030b1527ab3ba78187ceee319cc586769b40e3ca7deb51462dee88a0ed06659'
+          fetch_drive '1kvRhwCEPWzUyc-0kK8Q0t2KemyJtX4p0' 'index.html' 'da185b71499f81132b6dc3b9f5f0ed7b67daeaccc214d25c4b96c3fc239e5de7'
           fetch_drive '1ELpV95mdDzLI8XWemMNSphXAVll19fko' 'app.js' 'dd2905f0d5983b1473edd0c8ef865c695251ac311ab77831cf441120cec06b04'
-          fetch_drive '10cAgG1uDl7MAcuaUsgXEz3VdJ6AfTojd' 'store.js' '03a40e1ba2e3f8a87da747820084b0d6bc12bec4df1ee52422a377374967444d'
+          fetch_drive '10cAgG1uDl7MAcuaUsgXEz3VdJ6AfTojd' 'store.js' '25b73a5282e7bc8fda0b529069e6eb8a6e46b48cbe2481ad28c9f14f1893f402'
           fetch_drive '1YHqaZXp-lcLgj2RrjkjUp7HUhmjPEYgl' 'viewer-r26.js' '56b2c0e09edeab686b126eaa6bcc3f3075b8d11739f81a151b6743f7decd9846'
           fetch_drive '1KgyV2nBDLCQTzC1T8fKium5aR7ifu4vp' 'styles.css' 'dff7473320088a9be0a8d68e26f69c32a2630ac5080191c0fe40ad9923e68f07'
-          fetch_drive '10MXqTaH_3ETuWSH8oQQVQcEplYPMM2CS' 'integrity.js' 'a03bbe63dfa9cbbaeb8d950948d8eefd8783ae6ccdac8f35b9bd8973ff6f7fa8'
-          fetch_drive '1t0vUXJFOtC8TX3A5NgwKvXKvaxPjx0jB' 'firestore-compat.js' 'f813aaab6d4f801879adb3b60e0864b9b2f4b7477479b055b66dfa7709ad5ffd'
+          fetch_drive '10MXqTaH_3ETuWSH8oQQVQcEplYPMM2CS' 'integrity.js' 'ae91cd6e07e9823e64c621c739d54e1498483fdbada149aff7ac1727be5c8c7d'
+          fetch_drive '1t0vUXJFOtC8TX3A5NgwKvXKvaxPjx0jB' 'firestore-compat.js' '75c07eececa05bb2b1d53306c18d15cf89253f14e9573d5e0f36b3d4e9c54986'
           fetch_drive '1UR21DaYg2EGfbwXuenavLuDgjmmxIzB7' 'ui-integrity.js' 'c2b546d8e92b40ae0d9e5e319c33903380d3988afb77041f6fef12caf44d3d2e'
           fetch_drive '1zHfAtG7ccQZaSPN1zQ-ZLyT_v29v3Lck' 'diagnostics-r29.js' '1b3484a1e3a8eda8d59c583375a84feaf79738333d4ccc5fff0b41c7d621585b'
           fetch_drive '1lCABFvA380DYNyqK5W7vuAKMDTYJifdE' 'energy-r27.js' 'f2a938adafd5f0b58edfb87bf66777696a2670a62facab0331bf687188328d58'
           fetch_drive '1g58NvJ7aN3WBEupBe0gc8UIvlWPaJ54p' 'shell-integrity.js' '09074405256c4dd7e52eb3ee76fe1a49b4ec4c0488567e772603ea570594a3e6'
           fetch_drive '1v52VjG7kJz-WzQI38iCevHzsKR14hp7B' 'manifest.webmanifest' '456477c0adfc9c8df81a80065f6ad2b68f56ed7de1d7c30b181be107a36a6e9c'
-          fetch_drive '1ZoNuM2FzbzCcsq2e24IIvdrjEVeaIwGj' 'README.txt' 'c1b649e409066780a2261f28768d0117bbe085a1834e6f2c35a6a885aa90cb36'
+          fetch_drive '1ZoNuM2FzbzCcsq2e24IIvdrjEVeaIwGj' 'README.txt' '9b1d8f77cc5dbbfa3f4b6a54a7b8f536f75d47d2e4e664b6434e0aad45c61e28'
+          fetch_drive '1bF4BAhHxTUPGTlu0_7EmmOUeHhNFbNIx' 'revex-project-access-r43.rules' '786de75ff5d2ae7ae8313720e3eaee997485dc1180dd466db553c31ba33b93bd'
+          fetch_drive '1v9HRh_MOmLtd2yljj2Dqgj-1iGTo90a0' 'patch-live-firestore-rules.js' '43f946de738fe39b0f246f677cd579cd097f41c05dd327c53b82563bccb655c7'
+          fetch_drive '16roJDAx2b4huDdi1-qBuVQVUYVCp5T5I' 'verify-revex-r43-firestore.js' '08b24379dc192f48f210d76e00549ab8fa244dd7db30aca869798242f03c823a'
+          fetch_drive '1qurHTdpNxMfdJS5PSxO5BB63k0a9y1OW' 'verify-revex-r43-rules-patcher.js' '8a25aa3389249495a8c1b2f606be25dc82f4b4c564add33ed46896a96af5ea30'
+          fetch_drive '1iX9gjR9wyGgl6zhtvKkW3k6TPU41fPH2' 'verify-revex-r43-rules.js' '03bf3739a1b072776758b7ae70b343942f155ae6e16821ba3e32fb54c6e81357'
+          fetch_drive '1bdQ0EUDIaLj7cTnqw2w46ia1iE9EOI-L' 'live-firestore-base.rules' '735170792b348276c508e669c9e310159cd255c17be447ec11c04f5fae7ea9ca'
+          fetch_drive '1Ue9AJd_Zsq3Lf5Emi_QaXZ6YhDa3BQ1W' 'firebase-r43-emulator.json' '6285cd269cfb42419e2f9c9f03a0f2c16f41198831c36bea941cb3f1f7b93bb3'
+          fetch_drive '1lp2eNlEdLL-xtN6hgGlGeXUhu1HC4Kdn' 'r43-emulator.gitignore' '9b7557f216b233476d96b47094e7f59d12e87afa8b9193efe874eb54a7c1a500'
 
-      - name: Canonical r42 static QA
+      - name: Canonical r43 static QA
         shell: bash
         run: |
           set -euo pipefail
-          cp /tmp/revex-r42/app.js /tmp/revex-app.mjs
-          cp /tmp/revex-r42/store.js /tmp/revex-store.mjs
-          cp /tmp/revex-r42/viewer-r26.js /tmp/revex-viewer.mjs
-          cp /tmp/revex-r42/integrity.js /tmp/revex-integrity.mjs
-          cp /tmp/revex-r42/firestore-compat.js /tmp/revex-firestore-compat.mjs
-          cp /tmp/revex-r42/ui-integrity.js /tmp/revex-ui.mjs
-          cp /tmp/revex-r42/diagnostics-r29.js /tmp/revex-diagnostics.mjs
-          cp /tmp/revex-r42/energy-r27.js /tmp/revex-energy.mjs
-          cp /tmp/revex-r42/shell-integrity.js /tmp/revex-shell.mjs
-          node --check /tmp/revex-app.mjs
-          node --check /tmp/revex-store.mjs
-          node --check /tmp/revex-viewer.mjs
-          node --check /tmp/revex-integrity.mjs
-          node --check /tmp/revex-firestore-compat.mjs
-          node --check /tmp/revex-ui.mjs
-          node --check /tmp/revex-diagnostics.mjs
-          node --check /tmp/revex-energy.mjs
-          node --check /tmp/revex-shell.mjs
-          python -m json.tool /tmp/revex-r42/manifest.webmanifest >/dev/null
-
-          # r42 shell and cache identity
-          grep -q '20260813r42' /tmp/revex-r42/index.html
-          grep -q 'diagnostics-r29.js?v=20260813r42' /tmp/revex-r42/index.html
-          grep -q 'store.js?v=20260813r42' /tmp/revex-r42/index.html
-          grep -q 'app.js?v=20260813r42' /tmp/revex-r42/index.html
-          grep -q 'viewer-r26.js?v=20260813r42' /tmp/revex-r42/index.html
-          grep -q 'energy-r27.js?v=20260813r42' /tmp/revex-r42/index.html
-
-          # Current navigation: Energy is its own REVEX view, not the retired Spec sub-tab.
-          grep -q 'data-view="energy"' /tmp/revex-r42/index.html
-          grep -q 'id="view-energy"' /tmp/revex-r42/index.html
-          ! grep -q 'id="spec-energy-section"' /tmp/revex-r42/index.html
-
-          # Current Energy authority contract: 80% hard stop / 95% quality target.
-          grep -q 'const ENERGY_HARD_STOP = 0.80' /tmp/revex-r42/store.js
-          grep -q 'const ENERGY_QUALITY_TARGET = 0.95' /tmp/revex-r42/store.js
-          grep -q 'const ENERGY_HARD_STOP = 0.80' /tmp/revex-r42/energy-r27.js
-          grep -q 'const ENERGY_QUALITY_TARGET = 0.95' /tmp/revex-r42/energy-r27.js
-          ! grep -E -q '0\.98|98%' /tmp/revex-r42/index.html /tmp/revex-r42/store.js /tmp/revex-r42/energy-r27.js
-          grep -q 'writeBackToRevitAfterExport' /tmp/revex-r42/store.js
-          grep -q 'pdfInsertion' /tmp/revex-r42/store.js
-          ! grep -q 'data-energy-applicant' /tmp/revex-r42/index.html
-          ! grep -q 'id="energy-seal"' /tmp/revex-r42/index.html
-
-          # Store/API regressions that caused the Aug-12 browser crash.
-          grep -q 'resolveSpecProject' /tmp/revex-r42/store.js
-          grep -q 'ensureSpecProject' /tmp/revex-r42/store.js
-          grep -q 'listLibrary' /tmp/revex-r42/store.js
-          grep -q 'listHistory' /tmp/revex-r42/store.js
-          grep -q 'appendHistory' /tmp/revex-r42/store.js
-          grep -q 'Promise.allSettled' /tmp/revex-r42/app.js
-          grep -q 'toFirestorePlain' /tmp/revex-r42/store.js
-          grep -q "'library', ENGINEERING_CURRENT_ID" /tmp/revex-r42/store.js
-          grep -q 'revex_engineering_revision_' /tmp/revex-r42/store.js
-          grep -q 'firestorePlain' /tmp/revex-r42/integrity.js
-          ! grep -q "'revexEngineeringRevisions'" /tmp/revex-r42/store.js
-
-          # BIM: exact instance picking + Family Type/Instance hierarchy + real six-face section box.
-          grep -q 'revexElementIds' /tmp/revex-r42/viewer-r26.js
-          grep -q 'instanceId' /tmp/revex-r42/viewer-r26.js
-          grep -q 'activateViewerFallback' /tmp/revex-r42/viewer-r26.js
-          grep -q '__revexViewerR26Unavailable' /tmp/revex-r42/viewer-r26.js
-          grep -q 'VIEWER_INIT' /tmp/revex-r42/viewer-r26.js
-          grep -q 'Family type' /tmp/revex-r42/app.js
-          grep -q 'section-left' /tmp/revex-r42/index.html
-          grep -q 'section-right' /tmp/revex-r42/index.html
-          grep -q 'section-front' /tmp/revex-r42/index.html
-          grep -q 'section-back' /tmp/revex-r42/index.html
-          grep -q 'section-bottom' /tmp/revex-r42/index.html
-          grep -q 'section-top' /tmp/revex-r42/index.html
-          grep -q 'section-width' /tmp/revex-r42/index.html
-          grep -q 'section-length' /tmp/revex-r42/index.html
-          grep -q 'section-height' /tmp/revex-r42/index.html
-          ! grep -q 'id="section-x"' /tmp/revex-r42/index.html
-          ! grep -q 'id="section-y"' /tmp/revex-r42/index.html
-          ! grep -q 'id="section-z"' /tmp/revex-r42/index.html
-
-          # PWA banner is browser-only and suppressed inside the Revit WebView2 host.
-          grep -q 'revex-install-banner' /tmp/revex-r42/index.html
-          grep -q 'chrome?.webview' /tmp/revex-r42/index.html
-          grep -q 'manifest.webmanifest?v=20260813r42' /tmp/revex-r42/index.html
-
-      - name: Install exact canonical files into Pages source
-        shell: bash
-        run: |
-          set -euo pipefail
-          DST='docs/liber-apps/apps/revex'
-          for f in index.html app.js store.js viewer-r26.js styles.css integrity.js firestore-compat.js ui-integrity.js diagnostics-r29.js energy-r27.js shell-integrity.js manifest.webmanifest README.txt; do
-            install -m 0644 "/tmp/revex-r42/$f" "$DST/$f"
+          for file in app.js store.js viewer-r26.js integrity.js firestore-compat.js ui-integrity.js diagnostics-r29.js energy-r27.js shell-integrity.js patch-live-firestore-rules.js verify-revex-r43-firestore.js verify-revex-r43-rules-patcher.js verify-revex-r43-rules.js; do
+            cp "/tmp/revex-r43/$file" "/tmp/${file%.js}.mjs"
+            node --check "/tmp/${file%.js}.mjs"
           done
+          python -m json.tool /tmp/revex-r43/manifest.webmanifest >/dev/null
+          python -m json.tool /tmp/revex-r43/firebase-r43-emulator.json >/dev/null
+          grep -q '20260813r43' /tmp/revex-r43/index.html
+          grep -q 'store.js?v=20260813r43' /tmp/revex-r43/index.html
+          grep -q 'app.js?v=20260813r43' /tmp/revex-r43/index.html
+          grep -q 'energy-r27.js?v=20260813r43' /tmp/revex-r43/index.html
+          grep -q 'if (root.firebaseService)' /tmp/revex-r43/store.js
+          grep -q 'fs === root.firebaseService' /tmp/revex-r43/store.js
+          grep -q 'REVEX_PROJECT_ACCESS_R43_BEGIN' /tmp/revex-r43/revex-project-access-r43.rules
+          grep -Fq 'match /{projectDocument=**}' /tmp/revex-r43/revex-project-access-r43.rules
+          grep -Fq 'request.resource.data.memberIds == resource.data.memberIds' /tmp/revex-r43/revex-project-access-r43.rules
+          grep -q 'const ENERGY_HARD_STOP = 0.80' /tmp/revex-r43/store.js
+          grep -q 'const ENERGY_QUALITY_TARGET = 0.95' /tmp/revex-r43/store.js
+          ! grep -E -q '0\.98|98%' /tmp/revex-r43/index.html /tmp/revex-r43/store.js /tmp/revex-r43/energy-r27.js
 
-      - name: Verify cross-realm Firestore and private-state boundary
+      - name: Install exact canonical r43 files into Pages source
         shell: bash
-        run: node .github/scripts/verify-revex-r42-firestore.js
+        run: |
+          set -euo pipefail
+          APP='docs/liber-apps/apps/revex'
+          for file in index.html app.js store.js viewer-r26.js styles.css integrity.js firestore-compat.js ui-integrity.js diagnostics-r29.js energy-r27.js shell-integrity.js manifest.webmanifest README.txt; do
+            install -m 0644 "/tmp/revex-r43/$file" "$APP/$file"
+          done
+          install -D -m 0644 /tmp/revex-r43/revex-project-access-r43.rules firebase/revex-project-access-r43.rules
+          install -D -m 0644 /tmp/revex-r43/patch-live-firestore-rules.js .github/scripts/patch-live-firestore-rules.js
+          install -D -m 0644 /tmp/revex-r43/verify-revex-r43-firestore.js .github/scripts/verify-revex-r43-firestore.js
+          install -D -m 0644 /tmp/revex-r43/verify-revex-r43-rules-patcher.js .github/scripts/verify-revex-r43-rules-patcher.js
+          install -D -m 0644 /tmp/revex-r43/verify-revex-r43-rules.js .github/scripts/verify-revex-r43-rules.js
+          install -D -m 0644 /tmp/revex-r43/live-firestore-base.rules .github/scripts/fixtures/live-firestore-base.rules
+          install -D -m 0644 /tmp/revex-r43/firebase-r43-emulator.json firebase/r43-emulator/firebase.json
+          install -D -m 0644 /tmp/revex-r43/r43-emulator.gitignore firebase/r43-emulator/.gitignore
 
-      - name: Commit canonical r42 Companion
+      - name: Verify iframe Firestore realm and live-rules preservation
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .github/scripts/verify-revex-r43-firestore.js
+          node .github/scripts/verify-revex-r43-rules-patcher.js
+
+      - name: Verify project-member rules in Firestore emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .github/scripts/patch-live-firestore-rules.js \
+            .github/scripts/fixtures/live-firestore-base.rules \
+            firebase/revex-project-access-r43.rules \
+            firebase/r43-emulator/firestore.rules
+          mkdir -p /tmp/revex-r43-rules-test
+          cd /tmp/revex-r43-rules-test
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund firebase-tools@latest @firebase/rules-unit-testing@latest firebase@latest
+          cd "$GITHUB_WORKSPACE/firebase/r43-emulator"
+          /tmp/revex-r43-rules-test/node_modules/.bin/firebase emulators:exec \
+            --only firestore --project demo-revex-r43 \
+            "NODE_PATH=/tmp/revex-r43-rules-test/node_modules node $GITHUB_WORKSPACE/.github/scripts/verify-revex-r43-rules.js"
+
+      - name: Commit canonical r43 Companion
+        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
@@ -167,10 +149,18 @@ jobs:
                   docs/liber-apps/apps/revex/energy-r27.js \
                   docs/liber-apps/apps/revex/shell-integrity.js \
                   docs/liber-apps/apps/revex/manifest.webmanifest \
-                  docs/liber-apps/apps/revex/README.txt
+                  docs/liber-apps/apps/revex/README.txt \
+                  firebase/revex-project-access-r43.rules \
+                  firebase/r43-emulator/firebase.json \
+                  firebase/r43-emulator/.gitignore \
+                  .github/scripts/patch-live-firestore-rules.js \
+                  .github/scripts/verify-revex-r43-firestore.js \
+                  .github/scripts/verify-revex-r43-rules-patcher.js \
+                  .github/scripts/verify-revex-r43-rules.js \
+                  .github/scripts/fixtures/live-firestore-base.rules
           if git diff --cached --quiet; then
-            echo 'Canonical r42 REVEX Companion is already live.'
+            echo 'Canonical r43 REVEX Companion is already live.'
             exit 0
           fi
-          git commit -m 'REVEX 0.8.19 r42: publish canonical Drive Companion'
+          git commit -m 'REVEX 0.8.19 r43: publish canonical project access repair'
           git push origin HEAD:main
