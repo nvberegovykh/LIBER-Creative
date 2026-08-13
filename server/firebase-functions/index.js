@@ -6,6 +6,7 @@ const { initializeApp } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 const { getStorage } = require('firebase-admin/storage');
 const { GoogleAuth } = require('google-auth-library');
+const { projectAccessRole } = require('./project-access');
 
 initializeApp();
 setGlobalOptions({ region: 'us-central1', maxInstances: 4 });
@@ -68,11 +69,10 @@ async function assertProjectAccess(projectId, uid) {
   ]);
   if (!snap.exists) throw new HttpsError('not-found', 'REVEX project not found.');
   const data = snap.data() || {};
-  const isLiberAdmin = userSnap.exists && String(userSnap.data()?.role || '').toLowerCase() === 'admin';
-  const members = Array.isArray(data.memberIds) ? data.memberIds.map(String) : [];
-  if (!isLiberAdmin && String(data.ownerId || '') !== uid && !members.includes(uid))
+  const accessRole = projectAccessRole(data, userSnap.exists ? userSnap.data() || {} : {}, uid);
+  if (!accessRole)
     throw new HttpsError('permission-denied', 'You do not have access to this REVEX project.');
-  return { project: { id: snap.id, ...data }, accessRole: isLiberAdmin ? 'liber-admin' : String(data.ownerId || '') === uid ? 'owner' : 'member' };
+  return { project: { id: snap.id, ...data }, accessRole };
 }
 
 async function requireComcheckConsent(projectId, sourceRevision, uid) {

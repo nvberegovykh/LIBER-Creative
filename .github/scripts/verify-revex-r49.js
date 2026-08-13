@@ -7,6 +7,11 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const zlib = require('zlib');
+const {
+  PROJECT_FUNCTIONS,
+  functionalAccessMatrix,
+  canMutateProjectAcl
+} = require('../../server/firebase-functions/project-access');
 
 const root = path.resolve(__dirname, '../..');
 const live = path.join(root, 'src/Live-Companion');
@@ -290,6 +295,9 @@ function verifyStaticContracts() {
   const worker = read(path.join(root,'server/revex-energy-worker/app.py'));
   const docker = read(path.join(root,'server/revex-energy-worker/Dockerfile'));
   const broker = read(path.join(root,'server/firebase-functions/index.js'));
+  const projectAccess = read(path.join(root,'server/firebase-functions/project-access.js'));
+  const projectAccessGate = read(path.join(root,'server/firebase-functions/verify-project-access-r49.js'));
+  const projectRules = read(path.join(root,'firebase/revex-project-access-r43.rules'));
   const brokerPackage = JSON.parse(read(path.join(root,'server/firebase-functions/package.json')));
 
   assert.match(app,/activationToken:\s*0/); assert.match(app,/state\.activationToken!==activationToken\|\|state\.projectId!==projectId/);
@@ -306,14 +314,43 @@ function verifyStaticContracts() {
   assert.match(store,/clientBuild:\s*'20260813r49'/); assert.match(store,/liber\.revex\.comcheck-consent\.v1/); assert.match(store,/sha256File\(file\)/); assert.match(store,/this\.api\.writeBatch/); assert.ok(store.indexOf("batch.set(immutableRef") < store.indexOf("batch.set(currentRef"));
   assert.match(worker,/"version": "0\.8\.19-r49"/); assert.match(worker,/REVIT_T_Z_EN_PAGE_SCAN_ONLY/); assert.match(worker,/Downloaded Engineering artifact failed transfer integrity/); assert.match(worker,/BASELINE_UPDATED_GEOMETRY\.osm/); assert.match(worker,/COMcheck_OFFICIAL_BACKSTOP_REPORT\.pdf/);
   assert.match(docker,/openstudio energyplus_version/); assert.match(docker,/openstudio ruby_version/); assert.match(docker,/verify_revex_r49_worker\.py/);
+  assert.match(broker,/require\('\.\/project-access'\)/); assert.match(broker,/projectAccessRole\(data,/);
   assert.match(broker,/timeoutSeconds:\s*3600/); assert.match(broker,/SHA-256 transfer integrity/); assert.match(broker,/String\(resultManifest\.pipelineVersion \|\| ''\) !== '0\.8\.19-r49'/); assert.match(broker,/corrupt\.map/); assert.match(broker,/pipelineVersion \|\| ''\) === '0\.8\.19-r49'/); assert.doesNotMatch(broker,/legacy.*Engineering revision/i);
+  assert.match(projectAccess,/ordinaryProjectMember|PROJECT_FUNCTIONS/); assert.match(projectAccessGate,/ordinaryMemberFunctionalParity/);
+  assert.equal((projectRules.match(/REVEX_PROJECT_ACCESS_R43_BEGIN/g)||[]).length,1); assert.equal((projectRules.match(/REVEX_PROJECT_ACCESS_R43_END/g)||[]).length,1);
+  assert.match(projectRules,/allow read, write: if revexR43ProjectMember\(projectId\)/); assert.match(projectRules,/allow read, write: if revexR43SpecMember\(specProjectId\)/);
+  assert.match(projectRules,/request\.resource\.data\.memberIds == resource\.data\.memberIds/); assert.match(projectRules,/revexR43IsAdmin/);
   assert.equal(brokerPackage.engines.node,'22'); assert.equal(brokerPackage.dependencies['firebase-admin'],'14.2.0'); assert.equal(brokerPackage.dependencies['firebase-functions'],'7.3.2'); assert.equal(brokerPackage.overrides.uuid,'11.1.1');
   checkpoint('STATIC_RELEASE_CONTRACTS', { build: '20260813r49', privateWorker: true, authenticatedBroker: true, revisionScopedConsent: true });
+}
+
+function verifyProjectUserAccess() {
+  const project={ownerId:'owner-a',memberIds:['owner-a','member-a']};
+  const allowed=[
+    ['owner',{},'owner-a','owner'],
+    ['ordinary-project-member',{},'member-a','member'],
+    ['liber-admin',{role:'admin'},'admin-a','liber-admin']
+  ];
+  for(const [label,profile,uid,role] of allowed){
+    const matrix=functionalAccessMatrix(project,profile,uid);
+    assert.equal(matrix.role,role,`${label} role mismatch`);
+    for(const operation of PROJECT_FUNCTIONS) assert.equal(matrix.operations[operation],true,`${label} cannot ${operation}`);
+  }
+  for(const [label,profile,uid] of [['outsider',{},'outsider-a'],['anonymous',{},''],['cross-project-member',{},'member-b']]){
+    const matrix=functionalAccessMatrix(project,profile,uid);
+    assert.equal(matrix.role,null,`${label} unexpectedly received access`);
+    for(const operation of PROJECT_FUNCTIONS) assert.equal(matrix.operations[operation],false,`${label} can ${operation}`);
+  }
+  assert.equal(canMutateProjectAcl(project,{},'member-a'),false);
+  assert.equal(canMutateProjectAcl(project,{},'owner-a'),true);
+  assert.equal(canMutateProjectAcl(project,{role:'admin'},'admin-a'),true);
+  checkpoint('PROJECT_USER_ACCESS_MATRIX',{ownerFunctionalParity:true,ordinaryProjectMemberFunctionalParity:true,liberAdminFunctionalParity:true,outsiderDenied:true,anonymousDenied:true,crossProjectDenied:true,aclRestrictedToOwnerOrAdmin:true});
 }
 
 (async()=>{
   try {
     verifyStaticContracts();
+    verifyProjectUserAccess();
     verifyNativeSchedules();
     verifyViewerOverlayLifecycle();
     await verifyAtomicProjectPackage();
