@@ -406,9 +406,37 @@
       </div></div>`;
   }
 
+  function nativeScheduleTable(s) {
+    const p = s.nativePresentation;
+    if (!p || p.schema !== 'liber.revit.schedule.presentation.v1') return '';
+    const headerRows = Array.isArray(p.header?.rows) ? p.header.rows : [];
+    const bodyRows = Array.isArray(p.body?.rows) ? p.body.rows : [];
+    const visibleFields = (Array.isArray(p.fields) ? p.fields : []).filter((field) => !field.hidden);
+    const widths = visibleFields.map((field) => Math.max(64, Math.min(420, Number(field.sheetColumnWidth || 0) * 96 || 120)));
+
+    const renderRows = (rows, tag) => rows.map((row) => `<tr>${(Array.isArray(row.cells) ? row.cells : []).map((cell) => {
+      const merge = cell.merge;
+      if (merge && (Number(cell.columnIndex) !== Number(merge.left) || Number(row.rowIndex) !== Number(merge.top))) return '';
+      const colSpan = merge ? Math.max(1, Number(merge.right) - Number(merge.left) + 1) : 1;
+      const rowSpan = merge ? Math.max(1, Number(merge.bottom) - Number(merge.top) + 1) : 1;
+      return `<${tag}${colSpan > 1 ? ` colspan="${colSpan}"` : ''}${rowSpan > 1 ? ` rowspan="${rowSpan}"` : ''}>${esc(cell.text || '')}</${tag}>`;
+    }).join('')}</tr>`).join('');
+
+    const sortSummary = (Array.isArray(p.sortGroups) ? p.sortGroups : [])
+      .map((group) => [group.fieldId, group.sortOrder].filter(Boolean).join(' · ')).filter(Boolean).join(' / ');
+    return `<div class="sp-native-schedule" data-source-schedule="${esc(s.sourceScheduleId || p.scheduleUniqueId || '')}">
+      <div class="sp-native-head"><b>Authoritative Revit schedule</b><span>Native columns, grouping, itemization and row order</span>${sortSummary ? `<span>Sort/group: ${esc(sortSummary)}</span>` : ''}</div>
+      <div class="sp-tablewrap"><table class="sp-table sp-native-table">
+        ${widths.length ? `<colgroup>${widths.map((width) => `<col style="width:${width}px">`).join('')}</colgroup>` : ''}
+        ${headerRows.length ? `<thead>${renderRows(headerRows, 'th')}</thead>` : ''}
+        <tbody>${renderRows(bodyRows, 'td') || `<tr><td><span class="sp-muted">No native Revit body rows.</span></td></tr>`}</tbody>
+      </table></div>
+    </div>`;
+  }
+
   function sectionBook(s) {
     if (s.kind === 'locations') {
-      return `<article class="sp-section" data-sec="${s.id}">${sectionHead(s)}
+      return `<article class="sp-section" data-sec="${s.id}">${sectionHead(s)}${nativeScheduleTable(s)}
         <div class="sp-part"><div class="sp-part-h">LOCATION REGISTRY</div>${itemsTable(s)}</div></article>`;
     }
     const body = s.body || {};
@@ -423,11 +451,11 @@
                  data-ph="Write ${a.title.toLowerCase()}…">${esc(body[a.number] || '')}</div></div>`}
           </div>`).join('')}
       </div>`).join('');
-    return `<article class="sp-section" data-sec="${s.id}">${sectionHead(s)}${parts}</article>`;
+    return `<article class="sp-section" data-sec="${s.id}">${sectionHead(s)}${nativeScheduleTable(s)}${parts}</article>`;
   }
 
   function sectionTable(s) {
-    return `<article class="sp-section" data-sec="${s.id}">${sectionHead(s)}${itemsTable(s, true)}</article>`;
+    return `<article class="sp-section" data-sec="${s.id}">${sectionHead(s)}${nativeScheduleTable(s)}${itemsTable(s, true)}</article>`;
   }
 
   /* Base grid per section kind, then user columns appended. */
