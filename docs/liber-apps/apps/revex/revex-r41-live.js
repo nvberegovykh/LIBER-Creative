@@ -4,7 +4,103 @@
   if(root.__revexR41Live)return;
   root.__revexR41Live=true;
 
-  const requiredStore=['resolveSpecProject','ensureSpecProject','listDesignEdits','saveDesignEdit','listChapterEdits','saveChapterEdit','listLibrary','listHistory','appendHistory','listBimOverlays','commitBimOverlay','listDerivedPlans','saveDerivedPlan'];
+  const Store=root.RevexStore;
+  const requiredStore=['resolveSpecProject','ensureSpecProject','listDesignEdits','saveDesignEdit','listChapterEdits','saveChapterEdit','listLibrary','listHistory','appendHistory','listBimOverlays','commitBimOverlay','listDerivedPlans','saveDerivedPlan','syncEngineeringPackage','getEngineeringState','runEnergyServer','publishEnergyResult','getEnergyResult'];
+  const iso=()=>new Date().toISOString();
+  const clone=(value)=>JSON.parse(JSON.stringify(value===undefined?null:value));
+  const safe=(value)=>String(value||'').replace(/[^a-zA-Z0-9._-]+/g,'_').slice(0,120)||'item';
+  const docId=(value)=>safe(value).replace(/\./g,'_');
+  const cloud=()=>Boolean(Store?.isCloud?.()&&Store.api&&Store.db&&Store.user?.uid);
+
+  function installStoreCorrections(){
+    if(!Store)return;
+
+    // r41 owns the Spec-project compatibility boundary. Older public Store builds
+    // used revexProjectId while the current schema uses linkedProjectId. Resolve
+    // either form before creating anything so an existing Spec Book is never duplicated.
+    Store.resolveSpecProject=async function(projectId,preferredId){
+      if(!projectId)return preferredId||null;
+      if(!cloud()){
+        if(preferredId)return preferredId;
+        try{return (await this.getProject(projectId))?.revexSpecProjectId||null}catch(_){return null}
+      }
+      const f=this.api;
+      const belongs=(data={})=>{
+        const linked=String(data.linkedProjectId||'').trim();
+        const legacy=String(data.revexProjectId||'').trim();
+        return (!linked&&!legacy)||linked===String(projectId)||legacy===String(projectId);
+      };
+      const exact=async(id)=>{
+        if(!id)return null;
+        try{const snap=await f.getDoc(f.doc(this.db,'specProjects',id));return snap.exists()&&belongs(snap.data())?id:null}catch(_){return null}
+      };
+      const preferred=await exact(preferredId);if(preferred)return preferred;
+      try{
+        const project=await this.getProject(projectId);
+        const pointer=await exact(project?.revexSpecProjectId||project?.specProjectId||'');
+        if(pointer)return pointer;
+      }catch(_){}
+      for(const field of['linkedProjectId','revexProjectId']){
+        try{
+          const q=f.query(f.collection(this.db,'specProjects'),f.where(field,'==',projectId),f.limit(10));
+          const snap=await f.getDocs(q);
+          if(!snap.empty)return snap.docs[0].id;
+        }catch(error){console.warn(`[REVEX r41] Spec lookup ${field}`,error)}
+      }
+      return null;
+    };
+
+    Store.ensureSpecProject=async function(projectId,preferredId,suppliedProject=null){
+      if(!projectId)return preferredId||null;
+      const existing=await this.resolveSpecProject(projectId,preferredId);
+      if(existing){
+        if(cloud()){
+          const at=iso();
+          await this.api.setDoc(this.api.doc(this.db,'specProjects',existing),clone({linkedProjectId:projectId,revexProjectId:projectId,managedByRevex:true,updatedAt:at}),clone({merge:true}));
+          try{await this.api.setDoc(this.api.doc(this.db,'projects',projectId),clone({revexSpecProjectId:existing,specBookStatus:'ready',updatedAt:at}),clone({merge:true}))}catch(_){}
+        }
+        return existing;
+      }
+      const project=suppliedProject||await this.getProject(projectId);
+      if(!project)throw new Error('The shared LIBER project could not be loaded.');
+      const id=`spec_${docId(projectId)}`,at=iso();
+      if(!cloud())return id;
+      const memberIds=[...new Set([...(project.memberIds||[]),project.ownerId,this.user?.uid].filter(Boolean))];
+      const row=clone({
+        id,
+        title:`${project.name||project.title||'Project'} — Spec Book`,
+        name:`${project.name||project.title||'Project'} — Spec Book`,
+        code:project.code||'',
+        linkedProjectId:projectId,
+        revexProjectId:projectId,
+        linkedProjectName:project.name||project.title||'',
+        ownerId:project.ownerId||this.user?.uid,
+        memberIds,
+        settings:{divisionPerSchedule:true,showEmptyArticles:false},
+        createdAt:at,updatedAt:at,managedByRevex:true
+      });
+      await this.api.setDoc(this.api.doc(this.db,'specProjects',id),row,clone({merge:true}));
+      await this.api.setDoc(this.api.doc(this.db,'projects',projectId),clone({revexSpecProjectId:id,specBookStatus:'ready',updatedAt:at}),clone({merge:true}));
+      return id;
+    };
+
+    // The hosted pre-r41 Store has the Energy evidence/result readers but lacks the
+    // managed broker call used by energy-r27.js. Restore the canonical method here.
+    Store.runEnergyServer=async function(projectId,sourceRevision){
+      if(!projectId||!sourceRevision)throw new Error('Project and Engineering revision are required for managed Energy processing.');
+      if(!this.isCloud?.())throw new Error('Managed Energy processing requires a signed-in REVEX cloud session.');
+      const fs=this.fs;
+      if(!fs?.callFunction)throw new Error('REVEX managed Energy broker is unavailable in this session.');
+      const response=await fs.callFunction('runRevexEnergy',clone({
+        schema:'liber.revex.energy-broker-request.v1',
+        projectId,
+        sourceRevision,
+        clientBuild:BUILD
+      }));
+      if(!response?.ok)throw new Error(response?.message||response?.error||'REVEX managed Energy worker did not complete.');
+      return response;
+    };
+  }
 
   function claim(buttonId,handler){
     const button=document.getElementById(buttonId);
@@ -53,12 +149,16 @@
     console.info('[REVEX] live coherence '+BUILD,{
       storeContract:missing.length===0,
       missingStoreMethods:missing,
+      specSchemaCompatibility:'linkedProjectId + revexProjectId',
+      managedEnergyBroker:typeof store.runEnergyServer==='function',
       viewerReady:Boolean(viewer),
       exactInstancePicking:Boolean(viewer?.pick),
       sectionBox:Boolean(viewer?.sectionBox&&viewer?.sectionApply),
       singleControlOwner:true
     });
   }
+
+  installStoreCorrections();
 
   function start(){
     let tries=0;
