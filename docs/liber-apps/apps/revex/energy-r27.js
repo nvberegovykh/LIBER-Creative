@@ -1,6 +1,3 @@
-import './energy-contract-r40.js?v=20260812r40';
-import './revex-r41-live.js?v=20260812r41';
-
 const Store = window.RevexStore;
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -121,6 +118,7 @@ function renderSource() {
     !publishable ? 'bad' : (reviewRequired ? 'busy' : '')
   );
 }
+
 
 async function runManagedServerForSource() {
   const id = projectId();
@@ -246,6 +244,7 @@ async function importResult(files) {
     setRun(error.message || 'Energy result could not be published.', 'bad');
   } finally { resultBusy = false; }
 }
+
 
 async function hydrate() {
   const id = projectId();

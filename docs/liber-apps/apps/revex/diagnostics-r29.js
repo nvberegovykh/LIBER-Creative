@@ -62,6 +62,8 @@
     emit(d.level || 'INFO', d.stage || 'APP', d.message || 'Companion app diagnostic', d);
   });
 
+
+
   function auditContracts() {
     const store = window.RevexStore;
     const requiredStore = [
@@ -98,70 +100,10 @@
     }
   }
 
-  function sanitizeLegacyViewerBindings() {
-    const v = window.__revexViewerR26Instance;
-    if (!v || v.__revexR41ControlOwnership) return Boolean(v);
-    if (typeof v.sectionApply !== 'function' || typeof v.setSectionFace !== 'function' || typeof v.setSectionDimension !== 'function') return false;
-    v.__revexR41ControlOwnership = true;
-    const replace = (id, bind) => {
-      const old = document.getElementById(id);
-      if (!old) return null;
-      const fresh = old.cloneNode(true);
-      old.replaceWith(fresh);
-      bind?.(fresh);
-      return fresh;
-    };
-    replace('fit-model', el => el.addEventListener('click', () => v.fit?.()));
-    replace('fit-model-rail', el => el.addEventListener('click', () => v.fit?.()));
-    replace('walk-toggle', el => el.addEventListener('click', () => {
-      const on = !el.classList.contains('active');
-      el.classList.toggle('active', on);
-      const controls = document.getElementById('walk-controls');
-      if (controls) controls.hidden = !on;
-      v.walkOn?.(on);
-    }));
-    replace('walk-floor', el => el.addEventListener('change', () => {
-      v.floor = Number(el.value) || 0;
-      if (v.walk) { v.camera.position.y = v.floor + v.eye; v.requestRender?.(); }
-    }));
-    replace('walk-height', el => el.addEventListener('input', () => {
-      v.eye = Math.max(2.5, Math.min(9, Number(el.value) || 5.5));
-      if (v.walk) { v.camera.position.y = v.floor + v.eye; v.requestRender?.(); }
-    }));
-    replace('walk-fov', el => el.addEventListener('input', () => {
-      v.camera.fov = Math.max(30, Math.min(90, Number(el.value) || 55));
-      v.camera.updateProjectionMatrix();
-      const label = document.getElementById('walk-fov-value');
-      if (label) label.textContent = `${Math.round(v.camera.fov)}°`;
-      v.requestRender?.();
-    }));
-    replace('section-toggle', el => el.addEventListener('click', () => {
-      v.section.enabled = !v.section.enabled;
-      el.classList.toggle('active', v.section.enabled);
-      el.setAttribute('aria-expanded', String(v.section.enabled));
-      const controls = document.getElementById('section-controls');
-      if (controls) controls.hidden = !v.section.enabled;
-      v.sectionApply();
-    }));
-    for (const [id, key] of [['section-left','minX'],['section-right','maxX'],['section-bottom','minY'],['section-top','maxY'],['section-front','minZ'],['section-back','maxZ']]) {
-      replace(id, el => el.addEventListener('input', () => v.setSectionFace(key, (Number(el.value) || 0) / 100)));
-    }
-    for (const [id, axis] of [['section-width','X'],['section-height','Y'],['section-length','Z']]) {
-      replace(id, el => el.addEventListener('change', () => v.setSectionDimension(axis, Number(el.value))));
-    }
-    replace('section-reset', el => el.addEventListener('click', () => v.resetSection()));
-    emit('INFO', 'VIEWER_CONTROL_OWNERSHIP', 'r41 removed legacy duplicate Walk/Section bindings; viewer owns the controls once.', { initiator: 'public compatibility boundary' });
-    return true;
-  }
-
   emit('INFO', 'BOOT', 'REVEX Companion browser diagnostics bridge initialized.', {
     initiator: native() ? 'REVEX Revit WebView2' : 'regular browser'
   });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(auditContracts, 250), { once: true });
   else setTimeout(auditContracts, 250);
   setTimeout(auditContracts, 2500);
-  let ownershipAttempts = 0;
-  const ensureOwnership = () => { if (sanitizeLegacyViewerBindings()) return; ownershipAttempts += 1; if (ownershipAttempts < 12) setTimeout(ensureOwnership, 1000); };
-  setTimeout(ensureOwnership, 1200);
-  emit('INFO', 'PUBLIC_COMPAT', 'Public REVEX is using the r41 compatibility boundary over the older hosted core until the canonical large-file mirror is replaced atomically.', { initiator: 'public compatibility boundary' });
 })();

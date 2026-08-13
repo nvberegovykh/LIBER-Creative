@@ -3,7 +3,7 @@
 
   const Store = root.RevexStore;
   if (!Store) return;
-  const BUILD = '20260811r26';
+  const BUILD = '20260812r41';
   const iso = () => new Date().toISOString();
   const safe = (value) => String(value || '').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || 'file';
   const docId = (value) => safe(value).replace(/\./g, '_');
@@ -88,9 +88,132 @@
   };
 
   Store.ensureSpecProject = async function ensureSpecWithoutChurn(projectId, preferredId, suppliedProject = null) {
-    const existing = await this.resolveSpecProject(projectId, preferredId);
-    if (existing) return existing;
+    // Keep Spec linkage stable, but never assume a newer Store helper exists. This file
+    // can briefly coexist with an older cached store.js during a deployment refresh.
+    if (typeof this.resolveSpecProject === 'function') {
+      const existing = await this.resolveSpecProject(projectId, preferredId);
+      if (existing) return existing;
+    }
     return originalEnsureSpecProject(projectId, preferredId, suppliedProject);
+  };
+
+  Store.listHistory = async function listHistoryControlled(projectId) {
+    if (!projectId) return [];
+    if (!cloudReady()) {
+      try { return JSON.parse(localStorage.getItem(`liber.revex.history.${projectId}`) || '[]'); } catch (_) { return []; }
+    }
+    return (await listKind(projectId, 'history', 2500))
+      .map((row) => ({ ...row, id: row.revexId || row.id }))
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  };
+
+  Store.appendHistory = async function appendHistoryControlled(projectId, event = {}) {
+    if (!projectId) throw new Error('Choose a REVEX project first.');
+    const at = iso();
+    const id = event.id || `hist_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const data = clone({
+      ...event, revexId: id, projectId, createdAt: event.createdAt || at,
+      createdBy: event.createdBy || this.user?.uid || 'local', updatedAt: at
+    });
+    if (!cloudReady()) {
+      const key = `liber.revex.history.${projectId}`;
+      const all = JSON.parse(localStorage.getItem(key) || '[]');
+      all.unshift({ id, ...data });
+      localStorage.setItem(key, JSON.stringify(all.slice(0, 2500)));
+      return { id, ...data };
+    }
+    await setRecord(projectId, `revex_history_${docId(id)}`, 'history', data, false);
+    return { id, ...data };
+  };
+
+  Store.listBimOverlays = async function listBimOverlaysControlled(projectId) {
+    if (!projectId) return [];
+    if (!cloudReady()) {
+      try { return Object.values(JSON.parse(localStorage.getItem(`liber.revex.bim-overlays.${projectId}`) || '{}')); } catch (_) { return []; }
+    }
+    return (await listKind(projectId, 'bim-overlay', 5000)).map((row) => ({ ...row, id: row.revexId || row.id }));
+  };
+
+  Store.commitBimOverlay = async function commitBimOverlayControlled(projectId, element, patch, meta = {}) {
+    if (!projectId || !element) throw new Error('Project and BIM element are required.');
+    const stable = String(element.uniqueId || element.id || '').trim();
+    if (!stable) throw new Error('The selected BIM element has no stable Revit identity.');
+    const overlayId = docId(stable);
+    let before = null;
+    if (!cloudReady()) {
+      const key = `liber.revex.bim-overlays.${projectId}`;
+      const all = JSON.parse(localStorage.getItem(key) || '{}');
+      before = all[overlayId] || null;
+      const after = {
+        ...(before || {}), ...clone(patch), id: overlayId, revexId: overlayId,
+        elementId: element.id ?? before?.elementId ?? null,
+        uniqueId: element.uniqueId || before?.uniqueId || null,
+        category: element.category || before?.category || '', level: element.level || before?.level || '',
+        sourceRevision: meta.sourceRevision || before?.sourceRevision || null,
+        updatedAt: iso(), updatedBy: this.user?.uid || 'local'
+      };
+      all[overlayId] = after;
+      localStorage.setItem(key, JSON.stringify(all));
+      const event = await this.appendHistory(projectId, {
+        sourceRevision: meta.sourceRevision || null, kind: 'bim-overlay', operation: meta.operation || 'edit',
+        label: meta.label || `${element.category || 'BIM'} ${element.id || ''}`.trim(),
+        affectedElementIds: element.id != null ? [element.id] : [],
+        affectedUniqueIds: element.uniqueId ? [element.uniqueId] : [], affectedLevels: element.level ? [element.level] : [],
+        affectedViews: meta.affectedViews || [], before, after, camera: meta.camera || null, snapshot: meta.snapshot || null,
+        note: meta.note || '', relatedId: overlayId, previousEventId: meta.previousEventId || null
+      });
+      return { overlay: after, event };
+    }
+    const existing = await listKind(projectId, 'bim-overlay', 5000);
+    before = existing.find((row) => String(row.revexId || row.id) === overlayId) || null;
+    const after = clone({
+      ...(before || {}), ...patch, id: overlayId, revexId: overlayId,
+      elementId: element.id ?? before?.elementId ?? null, uniqueId: element.uniqueId || before?.uniqueId || null,
+      category: element.category || before?.category || '', level: element.level || before?.level || '',
+      sourceRevision: meta.sourceRevision || before?.sourceRevision || null, updatedAt: iso(), updatedBy: this.user?.uid || 'local'
+    });
+    await setRecord(projectId, `revex_bim_${overlayId}`, 'bim-overlay', after, false);
+    const event = await this.appendHistory(projectId, {
+      sourceRevision: meta.sourceRevision || null, kind: 'bim-overlay', operation: meta.operation || 'edit',
+      label: meta.label || `${element.category || 'BIM'} ${element.id || ''}`.trim(),
+      affectedElementIds: element.id != null ? [element.id] : [], affectedUniqueIds: element.uniqueId ? [element.uniqueId] : [],
+      affectedLevels: element.level ? [element.level] : [], affectedViews: meta.affectedViews || [], before, after,
+      camera: meta.camera || null, snapshot: meta.snapshot || null, note: meta.note || '', relatedId: overlayId,
+      previousEventId: meta.previousEventId || null
+    });
+    return { overlay: after, event };
+  };
+
+  Store.listDerivedPlans = async function listDerivedPlansControlled(projectId) {
+    if (!projectId) return [];
+    if (!cloudReady()) {
+      try { return JSON.parse(localStorage.getItem(`liber.revex.derived-plans.${projectId}`) || '[]'); } catch (_) { return []; }
+    }
+    return (await listKind(projectId, 'derived-plan', 1000)).map((row) => ({ ...row, id: row.revexId || row.id }))
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  };
+
+  Store.saveDerivedPlan = async function saveDerivedPlanControlled(projectId, plan = {}, imageDataUrl = '') {
+    if (!projectId) throw new Error('Choose a REVEX project first.');
+    const id = plan.id || `plan_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const data = clone({ ...plan, id, revexId: id, createdAt: plan.createdAt || iso(), createdBy: plan.createdBy || this.user?.uid || 'local' });
+    if (!cloudReady()) {
+      const key = `liber.revex.derived-plans.${projectId}`;
+      const all = JSON.parse(localStorage.getItem(key) || '[]');
+      all.unshift({ ...data, imageDataUrl: imageDataUrl || null });
+      localStorage.setItem(key, JSON.stringify(all.slice(0, 250)));
+      return all[0];
+    }
+    let imageUrl = null, imagePath = null;
+    if (imageDataUrl && this.fs?.storage) {
+      const blob = await (await fetch(imageDataUrl)).blob();
+      const file = new File([blob], `${id}.png`, { type: 'image/png' });
+      const uploaded = await upload(projectId, `derived-plans/${docId(id)}`, file);
+      imageUrl = uploaded.url; imagePath = uploaded.path;
+    }
+    const finalData = clone({ ...data, imageUrl, imagePath });
+    await setRecord(projectId, `revex_plan_${docId(id)}`, 'derived-plan', finalData, false);
+    return finalData;
   };
 
   Store.getState = async function getControlledState(projectId) {

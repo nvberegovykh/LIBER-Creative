@@ -34,6 +34,16 @@ const state = {
 };
 window.__revexState = state;
 
+function storeCall(name, args = [], fallback = null) {
+  const fn = Store?.[name];
+  if (typeof fn !== 'function') {
+    console.warn(`[REVEX] Store.${name} unavailable; continuing with fallback.`, { build: '20260812r41' });
+    return Promise.resolve(fallback);
+  }
+  try { return Promise.resolve(fn.apply(Store, args)); }
+  catch (error) { return Promise.reject(error); }
+}
+
 let projectReturnFocus = null;
 let renderReturnFocus = null;
 let pendingNativeRender = null;
@@ -128,31 +138,29 @@ function activeBimViewer(){ return window.__revexViewerR26Instance || window.__r
 
 function showView(name) {
   closeWorkspaceRail();
-  let requestedSpecSection = '';
-  if (name === 'energy' || name === 'engineering' || name === 'spec-energy') {
-    name = 'spec';
-    requestedSpecSection = 'energy';
-  } else if (name === 'spec') {
-    requestedSpecSection = new URLSearchParams(location.search).get('specSection') || '';
-  }
   const hasProject = Boolean(state.projectId);
-  $('#view-empty').hidden = hasProject;
-  for (const view of ['bim', 'design', 'spec', 'docs', 'chat', 'history']) $(`#view-${view}`).hidden = !hasProject || view !== name;
-  $$('.main-nav [data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === name));
-  if (hasProject) {
-    const route = { ...(params.get('inShell') ? { inShell: '1' } : {}), projectId: state.projectId, ...(state.preferredSpecId ? { specProjectId: state.preferredSpecId } : {}), view: name };
-    if (name === 'spec' && requestedSpecSection === 'energy') route.specSection = 'energy';
-    history.replaceState(null, '', `${location.pathname}?${new URLSearchParams(route)}`);
-    const av = activeBimViewer();
-    av?.setActive?.(name === 'bim');
-    if (name === 'bim') setTimeout(() => { av?.resize?.(); av?.requestRender?.(); }, 0);
-    if (name === 'spec') {
-      renderSpec();
-      window.dispatchEvent(new CustomEvent('revex:spec-section-route', { detail: { section: requestedSpecSection === 'energy' ? 'energy' : 'book', projectId: state.projectId } }));
-    }
-    if (name === 'chat') { renderChatContext(); setTimeout(() => ensureChatEmbedded(state.selectedContext), 0); }
-    if (name === 'history') window.dispatchEvent(new CustomEvent('revex:history-open', { detail: { projectId: state.projectId } }));
+  const engineeringOnboarding = name === 'energy';
+  $('#view-empty').hidden = hasProject || engineeringOnboarding;
+  for (const view of ['bim', 'design', 'spec', 'docs', 'energy', 'chat', 'history']) {
+    const allowed = hasProject || view === 'energy';
+    $(`#view-${view}`).hidden = !allowed || view !== name;
   }
+  $$('.main-nav [data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === name));
+  const query = new URLSearchParams({
+    ...(params.get('inShell') ? { inShell: '1' } : {}),
+    ...(hasProject ? { projectId: state.projectId } : {}),
+    ...(state.preferredSpecId ? { specProjectId: state.preferredSpecId } : {}),
+    view: name
+  });
+  history.replaceState(null, '', `${location.pathname}?${query}`);
+  if (name === 'energy') window.dispatchEvent(new CustomEvent('revex:energy-open', { detail: { projectId: state.projectId || '' } }));
+  if (!hasProject) return;
+  const av = activeBimViewer();
+  av?.setActive?.(name === 'bim');
+  if (name === 'bim') setTimeout(() => { av?.resize?.(); av?.requestRender?.(); }, 0);
+  if (name === 'spec') renderSpec();
+  if (name === 'chat') { renderChatContext(); setTimeout(() => ensureChatEmbedded(state.selectedContext), 0); }
+  if (name === 'history') window.dispatchEvent(new CustomEvent('revex:history-open', { detail: { projectId: state.projectId } }));
 }
 
 function currentWorkspaceRail() {
@@ -178,10 +186,23 @@ function toggleWorkspaceRail() {
 
 function renderProjects() {
   const select = $('#project-select');
-  select.innerHTML = '<option value="">Choose a project</option>' + state.projects.map((project) =>
+  const hasActive = state.projectId && state.projects.some((project) => project.id === state.projectId);
+  const provisional = state.projectId && !hasActive
+    ? `<option value="${escapeHtml(state.projectId)}" data-revex-provisional="1">${escapeHtml(state.project?.name || state.project?.title || state.projectId)}</option>`
+    : '';
+  select.innerHTML = '<option value="">Choose a project</option>' + provisional + state.projects.map((project) =>
     `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name || project.title || 'Untitled project')}</option>`
   ).join('');
   select.value = state.projectId;
+}
+
+function persistProjectRoute() {
+  if (state.projectId) params.set('projectId', state.projectId);
+  else params.delete('projectId');
+  if (state.preferredSpecId) params.set('specProjectId', state.preferredSpecId);
+  else params.delete('specProjectId');
+  const query = params.toString();
+  history.replaceState(history.state, '', `${location.pathname}${query ? `?${query}` : ''}${location.hash || ''}`);
 }
 
 function notifyNativeProject() {
@@ -245,36 +266,123 @@ function connectExistingProject() {
   toast('Choose the existing LIBER project from the project field.');
 }
 
+function modelFamilyTypeKey(row) {
+  const family = String(row?.family || row?.category || 'System / Other').trim() || 'System / Other';
+  const type = String(row?.type || row?.name || 'Unnamed type').trim() || 'Unnamed type';
+  return `${family}\u241f${type}`;
+}
+
+function modelFamilyTypeLabel(row) {
+  const family = String(row?.family || row?.category || 'System / Other').trim() || 'System / Other';
+  const type = String(row?.type || row?.name || 'Unnamed type').trim() || 'Unnamed type';
+  return family.toLowerCase() === type.toLowerCase() ? family : `${family} · ${type}`;
+}
+
+function modelInstanceLabel(row) {
+  const name = String(row?.name || '').trim();
+  const type = String(row?.type || '').trim();
+  const level = String(row?.level || '').trim();
+  const primary = name && name.toLowerCase() !== type.toLowerCase() ? name : (level ? `${type || row?.category || 'Instance'} · ${level}` : (type || row?.category || 'Instance'));
+  return `${primary} · #${row?.id ?? ''}`;
+}
+
+function ensureModelFilterBar() {
+  const search = $('#element-search');
+  if (!search) return null;
+  let host = $('#model-filter-bar');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'model-filter-bar';
+    host.className = 'model-filter-bar';
+    host.innerHTML = `
+      <label><span>Family type</span><select id="model-family-type-filter" class="sp-inp"><option value="">All family types</option></select></label>
+      <label><span>Instance</span><select id="model-instance-filter" class="sp-inp"><option value="">All instances</option></select></label>
+      <button id="model-filter-clear" type="button" class="button ghost compact">Clear</button>`;
+    search.insertAdjacentElement('afterend', host);
+    $('#model-filter-clear', host)?.addEventListener('click', () => {
+      const family = $('#model-family-type-filter');
+      const instance = $('#model-instance-filter');
+      if (family) family.value = '';
+      if (instance) instance.value = '';
+      if (search) search.value = '';
+      renderModelTree();
+    });
+  }
+  return host;
+}
+
 function renderModelTree() {
   const data = state.viewerData;
   const elements = data?.elements || [];
   $('#model-title').textContent = data?.source?.documentTitle || state.cloudState?.central?.documentTitle || 'No model synced';
   $('#model-facts').innerHTML = state.cloudState ? `
-    <div class="fact"><strong>${elements.length.toLocaleString()}</strong><span>visible elements</span></div>
+    <div class="fact"><strong>${elements.length.toLocaleString()}</strong><span>model instances</span></div>
     <div class="fact"><strong>${(data?.source?.viewName || '3D').slice(0, 20)}</strong><span>Revit view</span></div>
     <div class="fact"><strong>${state.cloudState.scheduleCount || state.designData?.schedules?.length || 0}</strong><span>schedules</span></div>
     <div class="fact"><strong>${state.viewerMode === 'rvxmesh' ? 'Exact' : state.viewerMode === 'fbx' ? 'FBX' : state.viewerMode === 'fallback' ? 'Index' : 'Loading'}</strong><span>geometry</span></div>` : '';
-  const groups = new Map();
-  elements.forEach((element) => {
-    const category = element.category || 'Other';
-    if (!groups.has(category)) groups.set(category, []);
-    groups.get(category).push(element);
+
+  const filterHost = ensureModelFilterBar();
+  const familySelect = $('#model-family-type-filter', filterHost || document);
+  const instanceSelect = $('#model-instance-filter', filterHost || document);
+  const q = ($('#element-search')?.value || '').trim().toLowerCase();
+  const previousFamily = familySelect?.value || '';
+  const previousInstance = instanceSelect?.value || '';
+
+  const typeBuckets = new Map();
+  for (const row of elements) {
+    const key = modelFamilyTypeKey(row);
+    if (!typeBuckets.has(key)) typeBuckets.set(key, { key, label: modelFamilyTypeLabel(row), rows: [] });
+    typeBuckets.get(key).rows.push(row);
+  }
+  const sortedTypes = [...typeBuckets.values()].sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' }));
+  if (familySelect) {
+    familySelect.innerHTML = '<option value="">All family types</option>' + sortedTypes.map((bucket) => `<option value="${escapeHtml(bucket.key)}">${escapeHtml(bucket.label)} · ${bucket.rows.length}</option>`).join('');
+    familySelect.value = typeBuckets.has(previousFamily) ? previousFamily : '';
+    familySelect.onchange = () => { if (instanceSelect) instanceSelect.value = ''; renderModelTree(); };
+  }
+  const activeFamily = familySelect?.value || '';
+  const familyRows = activeFamily ? (typeBuckets.get(activeFamily)?.rows || []) : elements;
+  const sortedInstances = [...familyRows].sort((a, b) => modelInstanceLabel(a).localeCompare(modelInstanceLabel(b), undefined, { numeric: true, sensitivity: 'base' }));
+  if (instanceSelect) {
+    instanceSelect.innerHTML = '<option value="">All instances</option>' + sortedInstances.slice(0, 3000).map((row) => `<option value="${escapeHtml(row.id)}">${escapeHtml(modelInstanceLabel(row))}</option>`).join('');
+    instanceSelect.value = sortedInstances.some((row) => String(row.id) === previousInstance) ? previousInstance : '';
+    instanceSelect.onchange = () => {
+      const id = instanceSelect.value;
+      if (!id) return renderModelTree();
+      const element = elements.find((row) => String(row.id) === String(id));
+      if (element) selectElement(element, true);
+    };
+  }
+  const activeInstance = instanceSelect?.value || '';
+
+  const visible = elements.filter((row) => {
+    if (activeFamily && modelFamilyTypeKey(row) !== activeFamily) return false;
+    if (activeInstance && String(row.id) !== activeInstance) return false;
+    if (!q) return true;
+    return `${row.id} ${row.category || ''} ${row.family || ''} ${row.name || ''} ${row.type || ''} ${row.level || ''} ${(row.materials || []).map((m) => m.name).join(' ')}`.toLowerCase().includes(q);
   });
-  const q = $('#element-search').value.trim().toLowerCase();
-  const treeLimit = q ? 1500 : 800;
+
+  const grouped = new Map();
+  for (const row of visible) {
+    const key = modelFamilyTypeKey(row);
+    if (!grouped.has(key)) grouped.set(key, { label: modelFamilyTypeLabel(row), rows: [] });
+    grouped.get(key).rows.push(row);
+  }
+  const treeLimit = (q || activeFamily || activeInstance) ? 1800 : 900;
   let shown = 0;
   const chunks = [];
-  [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).forEach(([category, rows]) => {
-    const matching = rows.filter((row) => !q || `${row.id} ${row.category} ${row.name} ${row.type} ${(row.materials || []).map((m) => m.name).join(' ')}`.toLowerCase().includes(q));
-    if (!matching.length || shown >= treeLimit) return;
-    chunks.push(`<div class="tree-group">${escapeHtml(category)} · ${matching.length}</div>`);
-    for (const row of matching.slice(0, Math.max(treeLimit - shown, 0))) {
+  [...grouped.values()].sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' })).forEach((bucket) => {
+    if (shown >= treeLimit) return;
+    const rows = bucket.rows.sort((a, b) => modelInstanceLabel(a).localeCompare(modelInstanceLabel(b), undefined, { numeric: true, sensitivity: 'base' }));
+    chunks.push(`<div class="tree-group tree-family-type"><span>${escapeHtml(bucket.label)}</span><b>${rows.length}</b></div>`);
+    for (const row of rows.slice(0, Math.max(treeLimit - shown, 0))) {
       shown += 1;
-      chunks.push(`<button class="tree-item${String(state.selectedElement?.id) === String(row.id) ? ' active' : ''}" data-element-id="${escapeHtml(row.id)}"><span>${escapeHtml(row.name || row.type || category)}</span><span class="tree-id">${escapeHtml(row.id)}</span></button>`);
+      const secondary = [row.category, row.level].filter(Boolean).join(' · ');
+      chunks.push(`<button class="tree-item${String(state.selectedElement?.id) === String(row.id) ? ' active' : ''}" data-element-id="${escapeHtml(row.id)}"><span class="tree-instance"><b>${escapeHtml(modelInstanceLabel(row).replace(/ · #.*$/, ''))}</b>${secondary ? `<small>${escapeHtml(secondary)}</small>` : ''}</span><span class="tree-id">#${escapeHtml(row.id)}</span></button>`);
     }
   });
-  if (elements.length > shown && !q) chunks.push(`<p class="muted">Showing ${shown.toLocaleString()} of ${elements.length.toLocaleString()} elements for responsiveness. Search finds the rest.</p>`);
-  $('#element-tree').innerHTML = chunks.join('') || '<p class="muted">No matching elements.</p>';
+  if (visible.length > shown) chunks.push(`<p class="muted">Showing ${shown.toLocaleString()} of ${visible.length.toLocaleString()} matching instances. Use Family type, Instance or search to narrow.</p>`);
+  $('#element-tree').innerHTML = chunks.join('') || '<p class="muted">No matching model instances.</p>';
   $$('.tree-item', $('#element-tree')).forEach((button) => button.addEventListener('click', () => {
     const element = elements.find((row) => String(row.id) === button.dataset.elementId);
     if (element) { selectElement(element, true); closeWorkspaceRail(); }
@@ -313,7 +421,9 @@ function selectElement(element, fit = true) {
     <h2>${escapeHtml(element.name || element.type || element.category || 'Element')}</h2>
     <div class="property-list">
       <div class="property"><span>Category</span>${escapeHtml(element.category || '—')}</div>
+      <div class="property"><span>Family</span>${escapeHtml(element.family || element.category || '—')}</div>
       <div class="property"><span>Type</span>${escapeHtml(element.type || '—')}</div>
+      <div class="property"><span>Level</span>${escapeHtml(element.level || '—')}</div>
       <div class="property"><span>Unique ID</span>${escapeHtml(element.uniqueId || '—')}</div>
       <div class="property"><span>Materials</span>${(element.materials || []).map((m) => `<b class="material-chip">${escapeHtml(m.name)}</b>`).join('') || '—'}</div>
     </div>
@@ -891,8 +1001,8 @@ function settledValue(result,fallback){ return result?.status==='fulfilled' ? re
 async function hydrateRevisionOverlays(cloudState,localPackage,revision){
   const token=++revisionHydrationToken;
   const results=await Promise.allSettled([
-    Store.listDesignEdits(state.projectId),Store.listChapterEdits(state.projectId),Store.listIssues(state.projectId),Store.listLibrary(state.projectId),
-    Store.listHistory(state.projectId),Store.listBimOverlays(state.projectId),Store.listDerivedPlans(state.projectId)
+    storeCall('listDesignEdits',[state.projectId],[]),storeCall('listChapterEdits',[state.projectId],[]),storeCall('listIssues',[state.projectId],[]),storeCall('listLibrary',[state.projectId],[]),
+    storeCall('listHistory',[state.projectId],[]),storeCall('listBimOverlays',[state.projectId],[]),storeCall('listDerivedPlans',[state.projectId],[])
   ]);
   if(token!==revisionHydrationToken||state.loadingRevision!==revision)return;
   const [editsR,chapterR,issuesR,libraryR,historyR,overlayR,plansR]=results;
@@ -938,18 +1048,18 @@ async function activateProject(projectId){
   state.unsubscribe?.();state.unsubscribe=null;state.projectId=projectId||'';
   state.project=state.projects.find(r=>r.id===projectId)||(projectId?await Store.getProject(projectId):null);
   state.preferredSpecId=((params.get('projectId')===projectId&&params.get('specProjectId'))||state.project?.revexSpecProjectId||'');
-  $('#project-select').value=state.projectId;notifyNativeProject();
-  if(!projectId){state.preferredSpecId='';showView('bim');return;}
+  renderProjects();persistProjectRoute();notifyNativeProject();
+  if(!projectId){state.preferredSpecId='';showView(params.get('view')||'bim');return;}
   showView(params.get('view')||'bim');setSync('Loading project…','busy');
   try{
     const cloudState=await Store.getState(projectId);await loadCloudState(cloudState);notifyNativeProject();
     state.unsubscribe=Store.subscribeState(projectId,next=>{if(next?.revision&&next.revision!==state.cloudState?.revision)loadCloudState(next);else if(next){state.cloudState=next;if(!$('#view-spec')?.hidden)renderSpec();}});
-    Promise.allSettled([Store.ensureSpecProject(projectId,state.preferredSpecId||state.project?.revexSpecProjectId,state.project),Store.listRenderJobs(projectId)]).then(([specResult,renderResult])=>{
+    Promise.allSettled([storeCall('ensureSpecProject',[projectId,state.preferredSpecId||state.project?.revexSpecProjectId,state.project],state.preferredSpecId||''),storeCall('listRenderJobs',[projectId],[])]).then(([specResult,renderResult])=>{
       if(state.projectId!==projectId)return;
       if(specResult.status==='fulfilled')state.preferredSpecId=specResult.value||state.preferredSpecId||'';else console.warn('[REVEX] Spec Book projection pending',specResult.reason);
       state.renderJobs=renderResult.status==='fulfilled'?(renderResult.value||[]):[];
       if(state.project&&state.preferredSpecId)state.project.revexSpecProjectId=state.preferredSpecId;
-      renderRenderHistory();notifyNativeProject();if(!$('#view-spec')?.hidden)renderSpec();
+      persistProjectRoute();renderProjects();renderRenderHistory();notifyNativeProject();if(!$('#view-spec')?.hidden)renderSpec();
     });
     if(params.get('render')==='1')openRenderDialog();
   }catch(error){setSync('Project unavailable','bad');toast(error.message,true);}
@@ -1027,6 +1137,8 @@ $('#project-select').addEventListener('change', () => activateProject($('#projec
 $('#new-project-button').addEventListener('click', openProjectDialog);
 $('#empty-create-button').addEventListener('click', openProjectDialog);
 $('#empty-connect-button').addEventListener('click', connectExistingProject);
+$('#energy-create-project')?.addEventListener('click', openProjectDialog);
+$('#energy-connect-project')?.addEventListener('click', connectExistingProject);
 $('#project-form').addEventListener('submit', createProject);
 $('#project-close').addEventListener('click', closeProjectDialog);
 $('#project-cancel').addEventListener('click', closeProjectDialog);
@@ -1035,14 +1147,8 @@ $('#sync-button').addEventListener('click', () => $('#revex-sync-upload').click(
 $('#empty-sync-button').addEventListener('click', () => $('#revex-sync-upload').click());
 $('#revex-sync-upload').addEventListener('change', (event) => handleSyncFiles(event.target.files));
 $('#element-search').addEventListener('input', renderModelTree);
-for (const id of ['fit-model','fit-model-rail']) $('#'+id)?.addEventListener('click', () => { viewer?.fit(); $('#walk-toggle')?.classList.remove('active'); });
-$('#walk-toggle')?.addEventListener('click', (event) => { const on=!event.currentTarget.classList.contains('active'); event.currentTarget.classList.toggle('active',on); viewer?.toggleWalk(on); });
-$('#walk-floor')?.addEventListener('change', (event) => viewer?.setWalkFloor(Number(event.target.value)||0));
-$('#walk-height')?.addEventListener('input', (event) => viewer?.setWalkHeight(event.target.value));
-$('#walk-fov')?.addEventListener('input', (event) => viewer?.setFov(event.target.value));
-$('#section-toggle')?.addEventListener('click', (event) => { const on=!event.currentTarget.classList.contains('active'); event.currentTarget.classList.toggle('active',on); event.currentTarget.setAttribute('aria-expanded',String(on)); $('#section-panel').hidden=!on; viewer?.setSectionEnabled(on); });
-for (const [id,axis] of [['section-x','x'],['section-y','y'],['section-z','z']]) $('#'+id)?.addEventListener('input', (event) => viewer?.setSectionAxis(axis, Number(event.target.value)/100));
-$('#section-reset')?.addEventListener('click', () => { for (const id of ['section-x','section-y','section-z']) $('#'+id).value='100'; viewer?.resetSection(); });
+// BIM viewport controls are owned exclusively by viewer-r26.js. Keeping a second
+// handler here caused Walk/Section to toggle twice and retained obsolete three-axis clipping UI.
 $('#issue-close').addEventListener('click', closeIssue);
 $('#issue-cancel').addEventListener('click', closeIssue);
 $('#issue-drawer').addEventListener('click', (event) => { if (event.target === event.currentTarget) closeIssue(); });
@@ -1096,7 +1202,7 @@ async function init() {
   if (!Store.isCloud()) setSync('Sign in for live project sync', 'quiet');
   if (state.projectId) await activateProject(state.projectId);
   else {
-    showView('bim');
+    showView(params.get('view') || 'bim');
     if (state.projects.length === 1) await activateProject(state.projects[0].id);
   }
 }
