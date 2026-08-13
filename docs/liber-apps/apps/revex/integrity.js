@@ -3,7 +3,7 @@
 
   const Store = root.RevexStore;
   if (!Store) return;
-  const BUILD = '20260813r45';
+  const BUILD = '20260813r46';
   const iso = () => new Date().toISOString();
   const safe = (value) => String(value || '').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || 'file';
   const docId = (value) => safe(value).replace(/\./g, '_');
@@ -52,6 +52,38 @@
     const ref = f.ref(Store.fs.storage, path);
     await f.uploadBytes(ref, file, firestorePlain({ contentType: file.type || (/\.json$/i.test(name) ? 'application/json' : 'application/octet-stream') }));
     return { path, url: await f.getDownloadURL(ref), name, size: file.size };
+  }
+
+  async function verifyUploadedAsset(uploaded, file, label) {
+    if (!uploaded?.url || !file?.size) throw new Error(`${label} did not produce a readable revision asset.`);
+    const controller = new AbortController();
+    try {
+      const response = await fetch(uploaded.url, {
+        cache: 'no-store',
+        signal: controller.signal
+      });
+      if (!response.ok) throw new Error(`${label} upload verification returned ${response.status}.`);
+      const reader = response.body?.getReader?.();
+      if (!reader) throw new Error(`${label} upload verification returned no data stream.`);
+      const first = await reader.read();
+      await reader.cancel().catch(() => {});
+      if (first.done || !first.value?.byteLength) throw new Error(`${label} upload verification returned an empty asset.`);
+      if (/\.rvxmesh\.gz$/i.test(file.name) && (first.value.byteLength < 2 || first.value[0] !== 0x1f || first.value[1] !== 0x8b))
+        throw new Error('Exact Revit geometry upload is not a valid gzip stream.');
+    } finally {
+      controller.abort();
+    }
+  }
+
+  function overlayVersionId(prefix, overlayId) {
+    return `${prefix}_${docId(overlayId)}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  async function appendLocalOverlayVersion(projectId, lane, overlayId, data) {
+    const key = `liber.revex.${lane}-versions.${projectId}`;
+    const rows = JSON.parse(localStorage.getItem(key) || '[]');
+    rows.unshift({ id: overlayVersionId(lane, overlayId), overlayId, ...clone(data), createdAt: iso() });
+    localStorage.setItem(key, JSON.stringify(rows.slice(0, 5000)));
   }
 
   async function readJson(file) {
@@ -251,6 +283,7 @@
     const printingFile = byName(files, 'printing-sets.json');
     const pdfFiles = files.filter((file) => /\.pdf$/i.test(file.name));
     const ifcFile = files.find((file) => /\.ifc$/i.test(file.name)) || null;
+    const rvxMeshFile = files.find((file) => /\.rvxmesh\.gz$/i.test(file.name)) || null;
     const fbxFile = files.find((file) => /\.fbx$/i.test(file.name)) || null;
 
     if (!projectFile || !designFile || !viewerFile || !specFile || !integrityFile) {
@@ -263,6 +296,7 @@
     const projectId = preferredProjectId || project?.central?.projectId || null;
     if (!projectId) throw new Error('Choose the REVEX project once before the first Revit sync.');
     if (!ifcFile) throw new Error('This revision has no IFC authority model. Re-sync with REVEX 0.7.0 or newer.');
+    if (!rvxMeshFile) throw new Error('This revision has no exact Revit geometry stream (model.rvxmesh.gz). The BIM pointer was not advanced.');
     await verifyIntegrity(files, integrity);
 
     const revision = docId(integrity?.revision || `rev_${Date.now()}`);
@@ -270,7 +304,11 @@
       projectId, revision, project, design, viewer, specPush, integrity, printingSets,
       printingDocs: pdfFiles.map((file) => ({ name: file.name, url: URL.createObjectURL(file), size: file.size })),
       ifcUrl: URL.createObjectURL(ifcFile),
-      modelUrl: fbxFile ? URL.createObjectURL(fbxFile) : null,
+      modelUrl: URL.createObjectURL(rvxMeshFile),
+      modelFormat: 'rvxmesh-gzip',
+      fallbackModelUrl: fbxFile ? URL.createObjectURL(fbxFile) : null,
+      assetRevision: revision,
+      modelRevision: revision,
       syncedAt: iso(), cloud: false
     };
     this.lastLocalPackage = localPackage;
@@ -286,9 +324,12 @@
     }
 
     const area = `revisions/${revision}`;
-    const packageFiles = [projectFile, designFile, viewerFile, specFile, integrityFile, printingFile, ifcFile, fbxFile, ...pdfFiles].filter(Boolean);
+    const packageFiles = [projectFile, designFile, viewerFile, specFile, integrityFile, printingFile, ifcFile, rvxMeshFile, fbxFile, ...pdfFiles].filter(Boolean);
     const uploads = {};
     for (const file of packageFiles) uploads[file.name] = await upload(projectId, area, file);
+    await verifyUploadedAsset(uploads[rvxMeshFile.name], rvxMeshFile, 'Exact Revit geometry');
+    await verifyUploadedAsset(uploads['viewer-model.json'], viewerFile, 'BIM metadata');
+    await verifyUploadedAsset(uploads['design-book.json'], designFile, 'Design Book source');
 
     const specProjectId = await this.ensureSpecProject(projectId, preferredSpecProjectId || project?.central?.specProjectId);
     let specSync = { status: 'unlinked', projectId: null, rev: specPush?.rev || revision };
@@ -329,9 +370,12 @@
     }
 
     const state = clone({
-      schema: 'liber.revex.cloud-state.v2',
+      schema: 'liber.revex.cloud-state.v3',
       projectId,
       revision,
+      latestRevision: revision,
+      assetRevision: revision,
+      modelRevision: revision,
       syncedAt: iso(),
       syncedBy: this.user.uid,
       sourceMode: 'controlled-revit-sync',
@@ -340,8 +384,11 @@
       integrity: integrity || null,
       ifcUrl: uploads[ifcFile.name]?.url || null,
       ifcPath: uploads[ifcFile.name]?.path || null,
-      modelUrl: fbxFile ? uploads[fbxFile.name]?.url || null : null,
-      modelPath: fbxFile ? uploads[fbxFile.name]?.path || null : null,
+      modelUrl: uploads[rvxMeshFile.name]?.url || null,
+      modelPath: uploads[rvxMeshFile.name]?.path || null,
+      modelFormat: 'rvxmesh-gzip',
+      fallbackModelUrl: fbxFile ? uploads[fbxFile.name]?.url || null : null,
+      fallbackModelPath: fbxFile ? uploads[fbxFile.name]?.path || null : null,
       viewerUrl: uploads['viewer-model.json']?.url || null,
       designUrl: uploads['design-book.json']?.url || null,
       projectUrl: uploads['project.json']?.url || null,
@@ -356,9 +403,12 @@
       type: 'revex', hidden: true, revexKind: 'state'
     });
 
-    await setRecord(projectId, 'revex_state', 'state', state, true);
+    // The current pointer is a complete immutable-revision projection. Replacing
+    // it prevents missing new assets from silently retaining URLs from an older
+    // revision. Older revision records and files remain append-only/offloaded.
+    await setRecord(projectId, 'revex_state', 'state', state, false);
     await setRecord(projectId, `revex_revision_${revision}`, 'revision', {
-      revision, syncedAt: state.syncedAt, ifcPath: state.ifcPath, modelPath: state.modelPath,
+      ...state, revision, syncedAt: state.syncedAt, ifcPath: state.ifcPath, modelPath: state.modelPath,
       viewerUrl: state.viewerUrl, designUrl: state.designUrl, projectUrl: state.projectUrl,
       specPushUrl: state.specPushUrl, printingSetsUrl: state.printingSetsUrl, integrity: state.integrity, createdAt: state.syncedAt
     }, false);
@@ -372,14 +422,20 @@
   };
 
   Store.saveDesignEdit = async function saveDesignEditControlled(projectId, itemId, patch) {
-    const data = { ...patch, revexId: itemId, updatedAt: iso(), updatedBy: this.user?.uid || 'local' };
+    const sourceRevision = patch?.sourceRevision || root.__revexCloudState?.revision || null;
+    const data = { ...patch, sourceRevision, revexId: itemId, overlayLane: 'design-book', updatedAt: iso(), updatedBy: this.user?.uid || 'local' };
     if (!cloudReady()) {
       const key = `liber.revex.design.${projectId}`;
       const all = JSON.parse(localStorage.getItem(key) || '{}');
       all[itemId] = { ...(all[itemId] || {}), ...data, id: itemId };
       localStorage.setItem(key, JSON.stringify(all));
+      await appendLocalOverlayVersion(projectId, 'design', itemId, data);
       return all[itemId];
     }
+    const versionId = overlayVersionId('design', itemId);
+    await setRecord(projectId, `revex_design_version_${docId(versionId)}`, 'design-item-version', {
+      ...data, revexId: versionId, overlayId: itemId, immutable: true, createdAt: iso()
+    }, false);
     await setRecord(projectId, `revex_design_${docId(itemId)}`, 'design-item', data, true);
     return { id: itemId, ...data };
   };
@@ -392,14 +448,20 @@
   };
 
   Store.saveChapterEdit = async function saveChapterEditControlled(projectId, chapterId, patch) {
-    const data = { ...patch, revexId: chapterId, updatedAt: iso(), updatedBy: this.user?.uid || 'local' };
+    const sourceRevision = patch?.sourceRevision || root.__revexCloudState?.revision || null;
+    const data = { ...patch, sourceRevision, revexId: chapterId, overlayLane: 'design-book', updatedAt: iso(), updatedBy: this.user?.uid || 'local' };
     if (!cloudReady()) {
       const key = `liber.revex.chapters.${projectId}`;
       const all = JSON.parse(localStorage.getItem(key) || '{}');
       all[chapterId] = { ...(all[chapterId] || {}), ...data, id: chapterId };
       localStorage.setItem(key, JSON.stringify(all));
+      await appendLocalOverlayVersion(projectId, 'chapter', chapterId, data);
       return all[chapterId];
     }
+    const versionId = overlayVersionId('chapter', chapterId);
+    await setRecord(projectId, `revex_chapter_version_${docId(versionId)}`, 'design-chapter-version', {
+      ...data, revexId: versionId, overlayId: chapterId, immutable: true, createdAt: iso()
+    }, false);
     await setRecord(projectId, `revex_chapter_${docId(chapterId)}`, 'design-chapter', data, true);
     return { id: chapterId, ...data };
   };
