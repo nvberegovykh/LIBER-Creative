@@ -3,7 +3,7 @@
 
   const Store = root.RevexStore;
   if (!Store) return;
-  const BUILD = '20260813r47';
+  const BUILD = '20260813r48';
   const iso = () => new Date().toISOString();
   const safe = (value) => String(value || '').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || 'file';
   const docId = (value) => safe(value).replace(/\./g, '_');
@@ -75,6 +75,58 @@
     }
   }
 
+  async function publishSpecScheduleSources(store, specProjectId, projectId, specPush, project, storagePath, revision) {
+    const collection = store.api.collection(store.db, 'specProjects', specProjectId, 'sources');
+    const manifestRef = store.api.doc(collection, 'revex-revit');
+    let previousIds = [];
+    try {
+      const previous = await store.api.getDoc(manifestRef);
+      previousIds = previous.exists() && Array.isArray(previous.data()?.scheduleSourceIds)
+        ? previous.data().scheduleSourceIds.map(String)
+        : [];
+    } catch (_) {}
+
+    const schedules = Array.isArray(specPush?.payload) ? specPush.payload : [];
+    const sourceIds = [];
+    for (const schedule of schedules) {
+      const identity = schedule?.sourceScheduleId || schedule?.presentation?.scheduleUniqueId || schedule?.schedule || `schedule-${sourceIds.length + 1}`;
+      const sourceId = `revex-revit-${docId(identity)}`;
+      sourceIds.push(sourceId);
+      const source = firestorePlain({
+        type: 'revit',
+        name: schedule?.schedule || 'REVEX Revit schedule',
+        rev: specPush?.rev || revision,
+        pushedAt: specPush?.pushedAt || iso(),
+        payload: [schedule],
+        linkedProjectId: projectId,
+        sourceScheduleId: identity,
+        centralDocumentUniqueId: project?.central?.documentUniqueId || null,
+        storagePath
+      });
+      await store.api.setDoc(store.api.doc(collection, sourceId), source, firestorePlain({ merge: false }));
+    }
+
+    for (const sourceId of previousIds.filter((id) => !sourceIds.includes(id))) {
+      await store.api.setDoc(store.api.doc(collection, sourceId), firestorePlain({
+        type: 'revit', name: 'Retired REVEX Revit schedule', rev: specPush?.rev || revision,
+        pushedAt: specPush?.pushedAt || iso(), payload: [], linkedProjectId: projectId,
+        retired: true, retiredAt: iso(), storagePath
+      }), firestorePlain({ merge: false }));
+    }
+
+    // Emptying the former monolithic payload retires pre-r48 rows through the
+    // existing non-destructive Spec merge while keeping authored fields/history.
+    const manifest = firestorePlain({
+      type: 'revit-manifest', name: 'REVEX controlled Revit schedules',
+      rev: specPush?.rev || revision, pushedAt: specPush?.pushedAt || iso(),
+      payload: [], linkedProjectId: projectId, scheduleSourceIds: sourceIds,
+      scheduleCount: sourceIds.length, centralDocumentUniqueId: project?.central?.documentUniqueId || null,
+      storagePath
+    });
+    await store.api.setDoc(manifestRef, manifest, firestorePlain({ merge: false }));
+    return manifest;
+  }
+
   function overlayVersionId(prefix, overlayId) {
     return `${prefix}_${docId(overlayId)}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   }
@@ -94,6 +146,24 @@
 
   function byName(files, name) {
     return files.find((file) => String(file.name || '').toLowerCase() === String(name).toLowerCase()) || null;
+  }
+
+  function resolveAtomicPackageProject(project, preferredProjectId, preferredSpecProjectId) {
+    const packageProjectId = String(project?.central?.projectId || '').trim();
+    const requestedProjectId = String(preferredProjectId || '').trim();
+    if (!packageProjectId)
+      throw new Error('project.json has no authoritative Revit project binding. Re-sync the active Revit model.');
+    if (requestedProjectId && requestedProjectId !== packageProjectId)
+      throw new Error(`Blocked a mixed-project publish: the open Companion selected ${requestedProjectId}, but this immutable Revit revision belongs to ${packageProjectId}.`);
+
+    const expectedSpecProjectId = `spec_${docId(packageProjectId)}`;
+    const packageSpecProjectId = String(project?.central?.specProjectId || '').trim();
+    const requestedSpecProjectId = String(preferredSpecProjectId || '').trim();
+    if (packageSpecProjectId && packageSpecProjectId !== expectedSpecProjectId)
+      throw new Error(`Blocked a mixed BIM/Spec revision: ${packageProjectId} cannot publish into ${packageSpecProjectId}.`);
+    if (requestedSpecProjectId && requestedSpecProjectId !== expectedSpecProjectId)
+      throw new Error(`Blocked a mixed BIM/Spec selection: ${packageProjectId} requires ${expectedSpecProjectId}, not ${requestedSpecProjectId}.`);
+    return { projectId: packageProjectId, specProjectId: expectedSpecProjectId };
   }
 
   async function sha256(file) {
@@ -293,8 +363,8 @@
     const [project, design, viewer, specPush, integrity, printingSets] = await Promise.all([
       readJson(projectFile), readJson(designFile), readJson(viewerFile), readJson(specFile), readJson(integrityFile), printingFile ? readJson(printingFile) : null
     ]);
-    const projectId = preferredProjectId || project?.central?.projectId || null;
-    if (!projectId) throw new Error('Choose the REVEX project once before the first Revit sync.');
+    const packageBinding = resolveAtomicPackageProject(project, preferredProjectId, preferredSpecProjectId);
+    const projectId = packageBinding.projectId;
     if (!ifcFile) throw new Error('This revision has no IFC authority model. Re-sync with REVEX 0.7.0 or newer.');
     if (!rvxMeshFile) throw new Error('This revision has no exact Revit geometry stream (model.rvxmesh.gz). The BIM pointer was not advanced.');
     await verifyIntegrity(files, integrity);
@@ -331,21 +401,13 @@
     await verifyUploadedAsset(uploads['viewer-model.json'], viewerFile, 'BIM metadata');
     await verifyUploadedAsset(uploads['design-book.json'], designFile, 'Design Book source');
 
-    const specProjectId = await this.ensureSpecProject(projectId, preferredSpecProjectId || project?.central?.specProjectId);
+    const specProjectId = await this.ensureSpecProject(projectId, packageBinding.specProjectId);
     let specSync = { status: 'unlinked', projectId: null, rev: specPush?.rev || revision };
     if (specProjectId) {
-      const source = firestorePlain({
-        type: 'revit',
-        name: 'REVEX controlled Revit sync',
-        rev: specPush?.rev || revision,
-        pushedAt: specPush?.pushedAt || iso(),
-        payload: specPush?.payload || [],
-        linkedProjectId: projectId,
-        centralDocumentUniqueId: project?.central?.documentUniqueId || null,
-        storagePath: uploads['spec-revit-push.json']?.path || null
-      });
-      await this.api.setDoc(this.api.doc(this.db, 'specProjects', specProjectId, 'sources', 'revex-revit'), source, firestorePlain({ merge: true }));
-      specSync = { status: 'published', projectId: specProjectId, rev: source.rev, pushedAt: source.pushedAt };
+      const source = await publishSpecScheduleSources(
+        this, specProjectId, projectId, specPush, project,
+        uploads['spec-revit-push.json']?.path || null, revision);
+      specSync = { status: 'published', projectId: specProjectId, rev: source.rev, pushedAt: source.pushedAt, scheduleCount: source.scheduleCount };
     }
 
     const printingDocs = [];

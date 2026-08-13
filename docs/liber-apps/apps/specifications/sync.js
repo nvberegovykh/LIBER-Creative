@@ -37,6 +37,9 @@
           roles: sch.roles,
           groups: sch.groups,
           totals: sch.totals,
+          sourceScheduleId: sch.sourceScheduleId || null,
+          nativePresentation: sch.presentation || null,
+          nativeSchedule: sch.presentation?.schema === 'liber.revit.schedule.presentation.v1',
           body: {},
           updatedAt: nowISO()
         }
@@ -151,7 +154,10 @@
   function normalisePush(payload) {
     return (payload || []).map((p) => {
       const grid = [[p.schedule || 'Schedule']].concat([p.headers || []], (p.rows || []).map((r) => Array.isArray(r) ? r : (p.headers || []).map((h) => r[h])));
-      return root.ScheduleParser.parseGrid(grid, p.schedule || 'Schedule');
+      const parsed = root.ScheduleParser.parseGrid(grid, p.schedule || 'Schedule');
+      parsed.sourceScheduleId = p.sourceScheduleId || p.presentation?.scheduleUniqueId || null;
+      parsed.presentation = p.presentation || null;
+      return parsed;
     });
   }
 
