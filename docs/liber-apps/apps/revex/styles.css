@@ -82,6 +82,7 @@ h3 { margin: 20px 0 8px; font-size: 13px; }
 .viewport-tools { display: flex; gap: 5px; position: absolute; top: 12px; right: 12px; }
 .tool { min-height: 30px; padding: 0 9px; border: 1px solid var(--line-2); border-radius: 7px; background: rgba(19, 22, 27, .88); color: var(--tx-2); font: 11px var(--mono); }
 .tool.active { border-color: #22456b; background: rgba(77, 163, 255, .14); color: #91c5ff; }
+#model-hidden-filter.active { border-color: #2e6a91; background: rgba(77, 163, 255, .14); color: #a9d5ff; }
 .issue-pins { position: absolute; inset: 0; pointer-events: none; }
 .issue-pin { position: absolute; transform: translate(-50%, -100%); width: 27px; height: 27px; pointer-events: auto; border: 2px solid var(--bg); border-radius: 50% 50% 50% 8px; background: var(--bad); color: #fff; font: 700 10px var(--mono); box-shadow: 0 5px 16px rgba(0, 0, 0, .5); }
 .issue-pin.resolved { background: var(--ok); }

@@ -30,14 +30,15 @@ const state = {
   chatLoaded: false,
   historyEvents: [],
   bimOverlays: new Map(),
-  derivedPlans: []
+  derivedPlans: [],
+  showHiddenOnly: false
 };
 window.__revexState = state;
 
 function storeCall(name, args = [], fallback = null) {
   const fn = Store?.[name];
   if (typeof fn !== 'function') {
-    console.warn(`[REVEX] Store.${name} unavailable; continuing with fallback.`, { build: '20260812r41' });
+    console.warn(`[REVEX] Store.${name} unavailable; continuing with fallback.`, { build: '20260813r44' });
     return Promise.resolve(fallback);
   }
   try { return Promise.resolve(fn.apply(Store, args)); }
@@ -286,6 +287,28 @@ function modelInstanceLabel(row) {
   return `${primary} · #${row?.id ?? ''}`;
 }
 
+function modelOverlay(row) {
+  const overlays = state.bimOverlays;
+  if (!overlays?.get) return null;
+  return overlays.get(String(row?.uniqueId || '')) || overlays.get(String(row?.id || '')) || null;
+}
+
+function modelRowInVisibilityMode(row) {
+  const overlay = modelOverlay(row);
+  const hidden = Boolean(overlay?.hidden) && !overlay?.deleted;
+  return state.showHiddenOnly ? hidden : !hidden && !overlay?.deleted;
+}
+
+function syncHiddenMode() {
+  const button = $('#model-hidden-filter');
+  if (button) {
+    button.classList.toggle('active', state.showHiddenOnly);
+    button.setAttribute('aria-pressed', String(state.showHiddenOnly));
+    button.textContent = state.showHiddenOnly ? 'Show visible' : 'Show hidden';
+  }
+  activeBimViewer()?.setVisibilityMode?.(state.showHiddenOnly ? 'hidden-only' : 'normal');
+}
+
 function ensureModelFilterBar() {
   const search = $('#element-search');
   if (!search) return null;
@@ -297,8 +320,19 @@ function ensureModelFilterBar() {
     host.innerHTML = `
       <label><span>Family type</span><select id="model-family-type-filter" class="sp-inp"><option value="">All family types</option></select></label>
       <label><span>Instance</span><select id="model-instance-filter" class="sp-inp"><option value="">All instances</option></select></label>
+      <button id="model-hidden-filter" type="button" class="button ghost compact" aria-pressed="false">Show hidden</button>
       <button id="model-filter-clear" type="button" class="button ghost compact">Clear</button>`;
     search.insertAdjacentElement('afterend', host);
+    $('#model-hidden-filter', host)?.addEventListener('click', () => {
+      state.showHiddenOnly = !state.showHiddenOnly;
+      const family = $('#model-family-type-filter');
+      const instance = $('#model-instance-filter');
+      if (family) family.value = '';
+      if (instance) instance.value = '';
+      if (search) search.value = '';
+      syncHiddenMode();
+      renderModelTree();
+    });
     $('#model-filter-clear', host)?.addEventListener('click', () => {
       const family = $('#model-family-type-filter');
       const instance = $('#model-instance-filter');
@@ -308,6 +342,7 @@ function ensureModelFilterBar() {
       renderModelTree();
     });
   }
+  syncHiddenMode();
   return host;
 }
 
@@ -328,8 +363,9 @@ function renderModelTree() {
   const previousFamily = familySelect?.value || '';
   const previousInstance = instanceSelect?.value || '';
 
+  const modeElements = elements.filter(modelRowInVisibilityMode);
   const typeBuckets = new Map();
-  for (const row of elements) {
+  for (const row of modeElements) {
     const key = modelFamilyTypeKey(row);
     if (!typeBuckets.has(key)) typeBuckets.set(key, { key, label: modelFamilyTypeLabel(row), rows: [] });
     typeBuckets.get(key).rows.push(row);
@@ -341,7 +377,7 @@ function renderModelTree() {
     familySelect.onchange = () => { if (instanceSelect) instanceSelect.value = ''; renderModelTree(); };
   }
   const activeFamily = familySelect?.value || '';
-  const familyRows = activeFamily ? (typeBuckets.get(activeFamily)?.rows || []) : elements;
+  const familyRows = activeFamily ? (typeBuckets.get(activeFamily)?.rows || []) : modeElements;
   const sortedInstances = [...familyRows].sort((a, b) => modelInstanceLabel(a).localeCompare(modelInstanceLabel(b), undefined, { numeric: true, sensitivity: 'base' }));
   if (instanceSelect) {
     instanceSelect.innerHTML = '<option value="">All instances</option>' + sortedInstances.slice(0, 3000).map((row) => `<option value="${escapeHtml(row.id)}">${escapeHtml(modelInstanceLabel(row))}</option>`).join('');
@@ -355,7 +391,7 @@ function renderModelTree() {
   }
   const activeInstance = instanceSelect?.value || '';
 
-  const visible = elements.filter((row) => {
+  const visible = modeElements.filter((row) => {
     if (activeFamily && modelFamilyTypeKey(row) !== activeFamily) return false;
     if (activeInstance && String(row.id) !== activeInstance) return false;
     if (!q) return true;
@@ -378,11 +414,12 @@ function renderModelTree() {
     for (const row of rows.slice(0, Math.max(treeLimit - shown, 0))) {
       shown += 1;
       const secondary = [row.category, row.level].filter(Boolean).join(' · ');
-      chunks.push(`<button class="tree-item${String(state.selectedElement?.id) === String(row.id) ? ' active' : ''}" data-element-id="${escapeHtml(row.id)}"><span class="tree-instance"><b>${escapeHtml(modelInstanceLabel(row).replace(/ · #.*$/, ''))}</b>${secondary ? `<small>${escapeHtml(secondary)}</small>` : ''}</span><span class="tree-id">#${escapeHtml(row.id)}</span></button>`);
+      const hiddenTag = modelOverlay(row)?.hidden ? '<small>Hidden in Companion</small>' : '';
+      chunks.push(`<button class="tree-item${String(state.selectedElement?.id) === String(row.id) ? ' active' : ''}" data-element-id="${escapeHtml(row.id)}"><span class="tree-instance"><b>${escapeHtml(modelInstanceLabel(row).replace(/ · #.*$/, ''))}</b>${secondary ? `<small>${escapeHtml(secondary)}</small>` : ''}${hiddenTag}</span><span class="tree-id">#${escapeHtml(row.id)}</span></button>`);
     }
   });
   if (visible.length > shown) chunks.push(`<p class="muted">Showing ${shown.toLocaleString()} of ${visible.length.toLocaleString()} matching instances. Use Family type, Instance or search to narrow.</p>`);
-  $('#element-tree').innerHTML = chunks.join('') || '<p class="muted">No matching model instances.</p>';
+  $('#element-tree').innerHTML = chunks.join('') || `<p class="muted">${state.showHiddenOnly ? 'No hidden model instances.' : 'No matching visible model instances.'}</p>`;
   $$('.tree-item', $('#element-tree')).forEach((button) => button.addEventListener('click', () => {
     const element = elements.find((row) => String(row.id) === button.dataset.elementId);
     if (element) { selectElement(element, true); closeWorkspaceRail(); }
@@ -1011,7 +1048,7 @@ async function hydrateRevisionOverlays(cloudState,localPackage,revision){
   }
   const edits=settledValue(editsR,[]),chapterEdits=settledValue(chapterR,[]),issues=settledValue(issuesR,[]),library=settledValue(libraryR,[]),historyEvents=settledValue(historyR,[]),bimOverlays=settledValue(overlayR,[]),derivedPlans=settledValue(plansR,[]);
   state.designEdits=new Map(edits.map(r=>[r.id,r]));state.chapterEdits=new Map(chapterEdits.map(r=>[r.id,r]));state.issues=issues;state.library=library;state.historyEvents=historyEvents||[];state.bimOverlays=new Map((bimOverlays||[]).map(r=>[String(r.uniqueId||r.elementId||r.id),r]));state.derivedPlans=derivedPlans||[];
-  renderPins();renderDesign();renderDesignInspector();renderLibrary();activeBimViewer()?.setOverlays?.(bimOverlays||[]);activeBimViewer()?.requestRender?.();window.dispatchEvent(new CustomEvent('revex:history-data', { detail: { historyEvents: state.historyEvents, bimOverlays: bimOverlays||[], derivedPlans: state.derivedPlans } }));
+  syncHiddenMode();renderModelTree();renderPins();renderDesign();renderDesignInspector();renderLibrary();activeBimViewer()?.setOverlays?.(bimOverlays||[]);activeBimViewer()?.requestRender?.();window.dispatchEvent(new CustomEvent('revex:history-data', { detail: { historyEvents: state.historyEvents, bimOverlays: bimOverlays||[], derivedPlans: state.derivedPlans } }));
   if(!$('#view-spec')?.hidden)renderSpec();
 }
 
@@ -1045,7 +1082,7 @@ async function loadCloudState(cloudState,localPackage=null){
 }
 
 async function activateProject(projectId){
-  state.unsubscribe?.();state.unsubscribe=null;state.projectId=projectId||'';
+  state.unsubscribe?.();state.unsubscribe=null;state.projectId=projectId||'';state.showHiddenOnly=false;
   state.project=state.projects.find(r=>r.id===projectId)||(projectId?await Store.getProject(projectId):null);
   state.preferredSpecId=((params.get('projectId')===projectId&&params.get('specProjectId'))||state.project?.revexSpecProjectId||'');
   renderProjects();persistProjectRoute();notifyNativeProject();
@@ -1130,6 +1167,12 @@ $('#rail-toggle').addEventListener('click', toggleWorkspaceRail);
 $('#rail-scrim').addEventListener('click', closeWorkspaceRail);
 window.addEventListener('revex:viewer-mode', (event) => {
   state.viewerMode = event.detail?.mode || '';
+  renderModelTree();
+});
+window.addEventListener('revex:bim-overlays-changed', (event) => {
+  const rows = event.detail?.overlays || [];
+  state.bimOverlays = event.detail?.map || new Map(rows.map((row) => [String(row.uniqueId || row.elementId || row.id), row]));
+  syncHiddenMode();
   renderModelTree();
 });
 

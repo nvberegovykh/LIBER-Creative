@@ -67,6 +67,41 @@
     return null;
   }
 
+  function energyCallableError(error) {
+    const code = String(error?.code || error?.status || 'functions/unknown').trim();
+    const message = String(error?.message || 'REVEX Energy broker failed.').replace(/^Firebase:\s*/i, '').trim();
+    const details = error?.details == null ? '' : (typeof error.details === 'string' ? error.details : JSON.stringify(error.details));
+    const result = new Error([message, code && `Code: ${code}`, details && `Details: ${details}`].filter(Boolean).join(' · '));
+    result.name = 'RevexEnergyBrokerError';
+    result.code = code;
+    result.details = error?.details ?? null;
+    result.cause = error;
+    return result;
+  }
+
+  async function callEnergyBroker(fs, payload) {
+    await fs?.waitForInit?.();
+    const modular = root.firebaseModular || REALM.firebaseModular;
+    if (modular?.httpsCallable && modular?.getFunctions && fs?.app) {
+      const functions = fs.functionsByRegion?.['us-central1'] || modular.getFunctions(fs.app, 'us-central1');
+      try {
+        const callable = modular.httpsCallable(functions, 'runRevexEnergy', { timeout: 3600000 });
+        const response = await callable(payload);
+        return response?.data ?? null;
+      } catch (error) {
+        throw energyCallableError(error);
+      }
+    }
+    if (!fs?.callFunction) throw new Error('REVEX managed Energy broker is unavailable in this session.');
+    try {
+      const response = await fs.callFunction('runRevexEnergy', payload);
+      if (response == null) throw new Error('The shared Firebase wrapper returned no broker response.');
+      return response;
+    } catch (error) {
+      throw energyCallableError(error);
+    }
+  }
+
   async function readJson(file) {
     if (!file) return null;
     try { return JSON.parse(await file.text()); } catch (error) {
@@ -490,12 +525,11 @@
       if (!projectId || !sourceRevision) throw new Error('Project and Engineering revision are required for managed Energy processing.');
       if (!this.isCloud()) throw new Error('Managed Energy processing requires a signed-in REVEX cloud session.');
       const fs = this.fs || getService();
-      if (!fs?.callFunction) throw new Error('REVEX managed Energy broker is unavailable in this session.');
-      const response = await fs.callFunction('runRevexEnergy', plain({
+      const response = await callEnergyBroker(fs, plain({
         schema: 'liber.revex.energy-broker-request.v1',
         projectId,
         sourceRevision,
-        clientBuild: '20260813r43'
+        clientBuild: '20260813r44'
       }));
       if (!response?.ok) throw new Error(response?.message || response?.error || 'REVEX managed Energy worker did not complete.');
       return response;
