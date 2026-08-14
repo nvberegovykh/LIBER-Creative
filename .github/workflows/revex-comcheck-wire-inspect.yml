@@ -11,11 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Selenium
-        run: python -m pip install --disable-pip-version-check selenium
-      - name: Live namespace-preserved current-project CXL through COMcheck
+        run: python -m pip install --disable-pip-version-check selenium pypdf
+      - name: Live byte-preserving current-project CXL through COMcheck
         shell: python
         run: |
-          import pathlib,tempfile,time,urllib.request,xml.etree.ElementTree as ET
+          import pathlib,re,tempfile,time,urllib.request
           from selenium import webdriver
           from selenium.webdriver.common.by import By
           from selenium.webdriver.support.ui import WebDriverWait
@@ -24,46 +24,64 @@ jobs:
           ref=pathlib.Path('src/Liber.Revex.Revit/Engineering/Energy/References/COMcheck_250_MIDWOOD_STRUCTURE_REFERENCE.cxl')
           with tempfile.TemporaryDirectory() as td:
               p=pathlib.Path(td)/'REVEX_COMCHECK_CURRENT_QA.cxl'
-              tree=ET.parse(ref);root=tree.getroot();ns=root.tag.split('}')[0].lstrip('{');ET.register_namespace('',ns)
-              vals={'projectTitle':'REVEX COMCHECK LIVE QA','projectAddress':'999 TEST AVENUE','projectCity':'BROOKLYN','projectState':'New York','projectZipCode':'11201'}
-              for n in root.iter():
-                  k=n.tag.rsplit('}',1)[-1]
-                  if k in vals:n.text=vals[k]
-              tree.write(p,encoding='utf-8',xml_declaration=True)
-              print('CURRENT_CXL_PREFIX=',p.read_text(encoding='utf-8')[:220])
+              text=ref.read_text(encoding='utf-8')
+              replacements={
+                'projectTitle':'REVEX COMCHECK LIVE QA',
+                'projectAddress':'999 TEST AVENUE',
+                'projectCity':'BROOKLYN',
+                'projectState':'New York',
+                'projectZipCode':'11201',
+              }
+              for tag,value in replacements.items():
+                  pattern=rf'(<{tag}>\s*<!\[CDATA\[)(.*?)(\]\]>\s*</{tag}>)'
+                  text,n=re.subn(pattern,lambda m:m.group(1)+value+m.group(3),text,count=1,flags=re.S)
+                  if n!=1: raise RuntimeError(f'Expected one CDATA {tag}; got {n}')
+              p.write_text(text,encoding='utf-8',newline='')
+              original=ref.read_text(encoding='utf-8')
+              normalized=text
+              for tag,value in replacements.items():
+                  pattern=rf'(<{tag}>\s*<!\[CDATA\[)(.*?)(\]\]>\s*</{tag}>)'
+                  normalized=re.sub(pattern,lambda m:m.group(1)+re.search(pattern,original,re.S).group(2)+m.group(3),normalized,count=1,flags=re.S)
+              if normalized!=original: raise RuntimeError('Byte-preserving migration changed fields outside explicit project identity')
+              print('BYTE_PRESERVATION_GATE=PASSED')
+
               o=webdriver.ChromeOptions();o.add_argument('--headless=new');o.add_argument('--no-sandbox');o.add_argument('--disable-dev-shm-usage')
               d=webdriver.Chrome(options=o)
               try:
                   w=WebDriverWait(d,45);d.get(base+'index.html');w.until(lambda x:x.execute_script("return typeof uploadProject==='function' && typeof USER_PROJECT!=='undefined' && USER_PROJECT!==null"))
                   d.execute_script("let e=document.createElement('input');e.type='file';e.id='fileToUpload';e.name='fileToUpload';document.body.appendChild(e);")
                   d.find_element(By.ID,'fileToUpload').send_keys(str(p.resolve()));d.execute_script('uploadProject();')
-                  time.sleep(4)
+                  time.sleep(5)
                   try:
-                      a=d.switch_to.alert;txt=a.text;print('COMCHECK_ALERT=',txt);a.accept();raise RuntimeError('COMcheck rejected namespace-preserved CXL: '+txt)
+                      a=d.switch_to.alert;txt=a.text;print('COMCHECK_ALERT=',txt);a.accept();raise RuntimeError('COMcheck rejected byte-preserved CXL: '+txt)
                   except NoAlertPresentException:pass
                   current=d.execute_async_script("""
                     const done=arguments[arguments.length-1];
                     ProjectService.getCurrentProject(function(r){
-                      try{done(JSON.stringify({ok:true, text:JSON.stringify(r).slice(0,10000)}));}
-                      catch(e){done(JSON.stringify({ok:false,error:String(e)}));}
+                      try{done(JSON.stringify(r).slice(0,20000));}catch(e){done('ERR '+String(e));}
                     });
                   """)
-                  print('CURRENT_PROJECT_CALLBACK=',current)
-                  if 'REVEX COMCHECK LIVE QA' not in current:raise RuntimeError('uploaded project identity not present in official current-project response')
+                  print('CURRENT_PROJECT_PREFIX=',current[:2000])
+                  if 'REVEX COMCHECK LIVE QA' not in current: raise RuntimeError('official current project does not contain migrated identity')
                   print('REVEX_COMCHECK_BROWSER_UPLOAD=PASSED')
                   calc=d.execute_async_script("""
                     const done=arguments[arguments.length-1];
                     ProjectService.calculateEnvelopeCompliance(true,function(r){
-                      try{done(JSON.stringify({ok:true,text:JSON.stringify(r).slice(0,10000)}));}
-                      catch(e){done(JSON.stringify({ok:false,error:String(e)}));}
+                      try{done(JSON.stringify(r).slice(0,20000));}catch(e){done('ERR '+String(e));}
                     });
                   """)
-                  print('CALC_CALLBACK=',calc)
-                  if '"ok":true' not in calc.replace(' ',''):raise RuntimeError('official envelope calculation callback failed')
+                  print('CALC_PREFIX=',calc[:3000])
+                  if not calc or calc.startswith('ERR '):raise RuntimeError('official envelope calculation callback failed')
+                  print('REVEX_COMCHECK_BROWSER_CALC=PASSED')
                   report_url=base+'report.html?envelopeCertificate=true&intLightingCertificate=false&extLightingCertificate=false&mechanicalCertificate=false&mechanicalReqDescription=false'
                   d.get(report_url);w.until(lambda x:'report/current/pdf' in x.page_source)
                   cookies='; '.join(f"{c['name']}={c['value']}" for c in d.get_cookies());ua=d.execute_script('return navigator.userAgent')
                   pdf=urllib.request.urlopen(urllib.request.Request(base+'report/current/pdf',headers={'Cookie':cookies,'User-Agent':ua,'Referer':report_url}),timeout=45).read()
                   if not pdf.startswith(b'%PDF-'):raise RuntimeError('official report endpoint returned non-PDF')
+                  out=pathlib.Path(td)/'report.pdf';out.write_bytes(pdf)
+                  from pypdf import PdfReader
+                  report_text='\n'.join((x.extract_text() or '') for x in PdfReader(str(out)).pages)
+                  print('REPORT_TEXT_PREFIX=',report_text[:2500].replace('\n',' | '))
+                  if 'REVEX COMCHECK LIVE QA'.casefold() not in report_text.casefold():raise RuntimeError('official PDF does not contain migrated project identity')
                   print('REVEX_COMCHECK_BROWSER_PDF=PASSED bytes=',len(pdf))
               finally:d.quit()
