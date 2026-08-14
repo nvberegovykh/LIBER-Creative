@@ -595,7 +595,7 @@ try {
     "src\Liber.Revex.Revit\Engineering\Companion\native-managed-energy-bridge.js" = "82d6442254f468533532d88eedd63112f30a2fc1e407b47e1f86ac1b9ba726d2"
     "src\Liber.Revex.Revit\Engineering\Energy\revex_energy_pipeline.py" = "5daa186c61cdff8913ae48eca52bfbafa158eb8e74045550bc894d5c5cd034b2"
     "src\Liber.Revex.Revit\Engineering\Energy\comcheck_backstop.py" = "ed817d0832f64fc9c1f6bfabc3bc79d010b4cd84d192884d41d494df77809d10"
-    "src\Liber.Revex.Revit\Engineering\Energy\verify_revex_r49_energy.py" = "1ffcbf30b5511d3ea7017f79156ef9084af910d653c2da8f694f1acb8d507fe4"
+    "src\Liber.Revex.Revit\Engineering\Energy\verify_revex_r49_energy.py" = "e764b174ff0261c2f1d230357f04a1ffc41f8550ab6565e5089009d018fe7dab"
     "src\Liber.Revex.Revit\Engineering\Energy\requirements.txt" = "e9dde285ed5fa05c6161325ccdd2906d9d9f6d6693979f1df9078c82eb98e673"
     "src\Liber.Revex.Revit\Engineering\Energy\GeometryCo\OpenStudio_Energy_Model_Geometry_Compiler.py" = "0152e06c447b36457fc973b2896d82b68596a03bdc855a519dbcd0bda253ee9f"
     "src\Liber.Revex.Revit\Engineering\Energy\Packager\EnergyPlusReviewPackager.py" = "30ba0b2f3e1fee952382d016c68caa5dea85d7d68b439296797da5adf7f412f2"
