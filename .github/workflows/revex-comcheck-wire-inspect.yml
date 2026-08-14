@@ -7,50 +7,69 @@ permissions:
 jobs:
   inspect:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
-      - name: Isolate official COMcheck upload browser state
+      - name: Install browser automation client
+        run: python -m pip install --disable-pip-version-check selenium
+      - name: Live official COMcheck browser upload calculation and PDF
         shell: python
         run: |
-          import importlib.util, pathlib, sys, tempfile, urllib.parse, xml.etree.ElementTree as ET
-          energy=pathlib.Path('src/Liber.Revex.Revit/Engineering/Energy')
-          spec=importlib.util.spec_from_file_location('cc', energy/'comcheck_backstop.py')
-          cc=importlib.util.module_from_spec(spec); sys.modules['cc']=cc; spec.loader.exec_module(cc)
-          reference=energy/'References'/'COMcheck_250_MIDWOOD_STRUCTURE_REFERENCE.cxl'
-          def upload(client, path, filename):
-              fields=client._base_fields('ProjectService','uploadProject')
-              fields['c0-param0']='string:'+urllib.parse.quote(filename,safe='')
-              body,ctype=cc._multipart(fields,'c0-param1',path)
-              raw=client._request('POST','dwr/call/htmlcall/ProjectService.uploadProject.dwr',body=body,content_type=ctype)
-              text=raw.decode('utf-8','replace')
-              return text, cc._dwr_error(text)
+          import pathlib, tempfile, time, urllib.request, xml.etree.ElementTree as ET
+          from selenium import webdriver
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import WebDriverWait
+
+          base='https://legacy-comcheck.energycode.pnl.gov/CheckWeb/'
+          reference=pathlib.Path('src/Liber.Revex.Revit/Engineering/Energy/References/COMcheck_250_MIDWOOD_STRUCTURE_REFERENCE.cxl')
           with tempfile.TemporaryDirectory() as td:
-              test=pathlib.Path(td)/'REVEX_COMCHECK_SCHEMA_INTACT_QA.cxl'
+              folder=pathlib.Path(td)
+              test=folder/'REVEX_COMCHECK_BROWSER_QA.cxl'
               tree=ET.parse(reference); root=tree.getroot()
+              values={'projectTitle':'REVEX COMCHECK LIVE QA','projectAddress':'999 TEST AVENUE','projectCity':'BROOKLYN','projectState':'New York','projectZipCode':'11201'}
               for node in root.iter():
                   local=node.tag.rsplit('}',1)[-1]
-                  values={'projectTitle':'REVEX COMCHECK LIVE QA','projectAddress':'999 TEST AVENUE','projectCity':'BROOKLYN','projectState':'New York','projectZipCode':'11201'}
                   if local in values: node.text=values[local]
               tree.write(test,encoding='utf-8',xml_declaration=True)
-              results=[]
-              for make_new,fakepath in [(False,False),(True,False),(False,True),(True,True)]:
-                  c=cc.ComcheckClient(cc.DEFAULT_BASE_URL,lambda *a,**k:None,timeout_seconds=30)
-                  c.start()
-                  if make_new:
-                      new_reply=c._dwr_call('ProjectService','newProject','dwr/call/plaincall/ProjectService.newProject.dwr')
-                      print('NEW_PROJECT_CALLBACK=', 'handleCallback' in new_reply)
-                  filename=('C:\\fakepath\\'+test.name) if fakepath else test.name
-                  text,error=upload(c,test,filename)
-                  ok=('handleCallback' in text and error is None)
-                  results.append((make_new,fakepath,ok,error))
-                  print('UPLOAD_VARIANT',{'newProject':make_new,'fakepath':fakepath,'ok':ok,'error':error})
-                  if ok:
-                      evidence=pathlib.Path(td)/'calc.js'
-                      summary=c.calculate_backstop(evidence)
-                      report=pathlib.Path(td)/'report.pdf'
-                      c.download_report(report)
-                      print('WINNER_SUMMARY=',summary)
-                      print('WINNER_PDF=',report.stat().st_size,report.read_bytes()[:5])
-                      raise SystemExit(0)
-              raise RuntimeError('No browser-state upload variant succeeded: '+repr(results))
+
+              options=webdriver.ChromeOptions()
+              options.add_argument('--headless=new')
+              options.add_argument('--no-sandbox')
+              options.add_argument('--disable-dev-shm-usage')
+              options.add_argument('--window-size=1400,1000')
+              driver=webdriver.Chrome(options=options)
+              try:
+                  wait=WebDriverWait(driver,45)
+                  driver.get(base+'index.html')
+                  wait.until(lambda d: d.execute_script("return typeof ProjectService !== 'undefined' && typeof USER_PROJECT !== 'undefined' && USER_PROJECT !== null"))
+                  file_input=wait.until(lambda d: d.find_element(By.ID,'fileToUpload'))
+                  file_input.send_keys(str(test.resolve()))
+                  driver.execute_script('uploadProject();')
+                  wait.until(lambda d: d.execute_script("return USER_PROJECT && USER_PROJECT.project && USER_PROJECT.project.projectDetails && USER_PROJECT.project.projectDetails.title && USER_PROJECT.project.projectDetails.title.value") == 'REVEX COMCHECK LIVE QA')
+                  print('REVEX_COMCHECK_BROWSER_UPLOAD=PASSED')
+
+                  calc=driver.execute_async_script("""
+                    const done = arguments[arguments.length - 1];
+                    ProjectService.calculateEnvelopeCompliance(true, function(r) {
+                      try {
+                        const s = r && r.envelopeStatus ? r.envelopeStatus : r;
+                        done(JSON.stringify({ok:true, passes:s && s.passes, complianceIndex:s && s.complianceIndex}));
+                      } catch (e) { done(JSON.stringify({ok:false,error:String(e)})); }
+                    });
+                  """)
+                  print('REVEX_COMCHECK_BROWSER_CALC=',calc)
+                  if '"ok":true' not in calc.replace(' ',''):
+                      raise RuntimeError('COMcheck browser calculation callback failed: '+str(calc))
+
+                  report_url=base+'report.html?envelopeCertificate=true&intLightingCertificate=false&extLightingCertificate=false&mechanicalCertificate=false&mechanicalReqDescription=false'
+                  driver.get(report_url)
+                  wait.until(lambda d: 'report/current/pdf' in d.page_source)
+                  cookies='; '.join(f"{c['name']}={c['value']}" for c in driver.get_cookies())
+                  req=urllib.request.Request(base+'report/current/pdf',headers={'Cookie':cookies,'User-Agent':driver.execute_script('return navigator.userAgent')})
+                  pdf=urllib.request.urlopen(req,timeout=45).read()
+                  if not pdf.startswith(b'%PDF-'):
+                      raise RuntimeError('Official COMcheck browser-session report endpoint did not return PDF')
+                  print('REVEX_COMCHECK_BROWSER_PDF=PASSED')
+                  print('REVEX_COMCHECK_BROWSER_PDF_BYTES=',len(pdf))
+              finally:
+                  driver.quit()
