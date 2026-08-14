@@ -108,3 +108,17 @@ The fix is dependency-marker-only and must not alter Energy behavior:
 - GeometryCo model files, inference flow, thresholds, templates, Revit evidence, OSM compilation, EnergyPlus, COMcheck, EN-1, and acceptance semantics remain unchanged.
 
 Future publisher preflight must verify this split before expensive real-project acceptance so a workstation-only dependency pin cannot again reach Cloud Build.
+
+## 11. 2026-08-14 Cloud worker image runtime-closure boundary
+
+The `63f6e47c...` candidate passed the dependency-resolution boundary and Cloud Build installed the Python 3.10-compatible ONNX Runtime. The next build-stage failure occurred only when the image executed `verify_revex_r49_worker.py`: that verifier intentionally imports `run_revex_r49_release_acceptance.py`, but the Dockerfile had copied only `app.py`, `verify_revex_r49_worker.py`, and `requirements-server.txt` into `/opt/revex/server`. The source file existed in the release tree but was absent from the image filesystem.
+
+The fix is image-packaging-only and must not change the accepted Energy chain:
+
+- copy `run_revex_r49_release_acceptance.py` into `/opt/revex/server` beside `app.py` and the worker verifier;
+- run an early image-local `py_compile` over all three Python server modules before dependency installation/worker QA;
+- publisher static closure must reject any candidate whose Dockerfile omits the acceptance module or the early server-module compile gate;
+- keep Revit evidence, GeometryCo logic/model, Baseline/Proposed templates, EnergyPlus, COMcheck, EN-1, approved-run semantics, broker contract, and Companion behavior unchanged.
+
+The Cloud Build Python 3.10 FutureWarning from `google.api_core` is non-fatal and is not the failure boundary. Do not upgrade the worker operating system/Python as part of this packaging fix.
+

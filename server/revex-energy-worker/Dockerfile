@@ -29,8 +29,11 @@ RUN curl -fL --retry 4 "https://github.com/NatLabRockies/OpenStudio/releases/dow
 WORKDIR /opt/revex
 COPY src/Liber.Revex.Revit/Engineering/Energy /opt/revex/energy
 COPY server/revex-energy-worker/app.py /opt/revex/server/app.py
+COPY server/revex-energy-worker/run_revex_r49_release_acceptance.py /opt/revex/server/run_revex_r49_release_acceptance.py
 COPY server/revex-energy-worker/verify_revex_r49_worker.py /opt/revex/server/verify_revex_r49_worker.py
 COPY server/revex-energy-worker/requirements-server.txt /opt/revex/server/requirements-server.txt
+RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
+ && python3 -m py_compile /opt/revex/server/app.py /opt/revex/server/run_revex_r49_release_acceptance.py /opt/revex/server/verify_revex_r49_worker.py
 RUN python3 -m pip install --no-cache-dir \
     -r /opt/revex/energy/requirements.txt \
     -r /opt/revex/energy/GeometryCo/requirements.txt \
