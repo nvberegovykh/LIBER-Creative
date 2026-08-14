@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import importlib.util
+from collections import Counter
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 import os
 import shutil
 import sys
@@ -13,6 +15,7 @@ import tempfile
 import threading
 from pathlib import Path
 import xml.etree.ElementTree as ET
+import zipfile
 
 from openpyxl import load_workbook
 
@@ -30,6 +33,26 @@ SPEC.loader.exec_module(pipeline)
 def local_text(root, name: str) -> str:
     node = next((item for item in root.iter() if item.tag.rsplit("}", 1)[-1] == name), None)
     return str(node.text or "").strip() if node is not None else ""
+
+
+LOAD_TYPES = (
+    "OS:People", "OS:Lights", "OS:ElectricEquipment", "OS:GasEquipment",
+    "OS:SteamEquipment", "OS:OtherEquipment", "OS:InternalMass",
+    "OS:SpaceInfiltration", "OS:DesignSpecification:OutdoorAir",
+)
+HVAC_TYPES = (
+    "OS:PlantLoop", "OS:AirLoopHVAC", "OS:ZoneHVAC", "OS:Coil", "OS:Fan",
+    "OS:Boiler", "OS:Chiller", "OS:Pump", "OS:HeatExchanger", "OS:WaterHeater",
+)
+
+
+def behavior_inventory(compiler, model_path: Path) -> dict:
+    counts = Counter(obj.obj_type for obj in compiler.parse_osm(model_path).objects)
+    return {
+        "schedules": {key: value for key, value in sorted(counts.items()) if key.startswith("OS:Schedule")},
+        "loads": {key: value for key, value in sorted(counts.items()) if key.startswith(LOAD_TYPES)},
+        "systems": {key: value for key, value in sorted(counts.items()) if key.startswith(HVAC_TYPES)},
+    }
 
 
 class MockComcheckHandler(BaseHTTPRequestHandler):
@@ -82,10 +105,23 @@ def mock_comcheck_pdf(path: Path) -> bytes:
     return pdf.read_bytes()
 
 
+def mock_en1_pdf(path: Path) -> bytes:
+    from reportlab.pdfgen import canvas
+    pdf = path / "EN-1_READY_TO_INSERT.pdf"
+    page = canvas.Canvas(str(pdf))
+    for index, sheet in enumerate(pipeline.EN1_PRINT_SHEETS, start=1):
+        page.drawString(72, 740, f"EN-1 CURRENT TEST PROJECT — filing sheet {index}/16")
+        page.drawString(72, 720, sheet)
+        page.showPage()
+    page.save()
+    return pdf.read_bytes()
+
+
 def main() -> int:
     required = [
         pipeline.EN1_TEMPLATE, pipeline.COMCHECK_CXL_TEMPLATE,
         pipeline.BASELINE_REFERENCE, pipeline.PROPOSED_REFERENCE, pipeline.GEOMETRYCO,
+        pipeline.PACKAGER,
     ]
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
@@ -225,31 +261,150 @@ def main() -> int:
         assert response.is_file()
         assert official["officialDoeReport"] is True
         assert official["code"] == "2020 NYCECC Appendix CA Modeling Envelope Backstop"
+        compiler = pipeline.load_module(pipeline.GEOMETRYCO, "revex_geometryco_record_contract_qa")
         compiled = folder / "02_COMPILED_MODELS"
+        compilation = compiler.compile_baseline_proposed_pair(
+            pipeline.BASELINE_REFERENCE,
+            pipeline.BASELINE_REFERENCE,
+            pipeline.PROPOSED_REFERENCE,
+            compiled,
+            require_native_check=False,
+        )
+        assert compilation["success"] is True
+        expected_geometry = {"spaces": 159, "surfaces": 1930, "subsurfaces": 294}
+        expected_schedules = {"baseline": 243, "proposed": 89}
+        expected_systems = {"baseline": 13, "proposed": 18}
+        reference_paths = {"baseline": pipeline.BASELINE_REFERENCE, "proposed": pipeline.PROPOSED_REFERENCE}
+        output_paths = {
+            "baseline": compiled / "BASELINE_UPDATED_GEOMETRY.osm",
+            "proposed": compiled / "PROPOSED_UPDATED_GEOMETRY.osm",
+        }
+        for role in ("baseline", "proposed"):
+            role_report = compilation["reports"][role]
+            assert role_report["exact_geometry_lock"]["passed"] is True
+            assert role_report["exact_geometry_lock"]["new_space_identity_passed"] is True
+            assert {key: role_report["exact_geometry_lock"][key] for key in expected_geometry} == expected_geometry
+            assert role_report["space_mapping"]["count"] == 159
+            assert role_report["space_mapping"]["ambiguous_count"] == 0
+            assert role_report["schedule_lock"]["passed"] is True
+            assert role_report["schedule_lock"]["changed_schedule_objects"] == 0
+            assert role_report["schedule_lock"]["changed_protected_schedule_references"] == 0
+            assert role_report["serialized_roundtrip_validation"]["passed"] is True
+            repairs = role_report.get("energyplus_compatibility_repairs") or {"count": 0, "lossless": True}
+            assert repairs.get("lossless") is True
+            before = behavior_inventory(compiler, reference_paths[role])
+            after = behavior_inventory(compiler, output_paths[role])
+            assert after == before, f"{role} schedules, loads, or HVAC/system inventory changed"
+            assert sum(after["schedules"].values()) == expected_schedules[role]
+            assert sum(after["systems"].values()) == expected_systems[role]
+            pipeline.stamp_compiled_project_identity(output_paths[role], identity, role.upper(), log)
+
         baseline_run_dir = folder / "03_SIMULATION" / "BASELINE"
         proposed_run_dir = folder / "03_SIMULATION" / "PROPOSED"
-        compiled.mkdir(parents=True)
         baseline_run_dir.mkdir(parents=True)
         proposed_run_dir.mkdir(parents=True)
-        baseline_osm = compiled / "BASELINE_UPDATED_GEOMETRY.osm"
-        proposed_osm = compiled / "PROPOSED_UPDATED_GEOMETRY.osm"
-        for path in (baseline_osm, proposed_osm):
-            path.write_text("OS:Building,\n" + ("REVEX-CURRENT-MODEL\n" * 300), encoding="utf-8")
+        baseline_osm = output_paths["baseline"]
+        proposed_osm = output_paths["proposed"]
         runs = []
         for run_dir in (baseline_run_dir, proposed_run_dir):
             html = run_dir / "eplustbl.html"
             idf = run_dir / "in.idf"
-            html.write_text("<html>" + ("current simulation " * 40) + "</html>", encoding="utf-8")
+            html.write_text("<html><head><title>CURRENT TEST PROJECT</title></head><body><p>Building: CURRENT TEST PROJECT</p>" + ("current simulation " * 40) + "</body></html>", encoding="utf-8")
             idf.write_text("Version,24.2;\n" + ("!- current model\n" * 40), encoding="utf-8")
+            (run_dir / "eplusout.err").write_text("Program Version,EnergyPlus, Version 24.2\n************* EnergyPlus Completed Successfully-- 0 Warning; 0 Severe Errors; Elapsed Time=00hr 00min 01.00sec", encoding="utf-8")
             (run_dir / "eplusout.end").write_text("EnergyPlus Completed Successfully-- 0 Warning; 0 Severe Errors;", encoding="utf-8")
             runs.append({"folder": run_dir, "html": html, "idf": idf})
+
+        packager = pipeline.load_module(pipeline.PACKAGER, "revex_record_review_packager_qa")
+        review_dir = folder / "04_REVIEW_PACKAGE"
+        review_zip = Path(packager.generate_package(
+            str(runs[0]["html"]), str(runs[1]["html"]), str(review_dir),
+            z_project["title"], True, standard_version="NYCECC 2020",
+            baseline_model_file=str(runs[0]["idf"]), proposed_model_file=str(runs[1]["idf"]),
+        ))
+        expected_review_names = {f"{z_project['title']} - {label}.pdf" for label in pipeline.REVIEW_PACKAGE_PDF_LABELS}
+        with zipfile.ZipFile(review_zip) as package:
+            assert {Path(name).name for name in package.namelist() if not name.endswith("/")} == expected_review_names
+
         en1_pdf = folder / "EN-1_READY_TO_INSERT.pdf"
-        en1_pdf.write_bytes(MockComcheckHandler.pdf_bytes)
+        en1_pdf.write_bytes(mock_en1_pdf(folder))
         completion = pipeline.validate_completion_outputs(
-            baseline_osm, proposed_osm, runs[0], runs[1], en1_pdf, cxl, report, official
+            baseline_osm, proposed_osm, runs[0], runs[1], review_zip, z_project["title"],
+            en1_pdf, cxl, report, official
         )
         assert completion["compiledOsmCount"] == 2
         assert completion["officialDoeReport"] is True
+        assert completion["reviewPackagePdfCount"] == 9
+
+        approved_metrics = {
+            "modeledSquareFeet": pipeline.APPROVED_RUN_PROFILE["modeledSquareFeet"],
+            "conditionedSquareFeet": pipeline.APPROVED_RUN_PROFILE["conditionedSquareFeet"],
+        }
+        for role in ("baseline", "proposed"):
+            expected = pipeline.APPROVED_RUN_PROFILE["roles"][role]
+            approved_metrics[role] = {
+                "siteKbtu": expected["siteKbtu"],
+                "siteEuiKbtuPerFt2": expected["siteEuiKbtuPerFt2"],
+                "electricKwh": expected["electricKwh"],
+                "gasTherm": expected["gasTherm"],
+                "unmetHours": expected["unmetHours"],
+                "cost": 40402.0 if role == "baseline" else 25556.0,
+                "endUses": {label: {"sharePct": value} for label, value in expected["endUseSharePct"].items()},
+            }
+        approved_comparison = pipeline.compare_approved_run_profile(
+            approved_metrics, compiled / "COMPILATION_AUDIT.json", baseline_osm
+        )
+        assert approved_comparison["status"] == "PASSED", approved_comparison
+        assert approved_comparison["iterationSelection"] == "BEST_WORKING_ITERATION"
+        regressed_metrics = json.loads(json.dumps(approved_metrics))
+        regressed_metrics["proposed"]["siteKbtu"] *= 1.20
+        regressed_metrics["proposed"]["siteEuiKbtuPerFt2"] *= 1.20
+        regression = pipeline.compare_approved_run_profile(
+            regressed_metrics, compiled / "COMPILATION_AUDIT.json", baseline_osm
+        )
+        assert regression["status"] == "REGRESSION", regression
+        assert regression["reviewEligible"] is False
+
+        geometry_dir = folder / "01_ORIGINAL_MODELS"
+        geometry_dir.mkdir()
+        geometry_osm = geometry_dir / "REVIT_GEOMETRY_ORIGINAL.osm"
+        shutil.copy2(baseline_osm, geometry_osm)
+        en1_xlsx = folder / "EN-1_READY_TO_INSERT.xlsx"
+        review_workbook = load_workbook(pipeline.EN1_TEMPLATE)
+        review_info = review_workbook["1,2,3 Information"]
+        pipeline.blank_en1_identity_fields(review_info)
+        pipeline.apply_en1_project_identity(review_info, identity)
+        review_workbook.save(en1_xlsx)
+        review_workbook.close()
+        pipeline.assert_no_reference_identity_xlsx(en1_xlsx)
+        review_artifacts = [
+            pipeline.relative_artifact(path, folder, kind)
+            for path, kind in (
+                (geometry_osm, "geometry-osm"),
+                (baseline_osm, "baseline-osm"),
+                (proposed_osm, "proposed-osm"),
+                (runs[0]["html"], "baseline-html"),
+                (runs[1]["html"], "proposed-html"),
+                (en1_xlsx, "en1-spreadsheet"),
+                (report, "official-comcheck-pdf"),
+                (review_zip, "packager-reports-archive"),
+            )
+        ]
+        assert tuple(artifact["kind"] for artifact in review_artifacts) == pipeline.VALID_ENERGY_REVIEW_PACKAGE
+        manual_package = pipeline.create_manual_review_package(folder, review_artifacts, {
+            "schema": "liber.revex.energy-manual-review-package.v1",
+            "projectName": z_project["title"],
+            "referenceTemplatesIncluded": False,
+            "referenceIdentityExcluded": True,
+            "files": review_artifacts,
+        })
+        with zipfile.ZipFile(manual_package) as package:
+            names = {name for name in package.namelist() if not name.endswith("/")}
+            assert len(names) == 8
+            assert {artifact["path"] for artifact in review_artifacts}.issubset(names)
+            index = json.loads(package.comment)
+            assert index["referenceTemplatesIncluded"] is False
+            assert index["referenceIdentityExcluded"] is True
 
     print({
         "activeRevitTzIdentityOnly": True,
@@ -264,6 +419,19 @@ def main() -> int:
         "wrongRevisionConsentRejected": True,
         "exactRevisionConsentAccepted": True,
         "compiledOsmCompletionGate": True,
+        "approvedRecordGeometryCounts": {"spaces": 159, "surfaces": 1930, "subsurfaces": 294, "thermalZones": 2},
+        "baselineScheduleObjects": 243,
+        "proposedScheduleObjects": 89,
+        "baselineHvacSystemObjects": 13,
+        "proposedHvacSystemObjects": 18,
+        "loadsAndSystemsInventoryPreserved": True,
+        "approvedNinePdfReviewFormat": True,
+        "maskedApprovedRunComparison": True,
+        "referenceRegressionWithholdsReviewCandidate": True,
+        "userReviewContractItems": 8,
+        "productionUserArtifactsExactlySevenFilesPlusOneArchive": True,
+        "manualReviewPackageBesideRun": True,
+        "manualReviewPackageExcludesProtectedReferences": True,
         "filingSheets": len(pipeline.EN1_PRINT_SHEETS),
     })
     return 0
