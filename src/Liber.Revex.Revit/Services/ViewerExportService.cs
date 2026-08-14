@@ -225,8 +225,9 @@ public sealed class ViewerExportService
             {
                 View = view,
                 IncludeNonVisibleObjects = false,
-                ComputeReferences = false,
-                DetailLevel = ViewDetailLevel.Fine
+                // DetailLevel comes from the Fine REVEX sync view. Revit rejects
+                // Options that assign both View and DetailLevel.
+                ComputeReferences = false
             };
             GeometryElement? geometry = element.get_Geometry(options);
             if (geometry == null)

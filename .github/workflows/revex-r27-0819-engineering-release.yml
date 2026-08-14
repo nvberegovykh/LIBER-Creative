@@ -76,7 +76,12 @@ jobs:
           node .github/scripts/verify-revex-r49.js --report /tmp/revex-r49-simulation.json
           node server/firebase-functions/verify-project-access-r49.js
           npm --prefix server/firebase-functions ci --omit=dev --no-audit --no-fund
-          npm --prefix server/firebase-functions audit --omit=dev --audit-level=moderate
+          ok=0
+          for attempt in 1 2 3; do
+            if npm --prefix server/firebase-functions audit --omit=dev --audit-level=moderate; then ok=1; break; fi
+            [ "$attempt" -eq 3 ] || sleep $((attempt * 5))
+          done
+          [ "$ok" -eq 1 ]
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -89,7 +94,30 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check \
             -r src/Liber.Revex.Revit/Engineering/Energy/requirements.txt \
+            -r src/Liber.Revex.Revit/Engineering/Energy/GeometryCo/requirements.txt \
             -r server/revex-energy-worker/requirements-server.txt
+          python - <<'PY'
+          import json, pathlib, re
+          root = pathlib.Path('.')
+          graph = root / 'src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn'
+          external = root / 'src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.py'
+          service = root / 'src/Liber.Revex.Revit/Services/GbxmlEngineeringService.cs'
+          data = json.loads(graph.read_text(encoding='utf-8-sig'))
+          nodes = [n for n in data['Nodes'] if n.get('NodeType') == 'PythonScriptNode']
+          assert len(nodes) == 1
+          norm = lambda s: s.replace('\r\n','\n').replace('\r','\n')
+          code = nodes[0]['Code']
+          source = external.read_text(encoding='utf-8-sig')
+          assert norm(code) == norm(source), 'gbXML .dyn embedded engine differs from external .py'
+          version = re.search(r'TOOL_VERSION\s*=\s*"([^"]+)"', source).group(1)
+          assert f'EngineVersion = "{version}"' in service.read_text(encoding='utf-8-sig'), 'C# gbXML EngineVersion differs from Python'
+          assert len(nodes[0].get('Inputs') or []) == 8, 'gbXML engine must expose exactly eight inputs'
+          print('gbXML graph/Python/C# contract passed:', version)
+          PY
+          python -m py_compile \
+            server/revex-energy-worker/run_revex_r49_release_acceptance.py \
+            src/Liber.Revex.Revit/Engineering/Energy/revex_energy_pipeline.py \
+            src/Liber.Revex.Revit/Engineering/Energy/comcheck_backstop.py
           python src/Liber.Revex.Revit/Engineering/Energy/verify_revex_r49_energy.py
           python server/revex-energy-worker/verify_revex_r49_worker.py
 
@@ -113,7 +141,12 @@ jobs:
           set -euo pipefail
           RULES='firebase/r49-live-rules'
           npm --prefix "$RULES" ci --no-audit --no-fund
-          npm --prefix "$RULES" audit --audit-level=high
+          ok=0
+          for attempt in 1 2 3; do
+            if npm --prefix "$RULES" audit --audit-level=high; then ok=1; break; fi
+            [ "$attempt" -eq 3 ] || sleep $((attempt * 5))
+          done
+          [ "$ok" -eq 1 ]
           npm install --global firebase-tools@15.27.0 --no-audit --no-fund
           node .github/scripts/patch-live-firestore-rules.js \
             .github/scripts/fixtures/live-firestore-base.rules \

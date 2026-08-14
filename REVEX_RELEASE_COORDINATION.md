@@ -82,3 +82,16 @@ Approved-run comparison semantics are therefore fixed as follows:
 - never label a different cohort `BEST_WORKING_ITERATION`; absence of a comparable approved cohort is not evidence of regression.
 
 This distinction is required for REVEX to work on projects whose current Revit geometry legitimately differs from the masked 79 Winthrop approved reference cohort.
+
+
+## 9. 2026-08-14 GitHub security-gate boundary
+
+The `edb52b3...` local release gate and real 79 acceptance passed before GitHub mutation, including the full Energy chain and official clean-project COMcheck. PR #30 then passed the named `REVEX r49 final gate` but GitHub CodeQL rejected three high-severity inefficient-regular-expression alerts, all in `comcheck_backstop.py` DWR diagnostic/callback parsing.
+
+The security fix is intentionally limited to those parsers:
+
+- replace ambiguous quoted-string regexes with bounded linear-time JavaScript quoted-string scanning;
+- preserve DWR error extraction, escaped-string decoding, callback token selection, and official COMcheck behavior;
+- do not change Revit evidence, GeometryCo, Baseline/Proposed templates, EnergyPlus, EN-1, COMcheck project translation, or acceptance semantics.
+
+A CodeQL failure after the full local release gate is a downstream publication/security-gate failure, not evidence that the passed Energy chain should be rewritten.

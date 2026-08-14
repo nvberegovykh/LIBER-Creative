@@ -279,7 +279,19 @@ async function verifyManagedEnergyClient() {
   assert.equal(state.projectId,'revex_current','Managed Energy must activate the exact active-Revit project through the application boundary.');
   assert.equal(window.__revexManagedEnergyBridge.resultMatches(result,'revex_current','eng_current'),true);
   assert.equal(window.__revexManagedEnergyBridge.resultMatches(result,'revex_other','eng_current'),false);
-  checkpoint('MANAGED_ENERGY_CLIENT_HANDOFF', { activeDocumentProjectAuthority: true, immutableRevision: 'eng_current', brokerResultMatched: true, blanketConsent: false });
+  const originalSync=Store.syncEngineeringPackage;
+  Store.syncEngineeringPackage=async()=>{throw new Error('REVIT_TO_GBXML_GEOMETRY_INTEGRITY_FAILED: evidence remained diagnostic-only; repair Spaces/EADM/opening identity before retry.');};
+  await assert.rejects(
+    window.__revexManagedEnergyBridge.processInput([new TestFile('engineering-sync.json',JSON.stringify(manifest))]),
+    /REVIT_TO_GBXML_GEOMETRY_INTEGRITY_FAILED/
+  );
+  assert.equal(statusNode.dataset.tone,'bad','A blocked real-Energy handoff must render a visible error state.');
+  assert.match(statusNode.textContent,/evidence remained diagnostic-only/,'The exact actionable failure must remain visible to the user.');
+  Store.syncEngineeringPackage=originalSync;
+  const retry=await window.__revexManagedEnergyBridge.processInput([new TestFile('engineering-sync.json',JSON.stringify(manifest))]);
+  assert.equal(retry.ok,true,'A failed immutable revision attempt must not leave the Energy action locked or stale.');
+  assert.equal(statusNode.dataset.tone,'good');
+  checkpoint('MANAGED_ENERGY_CLIENT_HANDOFF', { activeDocumentProjectAuthority: true, immutableRevision: 'eng_current', brokerResultMatched: true, blanketConsent: false, actionableFailureVisible: true, retryAfterFailure: true });
 }
 
 function verifyStaticContracts() {
@@ -295,7 +307,17 @@ function verifyStaticContracts() {
   const ui = read(path.join(revit,'UI/RendairWindow.cs'));
   const manager = read(path.join(revit,'UI/RendairWindowManager.cs'));
   const mesh = read(path.join(revit,'Services/RevexMeshExportService.cs'));
+  const viewerExport = read(path.join(revit,'Services/ViewerExportService.cs'));
+  const gbxmlPython = read(path.join(revit,'Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.py'));
+  const appPaths = read(path.join(revit,'Services/AppPaths.cs'));
+  const releaseAutomation = read(path.join(revit,'Services/ReleaseEvidenceAutomation.cs'));
+  const gbxml = read(path.join(revit,'Services/GbxmlEngineeringService.cs'));
+  const energyPipeline = read(path.join(revit,'Engineering/Energy/revex_energy_pipeline.py'));
+  const energyQa = read(path.join(revit,'Engineering/Energy/verify_revex_r49_energy.py'));
+  const geometryRequirements = read(path.join(revit,'Engineering/Energy/GeometryCo/requirements.txt'));
   const worker = read(path.join(root,'server/revex-energy-worker/app.py'));
+  const releaseAcceptance = read(path.join(root,'server/revex-energy-worker/run_revex_r49_release_acceptance.py'));
+  const publisher = read(path.join(root,'PUBLISH_REVEX_R49.ps1'));
   const docker = read(path.join(root,'server/revex-energy-worker/Dockerfile'));
   const broker = read(path.join(root,'server/firebase-functions/index.js'));
   const projectAccess = read(path.join(root,'server/firebase-functions/project-access.js'));
@@ -311,14 +333,32 @@ function verifyStaticContracts() {
   assert.match(ui,/string activated = await _web\.ExecuteScriptAsync\(\$\$\$"""/); assert.doesNotMatch(ui,/string activated = await _web\.ExecuteScriptAsync\(\$\$"""/);
   assert.match(manager,/OnViewActivated/); assert.match(identity,/number\.StartsWith\("T"/); assert.match(identity,/number\.StartsWith\("Z"/);
   assert.match(mesh,/IsCurtainContainer/); assert.match(mesh,/Curtain hosts are containers only/);
+  assert.doesNotMatch(mesh,/View\s*=\s*view[^;\n]*DetailLevel/); assert.doesNotMatch(viewerExport,/View\s*=\s*view[\s\S]{0,180}DetailLevel\s*=/);
+  assert.match(gbxmlPython,/REDUNDANT_ROOM_SEED_ROLLED_BACK_IN_ISOLATION/); assert.match(gbxmlPython,/"isolated_transactions":True/);
+  assert.match(gbxmlPython,/"multiple spaces" in text and "same enclosed region" in text/);
+  assert.ok(gbxmlPython.indexOf('configuration_commit = seed_transaction.Commit()') < gbxmlPython.lastIndexOf('newly_seeded_ids, seed_stats = create_room_seeded_spaces('));
+  assert.match(appPaths,/REVEX_DATA_ROOT/); assert.match(releaseAutomation,/REVEX_RELEASE_EVIDENCE_OUTPUT/);
+  assert.match(releaseAutomation,/new RevexSyncService\(\)\.Sync/); assert.match(releaseAutomation,/new GbxmlEngineeringService\(\)\.Run/);
+  assert.match(releaseAutomation,/new EngineeringSyncService\(\)\.Create/); assert.match(releaseAutomation,/sourceRvtSaved = false/);
+  assert.match(releaseAutomation,/ExternalEvent\.Create/); assert.match(releaseAutomation,/IExternalEventHandler/); assert.match(releaseAutomation,/WaitingForDynamo/);
+  assert.doesNotMatch(releaseAutomation,/PostableCommand\.Dynamo/);
+  assert.match(gbxml,/InitializeDynamoAutomationHost/); assert.match(gbxml,/existing UI-less synchronous host verified; initialization safely skipped/);
   assert.match(viewer,/REVEX_PAGED_MISSING_GEOMETRY_PROXY/); assert.match(viewer,/fetchGeometry\(url,label\)/); assert.doesNotMatch(viewer,/clearEditGroups\(\)\{for\(const group.*disposeObject\(group\)/);
   assert.match(history,/setOverlays\?\.\(overlays\);publishOverlays\(\);render\(\);toast\('Previous state restored/);
   assert.match(index,/Show hidden only/); assert.match(index,/design-image-lightbox/); assert.match(index,/20260813r49/); assert.match(index,/active Revit document and its T\/Z pages/);
   assert.match(store,/clientBuild:\s*'20260813r49'/); assert.match(store,/liber\.revex\.comcheck-consent\.v1/); assert.match(store,/sha256File\(file\)/); assert.match(store,/this\.api\.writeBatch/); assert.ok(store.indexOf("batch.set(immutableRef") < store.indexOf("batch.set(currentRef"));
   assert.match(worker,/"version": "0\.8\.19-r49"/); assert.match(worker,/REVIT_T_Z_EN_PAGE_SCAN_ONLY/); assert.match(worker,/Downloaded Engineering artifact failed transfer integrity/); assert.match(worker,/BASELINE_UPDATED_GEOMETRY\.osm/); assert.match(worker,/COMcheck_OFFICIAL_BACKSTOP_REPORT\.pdf/);
+  assert.match(worker,/publisher-real-revit-evidence/); assert.match(worker,/SOURCE_CANDIDATE/); assert.match(worker,/sourceCandidate/); assert.match(worker,/def index_local_artifacts/); assert.match(worker,/indexed = index_revit_page_rows\(index\)/);
+  assert.match(releaseAcceptance,/EXPECTED_REVIEW_ENTRIES/); assert.match(releaseAcceptance,/BEST_WORKING_ITERATION/); assert.match(releaseAcceptance,/worker\.index_local_artifacts\(engineering_root\.iterdir\(\)\)/);
+  assert.match(releaseAcceptance,/environment\["PYTHONIOENCODING"\] = "utf-8"/); assert.match(releaseAcceptance,/configure_failure_safe_stdio/); assert.match(energyPipeline,/ensure_ascii=True/); assert.match(energyPipeline,/env=utf8_subprocess_environment\(\)/); assert.match(energyPipeline,/GeometryCo local-AI runtime is missing/);
+  assert.match(energyQa,/WINDOWS_CONSOLE_ENCODING/); assert.match(energyQa,/compiler\._local_ai_embeddings/); assert.match(geometryRequirements,/onnxruntime-directml==1\.24\.4/);
+  assert.ok(publisher.lastIndexOf('Invoke-RealRevitEvidenceGate') < publisher.indexOf('Clone the authoritative GitHub repository'));
+  assert.ok(publisher.lastIndexOf('Invoke-RealEnergyAcceptanceGate') < publisher.indexOf('Clone the authoritative GitHub repository'));
+  assert.match(publisher,/No Revit, Companion or Energy Sync interaction is required/);
+  assert.match(publisher,/GeometryCo\\requirements\.txt/); assert.match(publisher,/REVEX_R49_ENERGY_QA_FAILED_\$RunId\.zip/);
   assert.match(docker,/openstudio energyplus_version/); assert.match(docker,/openstudio ruby_version/); assert.match(docker,/verify_revex_r49_worker\.py/);
   assert.match(broker,/require\('\.\/project-access'\)/); assert.match(broker,/projectAccessRole\(data,/);
-  assert.match(broker,/timeoutSeconds:\s*3600/); assert.match(broker,/SHA-256 transfer integrity/); assert.match(broker,/String\(resultManifest\.pipelineVersion \|\| ''\) !== '0\.8\.19-r49'/); assert.match(broker,/corrupt\.map/); assert.match(broker,/pipelineVersion \|\| ''\) === '0\.8\.19-r49'/); assert.doesNotMatch(broker,/legacy.*Engineering revision/i);
+  assert.match(broker,/timeoutSeconds:\s*3600/); assert.match(broker,/SOURCE_CANDIDATE/); assert.match(broker,/sourceCandidate/); assert.match(broker,/SHA-256 transfer integrity/); assert.match(broker,/String\(resultManifest\.pipelineVersion \|\| ''\) !== '0\.8\.19-r49'/); assert.match(broker,/corrupt\.map/); assert.match(broker,/pipelineVersion \|\| ''\) === '0\.8\.19-r49'/); assert.doesNotMatch(broker,/legacy.*Engineering revision/i);
   assert.match(projectAccess,/ordinaryProjectMember|PROJECT_FUNCTIONS/); assert.match(projectAccessGate,/ordinaryMemberFunctionalParity/);
   assert.equal((projectRules.match(/REVEX_PROJECT_ACCESS_R43_BEGIN/g)||[]).length,1); assert.equal((projectRules.match(/REVEX_PROJECT_ACCESS_R43_END/g)||[]).length,1);
   assert.match(projectRules,/allow read, write: if revexR43ProjectMember\(projectId\)/); assert.match(projectRules,/allow read, write: if revexR43SpecMember\(specProjectId\)/);

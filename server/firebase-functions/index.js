@@ -22,6 +22,7 @@ const COMCHECK_CONSENT_SCHEMA = 'liber.revex.comcheck-consent.v1';
 const COMCHECK_SERVICE = 'PNNL_COMCHECK_BACKSTOP';
 const COMCHECK_ENDPOINT = 'https://legacy-comcheck.energycode.pnl.gov/CheckWeb/';
 const COMCHECK_SCOPE = 'GENERATED_CURRENT_PROJECT_CXL_ONLY';
+const SOURCE_CANDIDATE = String(process.env.REVEX_SOURCE_CANDIDATE || '').trim();
 
 function brokerLog(stage, detail = {}) {
   console.log('[REVEX ENERGY BROKER]', JSON.stringify({
@@ -124,8 +125,10 @@ exports.runRevexEnergy = onCall({ timeoutSeconds: 3600, memory: '1GiB', concurre
   const existing = await libraryDoc(projectId, ENERGY_CURRENT_ID).get();
   if (existing.exists) {
     const state = existing.data() || {};
-    if (String(state?.manifest?.sourceEngineeringRevision || '') === sourceRevision &&
+    if (SOURCE_CANDIDATE &&
+        String(state?.manifest?.sourceEngineeringRevision || '') === sourceRevision &&
         String(state?.manifest?.pipelineVersion || '') === '0.8.19-r49' &&
+        String(state?.manifest?.sourceCandidate || '') === SOURCE_CANDIDATE &&
         String(state?.manifest?.status || '').toUpperCase() === 'COMPLETE') {
       return { ok: true, reused: true, status: 'COMPLETE', sourceRevision, resultRevision: state.revision || state?.manifest?.resultRevision || '' };
     }
@@ -214,6 +217,7 @@ exports.runRevexEnergy = onCall({ timeoutSeconds: 3600, memory: '1GiB', concurre
     const resultManifest = body.manifest || {};
     if (resultManifest.schema !== 'liber.revex.energy-result.v1' ||
         String(resultManifest.pipelineVersion || '') !== '0.8.19-r49' ||
+        !SOURCE_CANDIDATE || String(resultManifest.sourceCandidate || '') !== SOURCE_CANDIDATE ||
         resultManifest.revitWriteBack !== false || resultManifest.pdfInsertion !== false)
       throw new Error('Managed worker returned an invalid Energy authority boundary.');
     if (String(resultManifest.status || '').toUpperCase() === 'COMPLETE') {
@@ -222,7 +226,7 @@ exports.runRevexEnergy = onCall({ timeoutSeconds: 3600, memory: '1GiB', concurre
       const required = [
         'BASELINE_UPDATED_GEOMETRY.osm',
         'PROPOSED_UPDATED_GEOMETRY.osm',
-        'EN-1_READY_TO_INSERT.pdf',
+        'EN-1_READY_TO_INSERT.xlsx',
         'COMcheck_PROJECT_INPUT_READY.cxl',
         'COMcheck_OFFICIAL_BACKSTOP_REPORT.pdf',
         'COMcheck_BACKSTOP_RESULT.json'
