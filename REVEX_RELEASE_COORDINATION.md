@@ -1,0 +1,71 @@
+# REVEX r49 Release Coordination Contract
+
+This file is release authority for future REVEX debugging and publication work. Read it before changing code, publisher logic, branches, archives, or cloud deployment.
+
+## 1. Authority and preservation rule
+
+- Product: REVEX 0.8.19 r49 + REVEX Companion.
+- Runtime authority is the exact immutable local candidate archive named by `PUBLISH_REVEX_R49.ps1`, not an arbitrary GitHub branch and not the newest log.
+- `PUBLISH_REVEX_R49.cmd` is only the stable launcher for `PUBLISH_REVEX_R49.ps1`; its timestamp is not release-state evidence.
+- `PUBLISH_REVEX_R49.latest.log` is only the most recent execution log; never treat it as source authority.
+- NEVER replace a last-known-working upstream chain to repair a downstream failure. Patch the failed stage and only its direct dependencies, then rerun the full acceptance gate.
+- Before every fix, identify: authoritative candidate, last completed stage, first failed stage, changed files, and invariants that must remain byte-for-byte unchanged.
+
+## 2. Last-known-working Energy boundary before the clean COMcheck fix
+
+The 2026-08-14 real 79 Winthrop acceptance reached the COMcheck Backstop after successfully producing current Revit evidence, gbXML/OSM geometry, GeometryCo compiled models, two EnergyPlus simulations, current T/Z/EN facts, and the current-project COMcheck CXL. The first failing boundary was the live Legacy COMcheck DWR session/upload transport. Therefore GeometryCo, model mapping, EnergyPlus, PRM comparison, T/Z/EN extraction, and project identity are preservation scope and must not be rewritten to fix COMcheck.
+
+## 3. COMcheck production intent
+
+- Required compliance path: official PNNL/DOE COMcheck, `2020 NYCECC Appendix CA Modeling Envelope Backstop`.
+- Current Revit T/Z/EN evidence remains authoritative for identity and envelope values.
+- Production must NOT depend on the broken undocumented Legacy `ProjectService.uploadProject` file-upload transport.
+- Production creates a fresh official COMcheck browser project, translates current generated CheckXML facts into COMcheck's current browser model, exports a clean CheckXML once, calculates compliance, and downloads the official PDF.
+- The direct DWR upload client remains only for isolated deterministic local mock/contract tests.
+- The clean project must preserve wall/window/door/roof/floor counts and current-project evidence tokens before the official result is accepted.
+
+## 4. Energy-chain invariants
+
+Preserve end-to-end:
+
+`active Revit document -> immutable Engineering revision -> T/Z identity + EN facts -> gbXML -> GeometryCo -> approved Baseline + Proposed templates -> two EnergyPlus runs -> official COMcheck Backstop -> EN-1 -> 7 files + 1 Packager archive`
+
+Do not weaken these invariants:
+
+- source RVT remains unchanged during QA;
+- active-document/project/revision identity stays exact and cross-project results are rejected;
+- approved Baseline/Proposed schedules, loads, HVAC/system templates and energy intent remain preserved while geometry/spaces are updated;
+- both EnergyPlus runs must complete;
+- prior-project identity remains masked from user-visible Energy artifacts;
+- only a passing `BEST_WORKING_ITERATION` is user-visible;
+- COMcheck consent stays exact-revision scoped;
+- EN-1 and review package come from the same immutable Engineering revision;
+- no Revit/Companion interaction is required after publisher launch to extract QA evidence.
+
+## 5. Publication structure
+
+The Drive release folder contains:
+
+- `PUBLISH_REVEX_R49.cmd` — stable launcher; normally unchanged.
+- `PUBLISH_REVEX_R49.ps1` — actual release orchestration and hash locks.
+- `REVEX_R49_SOURCE_<candidate>.zip` — immutable full source candidate used for build/QA/publication.
+- `REVEX-R49-PREFLIGHT.latest.json` — latest structured release gate state.
+- `PUBLISH_REVEX_R49.latest.log` — latest run log only.
+
+Every candidate change must keep the `.ps1`, source ZIP candidate id/hash/size, `$Expected` file hashes, and this coordination contract synchronized.
+
+## 6. Required release order
+
+1. Close Revit only for the atomic staged/installed add-in swap.
+2. Verify immutable source ZIP hash and all locked source hashes.
+3. Run static source/dependency closure and recorded-Revit Companion/access tests.
+4. Run local Energy/worker contract tests.
+5. Run a fast synthetic live official COMcheck clean-project test BEFORE the expensive real 79 acceptance.
+6. Reuse prior real-Revit evidence only when RVT hash, weather hash, producer bundle hash, artifact sizes and artifact hashes all match.
+7. Run real 79 T/Z/EN -> GeometryCo -> two EnergyPlus -> official clean-project COMcheck -> EN-1 -> eight-item package.
+8. Only after the real local gate passes: stage the exact candidate to GitHub, wait for the named final gate, merge, deploy private worker/broker/Companion, verify live access, then atomically install the add-in.
+9. On any failure, preserve diagnostics and stop without partial production installation.
+
+## 7. Debugging rule for future chats/agents
+
+Start from this file and the newest preflight/log, not from chat recollection alone. Do not restart exploration of already-passed stages unless evidence shows they regressed. Record any new release boundary or architecture decision here before handing off or changing another subsystem.
