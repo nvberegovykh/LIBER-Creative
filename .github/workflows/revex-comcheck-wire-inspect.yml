@@ -7,134 +7,19 @@ permissions:
 jobs:
   inspect:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 2
     steps:
       - uses: actions/checkout@v4
-      - name: Install browser automation client
-        run: python -m pip install --disable-pip-version-check selenium
-      - name: Live official COMcheck through real Load Project UI
+      - name: Inspect official COMcheck load/save functions
         shell: python
         run: |
-          import pathlib, tempfile, time, urllib.request, xml.etree.ElementTree as ET
-          from selenium import webdriver
-          from selenium.webdriver.common.by import By
-          from selenium.webdriver.support.ui import WebDriverWait
-          from selenium.common.exceptions import NoAlertPresentException
-
+          import re, urllib.request
           base='https://legacy-comcheck.energycode.pnl.gov/CheckWeb/'
-          reference=pathlib.Path('src/Liber.Revex.Revit/Engineering/Energy/References/COMcheck_250_MIDWOOD_STRUCTURE_REFERENCE.cxl')
-          with tempfile.TemporaryDirectory() as td:
-              folder=pathlib.Path(td)
-              test=folder/'REVEX_COMCHECK_BROWSER_QA.cxl'
-              tree=ET.parse(reference); root=tree.getroot()
-              values={'projectTitle':'REVEX COMCHECK LIVE QA','projectAddress':'999 TEST AVENUE','projectCity':'BROOKLYN','projectState':'New York','projectZipCode':'11201'}
-              for node in root.iter():
-                  local=node.tag.rsplit('}',1)[-1]
-                  if local in values: node.text=values[local]
-              tree.write(test,encoding='utf-8',xml_declaration=True)
-
-              options=webdriver.ChromeOptions()
-              options.add_argument('--headless=new')
-              options.add_argument('--no-sandbox')
-              options.add_argument('--disable-dev-shm-usage')
-              options.add_argument('--window-size=1400,1000')
-              driver=webdriver.Chrome(options=options)
-              try:
-                  wait=WebDriverWait(driver,45)
-                  driver.get(base+'index.html')
-                  wait.until(lambda d: d.execute_script("return typeof ProjectService !== 'undefined' && typeof USER_PROJECT !== 'undefined' && USER_PROJECT !== null"))
-
-                  candidates=driver.execute_script("""
-                    return Array.from(document.querySelectorAll('a,button,input,[onclick]')).map((e,i)=>({
-                      i, tag:e.tagName, id:e.id||'', text:(e.innerText||e.value||e.title||'').trim(),
-                      onclick:e.getAttribute('onclick')||'', href:e.getAttribute('href')||''
-                    })).filter(x => /load|open|project/i.test(x.text+' '+x.onclick+' '+x.href));
-                  """)
-                  print('LOAD_UI_CANDIDATES=',candidates)
-                  clicked=False
-                  for selector in [
-                      "//*[contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'load project')]",
-                      "//*[contains(translate(@title,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'load project')]",
-                      "//*[contains(translate(@onclick,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'load') and contains(translate(@onclick,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'project')]",
-                  ]:
-                      for el in driver.find_elements(By.XPATH,selector):
-                          try:
-                              if el.is_displayed():
-                                  driver.execute_script('arguments[0].click();',el)
-                                  clicked=True
-                                  print('CLICKED_LOAD_ELEMENT=',el.tag_name,el.get_attribute('id'),el.text,el.get_attribute('onclick'))
-                                  break
-                          except Exception:
-                              pass
-                      if clicked: break
-                  if not clicked:
-                      funcs=driver.execute_script("return Object.keys(window).filter(k => /load.*project|project.*load/i.test(k) && typeof window[k]==='function');")
-                      print('LOAD_FUNCTIONS=',funcs)
-                      for name in funcs:
-                          try:
-                              driver.execute_script('window[arguments[0]]();',name)
-                              clicked=True
-                              print('CALLED_LOAD_FUNCTION=',name)
-                              break
-                          except Exception as e:
-                              print('LOAD_FUNCTION_FAILED=',name,str(e))
-                  if not clicked:
-                      raise RuntimeError('Could not open COMcheck Load Project UI')
-
-                  file_input=wait.until(lambda d: d.find_element(By.ID,'fileToUpload'))
-                  print('REAL_FILE_INPUT_PRESENT=',file_input.get_attribute('outerHTML'))
-                  file_input.send_keys(str(test.resolve()))
-                  driver.execute_script('uploadProject();')
-
-                  deadline=time.time()+45
-                  last_alert=None
-                  upload_ok=False
-                  while time.time()<deadline:
-                      try:
-                          a=driver.switch_to.alert
-                          last_alert=a.text
-                          print('COMCHECK_ALERT=',last_alert)
-                          a.accept()
-                          break
-                      except NoAlertPresentException:
-                          pass
-                      try:
-                          title=driver.execute_script("return USER_PROJECT && USER_PROJECT.project && USER_PROJECT.project.projectDetails && USER_PROJECT.project.projectDetails.title && USER_PROJECT.project.projectDetails.title.value")
-                          if title=='REVEX COMCHECK LIVE QA':
-                              upload_ok=True
-                              print('REVEX_COMCHECK_BROWSER_UPLOAD=PASSED')
-                              break
-                      except Exception:
-                          pass
-                      time.sleep(.25)
-                  if last_alert:
-                      try:
-                          print('USER_PROJECT_AFTER_ALERT=',driver.execute_script("return JSON.stringify(USER_PROJECT).slice(0,4000)"))
-                      except Exception:
-                          pass
-                      raise RuntimeError('COMcheck official Load Project rejected schema-intact QA CXL: '+last_alert)
-                  if not upload_ok:
-                      raise RuntimeError('COMcheck Load Project did not complete or surface a validation message')
-
-                  calc=driver.execute_async_script("""
-                    const done=arguments[arguments.length-1];
-                    ProjectService.calculateEnvelopeCompliance(true,function(r){
-                      try { const s=r&&r.envelopeStatus?r.envelopeStatus:r; done(JSON.stringify({ok:true,passes:s&&s.passes,complianceIndex:s&&s.complianceIndex})); }
-                      catch(e){done(JSON.stringify({ok:false,error:String(e)}));}
-                    });
-                  """)
-                  print('REVEX_COMCHECK_BROWSER_CALC=',calc)
-                  if '"ok":true' not in calc.replace(' ',''):
-                      raise RuntimeError('COMcheck browser calculation callback failed: '+str(calc))
-
-                  report_url=base+'report.html?envelopeCertificate=true&intLightingCertificate=false&extLightingCertificate=false&mechanicalCertificate=false&mechanicalReqDescription=false'
-                  driver.get(report_url)
-                  wait.until(lambda d:'report/current/pdf' in d.page_source)
-                  cookies='; '.join(f"{c['name']}={c['value']}" for c in driver.get_cookies())
-                  ua=driver.execute_script('return navigator.userAgent')
-                  req=urllib.request.Request(base+'report/current/pdf',headers={'Cookie':cookies,'User-Agent':ua,'Referer':report_url})
-                  pdf=urllib.request.urlopen(req,timeout=45).read()
-                  if not pdf.startswith(b'%PDF-'): raise RuntimeError('Official report is not PDF')
-                  print('REVEX_COMCHECK_BROWSER_PDF=PASSED bytes=',len(pdf))
-              finally:
-                  driver.quit()
+          for rel in ['includes/load_save.js','includes/start_app.js','index.html']:
+              req=urllib.request.Request(base+rel,headers={'User-Agent':'Mozilla/5.0 REVEX-r49-source-inspect'})
+              text=urllib.request.urlopen(req,timeout=30).read().decode('utf-8','replace')
+              print('\n###',rel,'bytes',len(text))
+              for needle in ['function loadProject','function uploadProject','function reloadProject','fileToUpload','Unable to load project','loadProject =','uploadProject =']:
+                  for m in list(re.finditer(re.escape(needle),text,re.I))[:8]:
+                      print('\n---',needle,'---')
+                      print(text[max(0,m.start()-1800):min(len(text),m.start()+5000)])
