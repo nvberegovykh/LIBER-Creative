@@ -45,7 +45,10 @@ jobs:
               d=webdriver.Chrome(options=o); d.set_script_timeout(45)
               try:
                   w=WebDriverWait(d,45);d.get(base+'index.html');w.until(lambda x:x.execute_script("return typeof ProjectService!=='undefined' && typeof dwr!=='undefined' && typeof USER_PROJECT!=='undefined' && USER_PROJECT!==null"))
-                  d.execute_script("let e=document.createElement('input');e.type='file';e.id='fileToUpload';e.name='fileToUpload';document.body.appendChild(e);")
+                  print('SITE_UPLOAD_WRAPPER=',d.execute_script("return typeof window.uploadProject==='function' ? String(window.uploadProject) : 'MISSING'"))
+                  print('SITE_SCRIPTS=',d.execute_script("return Array.from(document.scripts).map(s=>s.src||'[inline]').join(' | ')"))
+                  print('SITE_FILE_INPUT=',d.execute_script("const e=document.querySelector('input[type=file]'); return e ? JSON.stringify({id:e.id,name:e.name,outer:e.outerHTML}) : 'NONE'"))
+                  d.execute_script("let e=document.getElementById('fileToUpload'); if(!e){e=document.createElement('input');e.type='file';e.id='fileToUpload';e.name='fileToUpload';document.body.appendChild(e);}")
                   d.find_element(By.ID,'fileToUpload').send_keys(str(p.resolve()))
                   upload=d.execute_async_script("""
                     const done=arguments[arguments.length-1];
@@ -59,7 +62,14 @@ jobs:
                         try { const s=JSON.stringify(r); finish({ok:true,identityPresent:s.includes('REVEX COMCHECK LIVE QA'),bytes:s.length,prefix:s.slice(0,3000)}); }
                         catch(e){ finish({ok:false,error:'callback '+String(e)}); }
                       },
-                      errorHandler:function(msg,ex){ finish({ok:false,error:String(msg),exception:ex?String(ex):''}); },
+                      exceptionHandler:function(msg,ex){
+                        let detail={}; try{for(const k of Object.getOwnPropertyNames(ex||{})) detail[k]=(ex||{})[k];}catch(e){}
+                        finish({ok:false,error:String(msg),exception:detail,exceptionText:String(ex)});
+                      },
+                      errorHandler:function(msg,ex){
+                        let detail={}; try{for(const k of Object.getOwnPropertyNames(ex||{})) detail[k]=(ex||{})[k];}catch(e){}
+                        finish({ok:false,error:String(msg),exception:detail,exceptionText:String(ex)});
+                      },
                       timeout:30000
                     });
                   """)
@@ -76,7 +86,8 @@ jobs:
                         try { const s=JSON.stringify(r); finish({ok:true,bytes:s.length,hasEnvelope:/envelopeStatus|passes|complianceIndex/i.test(s),payload:s.slice(0,6000)}); }
                         catch(e){ finish({ok:false,error:'callback '+String(e)}); }
                       },
-                      errorHandler:function(msg,ex){ finish({ok:false,error:String(msg),exception:ex?String(ex):''}); },
+                      exceptionHandler:function(msg,ex){ finish({ok:false,error:String(msg),exception:String(ex)}); },
+                      errorHandler:function(msg,ex){ finish({ok:false,error:String(msg),exception:String(ex)}); },
                       timeout:30000
                     });
                   """)
