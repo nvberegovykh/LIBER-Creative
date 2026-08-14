@@ -95,3 +95,16 @@ The security fix is intentionally limited to those parsers:
 - do not change Revit evidence, GeometryCo, Baseline/Proposed templates, EnergyPlus, EN-1, COMcheck project translation, or acceptance semantics.
 
 A CodeQL failure after the full local release gate is a downstream publication/security-gate failure, not evidence that the passed Energy chain should be rewritten.
+
+## 10. 2026-08-14 Cloud worker Python/ONNX Runtime boundary
+
+The `43370d3c...` candidate passed the full local real-project gate, CodeQL, and the named GitHub final gate, then merged. The first downstream deployment failure was Cloud Build image dependency resolution: Ubuntu 22.04 provides system Python 3.10, while `onnxruntime==1.24.4` has no compatible Linux CPython 3.10 distribution in the worker's package index. The cloud image therefore failed before worker QA or deployment.
+
+The fix is dependency-marker-only and must not alter Energy behavior:
+
+- Windows keeps `onnxruntime-directml==1.24.4`;
+- non-Windows Python 3.11+ keeps `onnxruntime==1.24.4`;
+- non-Windows Python <3.11 uses `onnxruntime==1.23.2`, which has a CPython 3.10 manylinux x86-64 wheel compatible with Ubuntu 22.04;
+- GeometryCo model files, inference flow, thresholds, templates, Revit evidence, OSM compilation, EnergyPlus, COMcheck, EN-1, and acceptance semantics remain unchanged.
+
+Future publisher preflight must verify this split before expensive real-project acceptance so a workstation-only dependency pin cannot again reach Cloud Build.
