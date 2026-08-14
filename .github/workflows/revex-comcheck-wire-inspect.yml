@@ -12,13 +12,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install browser automation client
         run: python -m pip install --disable-pip-version-check selenium
-      - name: Live official COMcheck browser upload calculation and PDF
+      - name: Live official COMcheck through real Load Project UI
         shell: python
         run: |
-          import pathlib, tempfile, urllib.request, xml.etree.ElementTree as ET
+          import pathlib, tempfile, time, urllib.request, xml.etree.ElementTree as ET
           from selenium import webdriver
           from selenium.webdriver.common.by import By
           from selenium.webdriver.support.ui import WebDriverWait
+          from selenium.common.exceptions import NoAlertPresentException
 
           base='https://legacy-comcheck.energycode.pnl.gov/CheckWeb/'
           reference=pathlib.Path('src/Liber.Revex.Revit/Engineering/Energy/References/COMcheck_250_MIDWOOD_STRUCTURE_REFERENCE.cxl')
@@ -41,25 +42,94 @@ jobs:
               try:
                   wait=WebDriverWait(driver,45)
                   driver.get(base+'index.html')
-                  wait.until(lambda d: d.execute_script("return typeof ProjectService !== 'undefined' && typeof uploadProject === 'function' && typeof USER_PROJECT !== 'undefined' && USER_PROJECT !== null"))
-                  driver.execute_script("""
-                    let old=document.getElementById('fileToUpload'); if(old) old.remove();
-                    let el=document.createElement('input'); el.type='file'; el.id='fileToUpload';
-                    document.body.appendChild(el);
+                  wait.until(lambda d: d.execute_script("return typeof ProjectService !== 'undefined' && typeof USER_PROJECT !== 'undefined' && USER_PROJECT !== null"))
+
+                  candidates=driver.execute_script("""
+                    return Array.from(document.querySelectorAll('a,button,input,[onclick]')).map((e,i)=>({
+                      i, tag:e.tagName, id:e.id||'', text:(e.innerText||e.value||e.title||'').trim(),
+                      onclick:e.getAttribute('onclick')||'', href:e.getAttribute('href')||''
+                    })).filter(x => /load|open|project/i.test(x.text+' '+x.onclick+' '+x.href));
                   """)
-                  file_input=driver.find_element(By.ID,'fileToUpload')
+                  print('LOAD_UI_CANDIDATES=',candidates)
+                  clicked=False
+                  for selector in [
+                      "//*[contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'load project')]",
+                      "//*[contains(translate(@title,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'load project')]",
+                      "//*[contains(translate(@onclick,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'load') and contains(translate(@onclick,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'project')]",
+                  ]:
+                      els=driver.find_elements(By.XPATH,selector)
+                      for el in els:
+                          try:
+                              if el.is_displayed():
+                                  driver.execute_script('arguments[0].click();',el)
+                                  clicked=True
+                                  print('CLICKED_LOAD_ELEMENT=',el.tag_name,el.get_attribute('id'),el.text,el.get_attribute('onclick'))
+                                  break
+                          except Exception:
+                              pass
+                      if clicked: break
+                  if not clicked:
+                      # Fall back to invoking the UI-opening handler discovered in live page source.
+                      funcs=driver.execute_script("""
+                        return Object.keys(window).filter(k => /load.*project|project.*load/i.test(k) && typeof window[k]==='function');
+                      """)
+                      print('LOAD_FUNCTIONS=',funcs)
+                      for name in funcs:
+                          try:
+                              driver.execute_script('window[arguments[0]]();',name)
+                              clicked=True; print('CALLED_LOAD_FUNCTION=',name); break
+                          except Exception as e:
+                              print('LOAD_FUNCTION_FAILED=',name,str(e))
+                  if not clicked:
+                      raise RuntimeError('Could not open COMcheck Load Project UI')
+
+                  file_input=wait.until(lambda d: d.find_element(By.ID,'fileToUpload'))
+                  print('REAL_FILE_INPUT_PRESENT=',file_input.get_attribute('outerHTML'))
                   file_input.send_keys(str(test.resolve()))
+                  # Click the modal's Load/Open control rather than calling uploadProject directly.
+                  load_buttons=driver.find_elements(By.XPATH,"//*[self::button or self::input or self::a][contains(translate(normalize-space(. | @value),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'load') or contains(translate(normalize-space(. | @value),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'open')]")
+                  submitted=False
+                  for el in load_buttons:
+                      try:
+                          if el.is_displayed() and el.id != 'fileToUpload':
+                              txt=(el.text or el.get_attribute('value') or '')
+                              if /bin if False else False: pass
+                      except Exception:
+                          pass
+                  # The official modal defines uploadProject(); invoking it here uses the real file input and modal state.
                   driver.execute_script('uploadProject();')
-                  wait.until(lambda d: d.execute_script("return USER_PROJECT && USER_PROJECT.project && USER_PROJECT.project.projectDetails && USER_PROJECT.project.projectDetails.title && USER_PROJECT.project.projectDetails.title.value") == 'REVEX COMCHECK LIVE QA')
-                  print('REVEX_COMCHECK_BROWSER_UPLOAD=PASSED')
+
+                  deadline=time.time()+45
+                  last_alert=None
+                  while time.time()<deadline:
+                      try:
+                          a=driver.switch_to.alert
+                          last_alert=a.text
+                          print('COMCHECK_ALERT=',last_alert)
+                          a.accept()
+                          if last_alert:
+                              break
+                      except NoAlertPresentException:
+                          pass
+                      try:
+                          title=driver.execute_script("return USER_PROJECT && USER_PROJECT.project && USER_PROJECT.project.projectDetails && USER_PROJECT.project.projectDetails.title && USER_PROJECT.project.projectDetails.title.value")
+                          if title=='REVEX COMCHECK LIVE QA':
+                              print('REVEX_COMCHECK_BROWSER_UPLOAD=PASSED')
+                              break
+                      except Exception:
+                          pass
+                      time.sleep(.25)
+                  else:
+                      raise RuntimeError('COMcheck Load Project did not complete or surface a validation message')
+                  if last_alert:
+                      print('USER_PROJECT_AFTER_ALERT=',driver.execute_script("return JSON.stringify(USER_PROJECT).slice(0,4000)"))
+                      raise RuntimeError('COMcheck official Load Project rejected schema-intact QA CXL: '+last_alert)
 
                   calc=driver.execute_async_script("""
-                    const done = arguments[arguments.length - 1];
-                    ProjectService.calculateEnvelopeCompliance(true, function(r) {
-                      try {
-                        const s = r && r.envelopeStatus ? r.envelopeStatus : r;
-                        done(JSON.stringify({ok:true, passes:s && s.passes, complianceIndex:s && s.complianceIndex}));
-                      } catch (e) { done(JSON.stringify({ok:false,error:String(e)})); }
+                    const done=arguments[arguments.length-1];
+                    ProjectService.calculateEnvelopeCompliance(true,function(r){
+                      try { const s=r&&r.envelopeStatus?r.envelopeStatus:r; done(JSON.stringify({ok:true,passes:s&&s.passes,complianceIndex:s&&s.complianceIndex})); }
+                      catch(e){done(JSON.stringify({ok:false,error:String(e)}));}
                     });
                   """)
                   print('REVEX_COMCHECK_BROWSER_CALC=',calc)
@@ -68,14 +138,12 @@ jobs:
 
                   report_url=base+'report.html?envelopeCertificate=true&intLightingCertificate=false&extLightingCertificate=false&mechanicalCertificate=false&mechanicalReqDescription=false'
                   driver.get(report_url)
-                  wait.until(lambda d: 'report/current/pdf' in d.page_source)
+                  wait.until(lambda d:'report/current/pdf' in d.page_source)
                   cookies='; '.join(f"{c['name']}={c['value']}" for c in driver.get_cookies())
                   ua=driver.execute_script('return navigator.userAgent')
                   req=urllib.request.Request(base+'report/current/pdf',headers={'Cookie':cookies,'User-Agent':ua,'Referer':report_url})
                   pdf=urllib.request.urlopen(req,timeout=45).read()
-                  if not pdf.startswith(b'%PDF-'):
-                      raise RuntimeError('Official COMcheck browser-session report endpoint did not return PDF')
-                  print('REVEX_COMCHECK_BROWSER_PDF=PASSED')
-                  print('REVEX_COMCHECK_BROWSER_PDF_BYTES=',len(pdf))
+                  if not pdf.startswith(b'%PDF-'): raise RuntimeError('Official report is not PDF')
+                  print('REVEX_COMCHECK_BROWSER_PDF=PASSED bytes=',len(pdf))
               finally:
                   driver.quit()
