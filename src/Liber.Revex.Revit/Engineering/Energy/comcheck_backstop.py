@@ -527,21 +527,38 @@ class FreshProjectBrowserClient:
         result = self.driver.execute_script(
             """
             const use=arguments[0], rows=buildingUseTable.getList();
-            if(!rows.length)buildingUseTable.createComponent('WHOLE_BLDG');
-            const row=buildingUseTable.getList()[0];
-            row.type.value=use.type;
-            row.constructionType.value=use.constructionType;
-            row.floorArea.value=Number(use.floorArea||0);
-            row.powerDensity.value=Number(use.powerDensity||0);
-            buildingUseTable.updateServerComponent(row,['type','constructionType','floorArea','powerDensity']);
-            buildingUseTable.redraw([row]);
-            return {id:row.id,key:row.key&&row.key.value,type:row.type.value,area:row.floorArea.value};
+            let row=rows.find(r=>r&&r.type&&r.constructionType&&r.floorArea&&r.powerDensity);
+            if(!row){
+              const fields={
+                component:createInputField('WHOLE_BLDG'),
+                type:createInputField(use.type),
+                constructionType:createInputField(use.constructionType),
+                floorArea:createInputField(Number(use.floorArea||0)),
+                powerDensity:createInputField(Number(use.powerDensity||0))
+              };
+              row=buildingUseTable.buildNewComponent(fields);
+              row=buildingUseTable.addComponent(row,false);
+              if(row==null)return {ok:false,error:'addComponent returned null'};
+              buildingUseTable.finish(row,'add');
+            }else{
+              row.type.value=use.type;
+              row.constructionType.value=use.constructionType;
+              row.floorArea.value=Number(use.floorArea||0);
+              row.powerDensity.value=Number(use.powerDensity||0);
+              buildingUseTable.updateServerComponent(row,['type','constructionType','floorArea','powerDensity']);
+              buildingUseTable.redraw([row]);
+            }
+            return {
+              ok:true,id:row.id,key:row.key&&row.key.value,type:row.type&&row.type.value,
+              area:row.floorArea&&row.floorArea.value,fields:Object.keys(row)
+            };
             """,
             use,
         )
-        if not result or result.get("type") != use["type"] or float(result.get("area") or 0) <= 0:
+        if (not result or not result.get("ok") or result.get("type") != use["type"]
+                or float(result.get("area") or 0) <= 0 or not result.get("key")):
             raise ComcheckBackstopError(f"COMcheck rejected the clean project building use: {result}")
-        key = str(result.get("key") or "UNSPECIFIED_BLDG_USE")
+        key = str(result["key"])
         self.log("FRESH_BUILDING_USE_READY", buildingType=use["type"], floorArea=use["floorArea"])
         return key
 
