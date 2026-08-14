@@ -12,15 +12,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Selenium
         run: python -m pip install --disable-pip-version-check selenium pypdf
-      - name: Live byte-preserving CXL with official browser DWR callbacks
+      - name: Live COMcheck import/export wire acceptance
         shell: python
         run: |
-          import pathlib,re,tempfile,urllib.request
+          import pathlib,re,tempfile,urllib.request,json
           from selenium import webdriver
           from selenium.webdriver.common.by import By
           from selenium.webdriver.support.ui import WebDriverWait
           base='https://legacy-comcheck.energycode.pnl.gov/CheckWeb/'
-          ref=pathlib.Path('src/Liber.Revex.Revit/Engineering/Energy/References/COMcheck_250_MIDWOOD_STRUCTURE_REFERENCE.cxl')
+          ref=pathlib.Path('src/Liber.Revex.Revit/Engineering/Energy/References/COMcheck_250_MIDWOOD_STRUCTURE_REFERENCE.cxl').resolve()
           with tempfile.TemporaryDirectory() as td:
               p=pathlib.Path(td)/'REVEX_COMCHECK_CURRENT_QA.cxl'
               original=ref.read_text(encoding='utf-8'); text=original
@@ -46,48 +46,57 @@ jobs:
               try:
                   w=WebDriverWait(d,45);d.get(base+'index.html');w.until(lambda x:x.execute_script("return typeof ProjectService!=='undefined' && typeof dwr!=='undefined' && typeof USER_PROJECT!=='undefined' && USER_PROJECT!==null"))
                   print('SITE_UPLOAD_WRAPPER=',d.execute_script("return typeof window.uploadProject==='function' ? String(window.uploadProject) : 'MISSING'"))
-                  print('SITE_SCRIPTS=',d.execute_script("return Array.from(document.scripts).map(s=>s.src||'[inline]').join(' | ')"))
-                  print('SITE_FILE_INPUT=',d.execute_script("const e=document.querySelector('input[type=file]'); return e ? JSON.stringify({id:e.id,name:e.name,outer:e.outerHTML}) : 'NONE'"))
-                  d.execute_script("let e=document.getElementById('fileToUpload'); if(!e){e=document.createElement('input');e.type='file';e.id='fileToUpload';e.name='fileToUpload';document.body.appendChild(e);}")
-                  d.find_element(By.ID,'fileToUpload').send_keys(str(p.resolve()))
-                  upload=d.execute_async_script("""
-                    const done=arguments[arguments.length-1];
-                    const el=document.getElementById('fileToUpload');
-                    const file=dwr.util.getValue('fileToUpload');
-                    const filename=el.value;
-                    let settled=false;
+                  print('SITE_DOWNLOAD_GLOBALS=',d.execute_script("return Object.keys(window).filter(k=>/download|saveproject/i.test(k)).sort().join(' | ')"))
+
+                  exported=d.execute_async_script("""
+                    const done=arguments[arguments.length-1]; let settled=false;
                     const finish=(x)=>{if(!settled){settled=true;done(JSON.stringify(x));}};
-                    ProjectService.uploadProject(filename,file,{
+                    ProjectService.downloadProject({
                       callback:function(r){
-                        try { const s=JSON.stringify(r); finish({ok:true,identityPresent:s.includes('REVEX COMCHECK LIVE QA'),bytes:s.length,prefix:s.slice(0,3000)}); }
-                        catch(e){ finish({ok:false,error:'callback '+String(e)}); }
+                        let s=''; try{s=JSON.stringify(r)}catch(e){s=String(r)}
+                        finish({ok:true,type:typeof r,string:String(r),json:s});
                       },
-                      exceptionHandler:function(msg,ex){
-                        let detail={}; try{for(const k of Object.getOwnPropertyNames(ex||{})) detail[k]=(ex||{})[k];}catch(e){}
-                        finish({ok:false,error:String(msg),exception:detail,exceptionText:String(ex)});
-                      },
-                      errorHandler:function(msg,ex){
-                        let detail={}; try{for(const k of Object.getOwnPropertyNames(ex||{})) detail[k]=(ex||{})[k];}catch(e){}
-                        finish({ok:false,error:String(msg),exception:detail,exceptionText:String(ex)});
-                      },
+                      exceptionHandler:function(msg,ex){let x={};try{for(const k of Object.getOwnPropertyNames(ex||{}))x[k]=(ex||{})[k]}catch(e){};finish({ok:false,error:String(msg),exception:x});},
+                      errorHandler:function(msg,ex){let x={};try{for(const k of Object.getOwnPropertyNames(ex||{}))x[k]=(ex||{})[k]}catch(e){};finish({ok:false,error:String(msg),exception:x});},
                       timeout:30000
                     });
                   """)
-                  print('UPLOAD_RESULT=',upload)
-                  compact=upload.replace(' ','')
-                  if '"ok":true' not in compact or '"identityPresent":true' not in compact: raise RuntimeError('official browser upload callback did not return migrated project')
+                  print('DOWNLOAD_PROJECT_RESULT=',exported)
+
+                  d.execute_script("let e=document.getElementById('fileToUpload'); if(!e){e=document.createElement('input');e.type='file';e.id='fileToUpload';e.name='fileToUpload';document.body.appendChild(e);}")
+
+                  def upload(path, label, identity):
+                      e=d.find_element(By.ID,'fileToUpload'); e.send_keys(str(path))
+                      result=d.execute_async_script("""
+                        const expected=arguments[0], done=arguments[arguments.length-1];
+                        const el=document.getElementById('fileToUpload'), file=dwr.util.getValue('fileToUpload'), filename=el.value;
+                        let settled=false; const finish=(x)=>{if(!settled){settled=true;done(JSON.stringify(x));}};
+                        ProjectService.uploadProject(filename,file,{
+                          callback:function(r){try{const s=JSON.stringify(r);finish({ok:true,identityPresent:expected? s.includes(expected):true,bytes:s.length,prefix:s.slice(0,2500)})}catch(e){finish({ok:false,error:'callback '+String(e)})}},
+                          exceptionHandler:function(msg,ex){let x={};try{for(const k of Object.getOwnPropertyNames(ex||{}))x[k]=(ex||{})[k]}catch(e){};finish({ok:false,error:String(msg),exception:x,exceptionText:String(ex)})},
+                          errorHandler:function(msg,ex){let x={};try{for(const k of Object.getOwnPropertyNames(ex||{}))x[k]=(ex||{})[k]}catch(e){};finish({ok:false,error:String(msg),exception:x,exceptionText:String(ex)})},
+                          timeout:30000
+                        });
+                      """, identity)
+                      print(label+'=',result)
+                      # DWR restores the file input after its iframe callback; clear it for the next probe.
+                      try:d.find_element(By.ID,'fileToUpload').clear()
+                      except Exception:pass
+                      return json.loads(result)
+
+                  original_result=upload(ref,'ORIGINAL_REFERENCE_UPLOAD','250 Midwood Street')
+                  migrated_result=upload(p,'MIGRATED_REFERENCE_UPLOAD','REVEX COMCHECK LIVE QA')
+                  if not migrated_result.get('ok') or not migrated_result.get('identityPresent'):
+                      raise RuntimeError('official browser upload callback did not return migrated project')
                   print('REVEX_COMCHECK_BROWSER_UPLOAD=PASSED')
 
                   calc=d.execute_async_script("""
                     const done=arguments[arguments.length-1]; let settled=false;
                     const finish=(x)=>{if(!settled){settled=true;done(JSON.stringify(x));}};
                     ProjectService.calculateEnvelopeCompliance(true,{
-                      callback:function(r){
-                        try { const s=JSON.stringify(r); finish({ok:true,bytes:s.length,hasEnvelope:/envelopeStatus|passes|complianceIndex/i.test(s),payload:s.slice(0,6000)}); }
-                        catch(e){ finish({ok:false,error:'callback '+String(e)}); }
-                      },
-                      exceptionHandler:function(msg,ex){ finish({ok:false,error:String(msg),exception:String(ex)}); },
-                      errorHandler:function(msg,ex){ finish({ok:false,error:String(msg),exception:String(ex)}); },
+                      callback:function(r){try{const s=JSON.stringify(r);finish({ok:true,bytes:s.length,hasEnvelope:/envelopeStatus|passes|complianceIndex/i.test(s),payload:s.slice(0,6000)})}catch(e){finish({ok:false,error:'callback '+String(e)})}},
+                      exceptionHandler:function(msg,ex){finish({ok:false,error:String(msg),exception:String(ex)})},
+                      errorHandler:function(msg,ex){finish({ok:false,error:String(msg),exception:String(ex)})},
                       timeout:30000
                     });
                   """)
