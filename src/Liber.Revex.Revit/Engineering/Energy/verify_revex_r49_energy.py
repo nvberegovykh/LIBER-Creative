@@ -263,8 +263,10 @@ def main() -> int:
         assert official["code"] == "2020 NYCECC Appendix CA Modeling Envelope Backstop"
         compiler = pipeline.load_module(pipeline.GEOMETRYCO, "revex_geometryco_record_contract_qa")
         compiled = folder / "02_COMPILED_MODELS"
+        geometry_fixture = folder / "APPROVED_GEOMETRY_FIXTURE.osm"
+        shutil.copy2(pipeline.BASELINE_REFERENCE, geometry_fixture)
         compilation = compiler.compile_baseline_proposed_pair(
-            pipeline.BASELINE_REFERENCE,
+            geometry_fixture,
             pipeline.BASELINE_REFERENCE,
             pipeline.PROPOSED_REFERENCE,
             compiled,
