@@ -379,19 +379,20 @@ def main() -> int:
         review_workbook.save(en1_xlsx)
         review_workbook.close()
         pipeline.assert_no_reference_identity_xlsx(en1_xlsx)
-        review_artifacts = [
-            pipeline.relative_artifact(path, folder, kind)
-            for path, kind in (
-                (geometry_osm, "geometry-osm"),
-                (baseline_osm, "baseline-osm"),
-                (proposed_osm, "proposed-osm"),
-                (runs[0]["html"], "baseline-html"),
-                (runs[1]["html"], "proposed-html"),
-                (en1_xlsx, "en1-spreadsheet"),
-                (report, "official-comcheck-pdf"),
-                (review_zip, "packager-reports-archive"),
-            )
-        ]
+        review_artifacts = []
+        for path, kind, review_name in (
+            (geometry_osm, "geometry-osm", "GEOMETRY.osm"),
+            (baseline_osm, "baseline-osm", "BASELINE.osm"),
+            (proposed_osm, "proposed-osm", "PROPOSED.osm"),
+            (runs[0]["html"], "baseline-html", "BASELINE_REPORT.html"),
+            (runs[1]["html"], "proposed-html", "PROPOSED_REPORT.html"),
+            (en1_xlsx, "en1-spreadsheet", "EN-1.xlsx"),
+            (report, "official-comcheck-pdf", "COMcheck_BACKSTOP.pdf"),
+            (review_zip, "packager-reports-archive", "PACKAGER_REPORTS.zip"),
+        ):
+            artifact = pipeline.relative_artifact(path, folder, kind)
+            artifact["reviewName"] = review_name
+            review_artifacts.append(artifact)
         assert tuple(artifact["kind"] for artifact in review_artifacts) == pipeline.VALID_ENERGY_REVIEW_PACKAGE
         manual_package = pipeline.create_manual_review_package(folder, review_artifacts, {
             "schema": "liber.revex.energy-manual-review-package.v1",
@@ -403,7 +404,8 @@ def main() -> int:
         with zipfile.ZipFile(manual_package) as package:
             names = {name for name in package.namelist() if not name.endswith("/")}
             assert len(names) == 8
-            assert {artifact["path"] for artifact in review_artifacts}.issubset(names)
+            assert names == {artifact["reviewName"] for artifact in review_artifacts}
+            assert all("/" not in name and "\\" not in name for name in names)
             index = json.loads(package.comment)
             assert index["referenceTemplatesIncluded"] is False
             assert index["referenceIdentityExcluded"] is True
