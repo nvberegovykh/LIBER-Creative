@@ -91,6 +91,73 @@ REFERENCE_IDENTITY_TOKENS = (
     "WINTHROP", "FAYBYSHENKO", "CHOSEN MEP", "BEREGOVYKH",
     "2306 OCEAN", "B01304513", "31-00 47TH", "091045",
 )
+REVIEW_PACKAGE_PDF_LABELS = (
+    "Document Index",
+    "Envelope Performance_Windows",
+    "Envelope Performance (Opaque)",
+    "Exterior Lighting Calculations",
+    "Interior Lighting Calculations",
+    "Proposed HVAC",
+    "Baseline HVAC",
+    "Proposed Reports",
+    "Baseline Reports",
+)
+VALID_ENERGY_REVIEW_PACKAGE = (
+    "geometry-osm",
+    "baseline-osm",
+    "proposed-osm",
+    "baseline-html",
+    "proposed-html",
+    "en1-spreadsheet",
+    "official-comcheck-pdf",
+    "packager-reports-archive",
+)
+
+# Identity-free numerical fingerprint of the approved EnergyPlus review record.
+# The structure templates remain protected worker inputs; only these verification
+# facts are exposed in run evidence and the manual-review package.
+APPROVED_RUN_PROFILE = {
+    "schema": "liber.revex.approved-energy-profile.v1",
+    "cohort": "MASKED_APPROVED_COHORT_A",
+    "referenceIdentity": "MASKED",
+    "topology": {"spaces": 159, "surfaces": 1930, "subsurfaces": 294, "thermalZones": 2},
+    "modeledSquareFeet": 11690.791,
+    "conditionedSquareFeet": 11169.925,
+    "roles": {
+        "baseline": {
+            "siteKbtu": 942537.659,
+            "siteEuiKbtuPerFt2": 80.623,
+            "electricKwh": 133325.0,
+            "gasTherm": 4876.0,
+            "unmetHours": 28.33,
+            "endUseSharePct": {
+                "Space Heat": 37.1, "Space Cool": 7.5, "Interior Lighting": 10.8,
+                "Exterior Lighting": 0.1, "Misc. Equip. Unregulated": 1.0,
+                "Vent Fans": 26.8, "Pumps & Misc": 2.0, "Dom. Hot Water": 14.7,
+            },
+        },
+        "proposed": {
+            "siteKbtu": 348806.134,
+            "siteEuiKbtuPerFt2": 29.836,
+            "electricKwh": 102225.0,
+            "gasTherm": 0.0,
+            "unmetHours": 70.33,
+            "endUseSharePct": {
+                "Space Heat": 24.7, "Space Cool": 6.6, "Interior Lighting": 3.3,
+                "Exterior Lighting": 0.3, "Misc. Equip. Unregulated": 2.8,
+                "Vent Fans": 17.3, "Pumps & Misc": 5.2, "Dom. Hot Water": 39.8,
+            },
+        },
+    },
+    "tolerances": {
+        "modeledAreaRelativePct": 0.25,
+        "energyRelativePct": 5.0,
+        "endUseSharePercentagePoints": 3.0,
+        "unmetHoursRelativePct": 25.0,
+        "unmetHoursAbsolute": 5.0,
+        "nearZeroGasTherm": 5.0,
+    },
+}
 
 
 class PipelineError(RuntimeError):
@@ -379,6 +446,151 @@ def aggregate_end_uses(rows: list[tuple[str, float, float, float]]) -> dict[str,
         target[1] += gas
         target[2] += other
     return output
+
+
+def summarize_end_uses(rows: dict[str, list[float]]) -> dict[str, dict[str, float]]:
+    """Return review-safe fuel totals and site-energy shares for each end use."""
+    raw = {}
+    total_site_kbtu = 0.0
+    for label, values in rows.items():
+        electric_kwh, gas_therm, other_kbtu = (float(value or 0) for value in values)
+        site_kbtu = electric_kwh * 3.412141633 + gas_therm * 100.0 + other_kbtu
+        raw[label] = {
+            "electricKwh": electric_kwh,
+            "gasTherm": gas_therm,
+            "otherKbtu": other_kbtu,
+            "siteKbtu": site_kbtu,
+        }
+        total_site_kbtu += site_kbtu
+    for values in raw.values():
+        values["sharePct"] = 100.0 * values["siteKbtu"] / total_site_kbtu if total_site_kbtu else 0.0
+    return raw
+
+
+def _relative_delta_pct(actual: float, expected: float) -> float:
+    if expected == 0:
+        return 0.0 if actual == 0 else float("inf")
+    return abs(actual - expected) * 100.0 / abs(expected)
+
+
+def compare_approved_run_profile(metrics: dict, compilation_audit: Path, compiled_baseline_model: Path) -> dict:
+    """Compare a matching model cohort with the masked approved EnergyPlus run.
+
+    Topology and model area identify the cohort. Numerical simulation results are
+    compared with bounded tolerances so harmless engine-version variance does not
+    obscure meaningful regressions. No source-project identity enters the result.
+    """
+    profile = APPROVED_RUN_PROFILE
+    tolerances = profile["tolerances"]
+    audit = json.loads(compilation_audit.read_text(encoding="utf-8"))
+    baseline_report = (audit.get("reports") or {}).get("baseline") or {}
+    geometry = baseline_report.get("exact_geometry_lock") or {}
+    compiler = load_module(GEOMETRYCO, "revex_geometryco_approved_profile_compare")
+    compiled_model = compiler.parse_osm(compiled_baseline_model)
+    actual_topology = {
+        "spaces": int(geometry.get("spaces") or -1),
+        "surfaces": int(geometry.get("surfaces") or -1),
+        "subsurfaces": int(geometry.get("subsurfaces") or -1),
+        "thermalZones": len(compiled_model.by_type.get("OS:ThermalZone", [])),
+    }
+    topology_matches = actual_topology == profile["topology"]
+    modeled_area = float(metrics.get("modeledSquareFeet") or 0)
+    area_delta = _relative_delta_pct(modeled_area, float(profile["modeledSquareFeet"]))
+    cohort_matches = topology_matches and area_delta <= float(tolerances["modeledAreaRelativePct"])
+    profile_digest = hashlib.sha256(
+        json.dumps(profile, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    result = {
+        "schema": "liber.revex.approved-run-comparison.v1",
+        "cohort": profile["cohort"],
+        "referenceIdentity": "MASKED",
+        "profileSha256": profile_digest,
+        "cohortMatches": cohort_matches,
+        "topology": {"expected": profile["topology"], "actual": actual_topology, "passed": topology_matches},
+        "modeledArea": {
+            "expectedSquareFeet": profile["modeledSquareFeet"],
+            "actualSquareFeet": modeled_area,
+            "relativeDeltaPct": area_delta,
+            "tolerancePct": tolerances["modeledAreaRelativePct"],
+            "passed": area_delta <= float(tolerances["modeledAreaRelativePct"]),
+        },
+        "checks": [],
+        "iterationSelection": "UNBENCHMARKED_DIFFERENT_COHORT",
+        "reviewEligible": True,
+    }
+    if not cohort_matches:
+        result["status"] = "NOT_APPLICABLE_DIFFERENT_COHORT"
+        return result
+
+    def add_relative(role: str, field: str, actual: float, expected: float, tolerance: float) -> None:
+        delta = _relative_delta_pct(actual, expected)
+        result["checks"].append({
+            "role": role, "metric": field, "actual": actual, "expected": expected,
+            "delta": delta, "tolerance": tolerance, "units": "relative-percent", "passed": delta <= tolerance,
+        })
+
+    def add_absolute(role: str, field: str, actual: float, expected: float, tolerance: float, units: str) -> None:
+        delta = abs(actual - expected)
+        result["checks"].append({
+            "role": role, "metric": field, "actual": actual, "expected": expected,
+            "delta": delta, "tolerance": tolerance, "units": units, "passed": delta <= tolerance,
+        })
+
+    for role in ("baseline", "proposed"):
+        actual_role = metrics.get(role) or {}
+        expected_role = profile["roles"][role]
+        add_relative(role, "siteKbtu", float(actual_role.get("siteKbtu") or 0),
+                     float(expected_role["siteKbtu"]), float(tolerances["energyRelativePct"]))
+        add_relative(role, "siteEuiKbtuPerFt2", float(actual_role.get("siteEuiKbtuPerFt2") or 0),
+                     float(expected_role["siteEuiKbtuPerFt2"]), float(tolerances["energyRelativePct"]))
+        add_relative(role, "electricKwh", float(actual_role.get("electricKwh") or 0),
+                     float(expected_role["electricKwh"]), float(tolerances["energyRelativePct"]))
+        if float(expected_role["gasTherm"]) == 0:
+            add_absolute(role, "gasTherm", float(actual_role.get("gasTherm") or 0), 0.0,
+                         float(tolerances["nearZeroGasTherm"]), "therm")
+        else:
+            add_relative(role, "gasTherm", float(actual_role.get("gasTherm") or 0),
+                         float(expected_role["gasTherm"]), float(tolerances["energyRelativePct"]))
+        unmet_tolerance = max(float(tolerances["unmetHoursAbsolute"]),
+                              float(expected_role["unmetHours"]) * float(tolerances["unmetHoursRelativePct"]) / 100.0)
+        add_absolute(role, "unmetHours", float(actual_role.get("unmetHours") or 0),
+                     float(expected_role["unmetHours"]), unmet_tolerance, "hours")
+        actual_end_uses = actual_role.get("endUses") or {}
+        for label, expected_share in expected_role["endUseSharePct"].items():
+            actual_share = float((actual_end_uses.get(label) or {}).get("sharePct") or 0)
+            add_absolute(role, f"endUseShare:{label}", actual_share, float(expected_share),
+                         float(tolerances["endUseSharePercentagePoints"]), "percentage-points")
+
+    baseline = metrics.get("baseline") or {}
+    proposed = metrics.get("proposed") or {}
+    directional = [
+        {
+            "role": "pair", "metric": "proposedSiteEnergyBelowBaseline",
+            "actual": float(proposed.get("siteKbtu") or 0), "expected": f"< {float(baseline.get('siteKbtu') or 0)}",
+            "passed": 0 < float(proposed.get("siteKbtu") or 0) < float(baseline.get("siteKbtu") or 0),
+        },
+        {
+            "role": "pair", "metric": "proposedVirtualCostBelowBaseline",
+            "actual": float(proposed.get("cost") or 0), "expected": f"< {float(baseline.get('cost') or 0)}",
+            "passed": 0 < float(proposed.get("cost") or 0) < float(baseline.get("cost") or 0),
+        },
+    ]
+    result["checks"].extend(directional)
+    passed = all(check.get("passed") is True for check in result["checks"])
+    finite_ratios = [
+        min(float(check["delta"]) / float(check["tolerance"]), 10.0)
+        for check in result["checks"]
+        if isinstance(check.get("delta"), (int, float)) and check.get("tolerance") not in (None, 0)
+    ]
+    result["normalizedRegressionScore"] = (
+        sum(finite_ratios) / len(finite_ratios) if finite_ratios else (0.0 if passed else 10.0)
+    )
+    result["passedChecks"] = sum(1 for check in result["checks"] if check.get("passed") is True)
+    result["totalChecks"] = len(result["checks"])
+    result["status"] = "PASSED" if passed else "REGRESSION"
+    result["iterationSelection"] = "BEST_WORKING_ITERATION" if passed else "WITHHELD_REFERENCE_REGRESSION"
+    result["reviewEligible"] = passed
+    return result
 
 
 def find_area_ft2(packager, soup, labels: tuple[str, ...]) -> float | None:
@@ -694,9 +906,23 @@ def prepare_en1(packager, baseline_html: Path, proposed_html: Path,
     print_workbook.views = [BookView(activeTab=active_index, firstSheet=active_index)]
     print_workbook.save(print_workbook_path)
 
+    baseline_site_kbtu = baseline_total[0] * 3.412141633 + baseline_total[1] * 100.0 + baseline_total[2]
+    proposed_site_kbtu = proposed_total[0] * 3.412141633 + proposed_total[1] * 100.0 + proposed_total[2]
     metrics = {
-        "baseline": {"electricKwh": baseline_total[0], "gasTherm": baseline_total[1], "otherKbtu": baseline_total[2], "cost": baseline_cost, "unmetHours": baseline_unmet},
-        "proposed": {"electricKwh": proposed_total[0], "gasTherm": proposed_total[1], "otherKbtu": proposed_total[2], "cost": proposed_cost, "unmetHours": proposed_unmet},
+        "baseline": {
+            "electricKwh": baseline_total[0], "gasTherm": baseline_total[1], "otherKbtu": baseline_total[2],
+            "siteKbtu": baseline_site_kbtu,
+            "siteEuiKbtuPerFt2": baseline_site_kbtu / modeled if modeled else None,
+            "cost": baseline_cost, "unmetHours": baseline_unmet,
+            "endUses": summarize_end_uses(baseline_rows),
+        },
+        "proposed": {
+            "electricKwh": proposed_total[0], "gasTherm": proposed_total[1], "otherKbtu": proposed_total[2],
+            "siteKbtu": proposed_site_kbtu,
+            "siteEuiKbtuPerFt2": proposed_site_kbtu / modeled if modeled else None,
+            "cost": proposed_cost, "unmetHours": proposed_unmet,
+            "endUses": summarize_end_uses(proposed_rows),
+        },
         "modeledSquareFeet": modeled, "conditionedSquareFeet": conditioned, "unconditionedSquareFeet": unconditioned,
         "identityFields": {
             "project": "ACTIVE_REVIT_T_Z_EVIDENCE", "applicant": "BLANK", "leadModeler": "BLANK",
@@ -1113,6 +1339,7 @@ def run_project_backstop(cxl: Path, filing_dir: Path, project_identity: dict, lo
 def validate_completion_outputs(
     baseline_model: Path, proposed_model: Path,
     baseline_run: dict, proposed_run: dict,
+    review_zip: Path, project_name: str,
     en1_pdf: Path | None, comcheck_cxl: Path | None,
     comcheck_report: Path | None, comcheck_summary: dict | None,
 ) -> dict:
@@ -1125,16 +1352,95 @@ def validate_completion_outputs(
             failures.append(f"compiled OSM is missing or empty: {path.name}")
         elif "OS:Building" not in path.read_text(encoding="utf-8", errors="ignore"):
             failures.append(f"compiled OSM is not an OpenStudio model: {path.name}")
+        else:
+            try:
+                assert_no_reference_identity_text(path.read_text(encoding="utf-8", errors="ignore"), path.name)
+            except PipelineError as exc:
+                failures.append(str(exc))
+
+    audit_path = baseline_model.parent / "COMPILATION_AUDIT.json"
+    geometry_hashes = []
+    if not audit_path.is_file():
+        failures.append("GeometryCo compilation audit is missing")
+    else:
+        try:
+            audit = json.loads(audit_path.read_text(encoding="utf-8"))
+            if audit.get("success") is not True:
+                failures.append("GeometryCo did not atomically commit a successful Baseline/Proposed pair")
+            for role in ("baseline", "proposed"):
+                report = (audit.get("reports") or {}).get(role) or {}
+                geometry = report.get("exact_geometry_lock") or {}
+                mapping = report.get("space_mapping") or {}
+                schedules = report.get("schedule_lock") or {}
+                serialized = report.get("serialized_roundtrip_validation") or {}
+                repairs = report.get("energyplus_compatibility_repairs") or {"count": 0, "lossless": True}
+                if geometry.get("passed") is not True or geometry.get("new_space_identity_passed") is not True:
+                    failures.append(f"{role.title()} GeometryCo exact coordinate/space identity lock did not pass")
+                if int(mapping.get("count") or -1) != int(geometry.get("spaces") or -2) or int(mapping.get("ambiguous_count") or 0) != 0:
+                    failures.append(f"{role.title()} GeometryCo space mapping is incomplete or ambiguous")
+                if schedules.get("passed") is not True or int(schedules.get("changed_schedule_objects") or 0) != 0 or int(schedules.get("changed_protected_schedule_references") or 0) != 0:
+                    failures.append(f"{role.title()} GeometryCo schedule/load reference lock did not pass")
+                if serialized.get("passed") is not True:
+                    failures.append(f"{role.title()} serialized OSM round-trip validation did not pass")
+                if int(repairs.get("count") or 0) > 0 and repairs.get("lossless") is not True:
+                    failures.append(f"{role.title()} EnergyPlus compatibility repair was not lossless")
+                if geometry.get("coordinate_sha256"):
+                    geometry_hashes.append(str(geometry["coordinate_sha256"]))
+            if len(set(geometry_hashes)) != 1:
+                failures.append("Baseline and Proposed compiled OSMs do not share the exact current-project geometry lock")
+        except (OSError, ValueError, TypeError) as exc:
+            failures.append(f"GeometryCo compilation audit is unreadable: {exc}")
+
     for role, run in (("Baseline", baseline_run), ("Proposed", proposed_run)):
         for key in ("html", "idf"):
             path = run.get(key)
             if not isinstance(path, Path) or not path.is_file() or path.stat().st_size < 512:
                 failures.append(f"{role} simulation {key.upper()} is missing or empty")
+            elif isinstance(path, Path):
+                try:
+                    assert_no_reference_identity_text(path.read_text(encoding="utf-8", errors="ignore"), f"{role} simulation {key.upper()}")
+                except PipelineError as exc:
+                    failures.append(str(exc))
         end_file = next(iter(Path(run["folder"]).glob("**/eplusout.end")), None)
         if end_file is None or "EnergyPlus Completed Successfully" not in end_file.read_text(encoding="utf-8", errors="ignore"):
             failures.append(f"{role} EnergyPlus run did not record successful completion")
+        err_file = next(iter(Path(run["folder"]).glob("**/eplusout.err")), None)
+        if err_file is None:
+            failures.append(f"{role} EnergyPlus error/warning report is missing")
+        else:
+            err_text = err_file.read_text(encoding="utf-8", errors="ignore")
+            if "**  Fatal  **" in err_text or "EnergyPlus Terminated--Fatal Error Detected" in err_text:
+                failures.append(f"{role} EnergyPlus error report contains a fatal termination")
+
+    if not review_zip.is_file() or not zipfile.is_zipfile(review_zip):
+        failures.append("EnergyPlus reviewer ZIP is missing or invalid")
+    else:
+        expected_names = {f"{project_name} - {label}.pdf" for label in REVIEW_PACKAGE_PDF_LABELS}
+        with zipfile.ZipFile(review_zip) as package:
+            actual_names = {Path(name).name for name in package.namelist() if not name.endswith("/")}
+            if actual_names != expected_names:
+                failures.append(
+                    "EnergyPlus reviewer ZIP does not match the approved nine-PDF record format "
+                    f"(missing={sorted(expected_names - actual_names)}, unexpected={sorted(actual_names - expected_names)})"
+                )
+            for name in sorted(actual_names):
+                try:
+                    assert_no_reference_identity_text(name, f"review package entry {name}")
+                except PipelineError as exc:
+                    failures.append(str(exc))
+                if not package.read(name).startswith(b"%PDF-"):
+                    failures.append(f"review package entry is not a PDF: {name}")
     if en1_pdf is None or not en1_pdf.is_file():
         failures.append("16-page EN-1 filing PDF is missing")
+    else:
+        from pypdf import PdfReader
+        en1_reader = PdfReader(str(en1_pdf))
+        if len(en1_reader.pages) != len(EN1_PRINT_SHEETS):
+            failures.append(f"EN-1 filing PDF has {len(en1_reader.pages)} pages instead of {len(EN1_PRINT_SHEETS)}")
+        try:
+            assert_no_reference_identity_text("\n".join((page.extract_text() or "") for page in en1_reader.pages), "EN-1 filing PDF")
+        except PipelineError as exc:
+            failures.append(str(exc))
     if comcheck_cxl is None or not comcheck_cxl.is_file():
         failures.append("current-project COMcheck CXL is missing")
     if comcheck_report is None or not comcheck_report.is_file() or not comcheck_report.read_bytes().startswith(b"%PDF-"):
@@ -1146,6 +1452,10 @@ def validate_completion_outputs(
     return {
         "compiledOsmCount": 2,
         "simulationCount": 2,
+        "geometrySpaceIdentityLock": True,
+        "scheduleAndLoadReferenceLock": True,
+        "losslessCompatibilityRepair": True,
+        "reviewPackagePdfCount": len(REVIEW_PACKAGE_PDF_LABELS),
         "en1Pdf": en1_pdf.name,
         "officialComcheckReport": comcheck_report.name,
         "officialDoeReport": True,
@@ -1179,11 +1489,46 @@ def relative_artifact(path: Path, root: Path, kind: str) -> dict:
             "bytes": path.stat().st_size, "sha256": sha256(path)}
 
 
+def create_manual_review_package(output_root: Path, artifacts: list[dict], index: dict) -> Path:
+    package_path = output_root / "REVEX_ENERGY_MANUAL_REVIEW_PACKAGE.zip"
+    package_path.unlink(missing_ok=True)
+    with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as package:
+        # Keep the archive itself at exactly eight user-visible entries. The same
+        # immutable index is stored as the ZIP comment and in energy-result.json.
+        package.comment = json.dumps(index, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        for artifact in artifacts:
+            relative = Path(str(artifact.get("path") or ""))
+            source = (output_root / relative).resolve()
+            try:
+                source.relative_to(output_root.resolve())
+            except ValueError as exc:
+                raise PipelineError(f"Manual-review artifact escaped the Energy output folder: {relative}") from exc
+            if not source.is_file():
+                raise PipelineError(f"Manual-review artifact is missing: {relative}")
+            if source == package_path.resolve():
+                continue
+            if source.stat().st_size != int(artifact.get("bytes") or -1) or sha256(source) != str(artifact.get("sha256") or ""):
+                raise PipelineError(f"Manual-review artifact failed its immutable hash/byte contract: {relative}")
+            package.write(source, relative.as_posix())
+    with zipfile.ZipFile(package_path) as verification:
+        entries = [name for name in verification.namelist() if not name.endswith("/")]
+        if len(entries) != len(VALID_ENERGY_REVIEW_PACKAGE):
+            raise PipelineError(
+                f"Manual-review archive contains {len(entries)} items instead of "
+                f"{len(VALID_ENERGY_REVIEW_PACKAGE)}."
+            )
+    return package_path
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--request", type=Path, required=True)
     args = parser.parse_args()
     request = json.loads(args.request.read_text(encoding="utf-8"))
+    publication_qa = (
+        request.get("publicationQa") is True
+        or str(os.environ.get("REVEX_PUBLICATION_QA") or "").strip().lower() in {"1", "true", "yes"}
+    )
     output_root = Path(request["outputFolder"]).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
     correlation_id = str(request.get("correlationId") or f"energy-{uuid.uuid4().hex[:12]}")
@@ -1197,6 +1542,13 @@ def main() -> int:
     artifacts: list[dict] = []
     deliverables: list[Path] = []
     failure_context = None
+    approved_run_comparison = {
+        "schema": "liber.revex.approved-run-comparison.v1",
+        "status": "NOT_RUN",
+        "iterationSelection": "WITHHELD_INCOMPLETE_RUN",
+        "reviewEligible": False,
+        "referenceIdentity": "MASKED",
+    }
     page_facts = {"status": "NOT_READ", "pages": []}
     project_identity = {"source": "bound active Revit document plus immutable T/Z pages", "missing": list(REQUIRED_PROJECT_IDENTITY)}
     current_project_name = "Current REVEX Project"
@@ -1340,10 +1692,42 @@ def main() -> int:
         else:
             completion = validate_completion_outputs(
                 baseline_model, proposed_model, baseline_run, proposed_run,
+                review_zip, current_project_name,
                 en1_pdf, comcheck_cxl, comcheck_report, comcheck_summary,
             )
             log.write("COMPLETION_GATE", "PASSED", **completion)
-            status = "COMPLETE"
+            approved_run_comparison = compare_approved_run_profile(
+                metrics, baseline_model.parent / "COMPILATION_AUDIT.json", baseline_model
+            )
+            comparison_path = output_root / "APPROVED_RUN_COMPARISON_MASKED.json"
+            comparison_path.write_text(json.dumps(approved_run_comparison, indent=2), encoding="utf-8")
+            deliverables.append(comparison_path)
+            if approved_run_comparison.get("status") == "REGRESSION":
+                status = "BLOCKED_APPROVED_RUN_REGRESSION"
+                error = (
+                    "The completed simulation diverged from the masked approved-run profile; "
+                    "the manual-review candidate was withheld."
+                )
+                failure_context = {
+                    "failedStage": "APPROVED_RUN_COMPARISON",
+                    "type": "PipelineBlocked",
+                    "message": error,
+                }
+                log.write(
+                    "APPROVED_RUN_COMPARISON", "REGRESSION",
+                    passedChecks=approved_run_comparison.get("passedChecks"),
+                    totalChecks=approved_run_comparison.get("totalChecks"),
+                    normalizedRegressionScore=approved_run_comparison.get("normalizedRegressionScore"),
+                    referenceIdentity="MASKED",
+                )
+            else:
+                log.write(
+                    "APPROVED_RUN_COMPARISON", approved_run_comparison.get("status") or "PASSED",
+                    iterationSelection=approved_run_comparison.get("iterationSelection"),
+                    normalizedRegressionScore=approved_run_comparison.get("normalizedRegressionScore"),
+                    referenceIdentity="MASKED",
+                )
+                status = "COMPLETE"
         log.write("PIPELINE", status)
     except Exception as ex:
         failed_stage = log.current_stage
@@ -1392,6 +1776,52 @@ def main() -> int:
             kind = "diagnostic"
         artifacts.append(relative_artifact(path, output_root, kind))
 
+    # Put one human-reviewable bundle beside the run folder only for an eligible
+    # completed iteration. The review contract is exactly seven files plus the
+    # Packager reports archive; diagnostics and protected references stay outside.
+    manual_review_index = {
+        "schema": "liber.revex.energy-manual-review-package.v1",
+        "pipelineVersion": PIPELINE_VERSION,
+        "projectId": request.get("projectId"),
+        "projectName": current_project_name,
+        "sourceEngineeringRevision": request.get("revision"),
+        "status": status,
+        "iterationSelection": approved_run_comparison.get("iterationSelection"),
+        "approvedRunComparisonStatus": approved_run_comparison.get("status"),
+        "approvedRunProfileSha256": approved_run_comparison.get("profileSha256"),
+        "referenceTemplatesIncluded": False,
+        "referenceIdentityExcluded": True,
+        "recordFormat": {
+            "topLevelFiles": 7,
+            "topLevelArchives": 1,
+            "contract": list(VALID_ENERGY_REVIEW_PACKAGE),
+            "packagerArchivePdfCount": len(REVIEW_PACKAGE_PDF_LABELS),
+        },
+        "files": [],
+    }
+    manual_review_package = None
+    review_artifacts: list[dict] = []
+    if status == "COMPLETE" and approved_run_comparison.get("reviewEligible") is True:
+        review_contract_paths = [
+            (geometry_osm, "geometry-osm"),
+            (baseline_model, "baseline-osm"),
+            (proposed_model, "proposed-osm"),
+            (baseline_run["html"], "baseline-html"),
+            (proposed_run["html"], "proposed-html"),
+            (en1_xlsx, "en1-spreadsheet"),
+            (comcheck_report, "official-comcheck-pdf"),
+            (review_zip, "packager-reports-archive"),
+        ]
+        review_artifacts = [relative_artifact(path, output_root, kind) for path, kind in review_contract_paths]
+        if tuple(artifact["kind"] for artifact in review_artifacts) != VALID_ENERGY_REVIEW_PACKAGE:
+            raise PipelineError("Manual-review package did not match the seven-files-plus-one-archive contract.")
+        manual_review_index["files"] = [
+            {key: artifact[key] for key in ("path", "kind", "bytes", "sha256")}
+            for artifact in review_artifacts
+        ]
+        manual_review_package = create_manual_review_package(output_root, review_artifacts, manual_review_index)
+        artifacts.append(relative_artifact(manual_review_package, output_root, "manual-review-package"))
+
     finished = dt.datetime.now(dt.timezone.utc)
     result = {
         "schema": SCHEMA,
@@ -1419,8 +1849,30 @@ def main() -> int:
             {"folder":"03_SIMULATION", "kind":"simulation-output", "label":"Original OpenStudio / EnergyPlus reports"},
             {"folder":"04_REVIEW_PACKAGE", "kind":"review-report", "label":"Organized review reports"},
             {"folder":"05_FILING", "kind":"filing-output", "label":"Filing-ready outputs and current-project inputs"},
+            {"folder":"REVEX_ENERGY_MANUAL_REVIEW_PACKAGE.zip", "kind":"manual-review-package", "label":"Seven files plus one Packager archive; eligible completed iteration only"},
         ],
-        "artifacts": artifacts,
+        "approvedRunComparison": approved_run_comparison,
+        "manualReviewPackage": ({
+            "status": "CREATED",
+            "name": manual_review_package.name,
+            "path": manual_review_package.name,
+            "bytes": manual_review_package.stat().st_size,
+            "sha256": sha256(manual_review_package),
+            "topLevelFiles": 7,
+            "topLevelArchives": 1,
+            "referenceTemplatesIncluded": False,
+            "referenceIdentityExcluded": True,
+        } if manual_review_package else {
+            "status": "WITHHELD",
+            "reason": approved_run_comparison.get("iterationSelection") or status,
+            "referenceTemplatesIncluded": False,
+            "referenceIdentityExcluded": True,
+        }),
+        # Production consumers receive exactly the seven-files-plus-one-archive
+        # review contract. Extra run evidence is exported only by publication QA.
+        "artifacts": review_artifacts,
+        "debugArtifacts": artifacts if publication_qa else [],
+        "publicationQa": publication_qa,
         "comcheck": {
             **(comcheck_audit if 'comcheck_audit' in locals() else {"status":"NOT_RUN"}),
             **comcheck_summary,
