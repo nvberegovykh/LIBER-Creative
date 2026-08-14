@@ -355,7 +355,7 @@ function Restore-HashLockedSource([System.Collections.IDictionary]$Expected, [st
     $relativePath = [string]$entry.Key
     $expectedHash = [string]$entry.Value
     $canonicalRelativePath = Get-CanonicalSourceRelativePath $relativePath
-    $canonicalPath = Join-Path $CanonicalSourceRoot $canonicalRelativePath.Replace("/", "\")
+    $canonicalPath = Join-Path $CanonicalSourceRoot ($canonicalRelativePath.Replace("/", "\"))
     if (-not (Test-Path -LiteralPath $canonicalPath -PathType Leaf)) {
       throw "Pinned commit $CanonicalSourceCommit is missing required source: $canonicalRelativePath. No unverified replacement was accepted."
     }
@@ -394,6 +394,43 @@ function Restore-HashLockedSource([System.Collections.IDictionary]$Expected, [st
     repairedFiles = @($repaired)
     deterministicCrLfFiles = @($lineEndingNormalizations)
     finalFullSetVerification = $true
+  })
+}
+
+function New-IsolatedCanonicalSourceStage([System.Collections.IDictionary]$Expected) {
+  Write-Step "Create the immutable r49 build and QA source stage"
+  New-Item -ItemType Directory -Path $StageSource -Force | Out-Null
+  Copy-SourceTree (Join-Path $CanonicalSourceRoot "src\Liber.Revex.Revit") (Join-Path $StageSource "src\Liber.Revex.Revit")
+  Copy-SourceTree (Join-Path $CanonicalSourceRoot "docs\liber-apps\apps\revex") (Join-Path $StageSource "src\Live-Companion")
+  Copy-SourceTree (Join-Path $CanonicalSourceRoot "server\revex-energy-worker") (Join-Path $StageSource "server\revex-energy-worker")
+  Copy-SourceTree (Join-Path $CanonicalSourceRoot "server\firebase-functions") (Join-Path $StageSource "server\firebase-functions")
+
+  foreach ($entry in $Expected.GetEnumerator()) {
+    $relativePath = [string]$entry.Key
+    $expectedHash = [string]$entry.Value
+    $canonicalRelativePath = Get-CanonicalSourceRelativePath $relativePath
+    $canonicalPath = Join-Path $CanonicalSourceRoot ($canonicalRelativePath.Replace("/", "\"))
+    $stagePath = Join-Path $StageSource $relativePath
+    $normalizeUtf8CrLf = $canonicalRelativePath -match '^src/Liber\.Revex\.Revit/Engineering/Energy/References/79_WINTHROP_APPROVED_(BASELINE|PROPOSED)\.osm$'
+    $stageHash = if (Test-Path -LiteralPath $stagePath -PathType Leaf) {
+      (Get-FileHash -LiteralPath $stagePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    } else { "<missing>" }
+    if ($stageHash -ne $expectedHash) {
+      Install-CanonicalSourceFile $canonicalPath $stagePath $expectedHash $normalizeUtf8CrLf
+    }
+    $finalStageHash = (Get-FileHash -LiteralPath $stagePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($finalStageHash -ne $expectedHash) {
+      throw "Immutable source-stage hash mismatch: $relativePath`nExpected $expectedHash`nActual   $finalStageHash"
+    }
+  }
+  Write-Log "Immutable build/QA stage contains the exact full source tree and all $($Expected.Count) hash-locked files." Green
+  Add-PreflightCheckpoint "IMMUTABLE_SOURCE_STAGE" ([ordered]@{
+    canonicalCommit = $CanonicalSourceCommit
+    lockedFileCount = $Expected.Count
+    fullRevitSourceTree = $true
+    fullCompanionSourceTree = $true
+    fullWorkerAndBrokerSourceTrees = $true
+    independentOfDriveAfterCreation = $true
   })
 }
 
@@ -815,13 +852,11 @@ try {
     Protect-DeploymentLogs
   }
 
-  Write-Step "Create isolated r49 offline preflight stage"
-  New-Item -ItemType Directory -Path $StageSource, $StagePayload, $StageRules -Force | Out-Null
-  Copy-SourceTree (Join-Path $Root "server\revex-energy-worker") (Join-Path $StageSource "server\revex-energy-worker")
-  Copy-SourceTree (Join-Path $Root "server\firebase-functions") $StageFunctions
-  Copy-SourceTree (Join-Path $Root "src\Liber.Revex.Revit\Engineering\Energy") (Join-Path $StageSource "src\Liber.Revex.Revit\Engineering\Energy")
-  Copy-SourceTree (Join-Path $Root "firebase\r49-live-rules") $StageRules
-  Copy-Item -LiteralPath (Join-Path $Root ".github\scripts\verify-revex-r49-live-rules.js") -Destination (Join-Path $StageRules "verify-revex-r49-live-rules.js") -Force
+  New-IsolatedCanonicalSourceStage $Expected
+  Write-Step "Create isolated r49 offline preflight dependencies"
+  New-Item -ItemType Directory -Path $StagePayload, $StageRules -Force | Out-Null
+  Copy-SourceTree (Join-Path $StageSource "firebase\r49-live-rules") $StageRules
+  Copy-Item -LiteralPath (Join-Path $StageSource ".github\scripts\verify-revex-r49-live-rules.js") -Destination (Join-Path $StageRules "verify-revex-r49-live-rules.js") -Force
   Invoke-Native "Install pinned Firebase Rules emulator dependencies" $Npm @("ci", "--no-audit", "--no-fund") -WorkingDirectory $StageRules
   Invoke-Native "Reject high or critical Firebase Rules gate dependency advisories" $Npm @("audit", "--audit-level=high") -WorkingDirectory $StageRules
   Invoke-Native "Prepare representative preserved project-access rules" $Node @(
@@ -829,7 +864,7 @@ try {
     ".github\scripts\fixtures\live-firestore-base.rules",
     "firebase\revex-project-access-r43.rules",
     (Join-Path $StageRules "firestore.rules")
-  ) -WorkingDirectory $Root
+  ) -WorkingDirectory $StageSource
   $previousNodePath = $env:NODE_PATH
   try {
     $env:NODE_PATH = Join-Path $StageRules "node_modules"
@@ -848,7 +883,7 @@ try {
     memberAclEscalationDenied = $true
   })
 
-  Invoke-Native "Simulate recorded-Revit BIM, Books, viewer and managed-Energy handoff" $Node @(".github\scripts\verify-revex-r49.js", "--report", $CompanionSimulationReport) -WorkingDirectory $Root
+  Invoke-Native "Simulate recorded-Revit BIM, Books, viewer and managed-Energy handoff" $Node @(".github\scripts\verify-revex-r49.js", "--report", $CompanionSimulationReport) -WorkingDirectory $StageSource
   $companionSimulation = Get-Content -LiteralPath $CompanionSimulationReport -Raw -Encoding UTF8 | ConvertFrom-Json
   if ([string]$companionSimulation.status -ne "PASSED" -or $companionSimulation.cloudMutations -ne $false -or $companionSimulation.officialComcheckProjectTransmission -ne $false) {
     throw "The recorded-Revit Companion simulation did not produce a safe PASSED contract."
@@ -862,10 +897,10 @@ try {
     reversibleVisibility = $true
     exactProjectRevisionHandoff = $true
   })
-  Invoke-Native "Parse live Companion" $Node @("--check", (Join-Path $Root "src\Live-Companion\app.js"))
-  Invoke-Native "Parse progressive BIM viewer" $Node @("--check", (Join-Path $Root "src\Live-Companion\viewer-r26.js"))
-  Invoke-Native "Parse Engineering cloud store" $Node @("--check", (Join-Path $Root "src\Live-Companion\store.js"))
-  Invoke-Native "Parse revision-scoped managed Energy bridge" $Node @("--check", (Join-Path $Root "src\Liber.Revex.Revit\Engineering\Companion\native-managed-energy-bridge.js"))
+  Invoke-Native "Parse live Companion" $Node @("--check", (Join-Path $StageSource "src\Live-Companion\app.js"))
+  Invoke-Native "Parse progressive BIM viewer" $Node @("--check", (Join-Path $StageSource "src\Live-Companion\viewer-r26.js"))
+  Invoke-Native "Parse Engineering cloud store" $Node @("--check", (Join-Path $StageSource "src\Live-Companion\store.js"))
+  Invoke-Native "Parse revision-scoped managed Energy bridge" $Node @("--check", (Join-Path $StageSource "src\Liber.Revex.Revit\Engineering\Companion\native-managed-energy-bridge.js"))
   Invoke-Native "Parse Firebase broker" $Node @("--check", (Join-Path $StageFunctions "index.js"))
   Invoke-Native "Parse shared Firebase project-access policy" $Node @("--check", (Join-Path $StageFunctions "project-access.js"))
   Invoke-Native "Run owner, ordinary-member, admin and outsider access matrix" $Node @((Join-Path $StageFunctions "verify-project-access-r49.js"))
@@ -880,7 +915,7 @@ try {
     workerInvocation = "broker service account only"
   })
 
-  $projectFile = Join-Path $Root "src\Liber.Revex.Revit\Liber.Revex.Revit.csproj"
+  $projectFile = Join-Path $StageSource "src\Liber.Revex.Revit\Liber.Revex.Revit.csproj"
   Invoke-Native "Restore locked .NET dependencies" $Dotnet @("restore", $projectFile)
   Invoke-Native "Compile REVEX r49 against Revit 2026 (warnings, errors and full binlog retained)" $Dotnet @("build", $projectFile, "-c", "Release", "--no-restore", "-nologo", "-clp:WarningsOnly;ErrorsOnly;Summary", "-bl:$BuildBinlog", "-p:RevitInstallDir=$RevitDir", "-o", $StagePayload)
   foreach ($relative in @("Liber.Revex.Revit.dll", "Microsoft.Web.WebView2.Core.dll", "Engineering\Energy\revex_energy_pipeline.py", "Engineering\Energy\verify_revex_r49_energy.py", "Engineering\Companion\native-managed-energy-bridge.js")) {
@@ -904,8 +939,8 @@ try {
   Invoke-Native "Create isolated r49 Python QA environment" $Python $venvArgs
   $VenvPython = Join-Path $VenvRoot "Scripts\python.exe"
   if (-not (Test-Path -LiteralPath $VenvPython -PathType Leaf)) { throw "Python did not create the isolated r49 QA environment." }
-  Invoke-Native "Install exact Energy and managed-worker QA dependencies" $VenvPython @("-m", "pip", "install", "--disable-pip-version-check", "--no-input", "--requirement", (Join-Path $Root "src\Liber.Revex.Revit\Engineering\Energy\requirements.txt"), "--requirement", (Join-Path $Root "server\revex-energy-worker\requirements-server.txt"))
-  Invoke-Native "Run current-project CXL, OSM identity, COMcheck protocol and EN-1 QA" $VenvPython @((Join-Path $Root "src\Liber.Revex.Revit\Engineering\Energy\verify_revex_r49_energy.py")) -WorkingDirectory (Join-Path $Root "src\Liber.Revex.Revit\Engineering\Energy")
+  Invoke-Native "Install exact Energy and managed-worker QA dependencies" $VenvPython @("-m", "pip", "install", "--disable-pip-version-check", "--no-input", "--requirement", (Join-Path $StageSource "src\Liber.Revex.Revit\Engineering\Energy\requirements.txt"), "--requirement", (Join-Path $StageSource "server\revex-energy-worker\requirements-server.txt"))
+  Invoke-Native "Run current-project CXL, OSM identity, COMcheck protocol and EN-1 QA" $VenvPython @((Join-Path $StageSource "src\Liber.Revex.Revit\Engineering\Energy\verify_revex_r49_energy.py")) -WorkingDirectory (Join-Path $StageSource "src\Liber.Revex.Revit\Engineering\Energy")
   Add-PreflightCheckpoint "OFFLINE_ENERGY_CHAIN_SIMULATION" ([ordered]@{
     activeRevitTzIdentity = $true
     enTechnicalFacts = $true
@@ -916,7 +951,7 @@ try {
     energyPlusCompletionContracts = 2
     en1AndPrmPackaging = $true
   })
-  Invoke-Native "Run managed worker artifact, binding, T/Z and revision-consent QA" $VenvPython @((Join-Path $Root "server\revex-energy-worker\verify_revex_r49_worker.py")) -WorkingDirectory (Join-Path $Root "server\revex-energy-worker")
+  Invoke-Native "Run managed worker artifact, binding, T/Z and revision-consent QA" $VenvPython @((Join-Path $StageSource "server\revex-energy-worker\verify_revex_r49_worker.py")) -WorkingDirectory (Join-Path $StageSource "server\revex-energy-worker")
   Add-PreflightCheckpoint "PRIVATE_WORKER_CONTRACT" ([ordered]@{
     artifactIntegrity = $true
     activeDocumentBinding = $true
@@ -948,21 +983,21 @@ try {
   Invoke-Native "Clone the authoritative GitHub repository" $Gh @("repo", "clone", $GitHubRepository, $RepoRoot, "--", "--depth", "1")
   $branch = "agent/revex-r49-final-$RunId"
   Invoke-Native "Create isolated r49 publication branch" $Git @("checkout", "-b", $branch) -WorkingDirectory $RepoRoot
-  Copy-SourceTree (Join-Path $Root "src\Live-Companion") (Join-Path $RepoRoot "docs\liber-apps\apps\revex")
-  Copy-SourceTree (Join-Path $Root "src\Liber.Revex.Revit") (Join-Path $RepoRoot "src\Liber.Revex.Revit")
-  Copy-SourceTree (Join-Path $Root "server\revex-energy-worker") (Join-Path $RepoRoot "server\revex-energy-worker")
-  Copy-SourceTree (Join-Path $Root "server\firebase-functions") (Join-Path $RepoRoot "server\firebase-functions")
+  Copy-SourceTree (Join-Path $StageSource "src\Live-Companion") (Join-Path $RepoRoot "docs\liber-apps\apps\revex")
+  Copy-SourceTree (Join-Path $StageSource "src\Liber.Revex.Revit") (Join-Path $RepoRoot "src\Liber.Revex.Revit")
+  Copy-SourceTree (Join-Path $StageSource "server\revex-energy-worker") (Join-Path $RepoRoot "server\revex-energy-worker")
+  Copy-SourceTree (Join-Path $StageSource "server\firebase-functions") (Join-Path $RepoRoot "server\firebase-functions")
   New-Item -ItemType Directory -Path (Join-Path $RepoRoot "firebase") -Force | Out-Null
-  Copy-Item -LiteralPath (Join-Path $Root "firebase\revex-project-access-r43.rules") -Destination (Join-Path $RepoRoot "firebase\revex-project-access-r43.rules") -Force
-  Copy-SourceTree (Join-Path $Root "firebase\r49-live-rules") (Join-Path $RepoRoot "firebase\r49-live-rules")
+  Copy-Item -LiteralPath (Join-Path $StageSource "firebase\revex-project-access-r43.rules") -Destination (Join-Path $RepoRoot "firebase\revex-project-access-r43.rules") -Force
+  Copy-SourceTree (Join-Path $StageSource "firebase\r49-live-rules") (Join-Path $RepoRoot "firebase\r49-live-rules")
   New-Item -ItemType Directory -Path (Join-Path $RepoRoot ".github\scripts") -Force | Out-Null
-  Copy-Item -LiteralPath (Join-Path $Root ".github\scripts\verify-revex-r49.js") -Destination (Join-Path $RepoRoot ".github\scripts\verify-revex-r49.js") -Force
-  Copy-Item -LiteralPath (Join-Path $Root ".github\scripts\verify-revex-r49-live-rules.js") -Destination (Join-Path $RepoRoot ".github\scripts\verify-revex-r49-live-rules.js") -Force
-  Copy-Item -LiteralPath (Join-Path $Root ".github\scripts\patch-live-firestore-rules.js") -Destination (Join-Path $RepoRoot ".github\scripts\patch-live-firestore-rules.js") -Force
+  Copy-Item -LiteralPath (Join-Path $StageSource ".github\scripts\verify-revex-r49.js") -Destination (Join-Path $RepoRoot ".github\scripts\verify-revex-r49.js") -Force
+  Copy-Item -LiteralPath (Join-Path $StageSource ".github\scripts\verify-revex-r49-live-rules.js") -Destination (Join-Path $RepoRoot ".github\scripts\verify-revex-r49-live-rules.js") -Force
+  Copy-Item -LiteralPath (Join-Path $StageSource ".github\scripts\patch-live-firestore-rules.js") -Destination (Join-Path $RepoRoot ".github\scripts\patch-live-firestore-rules.js") -Force
   New-Item -ItemType Directory -Path (Join-Path $RepoRoot ".github\scripts\fixtures") -Force | Out-Null
-  Copy-Item -LiteralPath (Join-Path $Root ".github\scripts\fixtures\live-firestore-base.rules") -Destination (Join-Path $RepoRoot ".github\scripts\fixtures\live-firestore-base.rules") -Force
+  Copy-Item -LiteralPath (Join-Path $StageSource ".github\scripts\fixtures\live-firestore-base.rules") -Destination (Join-Path $RepoRoot ".github\scripts\fixtures\live-firestore-base.rules") -Force
   New-Item -ItemType Directory -Path (Join-Path $RepoRoot ".github\workflows") -Force | Out-Null
-  Copy-Item -LiteralPath (Join-Path $Root ".github\workflows\revex-r27-0819-engineering-release.yml") -Destination (Join-Path $RepoRoot ".github\workflows\revex-r27-0819-engineering-release.yml") -Force
+  Copy-Item -LiteralPath (Join-Path $StageSource ".github\workflows\revex-r27-0819-engineering-release.yml") -Destination (Join-Path $RepoRoot ".github\workflows\revex-r27-0819-engineering-release.yml") -Force
   Copy-Item -LiteralPath (Join-Path $Root "PUBLISH_REVEX_R49.ps1") -Destination (Join-Path $RepoRoot "PUBLISH_REVEX_R49.ps1") -Force
   Copy-Item -LiteralPath (Join-Path $Root "PUBLISH_REVEX_R49.cmd") -Destination (Join-Path $RepoRoot "PUBLISH_REVEX_R49.cmd") -Force
   Invoke-Native "Stage only the r49 release" $Git @("add", "--",
