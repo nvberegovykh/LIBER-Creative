@@ -1492,6 +1492,7 @@ def relative_artifact(path: Path, root: Path, kind: str) -> dict:
 def create_manual_review_package(output_root: Path, artifacts: list[dict], index: dict) -> Path:
     package_path = output_root / "REVEX_ENERGY_MANUAL_REVIEW_PACKAGE.zip"
     package_path.unlink(missing_ok=True)
+    review_names: set[str] = set()
     with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as package:
         # Keep the archive itself at exactly eight user-visible entries. The same
         # immutable index is stored as the ZIP comment and in energy-result.json.
@@ -1509,7 +1510,11 @@ def create_manual_review_package(output_root: Path, artifacts: list[dict], index
                 continue
             if source.stat().st_size != int(artifact.get("bytes") or -1) or sha256(source) != str(artifact.get("sha256") or ""):
                 raise PipelineError(f"Manual-review artifact failed its immutable hash/byte contract: {relative}")
-            package.write(source, relative.as_posix())
+            review_name = str(artifact.get("reviewName") or source.name).strip()
+            if not review_name or Path(review_name).name != review_name or review_name in review_names:
+                raise PipelineError(f"Manual-review artifact has an invalid or duplicate flat name: {review_name}")
+            review_names.add(review_name)
+            package.write(source, review_name)
     with zipfile.ZipFile(package_path) as verification:
         entries = [name for name in verification.namelist() if not name.endswith("/")]
         if len(entries) != len(VALID_ENERGY_REVIEW_PACKAGE):
@@ -1803,20 +1808,24 @@ def main() -> int:
     review_artifacts: list[dict] = []
     if status == "COMPLETE" and approved_run_comparison.get("reviewEligible") is True:
         review_contract_paths = [
-            (geometry_osm, "geometry-osm"),
-            (baseline_model, "baseline-osm"),
-            (proposed_model, "proposed-osm"),
-            (baseline_run["html"], "baseline-html"),
-            (proposed_run["html"], "proposed-html"),
-            (en1_xlsx, "en1-spreadsheet"),
-            (comcheck_report, "official-comcheck-pdf"),
-            (review_zip, "packager-reports-archive"),
+            (geometry_osm, "geometry-osm", "GEOMETRY.osm"),
+            (baseline_model, "baseline-osm", "BASELINE.osm"),
+            (proposed_model, "proposed-osm", "PROPOSED.osm"),
+            (baseline_run["html"], "baseline-html", "BASELINE_REPORT.html"),
+            (proposed_run["html"], "proposed-html", "PROPOSED_REPORT.html"),
+            (en1_xlsx, "en1-spreadsheet", "EN-1.xlsx"),
+            (comcheck_report, "official-comcheck-pdf", "COMcheck_BACKSTOP.pdf"),
+            (review_zip, "packager-reports-archive", "PACKAGER_REPORTS.zip"),
         ]
-        review_artifacts = [relative_artifact(path, output_root, kind) for path, kind in review_contract_paths]
+        review_artifacts = []
+        for path, kind, review_name in review_contract_paths:
+            artifact = relative_artifact(path, output_root, kind)
+            artifact["reviewName"] = review_name
+            review_artifacts.append(artifact)
         if tuple(artifact["kind"] for artifact in review_artifacts) != VALID_ENERGY_REVIEW_PACKAGE:
             raise PipelineError("Manual-review package did not match the seven-files-plus-one-archive contract.")
         manual_review_index["files"] = [
-            {key: artifact[key] for key in ("path", "kind", "bytes", "sha256")}
+            {key: artifact[key] for key in ("path", "reviewName", "kind", "bytes", "sha256")}
             for artifact in review_artifacts
         ]
         manual_review_package = create_manual_review_package(output_root, review_artifacts, manual_review_index)
