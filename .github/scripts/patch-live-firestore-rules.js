@@ -85,3 +85,4 @@ if (require.main === module) {
 }
 
 module.exports = { injectRules, matchingBrace, START, END };
+
