@@ -279,7 +279,19 @@ async function verifyManagedEnergyClient() {
   assert.equal(state.projectId,'revex_current','Managed Energy must activate the exact active-Revit project through the application boundary.');
   assert.equal(window.__revexManagedEnergyBridge.resultMatches(result,'revex_current','eng_current'),true);
   assert.equal(window.__revexManagedEnergyBridge.resultMatches(result,'revex_other','eng_current'),false);
-  checkpoint('MANAGED_ENERGY_CLIENT_HANDOFF', { activeDocumentProjectAuthority: true, immutableRevision: 'eng_current', brokerResultMatched: true, blanketConsent: false });
+  const originalSync=Store.syncEngineeringPackage;
+  Store.syncEngineeringPackage=async()=>{throw new Error('REVIT_TO_GBXML_GEOMETRY_INTEGRITY_FAILED: evidence remained diagnostic-only; repair Spaces/EADM/opening identity before retry.');};
+  await assert.rejects(
+    window.__revexManagedEnergyBridge.processInput([new TestFile('engineering-sync.json',JSON.stringify(manifest))]),
+    /REVIT_TO_GBXML_GEOMETRY_INTEGRITY_FAILED/
+  );
+  assert.equal(statusNode.dataset.tone,'bad','A blocked real-Energy handoff must render a visible error state.');
+  assert.match(statusNode.textContent,/evidence remained diagnostic-only/,'The exact actionable failure must remain visible to the user.');
+  Store.syncEngineeringPackage=originalSync;
+  const retry=await window.__revexManagedEnergyBridge.processInput([new TestFile('engineering-sync.json',JSON.stringify(manifest))]);
+  assert.equal(retry.ok,true,'A failed immutable revision attempt must not leave the Energy action locked or stale.');
+  assert.equal(statusNode.dataset.tone,'good');
+  checkpoint('MANAGED_ENERGY_CLIENT_HANDOFF', { activeDocumentProjectAuthority: true, immutableRevision: 'eng_current', brokerResultMatched: true, blanketConsent: false, actionableFailureVisible: true, retryAfterFailure: true });
 }
 
 function verifyStaticContracts() {

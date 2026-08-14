@@ -13,7 +13,10 @@ $Root = (Resolve-Path $PSScriptRoot).Path
 $RunId = Get-Date -Format "yyyyMMdd-HHmmss"
 $ReleaseTag = "0.8.19-r49"
 $Build = "20260813r49"
+$CanonicalSourceCommit = "c2f919faba6c68addfc5d3fb92790648f90177c7"
+$CanonicalSourceRef = "agent/revex-r49-energy-acceptance-qa"
 $StageRoot = Join-Path $env:LOCALAPPDATA "LIBER\REVEX-R49-Publish\$RunId"
+$CanonicalSourceRoot = Join-Path $StageRoot "canonical-source"
 $StageSource = Join-Path $StageRoot "source"
 $StageFunctions = Join-Path $StageSource "server\firebase-functions"
 $StageRules = Join-Path $StageRoot "live-rules-gate"
@@ -260,6 +263,194 @@ function Assert-SourceHash([string]$RelativePath, [string]$Expected) {
   if ($actual -ne $Expected) { throw "Stale or partial r49 source: $RelativePath`nExpected $Expected`nActual   $actual" }
 }
 
+function Get-CanonicalSourceRelativePath([string]$RelativePath) {
+  $normalized = $RelativePath.Replace("\", "/")
+  $localCompanionPrefix = "src/Live-Companion/"
+  if ($normalized.StartsWith($localCompanionPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    return "docs/liber-apps/apps/revex/" + $normalized.Substring($localCompanionPrefix.Length)
+  }
+  return $normalized
+}
+
+function Get-Utf8CrLfText([string]$Path) {
+  $text = [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8)
+  return $text.Replace("`r`n", "`n").Replace("`r", "`n").Replace("`n", "`r`n")
+}
+
+function Get-Utf8TextSha256([string]$Text) {
+  $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Text)
+  $hasher = [Security.Cryptography.SHA256]::Create()
+  try {
+    return ([BitConverter]::ToString($hasher.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+  } finally {
+    $hasher.Dispose()
+  }
+}
+
+function Install-CanonicalSourceFile([string]$CanonicalPath, [string]$TargetPath, [string]$ExpectedHash, [bool]$NormalizeUtf8CrLf) {
+  $targetDirectory = Split-Path -Parent $TargetPath
+  New-Item -ItemType Directory -Path $targetDirectory -Force | Out-Null
+  $temporaryPath = "$TargetPath.revex-r49-repair-$RunId.tmp"
+  $backupPath = "$TargetPath.revex-r49-before-repair-$RunId.bak"
+  if ($NormalizeUtf8CrLf) {
+    [IO.File]::WriteAllText($temporaryPath, (Get-Utf8CrLfText $CanonicalPath), [Text.UTF8Encoding]::new($false))
+  } else {
+    Copy-Item -LiteralPath $CanonicalPath -Destination $temporaryPath -Force
+  }
+  $temporaryHash = (Get-FileHash -LiteralPath $temporaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($temporaryHash -ne $ExpectedHash) {
+    Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+    throw "Canonical r49 repair copy failed integrity verification: $TargetPath"
+  }
+
+  try {
+    if (Test-Path -LiteralPath $TargetPath -PathType Leaf) {
+      try {
+        [IO.File]::Replace($temporaryPath, $TargetPath, $backupPath, $true)
+      } catch {
+        if (-not (Test-Path -LiteralPath $backupPath -PathType Leaf)) {
+          Copy-Item -LiteralPath $TargetPath -Destination $backupPath -Force
+        }
+        Move-Item -LiteralPath $temporaryPath -Destination $TargetPath -Force
+      }
+    } else {
+      [IO.File]::Move($temporaryPath, $TargetPath)
+    }
+    $installedHash = (Get-FileHash -LiteralPath $TargetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($installedHash -ne $ExpectedHash) { throw "Installed source hash is $installedHash" }
+    Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
+  } catch {
+    $failure = $_.Exception.Message
+    if (Test-Path -LiteralPath $backupPath -PathType Leaf) {
+      Copy-Item -LiteralPath $backupPath -Destination $TargetPath -Force
+    }
+    Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+    throw "Atomic r49 source repair failed for $TargetPath. The prior file was preserved. $failure"
+  }
+}
+
+function Restore-HashLockedSource([System.Collections.IDictionary]$Expected, [string]$Git, [string]$Gh) {
+  Write-Step "Restore the complete r49 source set from its exact CI-approved commit"
+  New-Item -ItemType Directory -Path $StageRoot -Force | Out-Null
+  if (Test-Path -LiteralPath $CanonicalSourceRoot) {
+    throw "The isolated canonical-source directory already exists unexpectedly: $CanonicalSourceRoot"
+  }
+  Invoke-Native "Clone the read-only canonical r49 source" $Gh @(
+    "repo", "clone", $GitHubRepository, $CanonicalSourceRoot, "--",
+    "--branch", $CanonicalSourceRef, "--single-branch", "--config", "core.autocrlf=false"
+  )
+  Invoke-Native "Detach the exact CI-approved r49 source commit" $Git @(
+    "checkout", "--detach", $CanonicalSourceCommit
+  ) -WorkingDirectory $CanonicalSourceRoot
+  $canonicalHead = (Invoke-Captured "Verify the canonical r49 commit" $Git @(
+    "rev-parse", "HEAD"
+  ) -WorkingDirectory $CanonicalSourceRoot).Text.Trim().ToLowerInvariant()
+  if ($canonicalHead -ne $CanonicalSourceCommit) {
+    throw "Canonical source resolved to $canonicalHead instead of pinned commit $CanonicalSourceCommit. No local source was changed."
+  }
+
+  $repaired = @()
+  $localRepairFailures = @()
+  $lineEndingNormalizations = @()
+  foreach ($entry in $Expected.GetEnumerator()) {
+    $relativePath = [string]$entry.Key
+    $expectedHash = [string]$entry.Value
+    $canonicalRelativePath = Get-CanonicalSourceRelativePath $relativePath
+    $canonicalPath = Join-Path $CanonicalSourceRoot ($canonicalRelativePath.Replace("/", "\"))
+    if (-not (Test-Path -LiteralPath $canonicalPath -PathType Leaf)) {
+      throw "Pinned commit $CanonicalSourceCommit is missing required source: $canonicalRelativePath. No unverified replacement was accepted."
+    }
+    $canonicalHash = (Get-FileHash -LiteralPath $canonicalPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $normalizeUtf8CrLf = $false
+    if ($canonicalHash -ne $expectedHash -and $canonicalRelativePath -match '^src/Liber\.Revex\.Revit/Engineering/Energy/References/79_WINTHROP_APPROVED_(BASELINE|PROPOSED)\.osm$') {
+      $normalizedHash = Get-Utf8TextSha256 (Get-Utf8CrLfText $canonicalPath)
+      if ($normalizedHash -eq $expectedHash) {
+        $canonicalHash = $normalizedHash
+        $normalizeUtf8CrLf = $true
+        $lineEndingNormalizations += $relativePath
+      }
+    }
+    if ($canonicalHash -ne $expectedHash) {
+      throw "Pinned commit integrity mismatch: $canonicalRelativePath`nExpected $expectedHash`nCanonical $canonicalHash`nNo unverified replacement was accepted."
+    }
+
+    $targetPath = Join-Path $Root $relativePath
+    $localHash = if (Test-Path -LiteralPath $targetPath -PathType Leaf) {
+      (Get-FileHash -LiteralPath $targetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    } else { "<missing>" }
+    if ($localHash -ne $expectedHash) {
+      try {
+        Install-CanonicalSourceFile $canonicalPath $targetPath $expectedHash $normalizeUtf8CrLf
+        $repaired += $relativePath
+        Write-Log "Restored hash-locked source: $relativePath ($localHash -> $expectedHash)" Yellow
+      } catch {
+        $localRepairFailures += $relativePath
+        Write-Log "Drive mirror remained stale for $relativePath; the publisher will use the verified immutable source stage instead. $($_.Exception.Message)" Yellow
+      }
+    }
+  }
+
+  $remainingLocalDrift = @()
+  foreach ($entry in $Expected.GetEnumerator()) {
+    $localPath = Join-Path $Root ([string]$entry.Key)
+    $localHash = if (Test-Path -LiteralPath $localPath -PathType Leaf) {
+      (Get-FileHash -LiteralPath $localPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    } else { "<missing>" }
+    if ($localHash -ne [string]$entry.Value) { $remainingLocalDrift += [string]$entry.Key }
+  }
+  Write-Log "All $($Expected.Count) locked inputs were independently verified against CI-approved commit $CanonicalSourceCommit; live Drive files are not used for build or publication." Green
+  Add-PreflightCheckpoint "CANONICAL_SOURCE_RESTORE" ([ordered]@{
+    canonicalCommit = $CanonicalSourceCommit
+    canonicalRef = $CanonicalSourceRef
+    lockedFileCount = $Expected.Count
+    repairedFileCount = $repaired.Count
+    repairedFiles = @($repaired)
+    localRepairFailureCount = $localRepairFailures.Count
+    localRepairFailures = @($localRepairFailures)
+    remainingLocalDriveDrift = @($remainingLocalDrift)
+    deterministicCrLfFiles = @($lineEndingNormalizations)
+    canonicalFullSetVerification = $true
+    localDriveFilesExcludedFromBuild = $true
+  })
+}
+
+function New-IsolatedCanonicalSourceStage([System.Collections.IDictionary]$Expected) {
+  Write-Step "Create the immutable r49 build and QA source stage"
+  New-Item -ItemType Directory -Path $StageSource -Force | Out-Null
+  Copy-SourceTree (Join-Path $CanonicalSourceRoot "src\Liber.Revex.Revit") (Join-Path $StageSource "src\Liber.Revex.Revit")
+  Copy-SourceTree (Join-Path $CanonicalSourceRoot "docs\liber-apps\apps\revex") (Join-Path $StageSource "src\Live-Companion")
+  Copy-SourceTree (Join-Path $CanonicalSourceRoot "server\revex-energy-worker") (Join-Path $StageSource "server\revex-energy-worker")
+  Copy-SourceTree (Join-Path $CanonicalSourceRoot "server\firebase-functions") (Join-Path $StageSource "server\firebase-functions")
+
+  foreach ($entry in $Expected.GetEnumerator()) {
+    $relativePath = [string]$entry.Key
+    $expectedHash = [string]$entry.Value
+    $canonicalRelativePath = Get-CanonicalSourceRelativePath $relativePath
+    $canonicalPath = Join-Path $CanonicalSourceRoot ($canonicalRelativePath.Replace("/", "\"))
+    $stagePath = Join-Path $StageSource $relativePath
+    $normalizeUtf8CrLf = $canonicalRelativePath -match '^src/Liber\.Revex\.Revit/Engineering/Energy/References/79_WINTHROP_APPROVED_(BASELINE|PROPOSED)\.osm$'
+    $stageHash = if (Test-Path -LiteralPath $stagePath -PathType Leaf) {
+      (Get-FileHash -LiteralPath $stagePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    } else { "<missing>" }
+    if ($stageHash -ne $expectedHash) {
+      Install-CanonicalSourceFile $canonicalPath $stagePath $expectedHash $normalizeUtf8CrLf
+    }
+    $finalStageHash = (Get-FileHash -LiteralPath $stagePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($finalStageHash -ne $expectedHash) {
+      throw "Immutable source-stage hash mismatch: $relativePath`nExpected $expectedHash`nActual   $finalStageHash"
+    }
+  }
+  Write-Log "Immutable build/QA stage contains the exact full source tree and all $($Expected.Count) hash-locked files." Green
+  Add-PreflightCheckpoint "IMMUTABLE_SOURCE_STAGE" ([ordered]@{
+    canonicalCommit = $CanonicalSourceCommit
+    lockedFileCount = $Expected.Count
+    fullRevitSourceTree = $true
+    fullCompanionSourceTree = $true
+    fullWorkerAndBrokerSourceTrees = $true
+    independentOfDriveAfterCreation = $true
+  })
+}
+
 function Copy-SourceTree([string]$Source, [string]$Destination) {
   New-Item -ItemType Directory -Path $Destination -Force | Out-Null
   $sourcePath = (Resolve-Path $Source).Path.TrimEnd('\')
@@ -340,27 +531,36 @@ function Test-BrokerIdentityWorkerInvocation(
   $saPolicy = ((Invoke-Captured "Inspect broker token-creation policy" $Gcloud @(
     "iam", "service-accounts", "get-iam-policy", $BrokerSa, "--project=$ProjectId", "--format=json"
   )).Text | ConvertFrom-Json)
-  $tokenCreators = @(Get-IamRoleMembers $saPolicy "roles/iam.serviceAccountTokenCreator")
+  $oidcRole = "roles/iam.serviceAccountOpenIdTokenCreator"
+  $tokenCreators = @(Get-IamRoleMembers $saPolicy $oidcRole)
   $temporaryGrant = $DeployerMember -notin $tokenCreators
   $identityToken = $null
   try {
     if ($temporaryGrant) {
-      Invoke-Native "Grant temporary broker-token test authority" $Gcloud @(
+      Invoke-Native "Grant temporary broker OIDC-token test authority" $Gcloud @(
         "iam", "service-accounts", "add-iam-policy-binding", $BrokerSa,
         "--project=$ProjectId", "--member=$DeployerMember",
-        "--role=roles/iam.serviceAccountTokenCreator", "--quiet"
+        "--role=$oidcRole", "--quiet"
       )
     }
-    $tokenResult = Invoke-SecretCaptured "Mint one bounded broker identity token without logging it" $Gcloud @(
-      "auth", "print-identity-token",
-      "--impersonate-service-account=$BrokerSa",
-      "--audiences=$WorkerUrl",
-      "--include-email",
-      "--quiet"
-    )
-    $identityToken = [string]($tokenResult.Lines |
-      Where-Object { [string]$_ -match '^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$' } |
-      Select-Object -Last 1)
+    for ($attempt = 1; $attempt -le 12 -and -not $identityToken; $attempt++) {
+      $tokenResult = Invoke-SecretCaptured "Mint one bounded broker identity token without logging it (attempt $attempt/12)" $Gcloud @(
+        "auth", "print-identity-token",
+        "--impersonate-service-account=$BrokerSa",
+        "--audiences=$WorkerUrl",
+        "--include-email",
+        "--quiet"
+      ) -AllowFailure
+      if ($tokenResult.ExitCode -eq 0) {
+        $identityToken = [string]($tokenResult.Lines |
+          Where-Object { [string]$_ -match '^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$' } |
+          Select-Object -Last 1)
+      }
+      if (-not $identityToken -and $attempt -lt 12) {
+        Write-Log "Broker OIDC-token authority is not effective yet; waiting five seconds before the bounded retry." DarkYellow
+        Start-Sleep -Seconds 5
+      }
+    }
     if (-not $identityToken) { throw "Google Cloud did not mint the bounded broker identity token." }
     $response = Invoke-WebRequest -UseBasicParsing -Uri ($WorkerUrl + "/healthz") -Headers @{ Authorization = "Bearer $identityToken" } -TimeoutSec 20
     if ([int]$response.StatusCode -ne 200) { throw "The broker identity health probe returned HTTP $($response.StatusCode)." }
@@ -372,16 +572,16 @@ function Test-BrokerIdentityWorkerInvocation(
       authenticatedIdentity = $BrokerSa
       workerVersion = [string]$health.version
       healthStatus = 200
-      temporaryTokenCreatorGrantRemoved = $temporaryGrant
+      temporaryOidcTokenCreatorGrantRemoved = $temporaryGrant
     })
     Write-Log "Authenticated broker-identity invocation succeeded against the exact private r49 worker." Green
   } finally {
     $identityToken = $null
     if ($temporaryGrant) {
-      Invoke-Native "Remove temporary broker-token test authority" $Gcloud @(
+      Invoke-Native "Remove temporary broker OIDC-token test authority" $Gcloud @(
         "iam", "service-accounts", "remove-iam-policy-binding", $BrokerSa,
         "--project=$ProjectId", "--member=$DeployerMember",
-        "--role=roles/iam.serviceAccountTokenCreator", "--quiet"
+        "--role=$oidcRole", "--quiet"
       )
     }
   }
@@ -560,10 +760,10 @@ try {
   if (Get-Process -Name Revit -ErrorAction SilentlyContinue) { throw "Close every Revit window, then rerun PUBLISH_REVEX_R49.cmd. This is the only required manual preparation." }
   if (-not (Test-Path -LiteralPath (Join-Path $RevitDir "RevitAPI.dll") -PathType Leaf)) { throw "Autodesk Revit 2026 was not found at $RevitDir." }
 
-  Write-Step "Verify hash-locked r49 source"
+  Write-Step "Verify and self-repair the hash-locked r49 source"
   $Expected = [ordered]@{
     ".github\workflows\revex-r27-0819-engineering-release.yml" = "dcc4c02966b2fa3a83ebf567a7857b116841fe23662cca04b8bdda2818e89521"
-    ".github\scripts\verify-revex-r49.js" = "8e5d64ae4cd23bffc143665b0268ab2fea7dfd43262378e8e27d3bda77f37c12"
+    ".github\scripts\verify-revex-r49.js" = "22fdc385004e2352d4f6bb41731efa02376ad15c0c56d236a61b36f3dd0920bc"
     ".github\scripts\verify-revex-r49-live-rules.js" = "8e4bf1e40eb44256dad8969849a0ac3bd91c74895492e648c07ea696503b93ae"
     ".github\scripts\patch-live-firestore-rules.js" = "8662ad8bb3a9c1090d25421538161245e534306f894839113a50a7f5ab803d2d"
     ".github\scripts\fixtures\live-firestore-base.rules" = "ba4ee3c8757dd6e745809214b2b6008e430d54dcdc585900124a38d7db6acf01"
@@ -584,9 +784,9 @@ try {
     "src\Liber.Revex.Revit\Services\GbxmlEngineeringService.cs" = "fdb9001818ca558b069bb49fb5dc39317a73554d3763a33ba4e404b5c8e3c3c6"
     "src\Liber.Revex.Revit\Services\EngineeringCompanionWebBridge.cs" = "f763c77c0b514a9d404e2f98cefccd323deb98c73edc248dd741d5d133449184"
     "src\Liber.Revex.Revit\Engineering\Companion\native-managed-energy-bridge.js" = "82d6442254f468533532d88eedd63112f30a2fc1e407b47e1f86ac1b9ba726d2"
-    "src\Liber.Revex.Revit\Engineering\Energy\revex_energy_pipeline.py" = "fbbf6d9e2554239e756a9825a21791e3aa453a9388d6550a7c5c24924d203483"
+    "src\Liber.Revex.Revit\Engineering\Energy\revex_energy_pipeline.py" = "d33e5ef3bc85bdc0c9befdd10c61b084679d9e39b9067983a4fefe0582708682"
     "src\Liber.Revex.Revit\Engineering\Energy\comcheck_backstop.py" = "ed817d0832f64fc9c1f6bfabc3bc79d010b4cd84d192884d41d494df77809d10"
-    "src\Liber.Revex.Revit\Engineering\Energy\verify_revex_r49_energy.py" = "c2414d96df22f8385ca2270038792466ed5295b7a206f1c14156e32da04c5ff8"
+    "src\Liber.Revex.Revit\Engineering\Energy\verify_revex_r49_energy.py" = "57e302d62f420d30b1b3ca0595641aa4cdfa041c9dd784d42a0ca9ad485b3143"
     "src\Liber.Revex.Revit\Engineering\Energy\requirements.txt" = "e9dde285ed5fa05c6161325ccdd2906d9d9f6d6693979f1df9078c82eb98e673"
     "src\Liber.Revex.Revit\Engineering\Energy\GeometryCo\OpenStudio_Energy_Model_Geometry_Compiler.py" = "0152e06c447b36457fc973b2896d82b68596a03bdc855a519dbcd0bda253ee9f"
     "src\Liber.Revex.Revit\Engineering\Energy\Packager\EnergyPlusReviewPackager.py" = "30ba0b2f3e1fee952382d016c68caa5dea85d7d68b439296797da5adf7f412f2"
@@ -621,7 +821,16 @@ try {
     "firebase\r49-live-rules\firebase.json" = "6285cd269cfb42419e2f9c9f03a0f2c16f41198831c36bea941cb3f1f7b93bb3"
     "firebase\r49-live-rules\.gitignore" = "8bbd5e0e7c8f650b9fd6ca3a4bde39fedde690a639965b0e3b46cf33d040c20a"
   }
-  foreach ($entry in $Expected.GetEnumerator()) { Assert-SourceHash $entry.Key $entry.Value }
+  Refresh-ToolPath
+  $Git = Resolve-Executable @("git.exe", "git")
+  if (-not $Git) { Install-WingetPackage "Git.Git" "Git"; $Git = Resolve-Executable @("git.exe", "git") }
+  $Gh = Resolve-Executable @("gh.exe", "gh")
+  if (-not $Gh) { Install-WingetPackage "GitHub.cli" "GitHub CLI"; $Gh = Resolve-Executable @("gh.exe", "gh") }
+  foreach ($tool in @($Git,$Gh)) { if (-not $tool) { throw "Canonical source recovery requires Git and GitHub CLI." } }
+  $ghAuth = Invoke-Captured "Verify GitHub authentication for canonical source recovery" $Gh @("auth", "status", "--hostname", "github.com") -AllowFailure
+  if ($ghAuth.ExitCode -ne 0) { Invoke-InteractiveNoLog "Essential GitHub approval" $Gh @("auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web") }
+  Invoke-Native "Configure GitHub authentication for read-only source recovery" $Gh @("auth", "setup-git")
+  Restore-HashLockedSource $Expected $Git $Gh
 
   Refresh-ToolPath
   $Node = Resolve-Executable @("node.exe", "node")
@@ -660,13 +869,11 @@ try {
     Protect-DeploymentLogs
   }
 
-  Write-Step "Create isolated r49 offline preflight stage"
-  New-Item -ItemType Directory -Path $StageSource, $StagePayload, $StageRules -Force | Out-Null
-  Copy-SourceTree (Join-Path $Root "server\revex-energy-worker") (Join-Path $StageSource "server\revex-energy-worker")
-  Copy-SourceTree (Join-Path $Root "server\firebase-functions") $StageFunctions
-  Copy-SourceTree (Join-Path $Root "src\Liber.Revex.Revit\Engineering\Energy") (Join-Path $StageSource "src\Liber.Revex.Revit\Engineering\Energy")
-  Copy-SourceTree (Join-Path $Root "firebase\r49-live-rules") $StageRules
-  Copy-Item -LiteralPath (Join-Path $Root ".github\scripts\verify-revex-r49-live-rules.js") -Destination (Join-Path $StageRules "verify-revex-r49-live-rules.js") -Force
+  New-IsolatedCanonicalSourceStage $Expected
+  Write-Step "Create isolated r49 offline preflight dependencies"
+  New-Item -ItemType Directory -Path $StagePayload, $StageRules -Force | Out-Null
+  Copy-SourceTree (Join-Path $StageSource "firebase\r49-live-rules") $StageRules
+  Copy-Item -LiteralPath (Join-Path $StageSource ".github\scripts\verify-revex-r49-live-rules.js") -Destination (Join-Path $StageRules "verify-revex-r49-live-rules.js") -Force
   Invoke-Native "Install pinned Firebase Rules emulator dependencies" $Npm @("ci", "--no-audit", "--no-fund") -WorkingDirectory $StageRules
   Invoke-Native "Reject high or critical Firebase Rules gate dependency advisories" $Npm @("audit", "--audit-level=high") -WorkingDirectory $StageRules
   Invoke-Native "Prepare representative preserved project-access rules" $Node @(
@@ -674,7 +881,7 @@ try {
     ".github\scripts\fixtures\live-firestore-base.rules",
     "firebase\revex-project-access-r43.rules",
     (Join-Path $StageRules "firestore.rules")
-  ) -WorkingDirectory $Root
+  ) -WorkingDirectory $StageSource
   $previousNodePath = $env:NODE_PATH
   try {
     $env:NODE_PATH = Join-Path $StageRules "node_modules"
@@ -693,7 +900,7 @@ try {
     memberAclEscalationDenied = $true
   })
 
-  Invoke-Native "Simulate recorded-Revit BIM, Books, viewer and managed-Energy handoff" $Node @(".github\scripts\verify-revex-r49.js", "--report", $CompanionSimulationReport) -WorkingDirectory $Root
+  Invoke-Native "Simulate recorded-Revit BIM, Books, viewer and managed-Energy handoff" $Node @(".github\scripts\verify-revex-r49.js", "--report", $CompanionSimulationReport) -WorkingDirectory $StageSource
   $companionSimulation = Get-Content -LiteralPath $CompanionSimulationReport -Raw -Encoding UTF8 | ConvertFrom-Json
   if ([string]$companionSimulation.status -ne "PASSED" -or $companionSimulation.cloudMutations -ne $false -or $companionSimulation.officialComcheckProjectTransmission -ne $false) {
     throw "The recorded-Revit Companion simulation did not produce a safe PASSED contract."
@@ -707,10 +914,10 @@ try {
     reversibleVisibility = $true
     exactProjectRevisionHandoff = $true
   })
-  Invoke-Native "Parse live Companion" $Node @("--check", (Join-Path $Root "src\Live-Companion\app.js"))
-  Invoke-Native "Parse progressive BIM viewer" $Node @("--check", (Join-Path $Root "src\Live-Companion\viewer-r26.js"))
-  Invoke-Native "Parse Engineering cloud store" $Node @("--check", (Join-Path $Root "src\Live-Companion\store.js"))
-  Invoke-Native "Parse revision-scoped managed Energy bridge" $Node @("--check", (Join-Path $Root "src\Liber.Revex.Revit\Engineering\Companion\native-managed-energy-bridge.js"))
+  Invoke-Native "Parse live Companion" $Node @("--check", (Join-Path $StageSource "src\Live-Companion\app.js"))
+  Invoke-Native "Parse progressive BIM viewer" $Node @("--check", (Join-Path $StageSource "src\Live-Companion\viewer-r26.js"))
+  Invoke-Native "Parse Engineering cloud store" $Node @("--check", (Join-Path $StageSource "src\Live-Companion\store.js"))
+  Invoke-Native "Parse revision-scoped managed Energy bridge" $Node @("--check", (Join-Path $StageSource "src\Liber.Revex.Revit\Engineering\Companion\native-managed-energy-bridge.js"))
   Invoke-Native "Parse Firebase broker" $Node @("--check", (Join-Path $StageFunctions "index.js"))
   Invoke-Native "Parse shared Firebase project-access policy" $Node @("--check", (Join-Path $StageFunctions "project-access.js"))
   Invoke-Native "Run owner, ordinary-member, admin and outsider access matrix" $Node @((Join-Path $StageFunctions "verify-project-access-r49.js"))
@@ -725,7 +932,7 @@ try {
     workerInvocation = "broker service account only"
   })
 
-  $projectFile = Join-Path $Root "src\Liber.Revex.Revit\Liber.Revex.Revit.csproj"
+  $projectFile = Join-Path $StageSource "src\Liber.Revex.Revit\Liber.Revex.Revit.csproj"
   Invoke-Native "Restore locked .NET dependencies" $Dotnet @("restore", $projectFile)
   Invoke-Native "Compile REVEX r49 against Revit 2026 (warnings, errors and full binlog retained)" $Dotnet @("build", $projectFile, "-c", "Release", "--no-restore", "-nologo", "-clp:WarningsOnly;ErrorsOnly;Summary", "-bl:$BuildBinlog", "-p:RevitInstallDir=$RevitDir", "-o", $StagePayload)
   foreach ($relative in @("Liber.Revex.Revit.dll", "Microsoft.Web.WebView2.Core.dll", "Engineering\Energy\revex_energy_pipeline.py", "Engineering\Energy\verify_revex_r49_energy.py", "Engineering\Companion\native-managed-energy-bridge.js")) {
@@ -749,8 +956,8 @@ try {
   Invoke-Native "Create isolated r49 Python QA environment" $Python $venvArgs
   $VenvPython = Join-Path $VenvRoot "Scripts\python.exe"
   if (-not (Test-Path -LiteralPath $VenvPython -PathType Leaf)) { throw "Python did not create the isolated r49 QA environment." }
-  Invoke-Native "Install exact Energy and managed-worker QA dependencies" $VenvPython @("-m", "pip", "install", "--disable-pip-version-check", "--no-input", "--requirement", (Join-Path $Root "src\Liber.Revex.Revit\Engineering\Energy\requirements.txt"), "--requirement", (Join-Path $Root "server\revex-energy-worker\requirements-server.txt"))
-  Invoke-Native "Run current-project CXL, OSM identity, COMcheck protocol and EN-1 QA" $VenvPython @((Join-Path $Root "src\Liber.Revex.Revit\Engineering\Energy\verify_revex_r49_energy.py")) -WorkingDirectory (Join-Path $Root "src\Liber.Revex.Revit\Engineering\Energy")
+  Invoke-Native "Install exact Energy and managed-worker QA dependencies" $VenvPython @("-m", "pip", "install", "--disable-pip-version-check", "--no-input", "--requirement", (Join-Path $StageSource "src\Liber.Revex.Revit\Engineering\Energy\requirements.txt"), "--requirement", (Join-Path $StageSource "server\revex-energy-worker\requirements-server.txt"))
+  Invoke-Native "Run current-project CXL, OSM identity, COMcheck protocol and EN-1 QA" $VenvPython @((Join-Path $StageSource "src\Liber.Revex.Revit\Engineering\Energy\verify_revex_r49_energy.py")) -WorkingDirectory (Join-Path $StageSource "src\Liber.Revex.Revit\Engineering\Energy")
   Add-PreflightCheckpoint "OFFLINE_ENERGY_CHAIN_SIMULATION" ([ordered]@{
     activeRevitTzIdentity = $true
     enTechnicalFacts = $true
@@ -761,7 +968,7 @@ try {
     energyPlusCompletionContracts = 2
     en1AndPrmPackaging = $true
   })
-  Invoke-Native "Run managed worker artifact, binding, T/Z and revision-consent QA" $VenvPython @((Join-Path $Root "server\revex-energy-worker\verify_revex_r49_worker.py")) -WorkingDirectory (Join-Path $Root "server\revex-energy-worker")
+  Invoke-Native "Run managed worker artifact, binding, T/Z and revision-consent QA" $VenvPython @((Join-Path $StageSource "server\revex-energy-worker\verify_revex_r49_worker.py")) -WorkingDirectory (Join-Path $StageSource "server\revex-energy-worker")
   Add-PreflightCheckpoint "PRIVATE_WORKER_CONTRACT" ([ordered]@{
     artifactIntegrity = $true
     activeDocumentBinding = $true
@@ -782,10 +989,6 @@ try {
   Write-Log "Offline r49 release gate PASSED before GitHub or production-cloud mutation." Green
   Write-Log "Recorded preflight: $PreflightLatestPath" Green
 
-  $Git = Resolve-Executable @("git.exe", "git")
-  if (-not $Git) { Install-WingetPackage "Git.Git" "Git"; $Git = Resolve-Executable @("git.exe", "git") }
-  $Gh = Resolve-Executable @("gh.exe", "gh")
-  if (-not $Gh) { Install-WingetPackage "GitHub.cli" "GitHub CLI"; $Gh = Resolve-Executable @("gh.exe", "gh") }
   $Gcloud = Resolve-Executable @("gcloud.cmd", "gcloud.exe", "gcloud")
   if (-not $Gcloud) { Install-WingetPackage "Google.CloudSDK" "Google Cloud CLI"; $Gcloud = Resolve-Executable @("gcloud.cmd", "gcloud.exe", "gcloud") }
   foreach ($tool in @($Git,$Gh,$Gcloud,$Firebase)) { if (-not $tool) { throw "A required publishing tool did not become available after the offline gate." } }
@@ -797,21 +1000,21 @@ try {
   Invoke-Native "Clone the authoritative GitHub repository" $Gh @("repo", "clone", $GitHubRepository, $RepoRoot, "--", "--depth", "1")
   $branch = "agent/revex-r49-final-$RunId"
   Invoke-Native "Create isolated r49 publication branch" $Git @("checkout", "-b", $branch) -WorkingDirectory $RepoRoot
-  Copy-SourceTree (Join-Path $Root "src\Live-Companion") (Join-Path $RepoRoot "docs\liber-apps\apps\revex")
-  Copy-SourceTree (Join-Path $Root "src\Liber.Revex.Revit") (Join-Path $RepoRoot "src\Liber.Revex.Revit")
-  Copy-SourceTree (Join-Path $Root "server\revex-energy-worker") (Join-Path $RepoRoot "server\revex-energy-worker")
-  Copy-SourceTree (Join-Path $Root "server\firebase-functions") (Join-Path $RepoRoot "server\firebase-functions")
+  Copy-SourceTree (Join-Path $StageSource "src\Live-Companion") (Join-Path $RepoRoot "docs\liber-apps\apps\revex")
+  Copy-SourceTree (Join-Path $StageSource "src\Liber.Revex.Revit") (Join-Path $RepoRoot "src\Liber.Revex.Revit")
+  Copy-SourceTree (Join-Path $StageSource "server\revex-energy-worker") (Join-Path $RepoRoot "server\revex-energy-worker")
+  Copy-SourceTree (Join-Path $StageSource "server\firebase-functions") (Join-Path $RepoRoot "server\firebase-functions")
   New-Item -ItemType Directory -Path (Join-Path $RepoRoot "firebase") -Force | Out-Null
-  Copy-Item -LiteralPath (Join-Path $Root "firebase\revex-project-access-r43.rules") -Destination (Join-Path $RepoRoot "firebase\revex-project-access-r43.rules") -Force
-  Copy-SourceTree (Join-Path $Root "firebase\r49-live-rules") (Join-Path $RepoRoot "firebase\r49-live-rules")
+  Copy-Item -LiteralPath (Join-Path $StageSource "firebase\revex-project-access-r43.rules") -Destination (Join-Path $RepoRoot "firebase\revex-project-access-r43.rules") -Force
+  Copy-SourceTree (Join-Path $StageSource "firebase\r49-live-rules") (Join-Path $RepoRoot "firebase\r49-live-rules")
   New-Item -ItemType Directory -Path (Join-Path $RepoRoot ".github\scripts") -Force | Out-Null
-  Copy-Item -LiteralPath (Join-Path $Root ".github\scripts\verify-revex-r49.js") -Destination (Join-Path $RepoRoot ".github\scripts\verify-revex-r49.js") -Force
-  Copy-Item -LiteralPath (Join-Path $Root ".github\scripts\verify-revex-r49-live-rules.js") -Destination (Join-Path $RepoRoot ".github\scripts\verify-revex-r49-live-rules.js") -Force
-  Copy-Item -LiteralPath (Join-Path $Root ".github\scripts\patch-live-firestore-rules.js") -Destination (Join-Path $RepoRoot ".github\scripts\patch-live-firestore-rules.js") -Force
+  Copy-Item -LiteralPath (Join-Path $StageSource ".github\scripts\verify-revex-r49.js") -Destination (Join-Path $RepoRoot ".github\scripts\verify-revex-r49.js") -Force
+  Copy-Item -LiteralPath (Join-Path $StageSource ".github\scripts\verify-revex-r49-live-rules.js") -Destination (Join-Path $RepoRoot ".github\scripts\verify-revex-r49-live-rules.js") -Force
+  Copy-Item -LiteralPath (Join-Path $StageSource ".github\scripts\patch-live-firestore-rules.js") -Destination (Join-Path $RepoRoot ".github\scripts\patch-live-firestore-rules.js") -Force
   New-Item -ItemType Directory -Path (Join-Path $RepoRoot ".github\scripts\fixtures") -Force | Out-Null
-  Copy-Item -LiteralPath (Join-Path $Root ".github\scripts\fixtures\live-firestore-base.rules") -Destination (Join-Path $RepoRoot ".github\scripts\fixtures\live-firestore-base.rules") -Force
+  Copy-Item -LiteralPath (Join-Path $StageSource ".github\scripts\fixtures\live-firestore-base.rules") -Destination (Join-Path $RepoRoot ".github\scripts\fixtures\live-firestore-base.rules") -Force
   New-Item -ItemType Directory -Path (Join-Path $RepoRoot ".github\workflows") -Force | Out-Null
-  Copy-Item -LiteralPath (Join-Path $Root ".github\workflows\revex-r27-0819-engineering-release.yml") -Destination (Join-Path $RepoRoot ".github\workflows\revex-r27-0819-engineering-release.yml") -Force
+  Copy-Item -LiteralPath (Join-Path $StageSource ".github\workflows\revex-r27-0819-engineering-release.yml") -Destination (Join-Path $RepoRoot ".github\workflows\revex-r27-0819-engineering-release.yml") -Force
   Copy-Item -LiteralPath (Join-Path $Root "PUBLISH_REVEX_R49.ps1") -Destination (Join-Path $RepoRoot "PUBLISH_REVEX_R49.ps1") -Force
   Copy-Item -LiteralPath (Join-Path $Root "PUBLISH_REVEX_R49.cmd") -Destination (Join-Path $RepoRoot "PUBLISH_REVEX_R49.cmd") -Force
   Invoke-Native "Stage only the r49 release" $Git @("add", "--",
