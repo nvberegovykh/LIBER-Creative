@@ -14,7 +14,7 @@ $Root = (Resolve-Path $PSScriptRoot).Path
 $RunId = Get-Date -Format "yyyyMMdd-HHmmss"
 $ReleaseTag = "0.8.19-r49"
 $Build = "20260813r49"
-$PublisherOrchestration = "20260814r49-full-downstream-v1"
+$PublisherOrchestration = "20260814r49-cloudrun-native-health-v2"
 $GbxmlEvidenceProducerSha256 = "f9b48ebce0b98c134f81b8e174c8fb0e576186c2200290c5d1ccb0ea8e6af214"
 $CanonicalSourceCommit = "7c450801e1515af649c7f4ad4bfc4b45f32c59c8"
 $CanonicalSourceRef = "local/revex-r49-cloud-worker-runtime-closure"
@@ -596,8 +596,11 @@ function Assert-ReleaseBundleClosure([string]$SourceRoot) {
   if (-not $workflow.Contains("REVEX r49 final gate") -or -not $workflow.Contains("GeometryCo/requirements.txt") -or -not $workflow.Contains("verify-revex-r49-live-comcheck.py")) { throw "GitHub final gate does not exercise the complete GeometryCo and live clean-COMcheck dependency set." }
   if (-not $docker.Contains("/opt/revex/energy/GeometryCo/requirements.txt")) { throw "Cloud worker image does not install GeometryCo runtime dependencies." }
   if (-not $workerVerifier.Contains("run_revex_r49_release_acceptance.py")) { throw "Managed worker verifier no longer exercises the real-project release-acceptance module." }
+  if (-not $worker.Contains('@APP.get("/healthz")') -or -not $worker.Contains('"sourceCandidate": SOURCE_CANDIDATE')) { throw "Managed worker does not expose the candidate-bound /healthz runtime contract." }
+  if (-not $broker.Contains("getIdTokenClient(workerUrl)")) { throw "Firebase broker no longer uses the attached Google service identity to acquire a worker-scoped ID token." }
   if (-not $docker.Contains("COPY server/revex-energy-worker/run_revex_r49_release_acceptance.py /opt/revex/server/run_revex_r49_release_acceptance.py")) { throw "Cloud worker image omits run_revex_r49_release_acceptance.py required by worker QA." }
   if (-not $docker.Contains("python3 -m py_compile /opt/revex/server/app.py /opt/revex/server/run_revex_r49_release_acceptance.py /opt/revex/server/verify_revex_r49_worker.py")) { throw "Cloud worker image lacks the early server-module runtime-closure compile gate." }
+  if (-not $docker.Contains('"app:APP"')) { throw "Cloud worker image does not start the Flask APP object that owns /healthz and /run." }
   if (-not $cloudBuild.Contains("timeout: 1800s")) { throw "Cloud Build does not reserve enough time for the pinned OpenStudio image and full worker QA." }
   if (-not $broker.Contains("REVEX_SOURCE_CANDIDATE") -or -not $broker.Contains("sourceCandidate")) { throw "Firebase broker is not candidate-bound against stale r49 Energy result reuse." }
   if (-not $worker.Contains("COMCHECK_SEMANTIC_VERSION") -or -not $worker.Contains("scheduleNamesAuthoritative") -or -not $worker.Contains("_narrow_comcheck_schedule_agent")) { throw "Managed worker does not include the schedule-name-independent COMcheck semantic agent." }
@@ -1781,7 +1784,6 @@ try {
   $deployerMember = if ($deployer.EndsWith('.gserviceaccount.com')) { "serviceAccount:$deployer" } else { "user:$deployer" }
   $BrokerSa = "revex-energy-broker@$ProjectId.iam.gserviceaccount.com"
   Ensure-ServiceAccount $Gcloud $BrokerSa "REVEX authenticated Energy broker"
-  Grant-BrokerIdentityProbeAuthority $Gcloud $BrokerSa $deployerMember
 
   $ghAuth = Invoke-Captured "Verify GitHub authentication" $Gh @("auth", "status", "--hostname", "github.com") -AllowFailure
   if ($ghAuth.ExitCode -ne 0) { Invoke-InteractiveNoLog "Essential GitHub approval" $Gh @("auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web") }
@@ -1919,31 +1921,37 @@ try {
     Invoke-Native "Build, test and push the immutable r49 worker image" $Gcloud @("builds", "submit", "--project=$ProjectId", "--timeout=1800s", "--config=server/revex-energy-worker/cloudbuild.yaml", "--substitutions=_REGION=$Region,_REPOSITORY=$Repository,_IMAGE=revex-energy-worker,_TAG=$ReleaseTag", ".") -WorkingDirectory $StageSource
     Invoke-Native "Deploy the private r49 Energy worker" $Gcloud @("run", "deploy", $Service, "--project=$ProjectId", "--region=$Region", "--image=$Image", "--service-account=$WorkerSa", "--no-allow-unauthenticated", "--cpu=4", "--memory=8Gi", "--concurrency=1", "--min-instances=0", "--max-instances=3", "--timeout=3600", "--set-env-vars=REVEX_ENERGY_TIMEOUT_SECONDS=3500,REVEX_VERTEX_PROJECT=$ProjectId,REVEX_VERTEX_LOCATION=global,REVEX_SOURCE_CANDIDATE=$CanonicalSourceCommit", "--quiet")
   }
-  $workerStateForUrls = ((Invoke-Captured "Resolve all deployed Cloud Run worker URLs" $Gcloud @("run", "services", "describe", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
-  $WorkerUrls = @(Get-CloudRunServiceUrls $workerStateForUrls $Service $ProjectNumber $Region)
-  if ($WorkerUrls.Count -eq 0) { throw "Cloud Run did not expose any usable generated worker URL." }
-  $DeterministicWorkerUrl = "https://${Service}-${ProjectNumber}.${Region}.run.app"
-  if ($DeterministicWorkerUrl -notin $WorkerUrls) { throw "Cloud Run did not report its deterministic service URL: $DeterministicWorkerUrl" }
-  Write-Log ("Cloud Run worker URL candidates: " + ($WorkerUrls -join ', ')) Green
-  Invoke-Native "Bind the private worker to one stable deterministic authentication audience" $Gcloud @(
+  # The production caller is the Gen2 Firebase broker running on Google Cloud, not this workstation.
+  # Validate the application route from inside Cloud Run itself with an HTTP startup probe; a revision
+  # cannot become Ready unless the exact container answers /healthz successfully. Keep network ingress
+  # reachable but authorization broker-only through IAM. The default service URL is the audience used
+  # by GoogleAuth.getIdTokenClient(workerUrl) in the deployed broker.
+  Invoke-Native "Bind Cloud Run readiness to the worker's real /healthz application route" $Gcloud @(
     "run", "services", "update", $Service,
     "--project=$ProjectId", "--region=$Region",
-    "--add-custom-audiences=$DeterministicWorkerUrl", "--quiet"
+    "--ingress=all", "--clear-custom-audiences",
+    "--startup-probe=httpGet.path=/healthz,httpGet.port=8080,initialDelaySeconds=0,failureThreshold=3,timeoutSeconds=10,periodSeconds=10",
+    "--quiet"
   )
-  $workerStateForUrls = ((Invoke-Captured "Verify deterministic worker authentication audience" $Gcloud @("run", "services", "describe", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
-  $WorkerUrls = @(Get-CloudRunServiceUrls $workerStateForUrls $Service $ProjectNumber $Region)
-  $customAudienceText = ""
-  try { $customAudienceText = [string]$workerStateForUrls.metadata.annotations.'run.googleapis.com/custom-audiences' } catch { }
-  if (-not $customAudienceText -or $customAudienceText -notmatch [regex]::Escape($DeterministicWorkerUrl)) {
-    throw "Cloud Run did not retain the deterministic REVEX worker authentication audience."
+  $runState = ((Invoke-Captured "Verify native Cloud Run worker health and routing contract" $Gcloud @("run", "services", "describe", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
+  $WorkerUrl = ([string]$runState.status.url).Trim().TrimEnd('/')
+  if (-not $WorkerUrl -or $WorkerUrl -notmatch '^https://[^/]+\.run\.app$') { throw "Cloud Run did not expose its canonical service URL after native health verification." }
+  $ready = @($runState.status.conditions | Where-Object { $_.type -eq 'Ready' -and [string]$_.status -eq 'True' }).Count -gt 0
+  $routesReady = @($runState.status.conditions | Where-Object { $_.type -eq 'RoutesReady' -and [string]$_.status -eq 'True' }).Count -gt 0
+  $deployedImage = [string]$runState.spec.template.spec.containers[0].image
+  $deployedEnv = @($runState.spec.template.spec.containers[0].env)
+  $deployedSourceRows = @($deployedEnv | Where-Object { [string]$_.name -eq "REVEX_SOURCE_CANDIDATE" } | Select-Object -First 1)
+  $deployedSourceCandidate = if ($deployedSourceRows.Count -eq 1) { [string]$deployedSourceRows[0].value } else { "" }
+  $startupProbe = $runState.spec.template.spec.containers[0].startupProbe
+  $startupPath = try { [string]$startupProbe.httpGet.path } catch { "" }
+  $startupPort = try { [int]$startupProbe.httpGet.port } catch { 0 }
+  $ingress = try { [string]$runState.metadata.annotations.'run.googleapis.com/ingress-status' } catch { "" }
+  if (-not $ready -or -not $routesReady -or $startupPath -ne "/healthz" -or $startupPort -ne 8080 -or $ingress -ne "all" -or
+      $deployedImage -notmatch [regex]::Escape($ReleaseTag) -or $deployedSourceCandidate -ne $CanonicalSourceCommit) {
+    throw "Cloud Run native health contract failed (ready=$ready; routesReady=$routesReady; startup=$startupPath`:$startupPort; ingress=$ingress; image=$deployedImage; sourceCandidate=$deployedSourceCandidate)."
   }
-  Add-PreflightCheckpoint "PRIVATE_WORKER_AUTH_AUDIENCE" ([ordered]@{
-    deterministicWorkerUrl = $DeterministicWorkerUrl
-    acceptedAudience = $DeterministicWorkerUrl
-    reportedWorkerUrls = @($WorkerUrls)
-    brokerOnlyInvokerPolicyPreserved = $true
-  })
-  $WorkerUrls = @($DeterministicWorkerUrl) + @($WorkerUrls | Where-Object { $_ -ne $DeterministicWorkerUrl })
+  Write-Log "Cloud Run itself verified /healthz inside the exact candidate-bound container before routing traffic." Green
+
   $policy = ((Invoke-Captured "Inspect private worker invocation policy" $Gcloud @("run", "services", "get-iam-policy", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
   $conditionalWorkerInvokers = @($policy.bindings | Where-Object { [string]$_.role -eq "roles/run.invoker" -and $null -ne $_.PSObject.Properties['condition'] -and $null -ne $_.condition })
   if ($conditionalWorkerInvokers.Count) {
@@ -1961,26 +1969,28 @@ try {
   if ($invokerMembers.Count -ne 1 -or $invokerMembers[0] -ne $expectedInvoker) {
     throw "Private worker invokers are not exactly broker-only: $($invokerMembers -join ', ')"
   }
-  foreach ($candidateUrl in $WorkerUrls) {
-    try {
-      $unexpected = Invoke-WebRequest -UseBasicParsing -Uri ($candidateUrl + "/healthz") -TimeoutSec 15
-      if ($unexpected.StatusCode -eq 200) { throw "Private worker URL $candidateUrl unexpectedly allowed unauthenticated invocation." }
-    } catch {
-      $status = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
-      if ($status -notin @(401,403,404)) { throw }
-      Write-Log "Private worker URL $candidateUrl correctly denied or concealed the unauthenticated health probe ($status)." Green
-    }
+  try {
+    $unexpected = Invoke-WebRequest -UseBasicParsing -Uri ($WorkerUrl + "/healthz") -TimeoutSec 15
+    if ($unexpected.StatusCode -eq 200) { throw "Private worker unexpectedly allowed unauthenticated invocation." }
+  } catch {
+    $status = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
+    if ($status -notin @(401,403,404)) { throw }
+    Write-Log "Private worker remains non-public at its canonical URL (unauthenticated probe HTTP $status)." Green
   }
-  $WorkerUrl = Test-BrokerIdentityWorkerInvocation $Gcloud $BrokerSa $deployerMember $WorkerUrls
-  Remove-BrokerIdentityProbeAuthority
-  Write-Log "The broker service account is the sole dedicated runtime invoker binding for this worker. Project administrators retain administrative authority by design." Green
-  $runState = ((Invoke-Captured "Verify ready r49 Cloud Run revision" $Gcloud @("run", "services", "describe", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
-  $deployedImage = [string]$runState.spec.template.spec.containers[0].image
-  $ready = @($runState.status.conditions | Where-Object { $_.type -eq 'Ready' -and [string]$_.status -eq 'True' }).Count -gt 0
-  $deployedEnv = @($runState.spec.template.spec.containers[0].env)
-  $deployedSourceRows = @($deployedEnv | Where-Object { [string]$_.name -eq "REVEX_SOURCE_CANDIDATE" } | Select-Object -First 1)
-  $deployedSourceCandidate = if ($deployedSourceRows.Count -eq 1) { [string]$deployedSourceRows[0].value } else { "" }
-  if (-not $ready -or $deployedImage -notmatch [regex]::Escape($ReleaseTag) -or $deployedSourceCandidate -ne $CanonicalSourceCommit) { throw "Cloud Run is not ready on the immutable candidate-bound r49 worker (image=$deployedImage; sourceCandidate=$deployedSourceCandidate)." }
+  Add-PreflightCheckpoint "PRIVATE_WORKER_NATIVE_RUNTIME_CONTRACT" ([ordered]@{
+    workerUrl = $WorkerUrl
+    sourceCandidate = $deployedSourceCandidate
+    image = $deployedImage
+    cloudRunReady = $ready
+    routesReady = $routesReady
+    httpStartupProbePath = $startupPath
+    httpStartupProbePort = $startupPort
+    ingress = $ingress
+    runtimeInvoker = $BrokerSa
+    brokerOnlyInvokerPolicy = $true
+    workstationImpersonationRequired = $false
+  })
+  Write-Log "The broker service account is the sole runtime invoker; Cloud Run native HTTP startup health replaces the invalid workstation-as-broker smoke test." Green
 
   Set-Content -LiteralPath (Join-Path $StageFunctions ".env.$ProjectId") -Encoding ascii -Value @("REVEX_ENERGY_WORKER_URL=$WorkerUrl", "REVEX_ENERGY_BROKER_SERVICE_ACCOUNT=$BrokerSa", "REVEX_SOURCE_CANDIDATE=$CanonicalSourceCommit")
   $env:FUNCTIONS_DISCOVERY_TIMEOUT = "90"
@@ -1988,6 +1998,22 @@ try {
   $function = ((Invoke-Captured "Verify ACTIVE r49 broker" $Gcloud @("functions", "describe", "runRevexEnergy", "--gen2", "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
   if ([string]$function.state -ne 'ACTIVE' -or [string]$function.serviceConfig.serviceAccountEmail -ne $BrokerSa) { throw "runRevexEnergy is not ACTIVE on the broker-only identity." }
   if ([int]$function.serviceConfig.timeoutSeconds -lt 3500) { throw "runRevexEnergy does not preserve the full managed-chain timeout." }
+  $functionEnv = $function.serviceConfig.environmentVariables
+  $functionWorkerUrl = if ($null -ne $functionEnv -and $functionEnv.PSObject.Properties.Name -contains 'REVEX_ENERGY_WORKER_URL') { [string]$functionEnv.REVEX_ENERGY_WORKER_URL } else { "" }
+  $functionCandidate = if ($null -ne $functionEnv -and $functionEnv.PSObject.Properties.Name -contains 'REVEX_SOURCE_CANDIDATE') { [string]$functionEnv.REVEX_SOURCE_CANDIDATE } else { "" }
+  $functionBrokerSa = if ($null -ne $functionEnv -and $functionEnv.PSObject.Properties.Name -contains 'REVEX_ENERGY_BROKER_SERVICE_ACCOUNT') { [string]$functionEnv.REVEX_ENERGY_BROKER_SERVICE_ACCOUNT } else { "" }
+  if ($functionWorkerUrl.TrimEnd('/') -ne $WorkerUrl -or $functionCandidate -ne $CanonicalSourceCommit -or $functionBrokerSa -ne $BrokerSa) {
+    throw "The ACTIVE Firebase broker is not bound to the exact worker URL, source candidate, and broker service identity."
+  }
+  Add-PreflightCheckpoint "FIREBASE_BROKER_PRODUCTION_BINDING" ([ordered]@{
+    state = [string]$function.state
+    serviceAccount = [string]$function.serviceConfig.serviceAccountEmail
+    workerUrl = $functionWorkerUrl
+    sourceCandidate = $functionCandidate
+    timeoutSeconds = [int]$function.serviceConfig.timeoutSeconds
+    googleIdentityTokenClient = $true
+  })
+  Write-Log "ACTIVE Gen2 broker is bound to the exact Cloud Run URL, immutable candidate, broker service identity, and production timeout." Green
 
   Verify-LiveCompanion
 
