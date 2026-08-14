@@ -67,8 +67,24 @@ def revex_infer_vertical_context!(model)
     second_area = role_area.reject { |role, _area| role == winner }.values.max || 0.0
     interface_fraction = winner_area / total_vertical_interface
 
-    floor_area = space.floorArea.to_f
-    footprint_fraction = floor_area > 1.0e-8 ? [winner_area / floor_area, 1.0].min : interface_fraction
+    # Reverse-translated gbXML can occasionally type both the bottom and top
+    # horizontal caps as Floor. space.floorArea then sums both caps and can
+    # double the physical footprint. Derive the footprint from one elevation
+    # plane instead: sum horizontal fragments on each Z plane and use the
+    # largest plane as the space footprint reference.
+    cap_planes = Hash.new(0.0)
+    space.surfaces.each do |cap|
+      next unless ['Floor', 'RoofCeiling'].include?(cap.surfaceType.to_s)
+      vertices = cap.vertices
+      next if vertices.empty?
+      area = revex_surface_area(cap)
+      next unless area > 1.0e-8
+      average_z = vertices.reduce(0.0) { |sum, vertex| sum + vertex.z.to_f } / vertices.length.to_f
+      plane_key = (average_z / 0.01).round
+      cap_planes[plane_key] += area
+    end
+    footprint_area = cap_planes.values.max || space.floorArea.to_f
+    footprint_fraction = footprint_area > 1.0e-8 ? [winner_area / footprint_area, 1.0].min : interface_fraction
     dominance_gap = (winner_area - second_area) / total_vertical_interface
 
     # Only annotate otherwise-unclassified spaces when one known vertical role
