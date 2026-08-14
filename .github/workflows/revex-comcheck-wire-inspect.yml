@@ -1,0 +1,25 @@
+name: REVEX COMcheck wire inspect
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect official live DWR upload serializer
+        shell: python
+        run: |
+          import re, urllib.request
+          url='https://legacy-comcheck.energycode.pnl.gov/CheckWeb/dwr/engine.js'
+          req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0 REVEX-r49-live-wire-inspection'})
+          text=urllib.request.urlopen(req, timeout=30).read().decode('utf-8','replace')
+          print('ENGINE_BYTES', len(text))
+          for needle in ['fileUpload','File','_serializeAll','transport.iframe','iframe.send','multipart','c0-e','form.appendChild','input.type','input.name']:
+              print('\n===', needle, '===')
+              starts=[m.start() for m in re.finditer(re.escape(needle), text, re.I)]
+              for p in starts[:12]:
+                  print(re.sub(r'\s+',' ', text[max(0,p-1100):min(len(text),p+1800)]))
