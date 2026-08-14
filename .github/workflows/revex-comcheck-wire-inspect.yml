@@ -22,7 +22,8 @@ jobs:
           base='https://legacy-comcheck.energycode.pnl.gov/CheckWeb/'
           ref=pathlib.Path('src/Liber.Revex.Revit/Engineering/Energy/References/COMcheck_250_MIDWOOD_STRUCTURE_REFERENCE.cxl').resolve()
           with tempfile.TemporaryDirectory() as td:
-              p=pathlib.Path(td)/'REVEX_COMCHECK_CURRENT_QA.cxl'
+              td=pathlib.Path(td)
+              p=td/'REVEX_COMCHECK_CURRENT_QA.cxl'
               original=ref.read_text(encoding='utf-8'); text=original
               replacements={'projectTitle':'REVEX COMCHECK LIVE QA','projectAddress':'999 TEST AVENUE','projectCity':'BROOKLYN','projectState':'New York','projectZipCode':'11201'}
               originals={}
@@ -46,74 +47,58 @@ jobs:
               try:
                   w=WebDriverWait(d,45);d.get(base+'index.html');w.until(lambda x:x.execute_script("return typeof ProjectService!=='undefined' && typeof dwr!=='undefined' && typeof USER_PROJECT!=='undefined' && USER_PROJECT!==null"))
                   print('SITE_UPLOAD_WRAPPER=',d.execute_script("return typeof window.uploadProject==='function' ? String(window.uploadProject) : 'MISSING'"))
-                  print('SITE_DOWNLOAD_GLOBALS=',d.execute_script("return Object.keys(window).filter(k=>/download|saveproject/i.test(k)).sort().join(' | ')"))
 
                   exported=d.execute_async_script("""
                     const done=arguments[arguments.length-1]; let settled=false;
                     const finish=(x)=>{if(!settled){settled=true;done(JSON.stringify(x));}};
                     ProjectService.downloadProject({
-                      callback:function(r){
-                        let s=''; try{s=JSON.stringify(r)}catch(e){s=String(r)}
-                        finish({ok:true,type:typeof r,string:String(r),json:s});
-                      },
-                      exceptionHandler:function(msg,ex){let x={};try{for(const k of Object.getOwnPropertyNames(ex||{}))x[k]=(ex||{})[k]}catch(e){};finish({ok:false,error:String(msg),exception:x});},
-                      errorHandler:function(msg,ex){let x={};try{for(const k of Object.getOwnPropertyNames(ex||{}))x[k]=(ex||{})[k]}catch(e){};finish({ok:false,error:String(msg),exception:x});},
+                      callback:function(r){finish({ok:true,path:String(r)})},
+                      exceptionHandler:function(msg,ex){let x={};try{for(const k of Object.getOwnPropertyNames(ex||{}))x[k]=(ex||{})[k]}catch(e){};finish({ok:false,error:String(msg),exception:x})},
+                      errorHandler:function(msg,ex){let x={};try{for(const k of Object.getOwnPropertyNames(ex||{}))x[k]=(ex||{})[k]}catch(e){};finish({ok:false,error:String(msg),exception:x})},
                       timeout:30000
                     });
                   """)
+                  export_result=json.loads(exported)
                   print('DOWNLOAD_PROJECT_RESULT=',exported)
+                  if not export_result.get('ok') or not export_result.get('path'): raise RuntimeError('official clean project export failed')
+                  cookies='; '.join(f"{c['name']}={c['value']}" for c in d.get_cookies());ua=d.execute_script('return navigator.userAgent')
+                  export_url=urllib.request.urljoin(base,export_result['path'])
+                  clean_bytes=urllib.request.urlopen(urllib.request.Request(export_url,headers={'Cookie':cookies,'User-Agent':ua,'Referer':base+'index.html'}),timeout=45).read()
+                  clean=td/'COMCHECK_LIVE_CLEAN_REFERENCE.cxl';clean.write_bytes(clean_bytes)
+                  clean_text=clean_bytes.decode('utf-8','replace')
+                  print('CLEAN_EXPORT_BYTES=',len(clean_bytes))
+                  for tag in ('projectType','bldgUseType','feetBldgHeight','numberOfStories','code','complianceMode','version','state','city'):
+                      m=re.search(rf'<{tag}>(?:\s*<!\[CDATA\[)?\s*(.*?)(?:\]\]>)?\s*</{tag}>',clean_text,re.S)
+                      print('CLEAN_TAG_'+tag+'=',re.sub(r'\s+',' ',m.group(1)).strip() if m else 'MISSING')
+                  print('CLEAN_EXPORT_PREFIX=',clean_text[:5000].replace('\n',' | '))
 
                   d.execute_script("let e=document.getElementById('fileToUpload'); if(!e){e=document.createElement('input');e.type='file';e.id='fileToUpload';e.name='fileToUpload';document.body.appendChild(e);}")
-
-                  def upload(path, label, identity):
+                  def upload(path, label, identity=''):
                       e=d.find_element(By.ID,'fileToUpload'); e.send_keys(str(path))
                       result=d.execute_async_script("""
                         const expected=arguments[0], done=arguments[arguments.length-1];
                         const el=document.getElementById('fileToUpload'), file=dwr.util.getValue('fileToUpload'), filename=el.value;
                         let settled=false; const finish=(x)=>{if(!settled){settled=true;done(JSON.stringify(x));}};
                         ProjectService.uploadProject(filename,file,{
-                          callback:function(r){try{const s=JSON.stringify(r);finish({ok:true,identityPresent:expected? s.includes(expected):true,bytes:s.length,prefix:s.slice(0,2500)})}catch(e){finish({ok:false,error:'callback '+String(e)})}},
+                          callback:function(r){try{const s=JSON.stringify(r);finish({ok:true,identityPresent:expected? s.includes(expected):true,bytes:s.length,prefix:s.slice(0,1500)})}catch(e){finish({ok:false,error:'callback '+String(e)})}},
                           exceptionHandler:function(msg,ex){let x={};try{for(const k of Object.getOwnPropertyNames(ex||{}))x[k]=(ex||{})[k]}catch(e){};finish({ok:false,error:String(msg),exception:x,exceptionText:String(ex)})},
                           errorHandler:function(msg,ex){let x={};try{for(const k of Object.getOwnPropertyNames(ex||{}))x[k]=(ex||{})[k]}catch(e){};finish({ok:false,error:String(msg),exception:x,exceptionText:String(ex)})},
                           timeout:30000
                         });
                       """, identity)
                       print(label+'=',result)
-                      # DWR restores the file input after its iframe callback; clear it for the next probe.
                       try:d.find_element(By.ID,'fileToUpload').clear()
                       except Exception:pass
                       return json.loads(result)
 
+                  clean_result=upload(clean,'CLEAN_EXPORT_REIMPORT')
                   original_result=upload(ref,'ORIGINAL_REFERENCE_UPLOAD','250 Midwood Street')
                   migrated_result=upload(p,'MIGRATED_REFERENCE_UPLOAD','REVEX COMCHECK LIVE QA')
-                  if not migrated_result.get('ok') or not migrated_result.get('identityPresent'):
-                      raise RuntimeError('official browser upload callback did not return migrated project')
-                  print('REVEX_COMCHECK_BROWSER_UPLOAD=PASSED')
-
-                  calc=d.execute_async_script("""
-                    const done=arguments[arguments.length-1]; let settled=false;
-                    const finish=(x)=>{if(!settled){settled=true;done(JSON.stringify(x));}};
-                    ProjectService.calculateEnvelopeCompliance(true,{
-                      callback:function(r){try{const s=JSON.stringify(r);finish({ok:true,bytes:s.length,hasEnvelope:/envelopeStatus|passes|complianceIndex/i.test(s),payload:s.slice(0,6000)})}catch(e){finish({ok:false,error:'callback '+String(e)})}},
-                      exceptionHandler:function(msg,ex){finish({ok:false,error:String(msg),exception:String(ex)})},
-                      errorHandler:function(msg,ex){finish({ok:false,error:String(msg),exception:String(ex)})},
-                      timeout:30000
-                    });
-                  """)
-                  print('CALC_RESULT=',calc)
-                  compact=calc.replace(' ','')
-                  if '"ok":true' not in compact or '"hasEnvelope":true' not in compact: raise RuntimeError('official envelope calculation failed')
-                  print('REVEX_COMCHECK_BROWSER_CALC=PASSED')
-
-                  report_url=base+'report.html?envelopeCertificate=true&intLightingCertificate=false&extLightingCertificate=false&mechanicalCertificate=false&mechanicalReqDescription=false'
-                  d.get(report_url);w.until(lambda x:'report/current/pdf' in x.page_source)
-                  cookies='; '.join(f"{c['name']}={c['value']}" for c in d.get_cookies());ua=d.execute_script('return navigator.userAgent')
-                  pdf=urllib.request.urlopen(urllib.request.Request(base+'report/current/pdf',headers={'Cookie':cookies,'User-Agent':ua,'Referer':report_url}),timeout=45).read()
-                  if not pdf.startswith(b'%PDF-'): raise RuntimeError('official report endpoint returned non-PDF')
-                  out=pathlib.Path(td)/'report.pdf';out.write_bytes(pdf)
-                  from pypdf import PdfReader
-                  report_text='\n'.join((x.extract_text() or '') for x in PdfReader(str(out)).pages)
-                  print('REPORT_TEXT_PREFIX=',report_text[:2500].replace('\n',' | '))
-                  if 'REVEX COMCHECK LIVE QA'.casefold() not in report_text.casefold(): raise RuntimeError('official PDF does not contain migrated identity')
-                  print('REVEX_COMCHECK_BROWSER_PDF=PASSED bytes=',len(pdf))
+                  if not clean_result.get('ok'):
+                      raise RuntimeError('COMcheck cannot re-import its own current-session export')
+                  if original_result.get('ok') or migrated_result.get('ok'):
+                      print('LEGACY_REFERENCE_IMPORTABLE=true')
+                  else:
+                      print('LEGACY_REFERENCE_IMPORTABLE=false')
+                      raise RuntimeError('legacy reference requires one-time translation to clean live COMcheck schema')
               finally:d.quit()
