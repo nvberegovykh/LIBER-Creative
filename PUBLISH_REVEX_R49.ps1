@@ -15,11 +15,11 @@ $RunId = Get-Date -Format "yyyyMMdd-HHmmss"
 $ReleaseTag = "0.8.19-r49"
 $Build = "20260813r49"
 $GbxmlEvidenceProducerSha256 = "f9b48ebce0b98c134f81b8e174c8fb0e576186c2200290c5d1ccb0ea8e6af214"
-$CanonicalSourceCommit = "63f6e47c24ccd9a2c69a47b0cbb80ab560fc8e71"
-$CanonicalSourceRef = "local/revex-r49-cloud-py310-onnxruntime"
-$CanonicalSourceArchiveName = "REVEX_R49_SOURCE_63f6e47c24ccd9a2c69a47b0cbb80ab560fc8e71.zip"
-$CanonicalSourceArchiveSha256 = "63f6e47c24ccd9a2c69a47b0cbb80ab560fc8e714de3f12189a7d67884326bc9"
-$CanonicalSourceArchiveSize = 52809747L
+$CanonicalSourceCommit = "7c450801e1515af649c7f4ad4bfc4b45f32c59c8"
+$CanonicalSourceRef = "local/revex-r49-cloud-worker-runtime-closure"
+$CanonicalSourceArchiveName = "REVEX_R49_SOURCE_7c450801e1515af649c7f4ad4bfc4b45f32c59c8.zip"
+$CanonicalSourceArchiveSha256 = "7c450801e1515af649c7f4ad4bfc4b45f32c59c867446dae61037e159709fa50"
+$CanonicalSourceArchiveSize = 52810258L
 $CanonicalSourceArchive = Join-Path $Root $CanonicalSourceArchiveName
 $StageRoot = Join-Path $env:LOCALAPPDATA "LIBER\REVEX-R49-Publish\$RunId"
 $CanonicalSourceRoot = Join-Path $StageRoot "canonical-source"
@@ -556,10 +556,11 @@ function Assert-ReleaseBundleClosure([string]$SourceRoot) {
   $cloudBuildPath = Join-Path $SourceRoot "server\revex-energy-worker\cloudbuild.yaml"
   $brokerPath = Join-Path $SourceRoot "server\firebase-functions\index.js"
   $workerPath = Join-Path $SourceRoot "server\revex-energy-worker\app.py"
+  $workerVerifierPath = Join-Path $SourceRoot "server\revex-energy-worker\verify_revex_r49_worker.py"
   $acceptancePath = Join-Path $SourceRoot "server\revex-energy-worker\run_revex_r49_release_acceptance.py"
   $pipelinePath = Join-Path $SourceRoot "src\Liber.Revex.Revit\Engineering\Energy\revex_energy_pipeline.py"
   $geometryRequirementsPath = Join-Path $SourceRoot "src\Liber.Revex.Revit\Engineering\Energy\GeometryCo\requirements.txt"
-  foreach ($required in @($graphPath,$pythonPath,$servicePath,$workflowPath,$dockerPath,$cloudBuildPath,$brokerPath,$workerPath,$acceptancePath,$pipelinePath)) {
+  foreach ($required in @($graphPath,$pythonPath,$servicePath,$workflowPath,$dockerPath,$cloudBuildPath,$brokerPath,$workerPath,$workerVerifierPath,$acceptancePath,$pipelinePath,$geometryRequirementsPath)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Release dependency closure is missing: $required" }
   }
   $graph = Get-Content -LiteralPath $graphPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -582,11 +583,15 @@ function Assert-ReleaseBundleClosure([string]$SourceRoot) {
   $cloudBuild = [IO.File]::ReadAllText($cloudBuildPath, [Text.Encoding]::UTF8)
   $broker = [IO.File]::ReadAllText($brokerPath, [Text.Encoding]::UTF8)
   $worker = [IO.File]::ReadAllText($workerPath, [Text.Encoding]::UTF8)
+  $workerVerifier = [IO.File]::ReadAllText($workerVerifierPath, [Text.Encoding]::UTF8)
   $acceptance = [IO.File]::ReadAllText($acceptancePath, [Text.Encoding]::UTF8)
   $pipeline = [IO.File]::ReadAllText($pipelinePath, [Text.Encoding]::UTF8)
   $geometryRequirements = [IO.File]::ReadAllText($geometryRequirementsPath, [Text.Encoding]::UTF8)
   if (-not $workflow.Contains("REVEX r49 final gate") -or -not $workflow.Contains("GeometryCo/requirements.txt") -or -not $workflow.Contains("verify-revex-r49-live-comcheck.py")) { throw "GitHub final gate does not exercise the complete GeometryCo and live clean-COMcheck dependency set." }
   if (-not $docker.Contains("/opt/revex/energy/GeometryCo/requirements.txt")) { throw "Cloud worker image does not install GeometryCo runtime dependencies." }
+  if (-not $workerVerifier.Contains("run_revex_r49_release_acceptance.py")) { throw "Managed worker verifier no longer exercises the real-project release-acceptance module." }
+  if (-not $docker.Contains("COPY server/revex-energy-worker/run_revex_r49_release_acceptance.py /opt/revex/server/run_revex_r49_release_acceptance.py")) { throw "Cloud worker image omits run_revex_r49_release_acceptance.py required by worker QA." }
+  if (-not $docker.Contains("python3 -m py_compile /opt/revex/server/app.py /opt/revex/server/run_revex_r49_release_acceptance.py /opt/revex/server/verify_revex_r49_worker.py")) { throw "Cloud worker image lacks the early server-module runtime-closure compile gate." }
   if (-not $cloudBuild.Contains("timeout: 1800s")) { throw "Cloud Build does not reserve enough time for the pinned OpenStudio image and full worker QA." }
   if (-not $broker.Contains("REVEX_SOURCE_CANDIDATE") -or -not $broker.Contains("sourceCandidate")) { throw "Firebase broker is not candidate-bound against stale r49 Energy result reuse." }
   if (-not $worker.Contains("COMCHECK_SEMANTIC_VERSION") -or -not $worker.Contains("scheduleNamesAuthoritative") -or -not $worker.Contains("_narrow_comcheck_schedule_agent")) { throw "Managed worker does not include the schedule-name-independent COMcheck semantic agent." }
@@ -607,6 +612,8 @@ function Assert-ReleaseBundleClosure([string]$SourceRoot) {
     scheduleNamesAuthoritative = $false
     partialPageScanReuseWithSemanticRerun = $true
     cloudWorkerPython310OnnxRuntimeCompatible = $true
+    cloudWorkerAcceptanceModulePackaged = $true
+    cloudWorkerServerModuleCompileGate = $true
   })
   Write-Log "gbXML graph/Python/C# identity and downstream worker/GitHub/broker dependency closure passed before real Revit acceptance." Green
 }
@@ -1322,7 +1329,7 @@ try {
     "server\revex-energy-worker\app.py" = "fd64da71b87331f5efb3cbfa494979ef65def12d53ac105cb15ad1a5b8fe1ed7"
     "server\revex-energy-worker\verify_revex_r49_worker.py" = "8405a3e59448e5f2c6b51aeb001624e5c4672461de7bca8c1c9410c561c2404d"
     "server\revex-energy-worker\run_revex_r49_release_acceptance.py" = "93533a8cf3792d9c41882de62ee9469a07c93a9ddebfe7452562458666eb88df"
-    "server\revex-energy-worker\Dockerfile" = "b839a65e16c7e0e06d038589927f47045e002267d6e345c9a51c3989d3f6fd94"
+    "server\revex-energy-worker\Dockerfile" = "89a75fdd9ef42534dda1fa535a2c6701afe35751964db9404cc635f46fa2a303"
     "server\revex-energy-worker\cloudbuild.yaml" = "a12fe6c236c4a464de6faaf5792e194f8deca58bc8c87350b1e5ba0b889dcbb4"
     "server\revex-energy-worker\requirements-server.txt" = "f35c6f0f9355c7008cee71e693f729b66b138ed63b8be9a124659a31e24b5863"
     "server\firebase-functions\index.js" = "6e28e5990be701ada9d4012dfd99896ca7dc15367a1de6d4bb8f77359e93e842"
@@ -1336,7 +1343,7 @@ try {
     "firebase\r49-live-rules\package-lock.json" = "789bbcc5a9716e95a1924ffbe9ad19131deacb6a53376d1f352914b67b27f7d0"
     "firebase\r49-live-rules\firebase.json" = "6285cd269cfb42419e2f9c9f03a0f2c16f41198831c36bea941cb3f1f7b93bb3"
     "firebase\r49-live-rules\.gitignore" = "8bbd5e0e7c8f650b9fd6ca3a4bde39fedde690a639965b0e3b46cf33d040c20a"
-    "REVEX_RELEASE_COORDINATION.md" = "92725ac422eed6c194b93f1fcc86521542c605cb49f2db6de19c0bd47ae189e7"
+    "REVEX_RELEASE_COORDINATION.md" = "2b141c5309d20b683270f79f68810fd7af9b7de59504ec9bcc4bc83b70355aeb"
   }
   Restore-HashLockedSource $Expected
 
