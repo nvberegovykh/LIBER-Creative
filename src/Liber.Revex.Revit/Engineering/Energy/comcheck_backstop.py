@@ -557,7 +557,12 @@ class FreshProjectBrowserClient:
               row.constructionType.value=use.constructionType;
               row.floorArea.value=Number(use.floorArea||0);
               row.powerDensity.value=Number(use.powerDensity||0);
-              buildingUseTable.updateServerComponent(row,['type','constructionType','floorArea','powerDensity']);
+              // COMcheck's implementation iterates the keys of this argument;
+              // an Array therefore makes it look for row["0"].value.  Supply
+              // the keyed object used by its own multi-field edit path.
+              buildingUseTable.updateServerComponent(row,{
+                type:true,constructionType:true,floorArea:true,powerDensity:true
+              });
               buildingUseTable.redraw([row]);
               }
               return {
