@@ -14,6 +14,7 @@ $Root = (Resolve-Path $PSScriptRoot).Path
 $RunId = Get-Date -Format "yyyyMMdd-HHmmss"
 $ReleaseTag = "0.8.19-r49"
 $Build = "20260813r49"
+$PublisherOrchestration = "20260814r49-full-downstream-v1"
 $GbxmlEvidenceProducerSha256 = "f9b48ebce0b98c134f81b8e174c8fb0e576186c2200290c5d1ccb0ea8e6af214"
 $CanonicalSourceCommit = "7c450801e1515af649c7f4ad4bfc4b45f32c59c8"
 $CanonicalSourceRef = "local/revex-r49-cloud-worker-runtime-closure"
@@ -660,6 +661,49 @@ function Get-IamRoleMembers([object]$Policy, [string]$Role) {
     Sort-Object -Unique)
 }
 
+function Get-CloudRunServiceUrls(
+  [object]$ServiceState,
+  [string]$ServiceName,
+  [string]$ProjectNumber,
+  [string]$RegionName
+) {
+  $urls = @()
+  if ($ServiceName -and $ProjectNumber -and $RegionName) {
+    $urls += "https://${ServiceName}-${ProjectNumber}.${RegionName}.run.app"
+  }
+  try {
+    $annotations = $ServiceState.metadata.annotations
+    if ($null -ne $annotations -and $annotations.PSObject.Properties.Name -contains "run.googleapis.com/urls") {
+      $reported = [string]$annotations.'run.googleapis.com/urls'
+      if ($reported) {
+        try { $urls += @($reported | ConvertFrom-Json) } catch { }
+      }
+    }
+  } catch { }
+  try {
+    if (-not [string]::IsNullOrWhiteSpace([string]$ServiceState.status.url)) { $urls += [string]$ServiceState.status.url }
+  } catch { }
+  return @($urls | ForEach-Object { ([string]$_).Trim().TrimEnd('/') } | Where-Object { $_ -match '^https://[^/]+\.run\.app$' } | Select-Object -Unique)
+}
+
+function Get-JwtPayload([string]$Token) {
+  $parts = $Token.Split('.')
+  if ($parts.Count -ne 3) { throw "Identity token is not a three-part JWT." }
+  $payload = $parts[1].Replace('-', '+').Replace('_', '/')
+  switch ($payload.Length % 4) {
+    2 { $payload += '==' }
+    3 { $payload += '=' }
+    0 { }
+    default { throw "Identity token payload has invalid base64url length." }
+  }
+  try {
+    $json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload))
+    return ($json | ConvertFrom-Json)
+  } catch {
+    throw "Identity token payload could not be decoded for local claim verification."
+  }
+}
+
 function Remove-ProjectLevelWorkerInvokerGrants([string]$Gcloud, [string]$ProjectNumber, [string]$BrokerSa) {
   Write-Step "Remove project-wide Cloud Run invocation grants that would bypass the dedicated worker policy"
   $policy = ((Invoke-Captured "Inspect project-level Cloud Run invocation policy" $Gcloud @("projects", "get-iam-policy", $ProjectId, "--format=json")).Text | ConvertFrom-Json)
@@ -743,7 +787,7 @@ function Test-BrokerIdentityWorkerInvocation(
   [string]$Gcloud,
   [string]$BrokerSa,
   [string]$DeployerMember,
-  [string]$WorkerUrl
+  [string[]]$WorkerUrls
 ) {
   Write-Step "Prove the deployed broker identity can invoke the private r49 worker"
   $saPolicy = ((Invoke-Captured "Verify broker CLI-impersonation role is present before token mint" $Gcloud @(
@@ -751,54 +795,76 @@ function Test-BrokerIdentityWorkerInvocation(
   )).Text | ConvertFrom-Json)
   $tokenCreators = @(Get-IamRoleMembers $saPolicy $script:BrokerTokenCreatorRole)
   if ($DeployerMember -notin $tokenCreators) {
-    throw "The publisher does not have the required Service Account Token Creator binding on the broker identity at the smoke-test boundary. The release will not substitute blind retries for a missing IAM binding."
+    throw "The publisher does not have Service Account Token Creator on the broker identity at the smoke-test boundary."
   }
-  $identityToken = $null
-  $lastSafeError = ""
-  $maxTokenAttempts = 12
-  for ($attempt = 1; $attempt -le $maxTokenAttempts -and -not $identityToken; $attempt++) {
-    $tokenResult = Invoke-SecretCaptured "Mint broker identity token without logging credentials (attempt $attempt/$maxTokenAttempts)" $Gcloud @(
-      "auth", "print-identity-token",
-      "--impersonate-service-account=$BrokerSa",
-      "--audiences=$WorkerUrl",
-      "--include-email",
-      "--quiet"
-    ) -AllowFailure
-    if ($tokenResult.ExitCode -eq 0) {
-      $identityToken = [string]($tokenResult.Lines |
-        Where-Object { [string]$_ -match '^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$' } |
-        Select-Object -Last 1)
-      if (-not $identityToken) { throw "gcloud reported success but did not return a parseable broker identity token." }
-      break
+  $candidates = @($WorkerUrls | Where-Object { $_ } | Select-Object -Unique)
+  if ($candidates.Count -eq 0) { throw "Cloud Run did not report any usable run.app URL for authenticated broker verification." }
+  $probeFailures = @()
+  foreach ($candidateUrl in $candidates) {
+    $identityToken = $null
+    $lastSafeError = ""
+    for ($attempt = 1; $attempt -le 3 -and -not $identityToken; $attempt++) {
+      $tokenResult = Invoke-SecretCaptured "Mint broker identity token for $candidateUrl without logging credentials (attempt $attempt/3)" $Gcloud @(
+        "auth", "print-identity-token",
+        "--impersonate-service-account=$BrokerSa",
+        "--audiences=$candidateUrl",
+        "--include-email",
+        "--quiet"
+      ) -AllowFailure
+      if ($tokenResult.ExitCode -eq 0) {
+        $identityToken = [string]($tokenResult.Lines |
+          Where-Object { [string]$_ -match '^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$' } |
+          Select-Object -Last 1)
+        if (-not $identityToken) { throw "gcloud reported token-mint success but returned no parseable JWT." }
+        break
+      }
+      $safe = ([string]$tokenResult.Text -replace 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+','<REDACTED_ID_TOKEN>')
+      $safe = [regex]::Replace($safe, 'ya29\.[A-Za-z0-9._-]+', '<REDACTED_ACCESS_TOKEN>')
+      $safe = ($safe -replace '[\r\n]+',' ').Trim()
+      if ($safe.Length -gt 700) { $safe = $safe.Substring(0,700) + '...' }
+      $lastSafeError = $safe
+      $isPropagationDenial = $safe -match '(?i)(PERMISSION_DENIED|permission.*iam\.serviceAccounts\.(getOpenIdToken|getAccessToken)|iam\.serviceAccounts\.(getOpenIdToken|getAccessToken)|403)'
+      if (-not $isPropagationDenial) { throw "Broker identity-token mint failed for a non-propagation reason: $safe" }
+      if ($attempt -lt 3) { Start-Sleep -Seconds 5 }
     }
-    $safe = ([string]$tokenResult.Text -replace 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+','<REDACTED_ID_TOKEN>')
-    $safe = [regex]::Replace($safe, 'ya29\.[A-Za-z0-9._-]+', '<REDACTED_ACCESS_TOKEN>')
-    $safe = ($safe -replace '[\r\n]+',' ').Trim()
-    if ($safe.Length -gt 700) { $safe = $safe.Substring(0,700) + '...' }
-    $lastSafeError = $safe
-    $isPropagationDenial = $safe -match '(?i)(PERMISSION_DENIED|permission.*iam\.serviceAccounts\.(getOpenIdToken|getAccessToken)|iam\.serviceAccounts\.(getOpenIdToken|getAccessToken)|403)'
-    if (-not $isPropagationDenial) { throw "Broker identity-token mint failed for a non-propagation reason; no retry loop was used. $safe" }
-    if ($attempt -lt $maxTokenAttempts) {
-      Write-Log "Correct Token Creator binding is present but IAM Credentials still reports a propagation denial; retrying in five seconds." DarkYellow
-      Start-Sleep -Seconds 5
+    if (-not $identityToken) {
+      $probeFailures += "$candidateUrl token-mint=$lastSafeError"
+      continue
+    }
+    try {
+      $claims = Get-JwtPayload $identityToken
+      if ([string]$claims.aud -ne $candidateUrl) { throw "Minted ID token audience does not equal the candidate Cloud Run URL." }
+      if ($claims.PSObject.Properties.Name -contains 'email' -and [string]$claims.email -ne $BrokerSa) { throw "Minted ID token email claim does not equal the broker service account." }
+      try {
+        $response = Invoke-WebRequest -UseBasicParsing -Uri ($candidateUrl + "/healthz") -Headers @{ Authorization = "Bearer $identityToken" } -TimeoutSec 25
+        if ([int]$response.StatusCode -ne 200) { throw "HTTP $($response.StatusCode)" }
+        $health = $response.Content | ConvertFrom-Json
+        if ($health.ok -ne $true -or [string]$health.version -ne $ReleaseTag -or [string]$health.service -ne "REVEX Energy Worker" -or [string]$health.sourceCandidate -ne $CanonicalSourceCommit) {
+          throw "Worker health payload is not bound to immutable candidate $CanonicalSourceCommit."
+        }
+        Add-PreflightCheckpoint "BROKER_TO_PRIVATE_WORKER_SMOKE" ([ordered]@{
+          authenticatedIdentity = $BrokerSa
+          verifiedWorkerUrl = $candidateUrl
+          candidateUrlsEvaluated = @($candidates)
+          workerVersion = [string]$health.version
+          sourceCandidate = [string]$health.sourceCandidate
+          healthStatus = 200
+          tokenAudienceVerified = $true
+          tokenCreatorBindingPreparedBeforeGitHubGate = $true
+        })
+        Write-Log "Authenticated broker identity reached the exact private r49 worker at $candidateUrl." Green
+        return $candidateUrl
+      } catch {
+        $status = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
+        $message = ([string]$_.Exception.Message -replace '[\r\n]+',' ').Trim()
+        if ($message.Length -gt 400) { $message = $message.Substring(0,400) + '...' }
+        $probeFailures += "$candidateUrl http=$status message=$message"
+      }
+    } finally {
+      $identityToken = $null
     }
   }
-  if (-not $identityToken) { throw "Broker Token Creator binding is present, but IAM Credentials still denied token mint after the post-GitHub residual propagation window. Last sanitized response: $lastSafeError" }
-  try {
-    $response = Invoke-WebRequest -UseBasicParsing -Uri ($WorkerUrl + "/healthz") -Headers @{ Authorization = "Bearer $identityToken" } -TimeoutSec 20
-    if ([int]$response.StatusCode -ne 200) { throw "The broker identity health probe returned HTTP $($response.StatusCode)." }
-    $health = $response.Content | ConvertFrom-Json
-    if ($health.ok -ne $true -or [string]$health.version -ne $ReleaseTag -or [string]$health.service -ne "REVEX Energy Worker" -or [string]$health.sourceCandidate -ne $CanonicalSourceCommit) { throw "The broker identity reached a worker payload that is not bound to immutable candidate $CanonicalSourceCommit." }
-    Add-PreflightCheckpoint "BROKER_TO_PRIVATE_WORKER_SMOKE" ([ordered]@{
-      authenticatedIdentity = $BrokerSa
-      workerVersion = [string]$health.version
-      sourceCandidate = [string]$health.sourceCandidate
-      healthStatus = 200
-      tokenCreatorBindingPreparedBeforeGitHubGate = $true
-      blindRetryLoop = $false
-    })
-    Write-Log "Authenticated broker-identity invocation succeeded against the exact private r49 worker." Green
-  } finally { $identityToken = $null }
+  throw "No Cloud Run-generated URL accepted a correctly-audienced broker ID token for /healthz. " + ($probeFailures -join ' | ')
 }
 
 function Verify-LiveCompanion {
@@ -1217,6 +1283,78 @@ function Invoke-RealRevitEvidenceGate([string]$ModelPath, [string]$WeatherPath) 
   return $result
 }
 
+function Try-ReuseRealEnergyAcceptanceGate(
+  [object]$RevitEvidence,
+  [string]$ReviewPackage
+) {
+  if ([string]$env:REVEX_R49_FORCE_FRESH_ENERGY_ACCEPTANCE -match '^(?i:1|true|yes)$') {
+    Write-Log "Fresh real-project Energy acceptance was explicitly requested; prior immutable acceptance will not be reused." Yellow
+    return $null
+  }
+  $engineeringRevision = [string]$RevitEvidence.engineering.revision
+  if (-not $engineeringRevision) { return $null }
+  $runsRoot = Join-Path $env:LOCALAPPDATA "LIBER\REVEX-R49-Publish"
+  if (-not (Test-Path -LiteralPath $runsRoot -PathType Container)) { return $null }
+  $candidates = @(Get-ChildItem -LiteralPath $runsRoot -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -ne $StageRoot } |
+    Sort-Object LastWriteTimeUtc -Descending)
+  foreach ($candidate in $candidates) {
+    $priorPreflightPath = Join-Path $candidate.FullName "REVEX-R49-PREFLIGHT.json"
+    $priorAcceptancePath = Join-Path $candidate.FullName "REVEX-R49-REAL-PROJECT-ACCEPTANCE.json"
+    if (-not (Test-Path -LiteralPath $priorPreflightPath -PathType Leaf) -or -not (Test-Path -LiteralPath $priorAcceptancePath -PathType Leaf)) { continue }
+    try {
+      $priorPreflight = Get-Content -LiteralPath $priorPreflightPath -Raw -Encoding UTF8 | ConvertFrom-Json
+      if ([string]$priorPreflight.status -ne "PASSED") { continue }
+      $canonical = @($priorPreflight.checkpoints | Where-Object { [string]$_.name -eq "CANONICAL_SOURCE_RESTORE" } | Select-Object -Last 1)
+      if ($canonical.Count -ne 1 -or [string]$canonical[0].detail.canonicalCommit -ne $CanonicalSourceCommit) { continue }
+      $priorGate = @($priorPreflight.checkpoints | Where-Object { [string]$_.name -eq "REAL_79_ENERGY_ACCEPTANCE" } | Select-Object -Last 1)
+      if ($priorGate.Count -ne 1) { continue }
+      if ([string]$priorGate[0].detail.sourceEngineeringRevision -ne $engineeringRevision -or
+          $priorGate[0].detail.reviewEligible -ne $true -or
+          $priorGate[0].detail.officialComcheck -ne $true -or
+          [string]$priorGate[0].detail.comparisonDisposition -notin @("BENCHMARKED_BEST_WORKING_ITERATION","UNBENCHMARKED_DIFFERENT_COHORT")) { continue }
+      $acceptance = Get-Content -LiteralPath $priorAcceptancePath -Raw -Encoding UTF8 | ConvertFrom-Json
+      if ([string]$acceptance.status -ne "PASSED" -or [string]$acceptance.sourceEngineeringRevision -ne $engineeringRevision -or
+          $acceptance.officialComcheck -ne $true -or $acceptance.approvedRunComparison.reviewEligible -ne $true -or
+          [string]$acceptance.comparisonDisposition -notin @("BENCHMARKED_BEST_WORKING_ITERATION","UNBENCHMARKED_DIFFERENT_COHORT")) { continue }
+      $priorPackage = [string]$acceptance.manualReviewPackage.path
+      if (-not $priorPackage -or -not (Test-Path -LiteralPath $priorPackage -PathType Leaf)) { continue }
+      $expectedBytes = [int64]$acceptance.manualReviewPackage.bytes
+      $expectedSha = ([string]$acceptance.manualReviewPackage.sha256).ToLowerInvariant()
+      if ($expectedBytes -le 0 -or $expectedSha -notmatch '^[a-f0-9]{64}$' -or
+          [int64]$acceptance.manualReviewPackage.topLevelFiles -ne 7 -or [int64]$acceptance.manualReviewPackage.topLevelArchives -ne 1) { continue }
+      if ((Get-Item -LiteralPath $priorPackage).Length -ne $expectedBytes) { continue }
+      $actualSha = (Get-FileHash -LiteralPath $priorPackage -Algorithm SHA256).Hash.ToLowerInvariant()
+      if ($actualSha -ne $expectedSha) { continue }
+      New-Item -ItemType Directory -Path (Split-Path -Parent $ReviewPackage) -Force | Out-Null
+      Copy-Item -LiteralPath $priorPackage -Destination $ReviewPackage -Force
+      if ((Get-Item -LiteralPath $ReviewPackage).Length -ne $expectedBytes -or (Get-FileHash -LiteralPath $ReviewPackage -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedSha) {
+        Remove-Item -LiteralPath $ReviewPackage -Force -ErrorAction SilentlyContinue
+        continue
+      }
+      Copy-Item -LiteralPath $priorAcceptancePath -Destination $ReleaseAcceptancePath -Force
+      Add-PreflightCheckpoint "REAL_79_ENERGY_ACCEPTANCE_REUSED" ([ordered]@{
+        sourceRun = $candidate.Name
+        sourceEngineeringRevision = $engineeringRevision
+        sourceCandidate = $CanonicalSourceCommit
+        acceptanceRecord = $priorAcceptancePath
+        reviewPackage = $ReviewPackage
+        reviewPackageBytes = $expectedBytes
+        reviewPackageSha256 = $expectedSha
+        officialComcheck = $true
+        reviewEligible = $true
+        comparisonDisposition = [string]$acceptance.comparisonDisposition
+        exactImmutableReuse = $true
+      })
+      Write-Log "Reused exact hash-verified real 79 Energy acceptance from prior run $($candidate.Name); no Energy/GeometryCo/EnergyPlus/COMcheck recomputation was required for this downstream-only deployment retry." Green
+      return $acceptance
+    } catch {
+      continue
+    }
+  }
+  return $null
+}
+
 function Invoke-RealEnergyAcceptanceGate(
   [string]$VenvPython,
   [string]$Gcloud,
@@ -1305,6 +1443,7 @@ function Invoke-RealEnergyAcceptanceGate(
 try {
   Save-PreflightReport
   Write-Log "REVEX 0.8.19 r49 production publisher" White
+  Write-Log "Publisher orchestration: $PublisherOrchestration" Green
   Write-Log "Authority: active Revit document -> evidence-verified project -> immutable BIM/Spec/Energy revisions"
   Write-Log "Energy: T/Z identity + EN facts -> GeometryCo -> two OSMs -> two EnergyPlus runs -> official clean-project COMcheck -> EN-1"
   Write-Log "Preservation: last-known-working Energy candidate is authoritative; downstream fixes do not rewrite passed upstream stages."
@@ -1612,8 +1751,13 @@ try {
   if ($gcloudAuth.ExitCode -ne 0 -or -not $gcloudAuth.Text.Trim()) {
     Invoke-InteractiveNoLog "Essential Google Cloud approval" $Gcloud @("auth", "login")
   }
-  $RealEnergyAcceptance = Invoke-RealEnergyAcceptanceGate $VenvPython $Gcloud $RealRevitEvidence $ReleaseReviewPackage
-  $script:Preflight.safety.officialComcheckProjectTransmission = $true
+  $RealEnergyAcceptance = Try-ReuseRealEnergyAcceptanceGate $RealRevitEvidence $ReleaseReviewPackage
+  if ($null -eq $RealEnergyAcceptance) {
+    $RealEnergyAcceptance = Invoke-RealEnergyAcceptanceGate $VenvPython $Gcloud $RealRevitEvidence $ReleaseReviewPackage
+    $script:Preflight.safety.officialComcheckProjectTransmission = $true
+  } else {
+    $script:Preflight.safety.officialComcheckProjectTransmission = $false
+  }
   $script:Preflight.safety["officialComcheckAuthorization"] = "explicit-r49-release-request; exact immutable Engineering revision; generated current-project CXL only"
   Save-PreflightReport
 
@@ -1775,8 +1919,31 @@ try {
     Invoke-Native "Build, test and push the immutable r49 worker image" $Gcloud @("builds", "submit", "--project=$ProjectId", "--timeout=1800s", "--config=server/revex-energy-worker/cloudbuild.yaml", "--substitutions=_REGION=$Region,_REPOSITORY=$Repository,_IMAGE=revex-energy-worker,_TAG=$ReleaseTag", ".") -WorkingDirectory $StageSource
     Invoke-Native "Deploy the private r49 Energy worker" $Gcloud @("run", "deploy", $Service, "--project=$ProjectId", "--region=$Region", "--image=$Image", "--service-account=$WorkerSa", "--no-allow-unauthenticated", "--cpu=4", "--memory=8Gi", "--concurrency=1", "--min-instances=0", "--max-instances=3", "--timeout=3600", "--set-env-vars=REVEX_ENERGY_TIMEOUT_SECONDS=3500,REVEX_VERTEX_PROJECT=$ProjectId,REVEX_VERTEX_LOCATION=global,REVEX_SOURCE_CANDIDATE=$CanonicalSourceCommit", "--quiet")
   }
-  $WorkerUrl = (Invoke-Captured "Resolve deployed worker URL" $Gcloud @("run", "services", "describe", $Service, "--project=$ProjectId", "--region=$Region", "--format=value(status.url)")).Text.Trim()
-  if (-not $WorkerUrl) { throw "Cloud Run did not expose the private r49 worker URL." }
+  $workerStateForUrls = ((Invoke-Captured "Resolve all deployed Cloud Run worker URLs" $Gcloud @("run", "services", "describe", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
+  $WorkerUrls = @(Get-CloudRunServiceUrls $workerStateForUrls $Service $ProjectNumber $Region)
+  if ($WorkerUrls.Count -eq 0) { throw "Cloud Run did not expose any usable generated worker URL." }
+  $DeterministicWorkerUrl = "https://${Service}-${ProjectNumber}.${Region}.run.app"
+  if ($DeterministicWorkerUrl -notin $WorkerUrls) { throw "Cloud Run did not report its deterministic service URL: $DeterministicWorkerUrl" }
+  Write-Log ("Cloud Run worker URL candidates: " + ($WorkerUrls -join ', ')) Green
+  Invoke-Native "Bind the private worker to one stable deterministic authentication audience" $Gcloud @(
+    "run", "services", "update", $Service,
+    "--project=$ProjectId", "--region=$Region",
+    "--add-custom-audiences=$DeterministicWorkerUrl", "--quiet"
+  )
+  $workerStateForUrls = ((Invoke-Captured "Verify deterministic worker authentication audience" $Gcloud @("run", "services", "describe", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
+  $WorkerUrls = @(Get-CloudRunServiceUrls $workerStateForUrls $Service $ProjectNumber $Region)
+  $customAudienceText = ""
+  try { $customAudienceText = [string]$workerStateForUrls.metadata.annotations.'run.googleapis.com/custom-audiences' } catch { }
+  if (-not $customAudienceText -or $customAudienceText -notmatch [regex]::Escape($DeterministicWorkerUrl)) {
+    throw "Cloud Run did not retain the deterministic REVEX worker authentication audience."
+  }
+  Add-PreflightCheckpoint "PRIVATE_WORKER_AUTH_AUDIENCE" ([ordered]@{
+    deterministicWorkerUrl = $DeterministicWorkerUrl
+    acceptedAudience = $DeterministicWorkerUrl
+    reportedWorkerUrls = @($WorkerUrls)
+    brokerOnlyInvokerPolicyPreserved = $true
+  })
+  $WorkerUrls = @($DeterministicWorkerUrl) + @($WorkerUrls | Where-Object { $_ -ne $DeterministicWorkerUrl })
   $policy = ((Invoke-Captured "Inspect private worker invocation policy" $Gcloud @("run", "services", "get-iam-policy", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
   $conditionalWorkerInvokers = @($policy.bindings | Where-Object { [string]$_.role -eq "roles/run.invoker" -and $null -ne $_.PSObject.Properties['condition'] -and $null -ne $_.condition })
   if ($conditionalWorkerInvokers.Count) {
@@ -1794,15 +1961,17 @@ try {
   if ($invokerMembers.Count -ne 1 -or $invokerMembers[0] -ne $expectedInvoker) {
     throw "Private worker invokers are not exactly broker-only: $($invokerMembers -join ', ')"
   }
-  try {
-    $unexpected = Invoke-WebRequest -UseBasicParsing -Uri ($WorkerUrl + "/healthz") -TimeoutSec 15
-    if ($unexpected.StatusCode -eq 200) { throw "Private worker unexpectedly allowed unauthenticated invocation." }
-  } catch {
-    $status = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
-    if ($status -notin @(401,403,404)) { throw }
-    Write-Log "Private worker correctly denied or concealed the unauthenticated health probe ($status)." Green
+  foreach ($candidateUrl in $WorkerUrls) {
+    try {
+      $unexpected = Invoke-WebRequest -UseBasicParsing -Uri ($candidateUrl + "/healthz") -TimeoutSec 15
+      if ($unexpected.StatusCode -eq 200) { throw "Private worker URL $candidateUrl unexpectedly allowed unauthenticated invocation." }
+    } catch {
+      $status = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
+      if ($status -notin @(401,403,404)) { throw }
+      Write-Log "Private worker URL $candidateUrl correctly denied or concealed the unauthenticated health probe ($status)." Green
+    }
   }
-  Test-BrokerIdentityWorkerInvocation $Gcloud $BrokerSa $deployerMember $WorkerUrl
+  $WorkerUrl = Test-BrokerIdentityWorkerInvocation $Gcloud $BrokerSa $deployerMember $WorkerUrls
   Remove-BrokerIdentityProbeAuthority
   Write-Log "The broker service account is the sole dedicated runtime invoker binding for this worker. Project administrators retain administrative authority by design." Green
   $runState = ((Invoke-Captured "Verify ready r49 Cloud Run revision" $Gcloud @("run", "services", "describe", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
