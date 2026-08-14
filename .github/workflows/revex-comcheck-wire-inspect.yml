@@ -10,39 +10,38 @@ jobs:
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@v4
-      - name: Upload schema-intact syntheticized reference through exact client
+      - name: Trace official COMcheck application-session initialization
         shell: python
         run: |
-          import importlib.util, pathlib, sys, tempfile, xml.etree.ElementTree as ET
-          energy=pathlib.Path('src/Liber.Revex.Revit/Engineering/Energy')
-          client_path=energy/'comcheck_backstop.py'
-          spec=importlib.util.spec_from_file_location('cc', client_path)
-          cc=importlib.util.module_from_spec(spec); sys.modules['cc']=cc; spec.loader.exec_module(cc)
-          reference=energy/'References'/'COMcheck_250_MIDWOOD_STRUCTURE_REFERENCE.cxl'
-          with tempfile.TemporaryDirectory() as td:
-              test=pathlib.Path(td)/'REVEX_COMCHECK_SCHEMA_INTACT_QA.cxl'
-              tree=ET.parse(reference); root=tree.getroot()
-              for node in root.iter():
-                  local=node.tag.rsplit('}',1)[-1]
-                  values={
-                    'projectTitle':'REVEX COMCHECK LIVE QA',
-                    'projectAddress':'999 TEST AVENUE',
-                    'projectCity':'BROOKLYN',
-                    'projectState':'New York',
-                    'projectZipCode':'11201',
-                  }
-                  if local in values: node.text=values[local]
-              tree.write(test, encoding='utf-8', xml_declaration=True)
-              events=[]
-              c=cc.ComcheckClient(cc.DEFAULT_BASE_URL, lambda event, **detail: events.append((event,detail)), timeout_seconds=30)
-              c.start()
-              fields=c._base_fields('ProjectService','uploadProject')
-              fields['c0-param0']='string:'+__import__('urllib.parse',fromlist=['quote']).quote(test.name,safe='')
-              body,ctype=cc._multipart(fields,'c0-param1',test)
-              raw=c._request('POST','dwr/call/htmlcall/ProjectService.uploadProject.dwr',body=body,content_type=ctype)
-              text=raw.decode('utf-8','replace')
-              print('REVEX_COMCHECK_SCHEMA_INTACT_RESPONSE_BEGIN')
-              print(text)
-              print('REVEX_COMCHECK_SCHEMA_INTACT_RESPONSE_END')
-              print('DWR_ERROR=', cc._dwr_error(text))
-              print('CALLBACK_PRESENT=', 'handleCallback' in text)
+          import html, re, urllib.parse, urllib.request
+          base='https://legacy-comcheck.energycode.pnl.gov/CheckWeb/'
+          opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
+          def get(rel):
+              req=urllib.request.Request(urllib.parse.urljoin(base,rel),headers={'User-Agent':'Mozilla/5.0 REVEX-r49-live-session-inspection'})
+              return opener.open(req,timeout=30).read().decode('utf-8','replace')
+          for rel in ['dwr/test/ProjectService','dwr/interface/ProjectService.js']:
+              try:
+                  text=get(rel)
+                  print('\n===',rel,'===')
+                  for needle in ['uploadProject','getCurrentProjectName','saveNewProject','InvalidSessionException']:
+                      for m in list(re.finditer(needle,text,re.I))[:8]:
+                          print(re.sub(r'\s+',' ',html.unescape(text[max(0,m.start()-900):m.start()+1800])))
+              except Exception as e:
+                  print(rel,'ERROR',repr(e))
+          index=get('index.html')
+          srcs=re.findall(r'<script[^>]+src=["\']([^"\']+)',index,re.I)
+          print('SCRIPT_SRCS=',srcs)
+          targets=[]
+          for src in srcs:
+              try:
+                  text=get(src)
+              except Exception as e:
+                  continue
+              if re.search(r'ProjectService|uploadProject|getCurrentProjectName|saveNewProject',text,re.I):
+                  targets.append(src)
+                  print('\n=== SCRIPT',src,'===')
+                  for needle in ['uploadProject','getCurrentProjectName','saveNewProject','ProjectService.','initialize','newProject']:
+                      for m in list(re.finditer(re.escape(needle),text,re.I))[:12]:
+                          print('---',needle,'---')
+                          print(re.sub(r'\s+',' ',text[max(0,m.start()-1200):m.start()+2200]))
+          print('MATCHING_SCRIPTS=',targets)
