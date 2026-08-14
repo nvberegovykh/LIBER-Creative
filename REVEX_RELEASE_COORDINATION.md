@@ -37,7 +37,7 @@ Do not weaken these invariants:
 - approved Baseline/Proposed schedules, loads, HVAC/system templates and energy intent remain preserved while geometry/spaces are updated;
 - both EnergyPlus runs must complete;
 - prior-project identity remains masked from user-visible Energy artifacts;
-- only a passing `BEST_WORKING_ITERATION` is user-visible;
+- only a `reviewEligible=true` Energy iteration is user-visible; matching cohorts require `PASSED` + `BEST_WORKING_ITERATION`, while a legitimately different cohort may be `NOT_APPLICABLE_DIFFERENT_COHORT` + `UNBENCHMARKED_DIFFERENT_COHORT` after all independent completion gates pass;
 - COMcheck consent stays exact-revision scoped;
 - EN-1 and review package come from the same immutable Engineering revision;
 - no Revit/Companion interaction is required after publisher launch to extract QA evidence.
