@@ -7,19 +7,43 @@ permissions:
 jobs:
   inspect:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
-      - name: Inspect official COMcheck load/save functions
+      - name: Install Selenium
+        run: python -m pip install --disable-pip-version-check selenium
+      - name: Test official COMcheck browser with exact named file control
         shell: python
         run: |
-          import re, urllib.request
+          import pathlib,tempfile,time,xml.etree.ElementTree as ET
+          from selenium import webdriver
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import WebDriverWait
+          from selenium.common.exceptions import NoAlertPresentException
           base='https://legacy-comcheck.energycode.pnl.gov/CheckWeb/'
-          for rel in ['includes/load_save.js','includes/start_app.js','index.html']:
-              req=urllib.request.Request(base+rel,headers={'User-Agent':'Mozilla/5.0 REVEX-r49-source-inspect'})
-              text=urllib.request.urlopen(req,timeout=30).read().decode('utf-8','replace')
-              print('\n###',rel,'bytes',len(text))
-              for needle in ['function loadProject','function uploadProject','function reloadProject','fileToUpload','Unable to load project','loadProject =','uploadProject =']:
-                  for m in list(re.finditer(re.escape(needle),text,re.I))[:8]:
-                      print('\n---',needle,'---')
-                      print(text[max(0,m.start()-1800):min(len(text),m.start()+5000)])
+          ref=pathlib.Path('src/Liber.Revex.Revit/Engineering/Energy/References/COMcheck_250_MIDWOOD_STRUCTURE_REFERENCE.cxl')
+          with tempfile.TemporaryDirectory() as td:
+              p=pathlib.Path(td)/'REVEX_COMCHECK_BROWSER_QA.cxl'
+              tree=ET.parse(ref); root=tree.getroot(); vals={'projectTitle':'REVEX COMCHECK LIVE QA','projectAddress':'999 TEST AVENUE','projectCity':'BROOKLYN','projectState':'New York','projectZipCode':'11201'}
+              for n in root.iter():
+                  k=n.tag.rsplit('}',1)[-1]
+                  if k in vals:n.text=vals[k]
+              tree.write(p,encoding='utf-8',xml_declaration=True)
+              o=webdriver.ChromeOptions(); o.add_argument('--headless=new'); o.add_argument('--no-sandbox'); o.add_argument('--disable-dev-shm-usage')
+              d=webdriver.Chrome(options=o)
+              try:
+                  w=WebDriverWait(d,45); d.get(base+'index.html'); w.until(lambda x:x.execute_script("return typeof uploadProject==='function' && typeof USER_PROJECT!=='undefined' && USER_PROJECT!==null"))
+                  d.execute_script("let e=document.createElement('input');e.type='file';e.id='fileToUpload';e.name='fileToUpload';document.body.appendChild(e);")
+                  e=d.find_element(By.ID,'fileToUpload'); print('INPUT=',e.get_attribute('outerHTML')); e.send_keys(str(p.resolve()))
+                  print('DWR_VALUE_TYPE=',d.execute_script("let v=dwr.util.getValue('fileToUpload'); return Object.prototype.toString.call(v)+' name='+(v&&v.name)+' value='+(v&&v.value);"))
+                  d.execute_script('uploadProject();')
+                  deadline=time.time()+45
+                  while time.time()<deadline:
+                      try:
+                          a=d.switch_to.alert; txt=a.text; print('ALERT=',txt); a.accept(); raise RuntimeError('COMcheck rejected upload: '+txt)
+                      except NoAlertPresentException: pass
+                      title=d.execute_script("try{return USER_PROJECT.project.projectDetails.title.value}catch(e){return ''}")
+                      if title=='REVEX COMCHECK LIVE QA': print('REVEX_COMCHECK_BROWSER_UPLOAD=PASSED'); break
+                      time.sleep(.25)
+                  else: raise RuntimeError('upload timeout')
+              finally:d.quit()
