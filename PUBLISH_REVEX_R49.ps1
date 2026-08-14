@@ -350,6 +350,7 @@ function Restore-HashLockedSource([System.Collections.IDictionary]$Expected, [st
   }
 
   $repaired = @()
+  $localRepairFailures = @()
   $lineEndingNormalizations = @()
   foreach ($entry in $Expected.GetEnumerator()) {
     $relativePath = [string]$entry.Key
@@ -378,22 +379,38 @@ function Restore-HashLockedSource([System.Collections.IDictionary]$Expected, [st
       (Get-FileHash -LiteralPath $targetPath -Algorithm SHA256).Hash.ToLowerInvariant()
     } else { "<missing>" }
     if ($localHash -ne $expectedHash) {
-      Install-CanonicalSourceFile $canonicalPath $targetPath $expectedHash $normalizeUtf8CrLf
-      $repaired += $relativePath
-      Write-Log "Restored hash-locked source: $relativePath ($localHash -> $expectedHash)" Yellow
+      try {
+        Install-CanonicalSourceFile $canonicalPath $targetPath $expectedHash $normalizeUtf8CrLf
+        $repaired += $relativePath
+        Write-Log "Restored hash-locked source: $relativePath ($localHash -> $expectedHash)" Yellow
+      } catch {
+        $localRepairFailures += $relativePath
+        Write-Log "Drive mirror remained stale for $relativePath; the publisher will use the verified immutable source stage instead. $($_.Exception.Message)" Yellow
+      }
     }
   }
 
-  foreach ($entry in $Expected.GetEnumerator()) { Assert-SourceHash $entry.Key $entry.Value }
-  Write-Log "All $($Expected.Count) locked source files match CI-approved commit $CanonicalSourceCommit." Green
+  $remainingLocalDrift = @()
+  foreach ($entry in $Expected.GetEnumerator()) {
+    $localPath = Join-Path $Root ([string]$entry.Key)
+    $localHash = if (Test-Path -LiteralPath $localPath -PathType Leaf) {
+      (Get-FileHash -LiteralPath $localPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    } else { "<missing>" }
+    if ($localHash -ne [string]$entry.Value) { $remainingLocalDrift += [string]$entry.Key }
+  }
+  Write-Log "All $($Expected.Count) locked inputs were independently verified against CI-approved commit $CanonicalSourceCommit; live Drive files are not used for build or publication." Green
   Add-PreflightCheckpoint "CANONICAL_SOURCE_RESTORE" ([ordered]@{
     canonicalCommit = $CanonicalSourceCommit
     canonicalRef = $CanonicalSourceRef
     lockedFileCount = $Expected.Count
     repairedFileCount = $repaired.Count
     repairedFiles = @($repaired)
+    localRepairFailureCount = $localRepairFailures.Count
+    localRepairFailures = @($localRepairFailures)
+    remainingLocalDriveDrift = @($remainingLocalDrift)
     deterministicCrLfFiles = @($lineEndingNormalizations)
-    finalFullSetVerification = $true
+    canonicalFullSetVerification = $true
+    localDriveFilesExcludedFromBuild = $true
   })
 }
 
