@@ -31,7 +31,7 @@ jobs:
               return d.execute_script(code,*args)
 
           def close_dialog():
-              js("try{const e=hs.getExpander();if(e)hs.close(e)}catch(e){}")
+              js("try{hs.close()}catch(e){}")
               time.sleep(.4)
 
           def active_inputs():
@@ -59,7 +59,7 @@ jobs:
               time.sleep(1)
 
               for table_name in ['buildingUseTable','envelopeTable']:
-                  for method in ['createComponent','handleComponentAdd','buildComponentOptions','buildNewComponent','saveDialogInputs','updateServerComponent','addToServer']:
+                  for method in ['createComponent','handleComponentAdd','buildComponentOptions','buildNewComponent','saveDialogInputs','updateServerComponent','addToServer','addComponent','finish','isNewChild','findSelected','selectCurrent','getParentRow','getAddToServerFunction']:
                       print(f'SOURCE_{table_name}_{method}=',js("const f=window[arguments[0]]&&window[arguments[0]][arguments[1]];return typeof f==='function'?String(f):'MISSING'",table_name,method))
 
               js("newBuildingUse()")
