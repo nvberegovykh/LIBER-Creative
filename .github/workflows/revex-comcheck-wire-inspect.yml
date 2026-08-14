@@ -12,33 +12,92 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Selenium
         run: python -m pip install --disable-pip-version-check selenium
-      - name: Inspect fresh-project component dialogs
+      - name: Inspect fresh-project mutation contract
         shell: python
         run: |
           import json,time
           from selenium import webdriver
           from selenium.webdriver.support.ui import WebDriverWait
+
           base='https://legacy-comcheck.energycode.pnl.gov/CheckWeb/'
-          o=webdriver.ChromeOptions();o.add_argument('--headless=new');o.add_argument('--no-sandbox');o.add_argument('--disable-dev-shm-usage')
-          d=webdriver.Chrome(options=o);d.set_script_timeout(45)
+          o=webdriver.ChromeOptions()
+          o.add_argument('--headless=new')
+          o.add_argument('--no-sandbox')
+          o.add_argument('--disable-dev-shm-usage')
+          d=webdriver.Chrome(options=o)
+          d.set_script_timeout(45)
+
+          def js(code,*args):
+              return d.execute_script(code,*args)
+
+          def close_dialog():
+              js("try{const e=hs.getExpander();if(e)hs.close(e)}catch(e){}")
+              time.sleep(.4)
+
+          def active_inputs():
+              return js("""
+                const root=document.querySelector('#dialog');
+                if(!root)return [];
+                return Array.from(root.querySelectorAll('input,select,textarea,button')).map((e,i)=>({
+                  i,id:e.id,name:e.name,type:e.type,value:e.value,disabled:e.disabled,
+                  checked:e.checked,text:(e.innerText||'').trim(),
+                  context:(e.closest('label,.paddingBox,.assemblyOption,tr,div')?.innerText||'').replace(/\s+/g,' ').trim().slice(0,240),
+                  options:e.tagName==='SELECT'?Array.from(e.options).map(o=>({t:o.text,v:o.value})):undefined
+                }));
+              """)
+
           try:
-              w=WebDriverWait(d,45);d.get(base+'index.html');w.until(lambda x:x.execute_script("return typeof USER_PROJECT!=='undefined'&&USER_PROJECT!==null"))
-              d.execute_script("$('#code').val('CEZ_NYSTRETCH_NYC_90_1_11_G').trigger('change')")
+              w=WebDriverWait(d,45)
+              d.get(base+'index.html')
+              w.until(lambda x:x.execute_script("return typeof USER_PROJECT!=='undefined'&&USER_PROJECT!==null"))
+              js("$('#code').val('CEZ_NYSTRETCH_NYC_90_1_11_G').trigger('change')")
               w.until(lambda x:x.execute_script("return USER_PROJECT.project.buildingDetails.energyCode.value==='CEZ_NYSTRETCH_NYC_90_1_11_G'"))
               time.sleep(2)
-              d.execute_script("$('#state').val('New York').trigger('change')");time.sleep(1);d.execute_script("$('#cities').val('New York').trigger('change')");time.sleep(1)
-              print('BUILDING_METHODS=',d.execute_script("let a=[];for(let k in buildingUseTable)a.push(k);return a.sort().join(' | ')"))
-              print('ENVELOPE_METHODS=',d.execute_script("let a=[];for(let k in envelopeTable)a.push(k);return a.sort().join(' | ')"))
-              d.execute_script("newBuildingUse()")
+              js("$('#state').val('New York').trigger('change')")
               time.sleep(1)
-              print('AFTER_NEW_BUILDING_USE=',json.dumps(d.execute_script("return {list:buildingUseTable.getList(),visible:Array.from(document.querySelectorAll('input,select,textarea,button')).filter(e=>e.offsetParent!==null).map(e=>({id:e.id,name:e.name,type:e.type,value:e.value,tag:e.tagName,options:e.tagName==='SELECT'?Array.from(e.options).map(o=>({t:o.text,v:o.value})).slice(0,80):undefined})).filter(x=>/building|whole|floor|area|type|description/i.test(JSON.stringify(x))).slice(0,100)}"),indent=2))
-              # Close any building-use editor if present, keeping its default row for later.
-              d.execute_script("try{if(typeof hs!=='undefined'&&hs.getExpander())hs.close()}catch(e){}")
-              time.sleep(.5)
-              for label in ['Ext. Wall','Roof','Floor','Window','Door']:
-                  d.execute_script("const e=Array.from(document.querySelectorAll('a')).find(x=>(x.innerText||'').trim()===arguments[0]);if(e)e.click()",label)
-                  time.sleep(1)
-                  print('DIALOG_'+label.replace(' ','_').replace('.','')+'=',json.dumps(d.execute_script("return {visible:Array.from(document.querySelectorAll('input,select,textarea,button')).filter(e=>e.offsetParent!==null).map(e=>({id:e.id,name:e.name,type:e.type,value:e.value,tag:e.tagName,text:e.innerText||'',options:e.tagName==='SELECT'?Array.from(e.options).map(o=>({t:o.text,v:o.value})).slice(0,120):undefined})).filter(x=>!/login|email|password/i.test(JSON.stringify(x))).slice(-160),html:Array.from(document.querySelectorAll('.highslide-container,.highslide-html,.highslide-body,#dialog')).filter(e=>e.offsetParent!==null).map(e=>e.outerHTML.slice(0,12000))}"),indent=2))
-                  d.execute_script("try{if(typeof hs!=='undefined'&&hs.getExpander())hs.close()}catch(e){}")
+              js("$('#cities').val('New York').trigger('change')")
+              time.sleep(1)
+
+              for table_name in ['buildingUseTable','envelopeTable']:
+                  for method in ['createComponent','handleComponentAdd','buildComponentOptions','buildNewComponent','saveDialogInputs','updateServerComponent','addToServer']:
+                      print(f'SOURCE_{table_name}_{method}=',js("const f=window[arguments[0]]&&window[arguments[0]][arguments[1]];return typeof f==='function'?String(f):'MISSING'",table_name,method))
+
+              js("newBuildingUse()")
+              time.sleep(1)
+              print('BUILDING_DIALOG_INITIAL=',json.dumps(active_inputs(),indent=2))
+              js("""
+                const r=document.querySelector('#dialog');
+                const s=r&&Array.from(r.querySelectorAll('select')).find(x=>Array.from(x.options).some(o=>o.value==='WHOLE_BUILDING_MULTIFAMILY'));
+                if(s){$(s).val('WHOLE_BUILDING_MULTIFAMILY').trigger('change')}
+              """)
+              time.sleep(.6)
+              print('BUILDING_DIALOG_SELECTED=',json.dumps(active_inputs(),indent=2))
+              close_dialog()
+
+              choices={
+                'Ext. Wall':'OTHER_AG_WALL',
+                'Roof':'OTHER_ROOF',
+                'Floor':'OTHER_FLOOR',
+                'Window':'METAL',
+                'Door':'OTHER_DOOR',
+              }
+              for label,choice in choices.items():
+                  js("const e=Array.from(document.querySelectorAll('a')).find(x=>(x.innerText||'').trim()===arguments[0]);if(!e)throw new Error('missing '+arguments[0]);e.click()",label)
+                  time.sleep(.7)
+                  js("""
+                    const r=document.querySelector('#dialog');
+                    const e=r&&r.querySelector('#'+CSS.escape(arguments[0]));
+                    if(e){e.click();$(e).trigger('change')}
+                  """,choice)
                   time.sleep(.5)
-          finally:d.quit()
+                  if label in ('Window','Door'):
+                      js("""
+                        const r=document.querySelector('#dialog');
+                        const e=r&&r.querySelector('#PERF_TYPE_OTHER');
+                        if(e){e.click();$(e).trigger('change')}
+                      """)
+                      time.sleep(.4)
+                  print('DIALOG_SELECTED_'+label.replace(' ','_').replace('.','')+'=',json.dumps(active_inputs(),indent=2))
+                  close_dialog()
+          finally:
+              d.quit()
