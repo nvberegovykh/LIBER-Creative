@@ -1,8 +1,20 @@
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl python3 python3-pip python3-tk ruby libgl1 libglib2.0-0 \
+    ca-certificates curl gnupg python3 python3-pip python3-tk ruby libgl1 libglib2.0-0 \
     libreoffice-core libreoffice-calc fonts-liberation fontconfig \
+ && rm -rf /var/lib/apt/lists/*
+
+# Official COMcheck has disabled its legacy file-upload transport. REVEX forms a
+# clean project through COMcheck's own browser model instead. Chrome and its
+# matching driver are resolved together while the immutable worker image builds.
+RUN curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
+      | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
+ && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" \
+      > /etc/apt/sources.list.d/google-chrome.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends google-chrome-stable \
+ && google-chrome --version \
  && rm -rf /var/lib/apt/lists/*
 
 # Controlled simulation runtime: REVEX does not use a workstation OpenStudio installation.
@@ -22,10 +34,12 @@ COPY server/revex-energy-worker/app.py /opt/revex/server/app.py
 COPY server/revex-energy-worker/verify_revex_r49_worker.py /opt/revex/server/verify_revex_r49_worker.py
 COPY server/revex-energy-worker/requirements-server.txt /opt/revex/server/requirements-server.txt
 RUN python3 -m pip install --no-cache-dir -r /opt/revex/energy/requirements.txt -r /opt/revex/server/requirements-server.txt
+RUN python3 -c "from selenium import webdriver; o=webdriver.ChromeOptions(); o.binary_location='/usr/bin/google-chrome'; o.add_argument('--headless=new'); o.add_argument('--no-sandbox'); o.add_argument('--disable-dev-shm-usage'); d=webdriver.Chrome(options=o); d.get('data:text/plain,REVEX-COMCHECK-DRIVER-READY'); d.quit()"
 RUN python3 /opt/revex/energy/verify_revex_r49_energy.py \
  && python3 /opt/revex/server/verify_revex_r49_worker.py
 
 ENV REVEX_HEADLESS=1 \
+    REVEX_CHROME_BINARY=/usr/bin/google-chrome \
     REVEX_PIPELINE=/opt/revex/energy/revex_energy_pipeline.py \
     REVEX_ENERGY_TIMEOUT_SECONDS=3500 \
     PORT=8080
