@@ -616,6 +616,42 @@ class FreshProjectBrowserClient:
             """,
             values, parent_index,
         )
+        if result is None:
+            # EnvelopeView.add's synchronous response can replace the browser
+            # table fragment, which makes Selenium report a null script result
+            # even though COMcheck accepted and retained the row. Read the
+            # authoritative refreshed model before treating that as a failure.
+            def retained(driver):
+                return driver.execute_script(
+                    """
+                    const component=arguments[0],label=arguments[1],list=envelopeTable.getList();
+                    const matches=r=>r&&r.component&&r.component.value===component&&
+                      r.userDescription&&r.userDescription.value===label;
+                    return list.some(matches)||list.some(r=>(r.children||[]).some(matches));
+                    """,
+                    values.get("component"), values.get("userDescription"),
+                )
+
+            self._wait(
+                retained,
+                f"COMcheck did not retain fresh {values.get('component')} {values.get('userDescription')}.",
+                timeout=20,
+            )
+            result = self.driver.execute_script(
+                """
+                const component=arguments[0],label=arguments[1],list=envelopeTable.getList();
+                const matches=r=>r&&r.component&&r.component.value===component&&
+                  r.userDescription&&r.userDescription.value===label;
+                for(let i=list.length-1;i>=0;i--){
+                  if(matches(list[i]))return {ok:true,index:i,id:list[i].id,component,type:list[i].type&&list[i].type.value,rows:list.length,recovered:true};
+                  const children=list[i].children||[];
+                  for(let j=children.length-1;j>=0;j--)if(matches(children[j]))
+                    return {ok:true,index:-1,id:children[j].id,component,type:children[j].type&&children[j].type.value,rows:list.length,recovered:true};
+                }
+                return {ok:false,error:'accepted row disappeared from refreshed model'};
+                """,
+                values.get("component"), values.get("userDescription"),
+            )
         if not result or not result.get("ok"):
             raise ComcheckBackstopError(
                 f"COMcheck rejected fresh {values.get('component')} {values.get('userDescription')}: {result}"
