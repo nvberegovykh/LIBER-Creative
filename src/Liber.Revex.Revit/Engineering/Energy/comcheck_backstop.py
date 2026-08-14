@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
-"""REVEX client for the official PNNL COMcheck-Web envelope Backstop.
+"""Bounded client for the official PNNL Legacy COMcheck-Web Backstop engine.
 
-Production starts a clean project in COMcheck's own browser application and
-translates the current T/Z/EN-derived CheckXML into that project.  It never uses
-the broken legacy ``uploadProject`` DWR method.  The small direct-DWR client is
-kept only for the isolated local mock used by release contract tests.
+The generated project CXL is uploaded only to the configured official COMcheck
+endpoint. Cookies are process-local, never logged, and discarded after one run.
 """
+
 from __future__ import annotations
 
 import http.cookiejar
+import html
 import json
 import os
 from pathlib import Path
-import random
 import re
+import secrets
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
+
 
 DEFAULT_BASE_URL = "https://legacy-comcheck.energycode.pnl.gov/CheckWeb/"
 OFFICIAL_HOST = "legacy-comcheck.energycode.pnl.gov"
@@ -33,59 +34,20 @@ class ComcheckBackstopError(RuntimeError):
 def _dwr_error(text: str) -> str | None:
     if "handleBatchException" not in text and "handleException" not in text:
         return None
-    # DWR error objects are JavaScript, not JSON.  Scan their quoted values
-    # linearly so malformed server text cannot trigger regex backtracking.
-    for key in ("message", "javaClassName"):
-        start = text.find(key)
-        if start < 0:
-            continue
-        colon = text.find(":", start + len(key), start + len(key) + 80)
-        if colon < 0:
-            continue
-        quote_pos = next((i for i in range(colon + 1, min(len(text), colon + 80))
-                          if text[i] in "'\""), -1)
-        if quote_pos < 0:
-            continue
-        quote = text[quote_pos]
-        out: list[str] = []
-        escaped = False
-        for char in text[quote_pos + 1:quote_pos + 4097]:
-            if escaped:
-                out.append({"n": " ", "r": " "}.get(char, char))
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == quote:
-                value = "".join(out).strip()
-                if value:
-                    return value[:2000]
-                break
-            else:
-                out.append(char)
-    return "COMcheck-Web returned an unspecified DWR error."
-
-
-def _callback_string(text: str) -> str | None:
-    match = re.search(
-        r"(?:remote\.)?(?:_?handleCallback|handleCallback)\s*\(\s*['\"]\d+['\"]\s*,\s*['\"]\d+['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*\)",
-        text,
-        re.S,
-    )
-    return match.group(1) if match else None
-
-
-def _tokenify(number: int) -> str:
-    chars = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ*$"
-    remainder = max(1, int(number))
-    out: list[str] = []
-    while remainder > 0:
-        out.append(chars[remainder & 0x3F])
-        remainder //= 64
-    return "".join(out)
-
-
-def _new_page_id() -> str:
-    return f"{_tokenify(int(time.time() * 1000))}-{_tokenify(int(random.random() * 1e16))}"
+    # htmlcall replies commonly wrap DWR JavaScript inside HTML and may quote the exception
+    # object with either single or double quotes. Preserve the actual server reason in diagnostics.
+    match = re.search(r"message\s*:\s*([\"'])(?P<value>(?:\\.|(?!\1).)*)\1", text, re.S)
+    if not match:
+        # Some DWR builds pass a human message as a positional string rather than object.message.
+        match = re.search(r"handle(?:Batch)?Exception\([^)]*?([\"'])(?P<value>(?:\\.|(?!\1).)*)\1", text, re.S)
+    if not match:
+        compact = re.sub(r"\s+", " ", html.unescape(text)).strip()
+        return ("COMcheck-Web DWR import exception (raw response retained): " + compact[:1200]) if compact else "COMcheck-Web returned an unspecified DWR error."
+    value = match.group("value")
+    value = (value.replace("\\'", "'").replace('\\"', '"')
+                  .replace("\\n", " ").replace("\\r", " ").replace("\\t", " "))
+    value = re.sub(r"\s+", " ", html.unescape(value)).strip()
+    return value[:2000]
 
 
 def _multipart(fields: dict[str, str], file_field: str, path: Path) -> tuple[bytes, str]:
@@ -93,57 +55,82 @@ def _multipart(fields: dict[str, str], file_field: str, path: Path) -> tuple[byt
     chunks: list[bytes] = []
     for name, value in fields.items():
         chunks.extend([
-            f"--{boundary}\r\n".encode("ascii"),
-            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("ascii"),
+            f"--{boundary}\r\n".encode(),
+            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(),
             str(value).encode("utf-8"), b"\r\n",
         ])
     filename = path.name.replace('"', "_")
     chunks.extend([
-        f"--{boundary}\r\n".encode("ascii"),
-        f'Content-Disposition: form-data; name="{file_field}"; filename="{filename}"\r\n'.encode("utf-8"),
+        f"--{boundary}\r\n".encode(),
+        f'Content-Disposition: form-data; name="{file_field}"; filename="{filename}"\r\n'.encode(),
         b"Content-Type: application/octet-stream\r\n\r\n",
         path.read_bytes(), b"\r\n",
-        f"--{boundary}--\r\n".encode("ascii"),
+        f"--{boundary}--\r\n".encode(),
     ])
     return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
 
 
 class ComcheckClient:
+    _DWR_TOKEN_CHARS = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ*$"
+
     def __init__(self, base_url: str, log, timeout_seconds: int = 120):
         normalized = str(base_url or DEFAULT_BASE_URL).strip().rstrip("/") + "/"
         parsed = urllib.parse.urlparse(normalized)
-        self.allow_nonofficial = str(os.environ.get("REVEX_ALLOW_COMCHECK_TEST_ENDPOINT", "")).lower() == "true"
-        if parsed.scheme != "https" and not (self.allow_nonofficial and parsed.scheme == "http"):
+        allow_nonofficial = str(__import__("os").environ.get("REVEX_ALLOW_COMCHECK_TEST_ENDPOINT", "")).lower() == "true"
+        if parsed.scheme != "https" and not (allow_nonofficial and parsed.scheme == "http"):
             raise ComcheckBackstopError("COMcheck Backstop endpoint must use HTTPS.")
-        if parsed.hostname != OFFICIAL_HOST and not self.allow_nonofficial:
+        if parsed.hostname != OFFICIAL_HOST and not allow_nonofficial:
             raise ComcheckBackstopError(f"COMcheck Backstop endpoint must be the official {OFFICIAL_HOST} service.")
         self.base_url = normalized
-        self.origin = f"{parsed.scheme}://{parsed.netloc}"
-        self.page_path = (parsed.path.rstrip("/") or "") + "/index.html"
         self.timeout_seconds = max(10, min(int(timeout_seconds), 300))
         self.log = log
+        self._reset_transport()
+
+    def _reset_transport(self) -> None:
         self.cookies = http.cookiejar.CookieJar()
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookies))
         self.dwr_id = ""
         self.script_session_id = ""
-        self.page_id = _new_page_id()
+        self.http_session_id = ""
+        self.http_session_cookie_name = "JSESSIONID"
+        # This process emulates exactly one initialized DWR engine instance. Browser preInit()
+        # registers that first engine as index 0 before any request is sent.
         self.instance_id = "0"
+        self.page_path = "/CheckWeb/index.html"
+        self.page_url = urllib.parse.urljoin(self.base_url, "index.html")
         self.batch_id = 0
-        self.session_ready = False
+        self.engine_mode = "DWR3_COOKIE"
+        # DWR 3 deliberately does not echo the Java HTTP session as a request field;
+        # it correlates the application session from the cookie and uses DWRSESSIONID
+        # separately for the DWR/CSRF session. Older engines may still emit an explicit
+        # httpSessionId field, so this is selected from the served engine.js contract.
+        self.include_http_session_field = False
 
-    def _headers(self, content_type: str | None = None) -> dict[str, str]:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 REVEX/0.8.19-r49",
-            "Accept": "application/pdf,text/javascript,text/html;q=0.9,*/*;q=0.8",
-            "Origin": self.origin,
-            "Referer": urllib.parse.urljoin(self.base_url, "index.html"),
-            "X-Requested-With": "XMLHttpRequest",
-            "Cache-Control": "no-cache",
-            "Pragma": "no-cache",
-        }
-        if content_type:
-            headers["Content-Type"] = content_type
-        return headers
+    def _cookie_value(self, name: str) -> str:
+        target = str(name or "").casefold()
+        for cookie in self.cookies:
+            if str(cookie.name).casefold() == target:
+                return str(cookie.value or "")
+        return ""
+
+    @classmethod
+    def _dwr_tokenify(cls, value: int) -> str:
+        number = max(0, int(value))
+        if number == 0:
+            return cls._DWR_TOKEN_CHARS[0]
+        base = len(cls._DWR_TOKEN_CHARS)
+        output = []
+        while number:
+            number, rem = divmod(number, base)
+            output.append(cls._DWR_TOKEN_CHARS[rem])
+        # DWR engine.js appends least-significant base-64 digits and does not reverse them.
+        return "".join(output)
+
+    @classmethod
+    def _new_dwr_page_id(cls) -> str:
+        # DWR 3 engine.js uses a timestamp/random token pair for the browser page id.
+        random_component = secrets.randbelow(10_000_000_000_000_000)
+        return f"{cls._dwr_tokenify(int(time.time() * 1000))}-{cls._dwr_tokenify(random_component)}"
 
     def _request(self, method: str, relative: str, *, body: bytes | None = None,
                  content_type: str | None = None, expected: str = "text") -> bytes:
@@ -153,17 +140,32 @@ class ComcheckClient:
             started = time.monotonic()
             self.log("HTTP_STARTED", method=method, endpoint=relative, attempt=attempt,
                      hardLimitSeconds=self.timeout_seconds)
-            request = urllib.request.Request(url, data=body, headers=self._headers(content_type), method=method)
+            headers = {
+                "User-Agent": "REVEX/0.8.19-r49 COMcheck Backstop",
+                "Accept": "application/pdf,text/javascript,text/html;q=0.9,*/*;q=0.8",
+            }
+            if method.upper() == "POST":
+                parsed = urllib.parse.urlparse(self.base_url)
+                headers["Origin"] = f"{parsed.scheme}://{parsed.netloc}"
+                headers["Referer"] = self.page_url
+            if content_type:
+                headers["Content-Type"] = content_type
+            request = urllib.request.Request(url, data=body, headers=headers, method=method)
             try:
                 with self.opener.open(request, timeout=self.timeout_seconds) as response:
                     payload = response.read()
                     status = int(getattr(response, "status", 200))
                     response_type = str(response.headers.get("Content-Type") or "")
+                    final_url = str(response.geturl() or url)
                 elapsed = round((time.monotonic() - started) * 1000)
                 self.log("HTTP_COMPLETED", method=method, endpoint=relative, attempt=attempt,
                          httpStatus=status, elapsedMs=elapsed, bytes=len(payload), contentType=response_type)
                 if expected == "pdf" and not payload.startswith(b"%PDF-"):
                     raise ComcheckBackstopError(f"COMcheck report endpoint returned {response_type or 'non-PDF content'}.")
+                if relative == "index.html":
+                    self.page_url = final_url
+                    parsed_page = urllib.parse.urlparse(final_url)
+                    self.page_path = parsed_page.path + (("?" + parsed_page.query) if parsed_page.query else "")
                 return payload
             except (urllib.error.URLError, TimeoutError, ComcheckBackstopError) as exc:
                 last_error = exc
@@ -179,109 +181,203 @@ class ComcheckClient:
         return ("\n".join(f"{key}={value}" for key, value in fields.items()) + "\n").encode("utf-8")
 
     def _base_fields(self, service: str, method: str) -> dict[str, str]:
+        # DWR Batch.java accepts only letters, digits, and underscore for instanceId. A served
+        # engine.js starts at -1 only before browser preInit(); sending that literal is invalid.
+        if not re.fullmatch(r"[A-Za-z0-9_]+", str(self.instance_id or "")):
+            raise ComcheckBackstopError(
+                f"COMcheck DWR engine instance id is not browser-initialized: {self.instance_id!r}."
+            )
         fields = {
             "callCount": "1",
-            "nextReverseAjaxIndex": "0",
-            "windowName": "",
+            "page": urllib.parse.quote(self.page_path, safe=""),
+            "scriptSessionId": self.script_session_id,
             "c0-scriptName": service,
             "c0-methodName": method,
             "c0-id": "0",
             "batchId": str(self.batch_id),
             "instanceId": self.instance_id,
-            "page": urllib.parse.quote(self.page_path, safe=""),
-            "scriptSessionId": self.script_session_id,
+            "windowName": "",
         }
+        # DWR 2-era engines could add an explicit HTTP-session field. DWR 3's browser
+        # prepareToSend() does not; adding it ourselves changes the signed/session request
+        # contract and current COMcheck rejects that bootstrap. Follow the engine actually
+        # served by the official site instead of forcing one protocol generation.
+        if self.include_http_session_field and self.http_session_id:
+            fields["httpSessionId"] = urllib.parse.quote(self.http_session_id, safe="")
         self.batch_id += 1
         return fields
 
-    def _dwr_call(self, service: str, method: str, relative: str, *, extra: dict[str, str] | None = None) -> str:
-        fields = self._base_fields(service, method)
-        if extra:
-            fields.update(extra)
-        reply = self._request(
-            "POST", relative,
-            body=self._plain_body(fields), content_type="text/plain; charset=UTF-8",
-        ).decode("utf-8", errors="replace")
-        error = _dwr_error(reply)
-        if error:
-            raise ComcheckBackstopError(f"COMcheck DWR {service}.{method} failed: {error}")
-        return reply
+    @staticmethod
+    def _engine_uses_http_session_field(engine_text: str) -> bool:
+        if not engine_text:
+            return False
+        # Match code that actually populates the outbound batch map, not comments or the
+        # session-cookie configuration variable. This keeps DWR3 cookie correlation clean.
+        patterns = (
+            r"batch\.map(?:\[\s*[\"']httpSessionId[\"']\s*\]|\.httpSessionId)\s*=",
+            r"map\s*\[\s*[\"']httpSessionId[\"']\s*\]\s*=",
+            r"map\.httpSessionId\s*=",
+        )
+        return any(re.search(pattern, engine_text) for pattern in patterns)
 
-    def start(self) -> None:
+    @staticmethod
+    def _parse_engine_contract(engine_text: str) -> tuple[str, str, str]:
+        cookie_match = re.search(r'_sessionCookieName\s*=\s*["\']([^"\']+)', engine_text)
+        cookie_name = cookie_match.group(1) if cookie_match else "JSESSIONID"
+        instance_match = re.search(r'_instanceId\s*=\s*(-?\d+)', engine_text)
+        instance_literal = instance_match.group(1) if instance_match else ""
+        # The DWR 3 engine source initializes _instanceId to -1, then preInit() registers the
+        # engine in window.dwr._ and replaces it with the engine index before the first request.
+        # REVEX has one engine-equivalent client, so its browser-effective instance is 0. Never
+        # transmit the pre-initialization -1 literal: Batch.java rejects the hyphen as invalid.
+        instance_id = instance_literal if instance_literal and not instance_literal.startswith("-") else "0"
+        orig_match = re.search(r'_origScriptSessionId\s*=\s*["\']([^"\']+)', engine_text)
+        orig_script = orig_match.group(1) if orig_match else ""
+        return cookie_name, instance_id, orig_script
+
+    def start(self, *, reset: bool = False) -> None:
+        if reset:
+            self._reset_transport()
         self._request("GET", "index.html")
-        if not self.allow_nonofficial:
-            self._request("GET", "dwr/engine.js")
 
-        fields = self._base_fields("__System", "generateId")
-        reply = self._request(
-            "POST", "dwr/call/plaincall/__System.generateId.dwr",
-            body=self._plain_body(fields), content_type="text/plain; charset=UTF-8",
-        ).decode("utf-8", errors="replace")
-        error = _dwr_error(reply)
-        if error:
-            self.log("SESSION_GENERATE_ID_REJECTED", errorClass="DWR", error=error,
-                     responsePrefix=reply[:180])
-            raise ComcheckBackstopError(f"COMcheck-Web DWR session bootstrap failed: {error}")
-        dwr_id = _callback_string(reply)
-        if not dwr_id:
-            self.log("SESSION_GENERATE_ID_UNPARSED", bytes=len(reply), callbackPresent="handleCallback" in reply,
-                     responsePrefix=reply[:180])
-            raise ComcheckBackstopError("COMcheck-Web did not establish a DWR session.")
-        self.dwr_id = dwr_id
+        # Read the exact engine contract served by COMcheck so this client follows whichever
+        # supported DWR generation the official site is currently running instead of pinning
+        # browser-session internals in REVEX.
+        engine_text = ""
+        try:
+            engine_text = self._request("GET", "dwr/engine.js").decode("utf-8", errors="replace")
+        except ComcheckBackstopError as exc:
+            self.log("SESSION_ENGINE_FALLBACK", reason=str(exc))
+        cookie_name, instance_id, orig_script = self._parse_engine_contract(engine_text)
+        self.http_session_cookie_name = cookie_name
+        self.instance_id = instance_id
+        self.http_session_id = self._cookie_value(cookie_name)
+        self.include_http_session_field = self._engine_uses_http_session_field(engine_text)
 
-        if not any(cookie.name == "DWRSESSIONID" for cookie in self.cookies):
-            parsed = urllib.parse.urlparse(self.base_url)
-            self.cookies.set_cookie(http.cookiejar.Cookie(
-                version=0, name="DWRSESSIONID", value=self.dwr_id, port=None, port_specified=False,
-                domain=str(parsed.hostname), domain_specified=True, domain_initial_dot=False,
-                path="/CheckWeb", path_specified=True, secure=parsed.scheme == "https", expires=None,
-                discard=True, comment=None, comment_url=None, rest={}, rfc2109=False,
-            ))
-        self.script_session_id = f"{self.dwr_id}/{self.page_id}"
+        dwr_cookie = self._cookie_value("DWRSESSIONID")
+        modern_dwr = "DWRSESSIONID" in engine_text or "setDwrSession" in engine_text or not orig_script
+        if modern_dwr:
+            self.engine_mode = "DWR3_COOKIE"
+            if not dwr_cookie:
+                fields = self._base_fields("__System", "generateId")
+                reply = self._request(
+                    "POST", "dwr/call/plaincall/__System.generateId.dwr",
+                    body=self._plain_body(fields), content_type="text/plain"
+                ).decode("utf-8", errors="replace")
+                dwr_error = _dwr_error(reply)
+                if dwr_error:
+                    self.log("SESSION_GENERATE_ID_REJECTED", error=dwr_error[:1000])
+                    raise ComcheckBackstopError(f"COMcheck-Web DWR session bootstrap failed: {dwr_error}")
+                # DWR 3 has shipped multiple callback renderings in the wild:
+                #   dwr.engine.remote.handleCallback("0","0","TOKEN")
+                #   dwr.engine.remote.handleCallback( "0", "0", "TOKEN" )
+                # and some servlet/container combinations set DWRSESSIONID directly while
+                # returning a wrapper callback whose argument formatting differs. Prefer the
+                # server cookie when present; otherwise extract the callback token without
+                # depending on whitespace or the exact remote-handler prefix.
+                dwr_cookie = self._cookie_value("DWRSESSIONID")
+                if dwr_cookie:
+                    self.dwr_id = dwr_cookie
+                else:
+                    callback = re.search(r'handleCallback\s*\((?P<args>.*?)\)\s*;?', reply, re.S)
+                    token = ""
+                    if callback:
+                        args = callback.group("args")
+                        quoted = [
+                            m.group("value")
+                            for m in re.finditer(r'(["\'])(?P<value>(?:\\.|(?!\1).)*)\1', args, re.S)
+                        ]
+                        # The first two quoted callback arguments are normally batch/call ids.
+                        # Choose the last non-trivial quoted value so protocol wrappers and
+                        # optional arguments do not make session establishment brittle.
+                        for value in reversed(quoted):
+                            decoded = (value.replace("\\'", "'").replace('\\"', '"')
+                                            .replace("\\n", "").replace("\\r", ""))
+                            if decoded and not decoded.isdigit():
+                                token = decoded
+                                break
+                    if not token:
+                        # Preserve a safe structural fingerprint for diagnosis, never the
+                        # session token/cookies themselves.
+                        compact = re.sub(r'\s+', ' ', reply).strip()
+                        self.log("SESSION_GENERATE_ID_UNPARSED", bytes=len(reply.encode("utf-8")),
+                                 callbackPresent="handleCallback" in reply,
+                                 responsePrefix=compact[:120])
+                        raise ComcheckBackstopError("COMcheck-Web did not establish a DWR session.")
+                    self.dwr_id = token
+                if not dwr_cookie:
+                    parsed = urllib.parse.urlparse(self.base_url)
+                    self.cookies.set_cookie(http.cookiejar.Cookie(
+                        version=0, name="DWRSESSIONID", value=self.dwr_id, port=None, port_specified=False,
+                        domain=str(parsed.hostname), domain_specified=True, domain_initial_dot=False,
+                        path="/CheckWeb", path_specified=True, secure=parsed.scheme == "https", expires=None,
+                        discard=True, comment=None, comment_url=None, rest={}, rfc2109=False
+                    ))
+                    dwr_cookie = self.dwr_id
+            else:
+                self.dwr_id = dwr_cookie
+            self.script_session_id = f"{dwr_cookie}/{self._new_dwr_page_id()}"
+        else:
+            self.engine_mode = "DWR_LEGACY_ORIG_SCRIPT"
+            # Older DWR engines derive the script-session id from the server-generated original
+            # page id plus a browser random integer in [0,999].
+            self.script_session_id = f"{orig_script}{secrets.randbelow(1000)}"
 
-        if not self.allow_nonofficial:
-            self._dwr_call("__System", "pageLoaded", "dwr/call/plaincall/__System.pageLoaded.dwr")
-            # COMcheck's own start_app.js makes this call before the upload UI can
-            # be used. It creates/restores the server-side USER_PROJECT bound to
-            # the HTTP/DWR session; omitting it makes uploadProject throw
-            # gov.energycodes.check.common.exception.InvalidSessionException.
-            current = self._dwr_call(
-                "ProjectService", "getCurrentProject",
-                "dwr/call/plaincall/ProjectService.getCurrentProject.dwr",
+        # GET index.html establishes the Java HttpSession. Refresh the cookie after generateId
+        # in case the container created/rotated it there. Only legacy engines that explicitly
+        # populate httpSessionId in engine.js will receive that field in later calls.
+        refreshed_http = self._cookie_value(cookie_name)
+        if refreshed_http:
+            self.http_session_id = refreshed_http
+        if not self.http_session_id:
+            raise ComcheckBackstopError(
+                f"COMcheck-Web did not establish its {cookie_name} HTTP application session."
             )
-            if "handleCallback" not in current:
-                raise ComcheckBackstopError("COMcheck-Web did not initialize its current-project application session.")
-            self.log("APPLICATION_SESSION_READY", service=OFFICIAL_HOST, method="ProjectService.getCurrentProject")
+        self.log("SESSION_READY", service=OFFICIAL_HOST, protocol=self.engine_mode,
+                 httpSessionCookie=cookie_name, httpSessionPresent=True,
+                 httpSessionField=self.include_http_session_field,
+                 dwrSessionPresent=bool(dwr_cookie), instanceId=self.instance_id,
+                 page=self.page_path)
 
-        self.session_ready = True
-        self.log("SESSION_READY", service=OFFICIAL_HOST, protocol="DWR3_XHR",
-                 dwrSessionPresent=True, instanceId=self.instance_id, page=self.page_path)
-
-    def upload_project(self, cxl: Path) -> None:
-        if not self.session_ready:
-            raise ComcheckBackstopError("COMcheck DWR session is not ready.")
+    def _upload_once(self, cxl: Path, evidence_path: Path | None, attempt: int) -> str | None:
         fields = self._base_fields("ProjectService", "uploadProject")
         fields["c0-param0"] = "string:" + urllib.parse.quote(cxl.name, safe="")
         body, content_type = _multipart(fields, "c0-param1", cxl)
-        reply = self._request(
+        reply_bytes = self._request(
             "POST", "dwr/call/htmlcall/ProjectService.uploadProject.dwr",
-            body=body, content_type=content_type,
-        ).decode("utf-8", errors="replace")
-        error = _dwr_error(reply)
-        if error:
+            body=body, content_type=content_type
+        )
+        if evidence_path is not None:
+            attempt_path = evidence_path.with_name(f"{evidence_path.stem}.attempt{attempt}{evidence_path.suffix}")
+            attempt_path.write_bytes(reply_bytes)
+            evidence_path.write_bytes(reply_bytes)
+        reply = reply_bytes.decode("utf-8", errors="replace")
+        return _dwr_error(reply)
+
+    def upload_project(self, cxl: Path, evidence_path: Path | None = None) -> None:
+        for session_attempt in range(1, 3):
+            error = self._upload_once(cxl, evidence_path, session_attempt)
+            if not error:
+                self.log("PROJECT_IMPORTED", filename=cxl.name, bytes=cxl.stat().st_size,
+                         uploadResponse=(evidence_path.name if evidence_path is not None else None),
+                         sessionAttempt=session_attempt)
+                return
+            if "InvalidSessionException" in error and session_attempt == 1:
+                self.log("SESSION_REJECTED_REBOOTSTRAP", errorClass="InvalidSessionException",
+                         retry=2, projectDataResent=False)
+                # Throw away all cookie/session state and establish a browser-equivalent session
+                # from the official site before retrying the exact same immutable CXL once.
+                self.start(reset=True)
+                continue
             raise ComcheckBackstopError(f"COMcheck CXL import failed: {error}")
-        if "handleCallback" not in reply:
-            raise ComcheckBackstopError("COMcheck CXL import returned no project callback.")
-        self.log("PROJECT_IMPORTED", filename=cxl.name, bytes=cxl.stat().st_size)
+        raise ComcheckBackstopError("COMcheck CXL import failed after a fresh official session bootstrap.")
 
     def calculate_backstop(self, evidence_path: Path) -> dict:
+        fields = self._base_fields("ProjectService", "calculateEnvelopeCompliance")
+        fields["c0-param0"] = "boolean:true"
         reply_bytes = self._request(
             "POST", "dwr/call/plaincall/ProjectService.calculateEnvelopeCompliance.dwr",
-            body=self._plain_body({
-                **self._base_fields("ProjectService", "calculateEnvelopeCompliance"),
-                "c0-param0": "boolean:true",
-            }),
-            content_type="text/plain; charset=UTF-8",
+            body=self._plain_body(fields), content_type="text/plain"
         )
         reply = reply_bytes.decode("utf-8", errors="replace")
         evidence_path.write_bytes(reply_bytes)
@@ -290,10 +386,12 @@ class ComcheckClient:
             raise ComcheckBackstopError(f"COMcheck Backstop calculation failed: {error}")
         if "handleCallback" not in reply or "envelopeStatus" not in reply:
             raise ComcheckBackstopError("COMcheck Backstop calculation returned no envelope result.")
-        status_match = re.search(r"envelopeStatus\s*:\s*\{(?P<body>.*?)\}(?:,|\))", reply, re.S)
-        status_body = status_match.group("body") if status_match else reply
-        passes = re.search(r"passes\s*:\s*(true|false)", status_body)
-        index = re.search(r"complianceIndex\s*:\s*(-?\d+(?:\.\d+)?)", status_body)
+        status_match = re.search(
+            r"envelopeStatus\s*:\s*\{(?P<body>.*?)\}(?:,|\))", reply, re.S
+        )
+        body = status_match.group("body") if status_match else reply
+        passes = re.search(r"passes\s*:\s*(true|false)", body)
+        index = re.search(r"complianceIndex\s*:\s*(-?\d+(?:\.\d+)?)", body)
         summary = {
             "engine": "PNNL Legacy COMcheck-Web",
             "code": BACKSTOP_CODE,
@@ -317,6 +415,7 @@ class ComcheckClient:
             raise ComcheckBackstopError("COMcheck-Web did not make the official compliance report available.")
         destination.write_bytes(self._request("GET", "report/current/pdf", expected="pdf"))
         self.log("OFFICIAL_REPORT_DOWNLOADED", filename=destination.name, bytes=destination.stat().st_size)
+
 
 
 def _local_name(node: ET.Element) -> str:
@@ -398,7 +497,6 @@ def _component_values(node: ET.Element, component: str, type_field: str) -> dict
 def _fresh_project_spec(cxl: Path) -> dict:
     root = ET.parse(cxl).getroot()
     control = _child(root, "control")
-    location = _child(root, "location")
     project = _child(root, "project")
     lighting = _child(root, "lighting")
 
@@ -431,9 +529,6 @@ def _fresh_project_spec(cxl: Path) -> dict:
         "projectCity": _text(project, "projectCity"),
         "projectState": _text(project, "projectState"),
         "projectZip": _text(project, "projectZipCode"),
-        # The Appendix CA enum is a New York City compliance location.  T/Z
-        # identity commonly supplies ``NY`` and a borough, neither of which is
-        # a value in COMcheck's compliance-location selects.
         "state": "New York",
         "city": "New York",
         "height": _number(root, "feetBldgHeight"),
@@ -542,11 +637,6 @@ class FreshProjectBrowserClient:
                   powerDensity:createInputField(Number(use.powerDensity||0))
                 };
                 row=buildingUseTable.buildNewComponent(fields);
-                // Building uses have no parent/child relationship. Calling the
-                // generic addComponent() still walks the fresh table's empty
-                // placeholder rows as if they were envelope parents. Use the
-                // table's own server adapter directly, then perform the exact
-                // successful local-list/finish half of addComponent().
                 const status=buildingUseTable.addToServer(row,null);
                 if(status!==true)return {ok:false,error:'addToServer returned false',rows:snapshot()};
                 enableSave();
@@ -556,17 +646,14 @@ class FreshProjectBrowserClient:
                 if(!row.constructionType)row.constructionType=createInputField(use.constructionType);
                 if(!row.floorArea)row.floorArea=createInputField(0);
                 if(!row.powerDensity)row.powerDensity=createInputField(0);
-              row.type.value=use.type;
-              row.constructionType.value=use.constructionType;
-              row.floorArea.value=Number(use.floorArea||0);
-              row.powerDensity.value=Number(use.powerDensity||0);
-              // COMcheck's implementation iterates the keys of this argument;
-              // an Array therefore makes it look for row["0"].value.  Supply
-              // the keyed object used by its own multi-field edit path.
-              buildingUseTable.updateServerComponent(row,{
-                type:true,constructionType:true,floorArea:true,powerDensity:true
-              });
-              buildingUseTable.redraw([row]);
+                row.type.value=use.type;
+                row.constructionType.value=use.constructionType;
+                row.floorArea.value=Number(use.floorArea||0);
+                row.powerDensity.value=Number(use.powerDensity||0);
+                buildingUseTable.updateServerComponent(row,{
+                  type:true,constructionType:true,floorArea:true,powerDensity:true
+                });
+                buildingUseTable.redraw([row]);
               }
               return {
                 ok:true,id:row.id,key:row.key&&row.key.value,type:row.type&&row.type.value,
@@ -599,9 +686,6 @@ class FreshProjectBrowserClient:
               const parent=child?list[parentIndex]:null;
               if(child&&!parent)return {ok:false,error:'missing parent '+parentIndex};
               const row=envelopeTable.buildNewComponent(fields);
-              // Call the same authoritative EnvelopeView.add method as the
-              // table adapter, but keep its real DWR exception instead of the
-              // adapter's generic modal alert.
               let response=null,remoteError=null;
               const describe=(message,error)=>({
                 message:String(message||error||'EnvelopeView.add failed'),
@@ -630,10 +714,6 @@ class FreshProjectBrowserClient:
             values, parent_index,
         )
         if result is None:
-            # EnvelopeView.add's synchronous response can replace the browser
-            # table fragment, which makes Selenium report a null script result
-            # even though COMcheck accepted and retained the row. Read the
-            # authoritative refreshed model before treating that as a failure.
             def retained(driver):
                 return driver.execute_script(
                     """
@@ -644,7 +724,6 @@ class FreshProjectBrowserClient:
                     """,
                     values.get("component"), values.get("userDescription"),
                 )
-
             self._wait(
                 retained,
                 f"COMcheck did not retain fresh {values.get('component')} {values.get('userDescription')}.",
@@ -778,17 +857,16 @@ class FreshProjectBrowserClient:
         finally:
             driver.quit()
 
-
 def run_official_backstop(cxl: Path, filing_dir: Path, project_identity: dict, log,
                           base_url: str = DEFAULT_BASE_URL) -> tuple[Path, Path, dict]:
     evidence = filing_dir / "COMcheck_BACKSTOP_ENGINE_RESPONSE.js"
+    upload_evidence = filing_dir / "COMcheck_UPLOAD_RESPONSE.html"
     report = filing_dir / "COMcheck_OFFICIAL_BACKSTOP_REPORT.pdf"
     if str(os.environ.get("REVEX_ALLOW_COMCHECK_TEST_ENDPOINT", "")).lower() == "true":
-        # Deterministic local contract test only; production never calls the
-        # legacy file-upload method that is broken on the live service.
+        # Deterministic local contract test only. Production never uses the broken legacy upload transport.
         client = ComcheckClient(base_url, log)
         client.start()
-        client.upload_project(cxl)
+        client.upload_project(cxl, upload_evidence)
         summary = client.calculate_backstop(evidence)
         client.download_report(report)
     else:

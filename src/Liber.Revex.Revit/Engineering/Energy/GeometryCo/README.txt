@@ -1,4 +1,4 @@
-OPENSTUDIO ENERGY MODEL GEOMETRY COMPILER v4.3.1
+OPENSTUDIO ENERGY MODEL GEOMETRY COMPILER v4.3.3
 =================================================
 
 PURPOSE
@@ -107,3 +107,15 @@ WINDOWS APPLICATION PACKAGING
 MODEL NOTICE
 See local_ai_model/MODEL_NOTICE.txt for the pinned model revision, provenance,
 and Apache-2.0 license notice.
+
+
+v4.3.3 AUTHORITATIVE-GEOMETRY NORMALIZATION
+- Revit/gbXML room-shell and opening coordinates are authoritative; compiler repairs act on translation relationships and derived pieces, not source intent.
+- Uses dimensionally correct linear tolerances for coplanarity/containment. Numeric OSM/gbXML residue within 0.1 mm is recorded and accepted instead of blocking.
+- If an opening is attached to the wrong wall but one same-space coplanar parent uniquely contains it, only the parent reference is repaired.
+- If an unpaired physical opening spans multiple same-boundary coplanar wall segments, its EnergyPlus representation is split losslessly across those parents; the source opening and room shell remain unchanged.
+- Ground/Foundation-contact opaque parents containing real openings are partitioned into exterior opening carriers plus ground-contact remainder, preserving the parent union.
+- Derived intersection polygons remove only numerical duplicate corners before EnergyPlus serialization so short-edge cleanup cannot create degenerate faces.
+- Names, addresses, room labels, and known project/opening IDs are never used by normalization logic.
+- Hard failure is reserved for orphaned references, materially non-coplanar/uncovered openings, degenerate geometry, or semantic ambiguity that cannot be repaired without guessing.
+- Native OpenStudio ForwardTranslator + EnergyPlus design-day smoke remains the final geometry authority; ordinary warnings are retained as diagnostics rather than promoted to failures.

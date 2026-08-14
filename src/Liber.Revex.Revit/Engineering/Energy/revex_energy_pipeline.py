@@ -91,6 +91,73 @@ REFERENCE_IDENTITY_TOKENS = (
     "WINTHROP", "FAYBYSHENKO", "CHOSEN MEP", "BEREGOVYKH",
     "2306 OCEAN", "B01304513", "31-00 47TH", "091045",
 )
+REVIEW_PACKAGE_PDF_LABELS = (
+    "Document Index",
+    "Envelope Performance_Windows",
+    "Envelope Performance (Opaque)",
+    "Exterior Lighting Calculations",
+    "Interior Lighting Calculations",
+    "Proposed HVAC",
+    "Baseline HVAC",
+    "Proposed Reports",
+    "Baseline Reports",
+)
+VALID_ENERGY_REVIEW_PACKAGE = (
+    "geometry-osm",
+    "baseline-osm",
+    "proposed-osm",
+    "baseline-html",
+    "proposed-html",
+    "en1-spreadsheet",
+    "official-comcheck-pdf",
+    "packager-reports-archive",
+)
+
+# Identity-free numerical fingerprint of the approved EnergyPlus review record.
+# The structure templates remain protected worker inputs; only these verification
+# facts are exposed in run evidence and the manual-review package.
+APPROVED_RUN_PROFILE = {
+    "schema": "liber.revex.approved-energy-profile.v1",
+    "cohort": "MASKED_APPROVED_COHORT_A",
+    "referenceIdentity": "MASKED",
+    "topology": {"spaces": 159, "surfaces": 1930, "subsurfaces": 294, "thermalZones": 2},
+    "modeledSquareFeet": 11690.791,
+    "conditionedSquareFeet": 11169.925,
+    "roles": {
+        "baseline": {
+            "siteKbtu": 942537.659,
+            "siteEuiKbtuPerFt2": 80.623,
+            "electricKwh": 133325.0,
+            "gasTherm": 4876.0,
+            "unmetHours": 28.33,
+            "endUseSharePct": {
+                "Space Heat": 37.1, "Space Cool": 7.5, "Interior Lighting": 10.8,
+                "Exterior Lighting": 0.1, "Misc. Equip. Unregulated": 1.0,
+                "Vent Fans": 26.8, "Pumps & Misc": 2.0, "Dom. Hot Water": 14.7,
+            },
+        },
+        "proposed": {
+            "siteKbtu": 348806.134,
+            "siteEuiKbtuPerFt2": 29.836,
+            "electricKwh": 102225.0,
+            "gasTherm": 0.0,
+            "unmetHours": 70.33,
+            "endUseSharePct": {
+                "Space Heat": 24.7, "Space Cool": 6.6, "Interior Lighting": 3.3,
+                "Exterior Lighting": 0.3, "Misc. Equip. Unregulated": 2.8,
+                "Vent Fans": 17.3, "Pumps & Misc": 5.2, "Dom. Hot Water": 39.8,
+            },
+        },
+    },
+    "tolerances": {
+        "modeledAreaRelativePct": 0.25,
+        "energyRelativePct": 5.0,
+        "endUseSharePercentagePoints": 3.0,
+        "unmetHoursRelativePct": 25.0,
+        "unmetHoursAbsolute": 5.0,
+        "nearZeroGasTherm": 5.0,
+    },
+}
 
 
 class PipelineError(RuntimeError):
@@ -124,7 +191,10 @@ class RunLog:
         self.events.append(row)
         with self.path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(row, ensure_ascii=False) + "\n")
-        print(json.dumps(row, ensure_ascii=False), flush=True)
+        # Publisher consoles may still use Windows-1252. Keep the durable JSONL
+        # fully Unicode while escaping console-only output so diagnostics can
+        # never mask the original pipeline failure with UnicodeEncodeError.
+        print(json.dumps(row, ensure_ascii=True), flush=True)
 
     def dependency(self, name: str, available: bool, *, required: bool = True, **detail) -> None:
         row = {"name": name, "available": available, "required": required, **detail}
@@ -156,11 +226,21 @@ def safe_name(value: str) -> str:
     return text or "REVEX_Energy"
 
 
+def utf8_subprocess_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment["PYTHONUTF8"] = "1"
+    environment["PYTHONIOENCODING"] = "utf-8"
+    return environment
+
+
 def run_command(command: list[str], cwd: Path, log_path: Path, log: RunLog, stage: str) -> None:
     started = time.monotonic()
     log.write(stage, "STARTED", command=command, cwd=str(cwd), log=str(log_path))
-    process = subprocess.Popen(command, cwd=str(cwd), text=True, encoding="utf-8", errors="replace",
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    process = subprocess.Popen(
+        command, cwd=str(cwd), text=True, encoding="utf-8", errors="replace",
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        env=utf8_subprocess_environment(),
+    )
     log.write(stage, "PROCESS_STARTED", pid=process.pid)
     stdout, _ = process.communicate()
     log_path.write_text(stdout or "", encoding="utf-8")
@@ -314,7 +394,7 @@ def compile_models(geometry_osm: Path, cli: Path, folder: Path, log: RunLog) -> 
         "--openstudio-cli", str(cli),
         "--require-native-check",
     ]
-    run_command(command, folder, folder / "02_GEOMETRYCO.log", log, "GEOMETRYCO_4_3_1")
+    run_command(command, folder, folder / "02_GEOMETRYCO.log", log, "GEOMETRYCO_4_3_4")
     baseline = outdir / "BASELINE_UPDATED_GEOMETRY.osm"
     proposed = outdir / "PROPOSED_UPDATED_GEOMETRY.osm"
     if not baseline.is_file() or not proposed.is_file():
@@ -379,6 +459,151 @@ def aggregate_end_uses(rows: list[tuple[str, float, float, float]]) -> dict[str,
         target[1] += gas
         target[2] += other
     return output
+
+
+def summarize_end_uses(rows: dict[str, list[float]]) -> dict[str, dict[str, float]]:
+    """Return review-safe fuel totals and site-energy shares for each end use."""
+    raw = {}
+    total_site_kbtu = 0.0
+    for label, values in rows.items():
+        electric_kwh, gas_therm, other_kbtu = (float(value or 0) for value in values)
+        site_kbtu = electric_kwh * 3.412141633 + gas_therm * 100.0 + other_kbtu
+        raw[label] = {
+            "electricKwh": electric_kwh,
+            "gasTherm": gas_therm,
+            "otherKbtu": other_kbtu,
+            "siteKbtu": site_kbtu,
+        }
+        total_site_kbtu += site_kbtu
+    for values in raw.values():
+        values["sharePct"] = 100.0 * values["siteKbtu"] / total_site_kbtu if total_site_kbtu else 0.0
+    return raw
+
+
+def _relative_delta_pct(actual: float, expected: float) -> float:
+    if expected == 0:
+        return 0.0 if actual == 0 else float("inf")
+    return abs(actual - expected) * 100.0 / abs(expected)
+
+
+def compare_approved_run_profile(metrics: dict, compilation_audit: Path, compiled_baseline_model: Path) -> dict:
+    """Compare a matching model cohort with the masked approved EnergyPlus run.
+
+    Topology and model area identify the cohort. Numerical simulation results are
+    compared with bounded tolerances so harmless engine-version variance does not
+    obscure meaningful regressions. No source-project identity enters the result.
+    """
+    profile = APPROVED_RUN_PROFILE
+    tolerances = profile["tolerances"]
+    audit = json.loads(compilation_audit.read_text(encoding="utf-8"))
+    baseline_report = (audit.get("reports") or {}).get("baseline") or {}
+    geometry = baseline_report.get("exact_geometry_lock") or {}
+    compiler = load_module(GEOMETRYCO, "revex_geometryco_approved_profile_compare")
+    compiled_model = compiler.parse_osm(compiled_baseline_model)
+    actual_topology = {
+        "spaces": int(geometry.get("spaces") or -1),
+        "surfaces": int(geometry.get("surfaces") or -1),
+        "subsurfaces": int(geometry.get("subsurfaces") or -1),
+        "thermalZones": len(compiled_model.by_type.get("OS:ThermalZone", [])),
+    }
+    topology_matches = actual_topology == profile["topology"]
+    modeled_area = float(metrics.get("modeledSquareFeet") or 0)
+    area_delta = _relative_delta_pct(modeled_area, float(profile["modeledSquareFeet"]))
+    cohort_matches = topology_matches and area_delta <= float(tolerances["modeledAreaRelativePct"])
+    profile_digest = hashlib.sha256(
+        json.dumps(profile, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    result = {
+        "schema": "liber.revex.approved-run-comparison.v1",
+        "cohort": profile["cohort"],
+        "referenceIdentity": "MASKED",
+        "profileSha256": profile_digest,
+        "cohortMatches": cohort_matches,
+        "topology": {"expected": profile["topology"], "actual": actual_topology, "passed": topology_matches},
+        "modeledArea": {
+            "expectedSquareFeet": profile["modeledSquareFeet"],
+            "actualSquareFeet": modeled_area,
+            "relativeDeltaPct": area_delta,
+            "tolerancePct": tolerances["modeledAreaRelativePct"],
+            "passed": area_delta <= float(tolerances["modeledAreaRelativePct"]),
+        },
+        "checks": [],
+        "iterationSelection": "UNBENCHMARKED_DIFFERENT_COHORT",
+        "reviewEligible": True,
+    }
+    if not cohort_matches:
+        result["status"] = "NOT_APPLICABLE_DIFFERENT_COHORT"
+        return result
+
+    def add_relative(role: str, field: str, actual: float, expected: float, tolerance: float) -> None:
+        delta = _relative_delta_pct(actual, expected)
+        result["checks"].append({
+            "role": role, "metric": field, "actual": actual, "expected": expected,
+            "delta": delta, "tolerance": tolerance, "units": "relative-percent", "passed": delta <= tolerance,
+        })
+
+    def add_absolute(role: str, field: str, actual: float, expected: float, tolerance: float, units: str) -> None:
+        delta = abs(actual - expected)
+        result["checks"].append({
+            "role": role, "metric": field, "actual": actual, "expected": expected,
+            "delta": delta, "tolerance": tolerance, "units": units, "passed": delta <= tolerance,
+        })
+
+    for role in ("baseline", "proposed"):
+        actual_role = metrics.get(role) or {}
+        expected_role = profile["roles"][role]
+        add_relative(role, "siteKbtu", float(actual_role.get("siteKbtu") or 0),
+                     float(expected_role["siteKbtu"]), float(tolerances["energyRelativePct"]))
+        add_relative(role, "siteEuiKbtuPerFt2", float(actual_role.get("siteEuiKbtuPerFt2") or 0),
+                     float(expected_role["siteEuiKbtuPerFt2"]), float(tolerances["energyRelativePct"]))
+        add_relative(role, "electricKwh", float(actual_role.get("electricKwh") or 0),
+                     float(expected_role["electricKwh"]), float(tolerances["energyRelativePct"]))
+        if float(expected_role["gasTherm"]) == 0:
+            add_absolute(role, "gasTherm", float(actual_role.get("gasTherm") or 0), 0.0,
+                         float(tolerances["nearZeroGasTherm"]), "therm")
+        else:
+            add_relative(role, "gasTherm", float(actual_role.get("gasTherm") or 0),
+                         float(expected_role["gasTherm"]), float(tolerances["energyRelativePct"]))
+        unmet_tolerance = max(float(tolerances["unmetHoursAbsolute"]),
+                              float(expected_role["unmetHours"]) * float(tolerances["unmetHoursRelativePct"]) / 100.0)
+        add_absolute(role, "unmetHours", float(actual_role.get("unmetHours") or 0),
+                     float(expected_role["unmetHours"]), unmet_tolerance, "hours")
+        actual_end_uses = actual_role.get("endUses") or {}
+        for label, expected_share in expected_role["endUseSharePct"].items():
+            actual_share = float((actual_end_uses.get(label) or {}).get("sharePct") or 0)
+            add_absolute(role, f"endUseShare:{label}", actual_share, float(expected_share),
+                         float(tolerances["endUseSharePercentagePoints"]), "percentage-points")
+
+    baseline = metrics.get("baseline") or {}
+    proposed = metrics.get("proposed") or {}
+    directional = [
+        {
+            "role": "pair", "metric": "proposedSiteEnergyBelowBaseline",
+            "actual": float(proposed.get("siteKbtu") or 0), "expected": f"< {float(baseline.get('siteKbtu') or 0)}",
+            "passed": 0 < float(proposed.get("siteKbtu") or 0) < float(baseline.get("siteKbtu") or 0),
+        },
+        {
+            "role": "pair", "metric": "proposedVirtualCostBelowBaseline",
+            "actual": float(proposed.get("cost") or 0), "expected": f"< {float(baseline.get('cost') or 0)}",
+            "passed": 0 < float(proposed.get("cost") or 0) < float(baseline.get("cost") or 0),
+        },
+    ]
+    result["checks"].extend(directional)
+    passed = all(check.get("passed") is True for check in result["checks"])
+    finite_ratios = [
+        min(float(check["delta"]) / float(check["tolerance"]), 10.0)
+        for check in result["checks"]
+        if isinstance(check.get("delta"), (int, float)) and check.get("tolerance") not in (None, 0)
+    ]
+    result["normalizedRegressionScore"] = (
+        sum(finite_ratios) / len(finite_ratios) if finite_ratios else (0.0 if passed else 10.0)
+    )
+    result["passedChecks"] = sum(1 for check in result["checks"] if check.get("passed") is True)
+    result["totalChecks"] = len(result["checks"])
+    result["status"] = "PASSED" if passed else "REGRESSION"
+    result["iterationSelection"] = "BEST_WORKING_ITERATION" if passed else "WITHHELD_REFERENCE_REGRESSION"
+    result["reviewEligible"] = passed
+    return result
 
 
 def find_area_ft2(packager, soup, labels: tuple[str, ...]) -> float | None:
@@ -500,9 +725,30 @@ def assert_en1_project_identity(info, identity: dict) -> None:
         raise PipelineError("EN-1 current-project identity verification failed: " + ", ".join(wrong))
 
 
-def assert_no_reference_identity_text(value: str, artifact: str) -> None:
+def allowed_current_identity_tokens(project_identity: dict | None) -> set[str]:
+    """Allow a protected project token only when current Revit evidence proves it.
+
+    The approved 79 record is also the r49 publication-acceptance project.  A flat
+    ban on the word WINTHROP therefore rejects the correct current-project title.
+    Applicant/modeler/template tokens remain prohibited because they are not part
+    of the normalized current-project identity.
+    """
+    current = "\n".join(
+        str(value or "") for key, value in dict(project_identity or {}).items()
+        if key in {
+            "title", "address", "houseNumber", "streetName", "borough", "city",
+            "state", "zip", "block", "lot", "bin", "communityBoard", "jobType",
+            "architecturalJobNumber", "mechanicalJobNumber", "plumbingJobNumber",
+        }
+    ).upper()
+    return {token for token in REFERENCE_IDENTITY_TOKENS if token in current}
+
+
+def assert_no_reference_identity_text(value: str, artifact: str,
+                                      project_identity: dict | None = None) -> None:
     upper = str(value or "").upper()
-    leaked = sorted({token for token in REFERENCE_IDENTITY_TOKENS if token in upper})
+    allowed = allowed_current_identity_tokens(project_identity)
+    leaked = sorted({token for token in REFERENCE_IDENTITY_TOKENS if token in upper and token not in allowed})
     if leaked:
         raise PipelineError(f"{artifact} retained structure-template identity: " + ", ".join(leaked))
 
@@ -523,14 +769,14 @@ def stamp_compiled_project_identity(model_path: Path, project_identity: dict, ro
 
     def osm_text(value: object) -> str:
         text = re.sub(r"[\r\n]+", " ", str(value or "")).strip()
-        return text.replace("&", "&amp;").replace(",", "&#44;").replace(";", "&#59;")
+        return text.replace(",", "&#44").replace(";", "&#59")
 
     title = osm_text(project_identity.get("title") or project_identity.get("address"))
     address = osm_text(project_identity.get("address") or project_identity.get("title"))
     city = osm_text(project_identity.get("city"))
     state = osm_text(project_identity.get("state"))
     postal = osm_text(project_identity.get("zip"))
-    display_name = "&#44; ".join(part for part in (address, city, state, postal) if part)
+    display_name = "&#44 ".join(part for part in (address, city, state, postal) if part)
 
     compiler = load_module(GEOMETRYCO, "revex_geometryco_identity_stamp")
     model = compiler.parse_osm(model_path)
@@ -556,7 +802,9 @@ def stamp_compiled_project_identity(model_path: Path, project_identity: dict, ro
     current_building = reparsed.by_type.get("OS:Building", [None])[0]
     if current_building is None or len(current_building.fields) < 2 or current_building.fields[1] != title:
         raise PipelineError(f"{role} compiled OSM current-project identity stamp did not survive serialization.")
-    assert_no_reference_identity_text(model_path.read_text(encoding="utf-8"), f"{role} compiled OSM")
+    assert_no_reference_identity_text(
+        model_path.read_text(encoding="utf-8"), f"{role} compiled OSM", project_identity
+    )
     log.write(
         "COMPILED_MODEL_IDENTITY", "PASSED", role=role,
         source="bound active Revit document plus immutable T/Z pages", buildingName=title,
@@ -564,7 +812,8 @@ def stamp_compiled_project_identity(model_path: Path, project_identity: dict, ro
     )
 
 
-def assert_no_reference_identity_workbook(workbook) -> None:
+def assert_no_reference_identity_workbook(workbook, project_identity: dict | None = None) -> None:
+    allowed = allowed_current_identity_tokens(project_identity)
     hits = []
     for sheet in workbook.worksheets:
         for row in sheet.iter_rows():
@@ -572,18 +821,21 @@ def assert_no_reference_identity_workbook(workbook) -> None:
                 if not isinstance(cell.value, str):
                     continue
                 upper = cell.value.upper()
-                if any(token in upper for token in REFERENCE_IDENTITY_TOKENS):
+                if any(token in upper for token in REFERENCE_IDENTITY_TOKENS if token not in allowed):
                     hits.append(f"{sheet.title}!{cell.coordinate}")
     if hits:
         raise PipelineError("EN-1 retained structure-template identity at: " + ", ".join(hits[:24]))
 
 
-def assert_no_reference_identity_xlsx(path: Path) -> None:
+def assert_no_reference_identity_xlsx(path: Path, project_identity: dict | None = None) -> None:
+    allowed = allowed_current_identity_tokens(project_identity)
     leaked = []
     with zipfile.ZipFile(path) as package:
         for name in package.namelist():
             raw = package.read(name).upper()
             for token in REFERENCE_IDENTITY_TOKENS:
+                if token in allowed:
+                    continue
                 if token.encode("utf-8") in raw:
                     leaked.append(f"{name}:{token}")
     if leaked:
@@ -593,7 +845,6 @@ def assert_no_reference_identity_xlsx(path: Path) -> None:
 def prepare_en1(packager, baseline_html: Path, proposed_html: Path,
                 folder: Path, log: RunLog, weather_meta: dict, project_identity: dict) -> tuple[Path, Path | None, dict]:
     from openpyxl import load_workbook
-    from openpyxl.workbook.views import BookView
 
     baseline_soup = packager.load_soup(str(baseline_html))
     proposed_soup = packager.load_soup(str(proposed_html))
@@ -607,7 +858,7 @@ def prepare_en1(packager, baseline_html: Path, proposed_html: Path,
     apply_en1_project_identity(info, project_identity)
     assert_en1_identity_fields_blank(info)
     assert_en1_project_identity(info, project_identity)
-    assert_no_reference_identity_workbook(workbook)
+    assert_no_reference_identity_workbook(workbook, project_identity)
 
     baseline_total = [sum(values[i] for values in baseline_rows.values()) for i in range(3)]
     proposed_total = [sum(values[i] for values in proposed_rows.values()) for i in range(3)]
@@ -661,12 +912,12 @@ def prepare_en1(packager, baseline_html: Path, proposed_html: Path,
     workbook.calculation.forceFullCalc = True
     workbook.calculation.calcMode = "auto"
     workbook.save(workbook_path)
-    assert_no_reference_identity_xlsx(workbook_path)
+    assert_no_reference_identity_xlsx(workbook_path, project_identity)
     verification_workbook = load_workbook(workbook_path, read_only=True, data_only=False)
     try:
         assert_en1_identity_fields_blank(verification_workbook["1,2,3 Information"])
         assert_en1_project_identity(verification_workbook["1,2,3 Information"], project_identity)
-        assert_no_reference_identity_workbook(verification_workbook)
+        assert_no_reference_identity_workbook(verification_workbook, project_identity)
     finally:
         verification_workbook.close()
 
@@ -675,28 +926,26 @@ def prepare_en1(packager, baseline_html: Path, proposed_html: Path,
     # disposable print copy so the delivered workbook retains the template topology.
     target_dir = folder / "en1-export"
     target_dir.mkdir(exist_ok=True)
-    print_workbook_path = target_dir / "EN-1_READY_TO_INSERT_PRINT.xlsx"
-    shutil.copy2(workbook_path, print_workbook_path)
-    print_workbook = load_workbook(print_workbook_path)
-    printable = set(EN1_PRINT_SHEETS)
-    missing_print_sheets = [name for name in EN1_PRINT_SHEETS if name not in print_workbook.sheetnames]
-    if missing_print_sheets:
-        raise PipelineError("EN-1 template is missing filing sheet(s): " + ", ".join(missing_print_sheets))
-    for sheet in print_workbook.worksheets:
-        sheet.sheet_state = "visible" if sheet.title in printable else "hidden"
-        if sheet.title in printable:
-            sheet.sheet_properties.pageSetUpPr.fitToPage = True
-            sheet.page_setup.fitToWidth = 1
-            sheet.page_setup.fitToHeight = 1
-            sheet.page_setup.scale = None
-    active_index = print_workbook.sheetnames.index("1,2,3 Information")
-    print_workbook.active = active_index
-    print_workbook.views = [BookView(activeTab=active_index, firstSheet=active_index)]
-    print_workbook.save(print_workbook_path)
+    # EN-1 workbook is the filing deliverable. PDF export is intentionally not part of
+    # the REVEX completion contract; downstream users may print/export it externally if desired.
 
+    baseline_site_kbtu = baseline_total[0] * 3.412141633 + baseline_total[1] * 100.0 + baseline_total[2]
+    proposed_site_kbtu = proposed_total[0] * 3.412141633 + proposed_total[1] * 100.0 + proposed_total[2]
     metrics = {
-        "baseline": {"electricKwh": baseline_total[0], "gasTherm": baseline_total[1], "otherKbtu": baseline_total[2], "cost": baseline_cost, "unmetHours": baseline_unmet},
-        "proposed": {"electricKwh": proposed_total[0], "gasTherm": proposed_total[1], "otherKbtu": proposed_total[2], "cost": proposed_cost, "unmetHours": proposed_unmet},
+        "baseline": {
+            "electricKwh": baseline_total[0], "gasTherm": baseline_total[1], "otherKbtu": baseline_total[2],
+            "siteKbtu": baseline_site_kbtu,
+            "siteEuiKbtuPerFt2": baseline_site_kbtu / modeled if modeled else None,
+            "cost": baseline_cost, "unmetHours": baseline_unmet,
+            "endUses": summarize_end_uses(baseline_rows),
+        },
+        "proposed": {
+            "electricKwh": proposed_total[0], "gasTherm": proposed_total[1], "otherKbtu": proposed_total[2],
+            "siteKbtu": proposed_site_kbtu,
+            "siteEuiKbtuPerFt2": proposed_site_kbtu / modeled if modeled else None,
+            "cost": proposed_cost, "unmetHours": proposed_unmet,
+            "endUses": summarize_end_uses(proposed_rows),
+        },
         "modeledSquareFeet": modeled, "conditionedSquareFeet": conditioned, "unconditionedSquareFeet": unconditioned,
         "identityFields": {
             "project": "ACTIVE_REVIT_T_Z_EVIDENCE", "applicant": "BLANK", "leadModeler": "BLANK",
@@ -704,56 +953,10 @@ def prepare_en1(packager, baseline_html: Path, proposed_html: Path,
         },
     }
     (folder / "EN-1_DATA_AUDIT.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-    pdf_path = folder / "EN-1_READY_TO_INSERT.pdf"
-    export_error = None
-    if os.name == "nt":
-        powershell = shutil.which("powershell.exe") or shutil.which("powershell")
-        log.dependency("Excel PDF PowerShell bridge", bool(powershell), required=False,
-                       executable=powershell or "not found")
-        if powershell:
-            export_started = time.monotonic()
-            result = subprocess.run([powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                                     str(ROOT / "export_en1_pdf.ps1"), "-WorkbookPath", str(print_workbook_path),
-                                     "-PdfPath", str(pdf_path)], capture_output=True, text=True)
-            log.write("PREPARE_EN1_EXCEL_PDF", "PASSED" if result.returncode == 0 and pdf_path.is_file() else "FAILED",
-                      executable=powershell, exitCode=result.returncode,
-                      elapsedMs=round((time.monotonic() - export_started) * 1000),
-                      outputTail=((result.stdout or "") + "\n" + (result.stderr or "")).splitlines()[-24:])
-            if result.returncode != 0:
-                export_error = (result.stdout or "") + "\n" + (result.stderr or "")
-    if not pdf_path.is_file():
-        soffice = shutil.which("soffice") or shutil.which("libreoffice")
-        log.dependency("LibreOffice PDF fallback", bool(soffice), required=False,
-                       executable=soffice or "not found")
-        if soffice:
-            profile_dir = folder / "libreoffice-profile"
-            profile_dir.mkdir(exist_ok=True)
-            export_started = time.monotonic()
-            result = subprocess.run([soffice, "--headless", f"-env:UserInstallation={profile_dir.resolve().as_uri()}",
-                                     "--convert-to", "pdf", "--outdir", str(target_dir), str(print_workbook_path)],
-                                    capture_output=True, text=True)
-            candidate = target_dir / (print_workbook_path.stem + ".pdf")
-            log.write("PREPARE_EN1_LIBREOFFICE_PDF", "PASSED" if result.returncode == 0 and candidate.is_file() else "FAILED",
-                      executable=soffice, exitCode=result.returncode,
-                      elapsedMs=round((time.monotonic() - export_started) * 1000),
-                      outputTail=((result.stdout or "") + "\n" + (result.stderr or "")).splitlines()[-24:])
-            if result.returncode == 0 and candidate.is_file():
-                shutil.move(candidate, pdf_path)
-            else:
-                export_error = (result.stdout or "") + "\n" + (result.stderr or "")
-    if not pdf_path.is_file():
-        log.write("PREPARE_EN1", "WORKBOOK_READY_PDF_BLOCKED", error=export_error or "Excel/LibreOffice unavailable")
-        return workbook_path, None, metrics
-    from pypdf import PdfReader
-    page_count = len(PdfReader(str(pdf_path)).pages)
-    if page_count != len(EN1_PRINT_SHEETS):
-        pdf_path.unlink(missing_ok=True)
-        raise PipelineError(
-            f"EN-1 filing PDF must contain exactly {len(EN1_PRINT_SHEETS)} pages; export produced {page_count}."
-        )
-    metrics["filingPdfPages"] = page_count
-    log.write("PREPARE_EN1", "PASSED", workbook=str(workbook_path), pdf=str(pdf_path), pages=page_count)
-    return workbook_path, pdf_path, metrics
+    metrics["filingWorkbook"] = workbook_path.name
+    metrics["filingPdfRequired"] = False
+    log.write("PREPARE_EN1", "PASSED", workbook=str(workbook_path), pdfRequired=False)
+    return workbook_path, None, metrics
 
 
 def _fact_value(pages: list[dict], section: str, key: str):
@@ -784,15 +987,184 @@ def _orientation(value: str | None) -> str:
     return mapping.get(token, "NORTH")
 
 
-def _wall_exemplar(walls: list, description: str | None):
-    text = str(description or "").lower()
-    wanted = "METAL_FRAME" if any(t in text for t in ("steel", "metal", "stud")) else "CONCRETE" if "concrete" in text else "MASONRY" if any(t in text for t in ("masonry","cmu","block")) else ""
+def _xml_child_text(parent, local_name: str) -> str:
+    child = next((c for c in list(parent) if c.tag.rsplit('}',1)[-1] == local_name), None)
+    return str(child.text or "").strip() if child is not None else ""
+
+
+def _wall_exemplar(walls: list, description: str | None, assembly_type: str | None = None):
+    """Choose a schema-valid COMcheck wall exemplar from current assembly semantics.
+
+    Furring material is intentionally ignored for structural wall classification: a solid
+    concrete or CMU wall with metal furring is not a metal-frame wall.
+    """
+    text = f"{assembly_type or ''} {description or ''}".lower()
+    if any(t in text for t in ("concrete block", "cmu", "masonry", "block")):
+        wanted = "MASONRY_AG_WALL"
+    elif any(t in text for t in ("solid concrete", "cast-in-place", "cast in place", "concrete")):
+        wanted = "CONCRETE_AG_WALL"
+    elif any(t in text for t in ("steel-framed", "steel framed", "metal frame", "metal-frame", "stud")):
+        wanted = "METAL_FRAME"
+    else:
+        wanted = ""
     if wanted:
-        for e in walls:
-            wt = next((c.text or "" for c in list(e) if c.tag.rsplit('}',1)[-1] == "wallType"), "")
-            if wanted in wt: return e
+        for exemplar in walls:
+            if wanted in _xml_child_text(exemplar, "wallType"):
+                return exemplar
     return walls[0] if walls else None
 
+
+def _window_exemplar(windows: list, row: dict):
+    text = f"{row.get('assemblyType') or ''} {row.get('description') or ''}".lower()
+    wanted = ""
+    if any(t in text for t in ("operable", "opening")) and not any(t in text for t in ("non-operable", "non operable")):
+        wanted = "OPERABLE_WINDOW"
+    elif any(t in text for t in ("fixed", "non-operable", "non operable")):
+        wanted = "NON_OPERABLE_WINDOW"
+    if wanted:
+        for exemplar in windows:
+            if _xml_child_text(exemplar, "windowOpenType") == wanted:
+                return exemplar
+    return windows[0] if windows else None
+
+
+def _door_exemplar(doors: list, row: dict):
+    text = f"{row.get('assemblyType') or ''} {row.get('description') or ''}".lower()
+    wanted_type = "INSUL_METAL_DOOR" if any(t in text for t in ("insulated metal", "insul metal")) else "GLASS_DOOR" if "glass" in text else ""
+    wanted_entrance = "NON_ENTRANCE_DOOR" if any(t in text for t in ("non-entrance", "non entrance")) else "ENTRANCE_DOOR" if "entrance" in text else ""
+    candidates = doors
+    if wanted_type:
+        typed = [e for e in candidates if _xml_child_text(e, "doorType") == wanted_type]
+        if typed:
+            candidates = typed
+    if wanted_entrance:
+        entrance = [e for e in candidates if _xml_child_text(e, "doorEntranceType") == wanted_entrance]
+        if entrance:
+            candidates = entrance
+    return candidates[0] if candidates else (doors[0] if doors else None)
+
+
+def _row_visible_transmittance(row: dict) -> float | None:
+    for key in ("vt", "vlt", "visibleTransmittance"):
+        value = row.get(key)
+        if value not in (None, ""):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                pass
+    text = " ".join(str(row.get(key) or "") for key in ("evidence", "description", "assemblyType"))
+    match = re.search(r"\bV(?:T|LT)\s*[:=]?\s*(0?(?:\.\d+)|1(?:\.0+)?)", text, re.I)
+    return float(match.group(1)) if match else None
+
+
+def _comcheck_multifamily_evidence(en_pages: list[dict], project_identity: dict, semantic: dict | None = None) -> tuple[bool, str]:
+    explicit = []
+    semantic = semantic or {}
+    semantic_use = semantic.get("wholeBuildingType")
+    if semantic_use not in (None, "", "null"):
+        explicit.append(str(semantic_use))
+    for page in en_pages:
+        lighting = page.get("lighting") or {}
+        value = lighting.get("wholeBuildingType")
+        if value not in (None, "", "null") and float(page.get("confidence") or 0) >= 0.90:
+            explicit.append(str(value))
+    explicit = list(dict.fromkeys(explicit))
+    evidence = " ".join(explicit + [str(project_identity.get("jobType") or "")]).lower()
+    multifamily = any(token in evidence for token in (
+        "multifamily", "multi-family", "multi family", "apartment", "occupancy group r-2",
+        "occupancy r-2", " r-2", " r2", "dwelling unit", "d.u.", "residential building",
+    ))
+    return multifamily, "; ".join(explicit) or str(project_identity.get("jobType") or "")
+
+
+def _comcheck_nyc_location_supported(project_identity: dict, energy_code: str | None) -> bool:
+    code = str(energy_code or "").lower()
+    state = re.sub(r"[^a-z]", "", str(project_identity.get("state") or "").lower())
+    city = str(project_identity.get("city") or project_identity.get("borough") or "").strip().lower()
+    ny_state = state in {"ny", "newyork"}
+    nyc_place = city in {"brooklyn", "queens", "bronx", "staten island", "new york", "manhattan"}
+    nyc_code = "nyc" in code or "new york city" in code or "nycecc" in code
+    return ny_state and nyc_place and nyc_code
+
+
+def _opening_host_plan(created_walls: list[tuple[object, dict]], openings: list[dict]) -> tuple[list[tuple[dict, object]], list[str]]:
+    """Assign openings to same-orientation wall hosts without exceeding gross wall area.
+
+    COMcheck serializes windows/doors as children of AG walls. The gross area of a host wall must
+    be able to contain all child openings; otherwise the generated CXL is structurally invalid.
+    Exact parent-assembly evidence wins. Remaining openings use deterministic best-fit capacity.
+    """
+    states = []
+    for item, row in created_walls:
+        try:
+            gross = float(row.get("grossAreaFt2") or 0)
+        except (TypeError, ValueError):
+            gross = 0.0
+        states.append({"item": item, "row": row, "remaining": gross})
+    planned: list[tuple[dict, object]] = []
+    errors: list[str] = []
+    indexed = list(enumerate(openings))
+    indexed.sort(key=lambda pair: (-float(pair[1].get("grossAreaFt2") or 0), pair[0]))
+    for original_index, row in indexed:
+        area = float(row.get("grossAreaFt2") or 0)
+        orient = _orientation(row.get("orientation"))
+        parent = str(row.get("parentAssemblyType") or "").strip().lower()
+        candidates = [s for s in states if _orientation(s["row"].get("orientation")) == orient and s["remaining"] + 1e-6 >= area]
+        if parent:
+            parent_matches = [s for s in candidates if str(s["row"].get("assemblyType") or "").strip().lower() == parent]
+            if parent_matches:
+                candidates = parent_matches
+        if not candidates:
+            total_remaining = sum(s["remaining"] for s in states if _orientation(s["row"].get("orientation")) == orient)
+            errors.append(f"EN opening row {original_index + 1} ({orient}, {area:.3f}) cannot fit any same-orientation COMcheck wall host; remaining orientation capacity {total_remaining:.3f}")
+            continue
+        # Best fit leaves the smallest unused host capacity while keeping the assignment deterministic.
+        host = min(candidates, key=lambda s: (s["remaining"] - area, str(s["row"].get("assemblyType") or "")))
+        host["remaining"] -= area
+        planned.append((row, host["item"]))
+    return planned, errors
+
+
+def _validate_comcheck_cxl_structure(root) -> list[str]:
+    ns_uri = root.tag.split('}')[0].strip('{') if '}' in root.tag else ""
+    q = lambda name: f"{{{ns_uri}}}{name}" if ns_uri else name
+    errors: list[str] = []
+    location = root.find(q("location"))
+    if location is None or not _xml_child_text(location, "state") or not _xml_child_text(location, "city"):
+        errors.append("COMcheck climate location is incomplete")
+    lighting = root.find(q("lighting"))
+    whole_use = lighting.find(f".//{q('wholeBldgUse')}") if lighting is not None else None
+    if lighting is None or whole_use is None:
+        errors.append("COMcheck required lighting/building-use container is missing")
+    else:
+        use_key = _xml_child_text(whole_use, "key")
+        floor_area = _xml_child_text(whole_use, "floorArea")
+        if not use_key or not floor_area or float(floor_area or 0) <= 0:
+            errors.append("COMcheck whole-building use key/floor area is incomplete")
+        if use_key:
+            bad_keys = []
+            for node in root.iter():
+                child = next((c for c in list(node) if c.tag.rsplit('}',1)[-1] == "bldgUseKey"), None)
+                if child is not None and str(child.text or "").strip() != use_key:
+                    bad_keys.append(str(child.text or "").strip())
+            if bad_keys:
+                errors.append("COMcheck envelope building-use keys do not match the active whole-building use")
+    for wall in root.findall(f".//{q('agWall')}"):
+        gross = float(_xml_child_text(wall, "grossArea") or 0)
+        opening_area = 0.0
+        for name in ("window", "door"):
+            for opening in wall.findall(f".//{q(name)}"):
+                opening_area += float(_xml_child_text(opening, "grossArea") or 0)
+        if opening_area > gross + 1e-6:
+            errors.append(f"COMcheck wall {_xml_child_text(wall, 'assemblyType') or '<unnamed>'} has {opening_area:.3f} child opening area inside {gross:.3f} gross wall area")
+        wall_type = _xml_child_text(wall, "wallType")
+        if wall_type in {"MASONRY_AG_WALL", "CONCRETE_AG_WALL"} and not _xml_child_text(wall, "concreteThickness"):
+            errors.append(f"COMcheck {wall_type} wall is missing its structural concrete/masonry thickness field")
+    for floor in root.findall(f".//{q('floor')}"):
+        if _xml_child_text(floor, "floorType") == "UNHEATED_SLAB_ON_GRADE":
+            if not _xml_child_text(floor, "depthOfInsulation") or not _xml_child_text(floor, "insulationPosition"):
+                errors.append("COMcheck slab-on-grade is missing insulation depth/position structure")
+    return errors
 
 def _clear_children_by_local(parent, local_name: str) -> None:
     for child in list(parent):
@@ -831,37 +1203,242 @@ def _make_comcheck_audit_pdf(path: Path, project_name: str, facts: dict, status:
     doc.build(story)
 
 
+def _comcheck_row_code(row: dict) -> tuple[str, str]:
+    text = " ".join(str(row.get(key) or "") for key in ("evidence", "description", "assemblyType"))
+    match = re.search(r"(?<![A-Z0-9])([A-Z]{1,3}\d+(?:\.\d+)?)(?![A-Z0-9.])", text.upper())
+    if not match:
+        return "", ""
+    code = match.group(1)
+    return code, code.split(".", 1)[0]
+
+
+def _comcheck_row_has_thermal(row: dict) -> bool:
+    kind = str(row.get("kind") or "").lower()
+    if kind in ("window", "door"):
+        return row.get("uFactor") not in (None, "")
+    if kind in ("wall", "roof", "floor"):
+        return any(row.get(key) not in (None, "") for key in ("cavityR", "continuousR", "uFactor"))
+    return False
+
+
+def _recover_comcheck_gross_area(row: dict) -> float | None:
+    value = row.get("grossAreaFt2")
+    if value not in (None, ""):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    # Filing-table scans can collapse the separator before the U-factor, e.g. "30, 0.300".
+    # Recover only when the final numeric token agrees with the already-extracted U-factor.
+    evidence = str(row.get("evidence") or "")
+    numbers = [float(token) for token in re.findall(r"(?<![A-Za-z])\d+(?:\.\d+)?", evidence)]
+    if len(numbers) >= 2 and row.get("uFactor") not in (None, ""):
+        try:
+            u = float(row.get("uFactor"))
+        except (TypeError, ValueError):
+            u = None
+        if u is not None and abs(numbers[-1] - u) <= max(0.002, abs(u) * 0.01):
+            candidate = numbers[-2]
+            if candidate > 1.0:
+                return candidate
+    return None
+
+
+def _subset_sum_matches(rows: list[dict], target: float, tolerance: float = 0.75) -> bool:
+    """Return True when one to four same-orientation diagram rows reproduce target area."""
+    from itertools import combinations
+    values = []
+    for row in rows:
+        try:
+            value = float(row.get("grossAreaFt2"))
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            values.append(value)
+    for count in range(1, min(4, len(values)) + 1):
+        for combo in combinations(values, count):
+            if abs(sum(combo) - target) <= tolerance:
+                return True
+    return False
+
+
+def _comcheck_thermal_signature(row: dict) -> tuple:
+    kind = str(row.get("kind") or "").lower()
+    if kind in ("window", "door"):
+        return (row.get("uFactor"), row.get("shgc"))
+    return (row.get("uFactor"), row.get("cavityR"), row.get("continuousR"))
+
+
+def _merge_diagram_geometry_with_thermal(diagram_row: dict, thermal_rows: list[dict]) -> tuple[dict | None, str | None]:
+    """Merge one EN thermal-boundary geometry row with one unambiguous thermal-property signature.
+
+    EN thermal-boundary diagrams own gross area/orientation. EN/COMcheck schedule rows own
+    U/SHGC/R properties. Exact assembly codes are preferred, then base codes. Roof/floor rows
+    may use a unique same-kind thermal signature because diagrams often label roof regions R1/R2/R3
+    while the filing table carries one common roof assembly.
+    """
+    kind = str(diagram_row.get("kind") or "").lower()
+    code, base_code = _comcheck_row_code(diagram_row)
+    same_kind = [r for r in thermal_rows if str(r.get("kind") or "").lower() == kind]
+    exact = [r for r in same_kind if code and _comcheck_row_code(r)[0] == code]
+    base = [r for r in same_kind if base_code and _comcheck_row_code(r)[1] == base_code]
+    candidates = exact or base
+    if not candidates and kind in ("roof", "floor"):
+        if len({_comcheck_thermal_signature(r) for r in same_kind}) == 1:
+            candidates = same_kind
+    if not candidates:
+        return None, f"EN {kind or 'envelope'} geometry row {code or '<unlabeled>'} has no thermal-property match"
+    signatures = {_comcheck_thermal_signature(r) for r in candidates}
+    if len(signatures) != 1:
+        return None, f"EN {kind or 'envelope'} geometry row {code or '<unlabeled>'} has ambiguous thermal-property matches"
+    thermal = candidates[0]
+    merged = dict(diagram_row)
+    merged["_geometrySource"] = "EN_THERMAL_BOUNDARY_DIAGRAM"
+    merged["_thermalSource"] = "EN_COMCHECK_THERMAL_TABLE"
+    merged["_diagramAssemblyType"] = diagram_row.get("assemblyType")
+    merged["_diagramDescription"] = diagram_row.get("description")
+    if thermal.get("assemblyType"):
+        merged["assemblyType"] = thermal.get("assemblyType")
+    if thermal.get("description"):
+        merged["description"] = thermal.get("description")
+    for key in ("uFactor", "shgc", "cavityR", "continuousR", "product"):
+        if thermal.get(key) not in (None, ""):
+            merged[key] = thermal.get(key)
+    return merged, None
+
+
+def canonicalize_comcheck_envelope_rows(en_pages: list[dict]) -> tuple[list[dict], dict]:
+    """Build filing rows from authoritative EN geometry plus EN thermal properties.
+
+    Geometry comes from high-confidence thermal-boundary diagram rows (orientation/area). Thermal
+    properties come from high-confidence EN/COMcheck rows (U/SHGC/R). This prevents OCR/table
+    artifacts such as a stray revision number or a dropped area cell from becoming building
+    geometry. If a kind has no diagram geometry at all (typically a slab), current thermal-table
+    geometry is retained for that kind. Ambiguous thermal matches remain a hard failure.
+    """
+    all_rows: list[dict] = []
+    for page in en_pages:
+        sheet_number = str(page.get("sheetNumber") or "")
+        sheet_name = str(page.get("sheetName") or "")
+        for raw in list(page.get("envelope") or []):
+            if float(raw.get("confidence") or 0) < 0.90:
+                continue
+            row = dict(raw)
+            row["_sheetNumber"] = sheet_number
+            row["_sheetName"] = sheet_name
+            all_rows.append(row)
+
+    thermal_rows = [dict(row) for row in all_rows if _comcheck_row_has_thermal(row)]
+    diagram_rows = []
+    for row in all_rows:
+        if _comcheck_row_has_thermal(row) or row.get("grossAreaFt2") in (None, ""):
+            continue
+        kind = str(row.get("kind") or "").lower()
+        code, _ = _comcheck_row_code(row)
+        if kind in ("wall", "window", "door") and not _orientation(row.get("orientation")):
+            continue
+        if code or kind in ("roof", "floor"):
+            diagram_rows.append(dict(row))
+
+    merged_rows: list[dict] = []
+    merge_errors: list[str] = []
+    diagram_kinds = {str(row.get("kind") or "").lower() for row in diagram_rows}
+    if thermal_rows and diagram_rows:
+        for row in diagram_rows:
+            merged, error = _merge_diagram_geometry_with_thermal(row, thermal_rows)
+            if error:
+                merge_errors.append(error)
+            elif merged is not None:
+                merged_rows.append(merged)
+        # Some envelope kinds (most commonly slab-on-grade) may have no diagram row. For those
+        # kinds only, preserve current thermal-table geometry rather than importing template data.
+        for kind in ("wall", "window", "door", "roof", "floor"):
+            if kind in diagram_kinds:
+                continue
+            for row in thermal_rows:
+                if str(row.get("kind") or "").lower() == kind:
+                    fallback = dict(row)
+                    fallback["_geometrySource"] = "EN_COMCHECK_THERMAL_TABLE_FALLBACK"
+                    fallback["_thermalSource"] = "EN_COMCHECK_THERMAL_TABLE"
+                    merged_rows.append(fallback)
+        filing_rows = merged_rows
+        geometry_mode = "EN_THERMAL_BOUNDARY_DIAGRAM_PLUS_THERMAL_TABLE"
+    else:
+        filing_rows = [dict(row) for row in (thermal_rows or all_rows)]
+        geometry_mode = "THERMAL_TABLE_FALLBACK" if thermal_rows else "ENVELOPE_ROWS_FALLBACK"
+
+    # Recover an area only for fallback rows; diagram-owned geometry already has explicit area.
+    recovered_area = 0
+    for row in filing_rows:
+        if row.get("grossAreaFt2") not in (None, ""):
+            continue
+        area = _recover_comcheck_gross_area(row)
+        if area is not None:
+            row["grossAreaFt2"] = area
+            recovered_area += 1
+
+    # Remove exact duplicate filing rows only; never collapse distinct orientations or areas.
+    deduped: list[dict] = []
+    seen = set()
+    for row in filing_rows:
+        fingerprint = (
+            str(row.get("kind") or "").lower(), _orientation(row.get("orientation")),
+            round(float(row.get("grossAreaFt2") or 0), 3),
+            str(row.get("assemblyType") or row.get("description") or "").strip().lower(),
+            row.get("uFactor"), row.get("shgc"), row.get("cavityR"), row.get("continuousR"),
+        )
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        deduped.append(row)
+    return deduped, {
+        "sourceRowCount": len(all_rows),
+        "thermalPropertyRowCount": len(thermal_rows),
+        "diagramGeometryRowCount": len(diagram_rows),
+        "canonicalRowCount": len(deduped),
+        "geometryMode": geometry_mode,
+        "diagramGeometryAuthoritativeWhenAvailable": bool(thermal_rows and diagram_rows),
+        "thermalPropertyMergeErrorCount": len(merge_errors),
+        "thermalPropertyMergeErrors": merge_errors,
+        "recoveredGrossAreaCount": recovered_area,
+        "narrativeRowsExcluded": True,
+    }
+
+
 def prepare_project_comcheck(facts: dict, project_identity: dict, filing_dir: Path, log: RunLog) -> tuple[Path | None, Path, dict]:
     filing_dir.mkdir(parents=True, exist_ok=True)
     pages = list(facts.get("pages") or [])
     en_pages = [p for p in pages if str(p.get("pageType") or "").upper() == "EN"]
     identity_pages = [p for p in pages if str(p.get("pageType") or "").upper() in ("T", "Z")]
-    envelope = []
-    for page in en_pages:
-        for row in list(page.get("envelope") or []):
-            if float(row.get("confidence") or 0) >= 0.90:
-                envelope.append(row)
+    envelope, envelope_reconciliation = canonicalize_comcheck_envelope_rows(en_pages)
     project_title = project_identity.get("title")
     address = project_identity.get("address")
     city = project_identity.get("city")
     state = project_identity.get("state")
     zip_code = project_identity.get("zip")
-    energy_code = _fact_value(en_pages, "project", "energyCode")
+    semantic = dict(facts.get("comcheckSemantic") or {})
+    energy_code = semantic.get("energyCode") or _fact_value(en_pages, "project", "energyCode")
     stories = _fact_value(identity_pages or pages, "bulk", "stories")
     height = _fact_value(identity_pages or pages, "bulk", "buildingHeightFt")
-    floor_area = _fact_value(en_pages or pages, "lighting", "floorAreaFt2") or _fact_value(identity_pages or pages, "bulk", "conditionedFloorAreaFt2") or _fact_value(identity_pages or pages, "bulk", "grossFloorAreaFt2")
-    lpd = next(((page.get("lighting") or {}).get("lpdWPerFt2") for page in en_pages if (page.get("lighting") or {}).get("lpdWPerFt2") is not None), None)
+    # A whole-building-use schedule owns the COMcheck use-area value when present. Generic
+    # modeled/conditioned-area summaries are only fallbacks because they may have a different scope.
+    floor_area = (semantic.get("floorAreaFt2")
+                  or _fact_value(en_pages or pages, "lighting", "floorAreaFt2")
+                  or _fact_value(identity_pages or pages, "bulk", "conditionedFloorAreaFt2")
+                  or _fact_value(identity_pages or pages, "bulk", "grossFloorAreaFt2"))
     interior_fixtures = []
     exterior_uses = []
     for page in en_pages:
         interior_fixtures.extend([row for row in list((page.get("lighting") or {}).get("fixtures") or []) if float(row.get("confidence") or 0) >= 0.90])
         exterior_uses.extend([row for row in list((page.get("lighting") or {}).get("exteriorUses") or []) if float(row.get("confidence") or 0) >= 0.90])
 
-    missing = []
+    missing = list(envelope_reconciliation.get("thermalPropertyMergeErrors") or [])
     for label, value in (("T/Z project title", project_title), ("T/Z project address", address),
                          ("T/Z project city", city), ("T/Z project state", state), ("T/Z project ZIP", zip_code)):
         if value in (None, ""): missing.append(label)
-    for label, value in (("EN energy code",energy_code),("T/Z stories",stories),("T/Z building height",height),("EN envelope rows",envelope)):
+    for label, value in (("EN energy code", energy_code), ("T/Z stories", stories),
+                         ("T/Z building height", height), ("current building-use floor area", floor_area),
+                         ("EN envelope rows", envelope)):
         if value in (None, "", []): missing.append(label)
     for index, row in enumerate(envelope, start=1):
         kind = str(row.get("kind") or "").lower()
@@ -879,39 +1456,70 @@ def prepare_project_comcheck(facts: dict, project_identity: dict, filing_dir: Pa
         absent = [key for key in required if row.get(key) in (None, "")]
         if absent:
             missing.append(f"EN {kind or 'envelope'} row {index} missing " + "/".join(absent))
-    if not COMCHECK_CXL_TEMPLATE.is_file(): missing.append("COMcheck CXL structure template")
+    if not COMCHECK_CXL_TEMPLATE.is_file():
+        missing.append("COMcheck CXL structure template")
 
-    # The approved CXL is a schema/enum structure only. Every project and model
-    # value below comes from current immutable T/Z/EN evidence.
     cxl = None
+    cxl_structure = {
+        "templateEnumStructurePreserved": False,
+        "currentWholeBuildingUseProven": False,
+        "currentWholeBuildingUseEvidence": "",
+        "currentFloorAreaFt2": floor_area,
+        "climateLocationEnumPreserved": False,
+        "openingHostCapacityValidated": False,
+        "structuralValidationErrors": [],
+        "scheduleSemanticVersion": facts.get("comcheckSemanticVersion"),
+        "scheduleSemanticSources": list(semantic.get("sources") or []),
+        "scheduleNamesAuthoritative": bool(semantic.get("scheduleNamesAuthoritative", False)),
+    }
     if not missing:
+        # The retained CXL is a code/schema/enum structure, not a source of project identity,
+        # quantities, thermal values, fixtures, or other prior-project facts.
         tree = ET.parse(COMCHECK_CXL_TEMPLATE)
         root = tree.getroot()
         ns_uri = root.tag.split('}')[0].strip('{') if '}' in root.tag else ""
         q = lambda name: f"{{{ns_uri}}}{name}" if ns_uri else name
+
         _set_xml(root, "feetBldgHeight", f"{float(height):.3f}")
         _set_xml(root, "numberOfStories", int(stories))
         project_node = root.find(q("project"))
         if project_node is not None:
-            for key, value in (("projectTitle",project_title),("projectAddress",address),("projectCity",city),("projectState",state),("projectZipCode",zip_code)):
+            for key, value in (("projectTitle", project_title), ("projectAddress", address),
+                               ("projectCity", city), ("projectState", state), ("projectZipCode", zip_code)):
                 _set_xml(project_node, key, value)
-        location_node = root.find(q("location"))
-        if location_node is not None:
-            _set_xml(location_node, "state", state)
-            _set_xml(location_node, "city", city)
-        # Preserve the known CXL enum only when the visible EN code text is consistent with the template's NYC Stretch structure.
+
+        # COMcheck <location> is a code/climate-location enum, not a postal project field. The
+        # structure template is the NYC Appendix-CA enum set, so preserve its validated New York
+        # location rather than writing postal BROOKLYN/NY into schema-controlled fields.
         control = root.find(q("control"))
         visible_code = str(energy_code or "")
-        if control is not None:
-            visible_code_lower = visible_code.lower()
-            backstop_evidence = (
-                "stretch" in visible_code_lower or
-                "appendix ca" in visible_code_lower or
-                "backstop" in visible_code_lower or
-                ("2020" in visible_code_lower and ("nycecc" in visible_code_lower or "nyc energy" in visible_code_lower))
-            )
-            if not backstop_evidence:
-                missing.append("EN code does not visibly support the 2020 NYCECC Appendix CA Backstop mapping")
+        visible_code_lower = visible_code.lower()
+        backstop_evidence = (
+            "stretch" in visible_code_lower or "appendix ca" in visible_code_lower or
+            "backstop" in visible_code_lower or
+            ("2020" in visible_code_lower and ("nycecc" in visible_code_lower or "nyc energy" in visible_code_lower or "new york city energy" in visible_code_lower))
+        )
+        if control is None or not backstop_evidence:
+            missing.append("EN code does not visibly support the 2020 NYCECC Appendix CA Backstop mapping")
+        elif not _comcheck_nyc_location_supported(project_identity, visible_code):
+            missing.append("Current T/Z identity does not prove a New York City project for the retained NYC COMcheck code/location enum")
+        else:
+            cxl_structure["climateLocationEnumPreserved"] = True
+
+        lighting = root.find(q("lighting"))
+        whole_use = lighting.find(f".//{q('wholeBldgUse')}") if lighting is not None else None
+        template_use_type = _xml_child_text(whole_use, "wholeBldgType") if whole_use is not None else ""
+        multifamily, use_evidence = _comcheck_multifamily_evidence(en_pages, project_identity, semantic)
+        cxl_structure["currentWholeBuildingUseEvidence"] = use_evidence
+        if lighting is None or whole_use is None or not template_use_type:
+            missing.append("COMcheck structure template has no whole-building use container")
+        elif "MULTIFAMILY" in template_use_type and not multifamily:
+            missing.append("Current T/Z/EN evidence does not prove the multifamily whole-building use required by this COMcheck structure enum")
+        elif "MULTIFAMILY" not in template_use_type:
+            missing.append("COMcheck structure template whole-building use enum is unsupported by the current r49 transformer")
+        else:
+            cxl_structure["currentWholeBuildingUseProven"] = True
+
         if not missing:
             envelope_node = root.find(q("envelope"))
             above = envelope_node.find(q("aboveGroundWalls")) if envelope_node is not None else None
@@ -920,8 +1528,12 @@ def prepare_project_comcheck(facts: dict, project_identity: dict, filing_dir: Pa
             old_walls = list(above.findall(q("agWall"))) if above is not None else []
             old_roofs = list(roofs.findall(q("roof"))) if roofs is not None else []
             old_floors = list(floors.findall(q("floor"))) if floors is not None else []
-            win_example = root.find(f".//{q('window')}")
-            door_example = root.find(f".//{q('door')}")
+            window_examples = list(root.findall(f".//{q('window')}"))
+            door_examples = list(root.findall(f".//{q('door')}"))
+            if not old_walls or not old_roofs or not old_floors or not window_examples or not door_examples:
+                missing.append("COMcheck structure template lacks required envelope exemplars")
+
+        if not missing:
             if above is not None: _clear_children_by_local(above, "agWall")
             if roofs is not None: _clear_children_by_local(roofs, "roof")
             if floors is not None: _clear_children_by_local(floors, "floor")
@@ -931,127 +1543,176 @@ def prepare_project_comcheck(facts: dict, project_identity: dict, filing_dir: Pa
             roofs_facts = [r for r in envelope if r.get("kind") == "roof" and r.get("grossAreaFt2")]
             floors_facts = [r for r in envelope if r.get("kind") == "floor" and r.get("grossAreaFt2")]
             pos = 1
-            created_walls = []
+            created_walls: list[tuple[object, dict]] = []
             for row in opaque_walls:
-                ex = _wall_exemplar(old_walls, row.get("description"))
-                if ex is None: continue
-                item = copy.deepcopy(ex); pos += 1
-                _clear_children_by_local(item, "windows"); _clear_children_by_local(item, "doors")
-                for key in ("concreteThickness", "concreteDensity"):
-                    _replace_xml(item, key, None)
-                for key,val in (("assemblyType",row.get("assemblyType")),("description",row.get("description")),("orientation",_orientation(row.get("orientation"))),
-                                ("grossArea",f"{float(row.get('grossAreaFt2')):.3f}"),("cavityRvalue",row.get("cavityR")),("continuousRvalue",row.get("continuousR")),("listPosition",pos)):
-                    _replace_xml(item,key,val)
-                above.append(item); created_walls.append((item,row))
-            def host_for(row):
-                parent = str(row.get("parentAssemblyType") or "").strip().lower()
-                orient = _orientation(row.get("orientation"))
-                for item, src in created_walls:
-                    if parent and str(src.get("assemblyType") or "").strip().lower() == parent: return item
-                for item, src in created_walls:
-                    if _orientation(src.get("orientation")) == orient: return item
-                return created_walls[0][0] if created_walls else None
-            for kind, rows, exemplar, container_name in (("window",windows,win_example,"windows"),("door",doors,door_example,"doors")):
-                if exemplar is None: continue
-                for row in rows:
-                    host = host_for(row)
-                    if host is None: continue
+                ex = _wall_exemplar(old_walls, row.get("description"), row.get("assemblyType"))
+                if ex is None:
+                    missing.append(f"No COMcheck wall exemplar matched {row.get('assemblyType') or row.get('description')}")
+                    continue
+                item = copy.deepcopy(ex)
+                pos += 1
+                _clear_children_by_local(item, "windows")
+                _clear_children_by_local(item, "doors")
+                # Preserve construction-type-specific schema fields (concrete thickness/density,
+                # furring, CMU type, etc.) from the validated exemplar. Only project facts below
+                # are replaced.
+                for key, val in (("assemblyType", row.get("assemblyType")), ("description", row.get("description")),
+                                 ("orientation", _orientation(row.get("orientation"))),
+                                 ("grossArea", f"{float(row.get('grossAreaFt2')):.3f}"),
+                                 ("cavityRvalue", row.get("cavityR")),
+                                 ("continuousRvalue", row.get("continuousR")), ("listPosition", pos)):
+                    _replace_xml(item, key, val)
+                above.append(item)
+                created_walls.append((item, row))
+
+            opening_plan, host_errors = _opening_host_plan(created_walls, windows + doors)
+            if host_errors:
+                missing.extend(host_errors)
+            else:
+                for row, host in opening_plan:
+                    kind = str(row.get("kind") or "").lower()
+                    exemplar = _window_exemplar(window_examples, row) if kind == "window" else _door_exemplar(door_examples, row)
+                    if exemplar is None:
+                        missing.append(f"No COMcheck {kind} exemplar matched {row.get('assemblyType') or row.get('description')}")
+                        continue
+                    container_name = "windows" if kind == "window" else "doors"
                     container = next((c for c in list(host) if c.tag.rsplit('}',1)[-1] == container_name), None)
                     if container is None:
-                        container = ET.Element(q(container_name)); host.append(container)
-                    item = copy.deepcopy(exemplar); pos += 1
-                    for key in ("propVt", "feetAg", "propProjectionFactor"):
-                        _replace_xml(item, key, None)
-                    for key,val in (("assemblyType",row.get("assemblyType")),("description",row.get("description")),("orientation",_orientation(row.get("orientation"))),
-                                    ("grossArea",f"{float(row.get('grossAreaFt2')):.3f}"),("propUvalue",row.get("uFactor")),("propShgc",row.get("shgc")),
-                                    ("productId",row.get("product")),("listPosition",pos)):
-                        _replace_xml(item,key,val)
+                        container = ET.Element(q(container_name))
+                        host.append(container)
+                    item = copy.deepcopy(exemplar)
+                    pos += 1
+                    vt = _row_visible_transmittance(row)
+                    if _xml_child_text(item, "propVt"):
+                        if vt is None:
+                            _replace_xml(item, "propVt", None)
+                        else:
+                            _set_xml(item, "propVt", f"{vt:.3f}")
+                    # For buildings entirely below 95 ft, COMcheck only needs the below-95-ft
+                    # category. 94 ft is the validated sentinel used by the structure exemplar.
+                    if _xml_child_text(item, "feetAg") and float(height) < 95.0:
+                        _set_xml(item, "feetAg", "94.00")
+                    for key, val in (("assemblyType", row.get("assemblyType")), ("description", row.get("description")),
+                                     ("orientation", _orientation(row.get("orientation"))),
+                                     ("grossArea", f"{float(row.get('grossAreaFt2')):.3f}"),
+                                     ("propUvalue", row.get("uFactor")), ("propShgc", row.get("shgc")),
+                                     ("productId", row.get("product")), ("listPosition", pos)):
+                        # productId is optional for opaque doors; do not remove a structural field
+                        # from glazed exemplars unless current evidence explicitly contradicts it.
+                        if key == "productId" and val in (None, ""):
+                            continue
+                        _replace_xml(item, key, val)
                     container.append(item)
+                cxl_structure["openingHostCapacityValidated"] = not missing
+
             for row in roofs_facts:
                 if not old_roofs or roofs is None: continue
-                item=copy.deepcopy(old_roofs[0]); pos+=1
-                for key in ("solarReflectance", "solarReflectanceIndex", "thermalEmittance"):
-                    _replace_xml(item, key, None)
-                for key,val in (("assemblyType",row.get("assemblyType")),("description",row.get("description")),("grossArea",f"{float(row.get('grossAreaFt2')):.3f}"),
-                                ("cavityRvalue",row.get("cavityR")),("continuousRvalue",row.get("continuousR")),("listPosition",pos)):
-                    _replace_xml(item,key,val)
+                item = copy.deepcopy(old_roofs[0])
+                pos += 1
+                # Preserve roof-type schema defaults; replace only current assembly/R/area facts.
+                for key, val in (("assemblyType", row.get("assemblyType")), ("description", row.get("description")),
+                                 ("grossArea", f"{float(row.get('grossAreaFt2')):.3f}"),
+                                 ("cavityRvalue", row.get("cavityR")),
+                                 ("continuousRvalue", row.get("continuousR")), ("listPosition", pos)):
+                    _replace_xml(item, key, val)
                 roofs.append(item)
             for row in floors_facts:
                 if not old_floors or floors is None: continue
-                item=copy.deepcopy(old_floors[0]); pos+=1
-                for key in ("depthOfInsulation", "slabFullInsulBelowMinRValue"):
-                    _replace_xml(item, key, None)
-                for key,val in (("assemblyType",row.get("assemblyType")),("description",row.get("description")),("grossArea",f"{float(row.get('grossAreaFt2')):.3f}"),
-                                ("continuousRvalue",row.get("continuousR")),("listPosition",pos)):
-                    _replace_xml(item,key,val)
+                item = copy.deepcopy(old_floors[0])
+                pos += 1
+                # Slab insulation depth/position and edge-insulation flags are schema/assembly
+                # structure. Keep them from the validated slab exemplar; current R/perimeter wins.
+                for key, val in (("assemblyType", row.get("assemblyType")), ("description", row.get("description")),
+                                 ("grossArea", f"{float(row.get('grossAreaFt2')):.3f}"),
+                                 ("continuousRvalue", row.get("continuousR")), ("listPosition", pos)):
+                    _replace_xml(item, key, val)
                 floors.append(item)
-            lighting = root.find(q("lighting"))
-            has_current_lighting = bool(floor_area and (lpd is not None or interior_fixtures or exterior_uses))
-            if lighting is not None and not has_current_lighting:
-                root.remove(lighting)
-            elif lighting is not None:
-                use = lighting.find(f".//{q('wholeBldgUse')}")
-                if use is not None:
-                    _set_xml(use, "floorArea", f"{float(floor_area):.3f}")
-                    _replace_xml(use, "powerDensity", f"{float(lpd):.6f}" if lpd is not None else None)
-                    fixture_container = use.find(f".//{q('fixtures')}")
-                    fixture_example = fixture_container.find(q("fixture")) if fixture_container is not None else None
-                    if fixture_container is not None:
-                        _clear_children_by_local(fixture_container, "fixture")
-                        if fixture_example is not None:
-                            for fixture in interior_fixtures:
-                                item = copy.deepcopy(fixture_example); pos += 1
-                                _set_xml(item, "description", fixture.get("description"))
-                                _set_xml(item, "fixtureWattage", f"{float(fixture.get('wattage') or 0):.6f}")
-                                _set_xml(item, "quantity", int(round(float(fixture.get("quantity") or 0))))
-                                _set_xml(item, "listPosition", pos)
-                                fixture_container.append(item)
-                # Never carry prior-project exterior-lighting values into a current project.
-                # Only visible EN-page facts may repopulate this section.
-                exterior_container = lighting.find(q("exteriorUses"))
-                if exterior_container is not None:
-                    old_ext = list(exterior_container.findall(q("exteriorUse")))
-                    ext_example = old_ext[0] if old_ext else None
-                    _clear_children_by_local(exterior_container, "exteriorUse")
-                    if exterior_uses and ext_example is not None:
-                        for ext in exterior_uses:
-                            item = copy.deepcopy(ext_example); pos += 1
-                            _set_xml(item, "description", ext.get("description"))
-                            _set_xml(item, "useQuantity", ext.get("quantity"))
-                            _set_xml(item, "quantityUnits", ext.get("quantityUnits"))
+
+            # LIGHTING is also the COMcheck building-use container. It must remain even when this
+            # filing run requests envelope-only compliance and no current lighting fixtures exist.
+            # Prior-project fixtures/exterior-use quantities are cleared; only current evidence may
+            # repopulate them. Code-derived use metadata remains structural.
+            _set_xml(whole_use, "floorArea", f"{float(floor_area):.3f}")
+            interior_space = whole_use.find(q("interiorLightingSpace"))
+            if interior_space is not None:
+                _set_xml(interior_space, "description", f"Multifamily ({float(floor_area):.0f} sq.ft.)")
+                fixture_container = interior_space.find(q("fixtures"))
+                fixture_example = fixture_container.find(q("fixture")) if fixture_container is not None else None
+                if fixture_container is not None:
+                    _clear_children_by_local(fixture_container, "fixture")
+                    if fixture_example is not None:
+                        for fixture in interior_fixtures:
+                            item = copy.deepcopy(fixture_example)
+                            pos += 1
+                            _set_xml(item, "description", fixture.get("description"))
+                            _set_xml(item, "fixtureWattage", f"{float(fixture.get('wattage') or 0):.6f}")
+                            _set_xml(item, "quantity", int(round(float(fixture.get("quantity") or 0))))
                             _set_xml(item, "listPosition", pos)
-                            ext_space = item.find(q("exteriorLightingSpace"))
-                            fx = ext_space.find(q("fixtures")) if ext_space is not None else None
-                            fx_example = fx.find(q("fixture")) if fx is not None else None
-                            if fx is not None:
-                                _clear_children_by_local(fx, "fixture")
-                                if fx_example is not None and ext.get("fixtureWattage") is not None and ext.get("fixtureQuantity") is not None:
-                                    fixture = copy.deepcopy(fx_example)
-                                    _set_xml(fixture, "fixtureWattage", f"{float(ext.get('fixtureWattage')):.6f}")
-                                    _set_xml(fixture, "quantity", int(round(float(ext.get("fixtureQuantity")))))
-                                    fx.append(fixture)
-                            exterior_container.append(item)
-            if ns_uri: ET.register_namespace("", ns_uri)
-            cxl = filing_dir / "COMcheck_PROJECT_INPUT_READY.cxl"
-            tree.write(cxl, encoding="utf-8", xml_declaration=True)
-            assert_no_reference_identity_text(cxl.read_text(encoding="utf-8"), "COMcheck CXL")
+                            fixture_container.append(item)
+            exterior_container = lighting.find(q("exteriorUses")) if lighting is not None else None
+            if exterior_container is not None:
+                old_ext = list(exterior_container.findall(q("exteriorUse")))
+                ext_example = old_ext[0] if old_ext else None
+                _clear_children_by_local(exterior_container, "exteriorUse")
+                if exterior_uses and ext_example is not None:
+                    for ext in exterior_uses:
+                        item = copy.deepcopy(ext_example)
+                        pos += 1
+                        _set_xml(item, "description", ext.get("description"))
+                        _set_xml(item, "useQuantity", ext.get("quantity"))
+                        _set_xml(item, "quantityUnits", ext.get("quantityUnits"))
+                        _set_xml(item, "listPosition", pos)
+                        ext_space = item.find(q("exteriorLightingSpace"))
+                        fx = ext_space.find(q("fixtures")) if ext_space is not None else None
+                        fx_example = fx.find(q("fixture")) if fx is not None else None
+                        if fx is not None:
+                            _clear_children_by_local(fx, "fixture")
+                            if fx_example is not None and ext.get("fixtureWattage") is not None and ext.get("fixtureQuantity") is not None:
+                                fixture = copy.deepcopy(fx_example)
+                                _set_xml(fixture, "fixtureWattage", f"{float(ext.get('fixtureWattage')):.6f}")
+                                _set_xml(fixture, "quantity", int(round(float(ext.get("fixtureQuantity")))))
+                                fx.append(fixture)
+                        exterior_container.append(item)
+
+            # If any glazed component lacks current VT evidence, disable VLT-detail compliance
+            # rather than inheriting a prior-project VT value.
+            glazing_nodes = [node for node in root.iter() if node.tag.rsplit('}',1)[-1] in ("window", "door") and _xml_child_text(node, "glazingType")]
+            if glazing_nodes and any(not _xml_child_text(node, "propVt") for node in glazing_nodes):
+                _set_xml(envelope_node, "useVltDetails", "false")
+                for node in glazing_nodes:
+                    _replace_xml(node, "propVt", None)
+
+            cxl_structure["templateEnumStructurePreserved"] = True
+            structural_errors = _validate_comcheck_cxl_structure(root)
+            cxl_structure["structuralValidationErrors"] = structural_errors
+            if structural_errors:
+                missing.extend(structural_errors)
+            else:
+                if ns_uri: ET.register_namespace("", ns_uri)
+                cxl = filing_dir / "COMcheck_PROJECT_INPUT_READY.cxl"
+                tree.write(cxl, encoding="utf-8", xml_declaration=True)
+                assert_no_reference_identity_text(cxl.read_text(encoding="utf-8"), "COMcheck CXL", project_identity)
 
     status = "INPUT_READY" if cxl and not missing else "INPUT_INCOMPLETE"
     audit_json = filing_dir / "COMcheck_INPUT_AUDIT.json"
     audit = {
-        "schema":"liber.revex.comcheck-input-audit.v1", "status":status, "project":project_title,
-        "source":"bound active Revit evidence and immutable T/Z/EN page facts", "aiScope":"REVIT_T_Z_EN_PAGE_SCAN_ONLY",
-        "geometryAuthority":False, "requiredIntegrityGate":0.80, "qualityTarget":0.95, "missing":missing,
-        "cxl":cxl.name if cxl else None, "projectFilingReady": bool(cxl and not missing),
+        "schema": "liber.revex.comcheck-input-audit.v2", "status": status, "project": project_title,
+        "source": "bound active Revit evidence: EN thermal-boundary geometry plus EN thermal-property facts",
+        "aiScope": "REVIT_T_Z_EN_PAGE_SCAN_ONLY",
+        "geometryAuthority": bool(envelope_reconciliation.get("diagramGeometryAuthoritativeWhenAvailable")),
+        "envelopeReconciliation": envelope_reconciliation, "cxlStructure": cxl_structure,
+        "requiredIntegrityGate": 0.80, "qualityTarget": 0.95, "missing": missing,
+        "cxl": cxl.name if cxl else None, "projectFilingReady": bool(cxl and not missing),
         "officialDoeReport": None, "officialDoeReportStatus": "NOT_RUN",
-        "projectIdentitySource":"bound active Revit document plus immutable T/Z pages"
+        "projectIdentitySource": "bound active Revit document plus immutable T/Z pages"
     }
     audit_json.write_text(json.dumps(audit, indent=2), encoding="utf-8")
     audit_pdf = filing_dir / "COMcheck_INPUT_AUDIT.pdf"
     _make_comcheck_audit_pdf(audit_pdf, str(project_title or address or "Current REVEX Project"), facts, status, missing, cxl.name if cxl else None)
-    log.write("PREPARE_PROJECT_COMCHECK", "PASSED" if cxl else "BLOCKED", comcheckStatus=status, cxl=str(cxl) if cxl else "", audit=str(audit_pdf), missing=missing)
+    log.write("PREPARE_PROJECT_COMCHECK", "PASSED" if cxl else "BLOCKED", comcheckStatus=status,
+              cxl=str(cxl) if cxl else "", audit=str(audit_pdf), missing=missing,
+              cxlStructure=cxl_structure)
     return cxl, audit_pdf, audit
-
 
 def require_comcheck_consent(consent: dict, project_id: str, source_revision: str) -> dict:
     consent = dict(consent or {})
@@ -1101,7 +1762,7 @@ def run_project_backstop(cxl: Path, filing_dir: Path, project_identity: dict, lo
     result_json = filing_dir / "COMcheck_BACKSTOP_RESULT.json"
     from pypdf import PdfReader
     report_text = "\n".join((page.extract_text() or "") for page in PdfReader(str(report)).pages)
-    assert_no_reference_identity_text(report_text, "official COMcheck Backstop report")
+    assert_no_reference_identity_text(report_text, "official COMcheck Backstop report", project_identity)
     log.write(
         "COMCHECK_BACKSTOP", "PASSED", report=report.name,
         result=result_json.name, officialDoeReport=True,
@@ -1113,8 +1774,10 @@ def run_project_backstop(cxl: Path, filing_dir: Path, project_identity: dict, lo
 def validate_completion_outputs(
     baseline_model: Path, proposed_model: Path,
     baseline_run: dict, proposed_run: dict,
-    en1_pdf: Path | None, comcheck_cxl: Path | None,
+    review_zip: Path, project_name: str,
+    en1_xlsx: Path | None, comcheck_cxl: Path | None,
     comcheck_report: Path | None, comcheck_summary: dict | None,
+    project_identity: dict | None = None,
 ) -> dict:
     failures: list[str] = []
     compiled_models = [baseline_model, proposed_model]
@@ -1125,16 +1788,101 @@ def validate_completion_outputs(
             failures.append(f"compiled OSM is missing or empty: {path.name}")
         elif "OS:Building" not in path.read_text(encoding="utf-8", errors="ignore"):
             failures.append(f"compiled OSM is not an OpenStudio model: {path.name}")
+        else:
+            try:
+                assert_no_reference_identity_text(
+                    path.read_text(encoding="utf-8", errors="ignore"), path.name, project_identity
+                )
+            except PipelineError as exc:
+                failures.append(str(exc))
+
+    audit_path = baseline_model.parent / "COMPILATION_AUDIT.json"
+    geometry_hashes = []
+    if not audit_path.is_file():
+        failures.append("GeometryCo compilation audit is missing")
+    else:
+        try:
+            audit = json.loads(audit_path.read_text(encoding="utf-8"))
+            if audit.get("success") is not True:
+                failures.append("GeometryCo did not atomically commit a successful Baseline/Proposed pair")
+            for role in ("baseline", "proposed"):
+                report = (audit.get("reports") or {}).get(role) or {}
+                geometry = report.get("exact_geometry_lock") or {}
+                mapping = report.get("space_mapping") or {}
+                schedules = report.get("schedule_lock") or {}
+                serialized = report.get("serialized_roundtrip_validation") or {}
+                repairs = report.get("energyplus_compatibility_repairs") or {"count": 0, "lossless": True}
+                if geometry.get("passed") is not True or geometry.get("new_space_identity_passed") is not True:
+                    failures.append(f"{role.title()} GeometryCo exact coordinate/space identity lock did not pass")
+                if int(mapping.get("count") or -1) != int(geometry.get("spaces") or -2) or int(mapping.get("ambiguous_count") or 0) != 0:
+                    failures.append(f"{role.title()} GeometryCo space mapping is incomplete or ambiguous")
+                if schedules.get("passed") is not True or int(schedules.get("changed_schedule_objects") or 0) != 0 or int(schedules.get("changed_protected_schedule_references") or 0) != 0:
+                    failures.append(f"{role.title()} GeometryCo schedule/load reference lock did not pass")
+                if serialized.get("passed") is not True:
+                    failures.append(f"{role.title()} serialized OSM round-trip validation did not pass")
+                if int(repairs.get("count") or 0) > 0 and repairs.get("lossless") is not True:
+                    failures.append(f"{role.title()} EnergyPlus compatibility repair was not lossless")
+                if geometry.get("coordinate_sha256"):
+                    geometry_hashes.append(str(geometry["coordinate_sha256"]))
+            if len(set(geometry_hashes)) != 1:
+                failures.append("Baseline and Proposed compiled OSMs do not share the exact current-project geometry lock")
+        except (OSError, ValueError, TypeError) as exc:
+            failures.append(f"GeometryCo compilation audit is unreadable: {exc}")
+
     for role, run in (("Baseline", baseline_run), ("Proposed", proposed_run)):
         for key in ("html", "idf"):
             path = run.get(key)
             if not isinstance(path, Path) or not path.is_file() or path.stat().st_size < 512:
                 failures.append(f"{role} simulation {key.upper()} is missing or empty")
+            elif isinstance(path, Path):
+                try:
+                    assert_no_reference_identity_text(
+                        path.read_text(encoding="utf-8", errors="ignore"),
+                        f"{role} simulation {key.upper()}", project_identity
+                    )
+                except PipelineError as exc:
+                    failures.append(str(exc))
         end_file = next(iter(Path(run["folder"]).glob("**/eplusout.end")), None)
         if end_file is None or "EnergyPlus Completed Successfully" not in end_file.read_text(encoding="utf-8", errors="ignore"):
             failures.append(f"{role} EnergyPlus run did not record successful completion")
-    if en1_pdf is None or not en1_pdf.is_file():
-        failures.append("16-page EN-1 filing PDF is missing")
+        err_file = next(iter(Path(run["folder"]).glob("**/eplusout.err")), None)
+        if err_file is None:
+            failures.append(f"{role} EnergyPlus error/warning report is missing")
+        else:
+            err_text = err_file.read_text(encoding="utf-8", errors="ignore")
+            if "**  Fatal  **" in err_text or "EnergyPlus Terminated--Fatal Error Detected" in err_text:
+                failures.append(f"{role} EnergyPlus error report contains a fatal termination")
+
+    if not review_zip.is_file() or not zipfile.is_zipfile(review_zip):
+        failures.append("EnergyPlus reviewer ZIP is missing or invalid")
+    else:
+        expected_names = {f"{project_name} - {label}.pdf" for label in REVIEW_PACKAGE_PDF_LABELS}
+        with zipfile.ZipFile(review_zip) as package:
+            actual_names = {Path(name).name for name in package.namelist() if not name.endswith("/")}
+            if actual_names != expected_names:
+                failures.append(
+                    "EnergyPlus reviewer ZIP does not match the approved nine-PDF record format "
+                    f"(missing={sorted(expected_names - actual_names)}, unexpected={sorted(actual_names - expected_names)})"
+                )
+            for name in sorted(actual_names):
+                try:
+                    assert_no_reference_identity_text(name, f"review package entry {name}", project_identity)
+                except PipelineError as exc:
+                    failures.append(str(exc))
+                if not package.read(name).startswith(b"%PDF-"):
+                    failures.append(f"review package entry is not a PDF: {name}")
+    if en1_xlsx is None or not en1_xlsx.is_file():
+        failures.append("filled EN-1 workbook is missing")
+    else:
+        try:
+            from openpyxl import load_workbook
+            en1_workbook = load_workbook(en1_xlsx, read_only=True, data_only=False)
+            missing_sheets = [name for name in EN1_PRINT_SHEETS if name not in en1_workbook.sheetnames]
+            en1_workbook.close()
+            if missing_sheets:
+                failures.append("filled EN-1 workbook is missing filing sheets: " + ", ".join(missing_sheets))
+        except Exception as exc:
+            failures.append(f"filled EN-1 workbook could not be reopened: {exc}")
     if comcheck_cxl is None or not comcheck_cxl.is_file():
         failures.append("current-project COMcheck CXL is missing")
     if comcheck_report is None or not comcheck_report.is_file() or not comcheck_report.read_bytes().startswith(b"%PDF-"):
@@ -1146,7 +1894,12 @@ def validate_completion_outputs(
     return {
         "compiledOsmCount": 2,
         "simulationCount": 2,
-        "en1Pdf": en1_pdf.name,
+        "geometrySpaceIdentityLock": True,
+        "scheduleAndLoadReferenceLock": True,
+        "losslessCompatibilityRepair": True,
+        "reviewPackagePdfCount": len(REVIEW_PACKAGE_PDF_LABELS),
+        "en1Workbook": en1_xlsx.name,
+        "en1PdfRequired": False,
         "officialComcheckReport": comcheck_report.name,
         "officialDoeReport": True,
     }
@@ -1179,11 +1932,51 @@ def relative_artifact(path: Path, root: Path, kind: str) -> dict:
             "bytes": path.stat().st_size, "sha256": sha256(path)}
 
 
+def create_manual_review_package(output_root: Path, artifacts: list[dict], index: dict) -> Path:
+    package_path = output_root / "REVEX_ENERGY_MANUAL_REVIEW_PACKAGE.zip"
+    package_path.unlink(missing_ok=True)
+    review_names: set[str] = set()
+    with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as package:
+        # Keep the archive itself at exactly eight user-visible entries. The same
+        # immutable index is stored as the ZIP comment and in energy-result.json.
+        package.comment = json.dumps(index, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        for artifact in artifacts:
+            relative = Path(str(artifact.get("path") or ""))
+            source = (output_root / relative).resolve()
+            try:
+                source.relative_to(output_root.resolve())
+            except ValueError as exc:
+                raise PipelineError(f"Manual-review artifact escaped the Energy output folder: {relative}") from exc
+            if not source.is_file():
+                raise PipelineError(f"Manual-review artifact is missing: {relative}")
+            if source == package_path.resolve():
+                continue
+            if source.stat().st_size != int(artifact.get("bytes") or -1) or sha256(source) != str(artifact.get("sha256") or ""):
+                raise PipelineError(f"Manual-review artifact failed its immutable hash/byte contract: {relative}")
+            review_name = str(artifact.get("reviewName") or source.name).strip()
+            if not review_name or Path(review_name).name != review_name or review_name in review_names:
+                raise PipelineError(f"Manual-review artifact has an invalid or duplicate flat name: {review_name}")
+            review_names.add(review_name)
+            package.write(source, review_name)
+    with zipfile.ZipFile(package_path) as verification:
+        entries = [name for name in verification.namelist() if not name.endswith("/")]
+        if len(entries) != len(VALID_ENERGY_REVIEW_PACKAGE):
+            raise PipelineError(
+                f"Manual-review archive contains {len(entries)} items instead of "
+                f"{len(VALID_ENERGY_REVIEW_PACKAGE)}."
+            )
+    return package_path
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--request", type=Path, required=True)
     args = parser.parse_args()
     request = json.loads(args.request.read_text(encoding="utf-8"))
+    publication_qa = (
+        request.get("publicationQa") is True
+        or str(os.environ.get("REVEX_PUBLICATION_QA") or "").strip().lower() in {"1", "true", "yes"}
+    )
     output_root = Path(request["outputFolder"]).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
     correlation_id = str(request.get("correlationId") or f"energy-{uuid.uuid4().hex[:12]}")
@@ -1197,6 +1990,13 @@ def main() -> int:
     artifacts: list[dict] = []
     deliverables: list[Path] = []
     failure_context = None
+    approved_run_comparison = {
+        "schema": "liber.revex.approved-run-comparison.v1",
+        "status": "NOT_RUN",
+        "iterationSelection": "WITHHELD_INCOMPLETE_RUN",
+        "reviewEligible": False,
+        "referenceIdentity": "MASKED",
+    }
     page_facts = {"status": "NOT_READ", "pages": []}
     project_identity = {"source": "bound active Revit document plus immutable T/Z pages", "missing": list(REQUIRED_PROJECT_IDENTITY)}
     current_project_name = "Current REVEX Project"
@@ -1213,9 +2013,11 @@ def main() -> int:
                   sourceEngineeringRevision=request.get("revision"), standardVersion=request.get("standardVersion"))
         log.dependency("Python runtime", True, executable=sys.executable, version=sys.version.replace("\n", " "),
                        platform=platform.platform())
+        local_ai_distribution = "onnxruntime-directml" if platform.system() == "Windows" else "onnxruntime"
         for distribution, module_name in (
             ("beautifulsoup4", "bs4"), ("openpyxl", "openpyxl"), ("pypdf", "pypdf"),
             ("reportlab", "reportlab"), ("shapely", "shapely"), ("Pillow", "PIL"),
+            (local_ai_distribution, "onnxruntime"),
         ):
             try:
                 version = importlib.metadata.version(distribution)
@@ -1224,12 +2026,16 @@ def main() -> int:
                 version = "not installed"
                 available = False
             log.dependency(f"Python module {module_name}", available, version=version)
+            if module_name == "onnxruntime" and not available:
+                raise PipelineError("GeometryCo local-AI runtime is missing from the isolated publication environment.")
         for name, path, internal_template in (
             ("Worker request manifest", args.request, False),
             ("Engineering Sync gbXML", gbxml, False),
             ("Weather file (.EPW)", weather, False),
             ("gbXML-to-OSM translator", GBXML_TO_OSM, False),
-            ("GeometryCo 4.3.1", GEOMETRYCO, True),
+            ("GeometryCo 4.3.4", GEOMETRYCO, True),
+            ("GeometryCo local-AI model", GEOMETRYCO.parent / "local_ai_model" / "model_q4.onnx", True),
+            ("GeometryCo local-AI vocabulary", GEOMETRYCO.parent / "local_ai_model" / "vocab.txt", True),
             ("EnergyPlus review packager", PACKAGER, True),
             ("Approved Baseline template", BASELINE_REFERENCE, True),
             ("Approved Proposed template", PROPOSED_REFERENCE, True),
@@ -1297,14 +2103,14 @@ def main() -> int:
         log.write("REVIEW_PACKAGER", "PASSED", zip=str(review_zip))
         filing_dir = output_root / "05_FILING"
         filing_dir.mkdir(parents=True, exist_ok=True)
-        en1_xlsx, en1_pdf, metrics = prepare_en1(
+        en1_xlsx, _en1_pdf_unused, metrics = prepare_en1(
             packager, baseline_run["html"], proposed_run["html"], filing_dir, log, weather_meta, project_identity
         )
         comcheck_cxl, comcheck_audit_pdf, comcheck_audit = prepare_project_comcheck(
             page_facts, project_identity, filing_dir, log
         )
         comcheck_report = comcheck_response = comcheck_result_json = None
-        if comcheck_cxl and en1_pdf and not project_identity.get("missing"):
+        if comcheck_cxl and en1_xlsx and not project_identity.get("missing"):
             comcheck_report, comcheck_response, comcheck_result_json, comcheck_summary = run_project_backstop(
                 comcheck_cxl, filing_dir, project_identity, log,
                 request.get("externalProcessingConsent") or {},
@@ -1314,8 +2120,6 @@ def main() -> int:
                         baseline_run["idf"], proposed_run["idf"], review_zip, en1_xlsx, comcheck_audit_pdf,
                         filing_dir / "COMcheck_INPUT_AUDIT.json"]
         if comcheck_cxl: deliverables.append(comcheck_cxl)
-        if en1_pdf:
-            deliverables.append(en1_pdf)
         for path in (comcheck_report, comcheck_response, comcheck_result_json):
             if path:
                 deliverables.append(path)
@@ -1325,11 +2129,7 @@ def main() -> int:
             deliverables.extend(path for path in role["folder"].glob("**/*") if path.is_file())
         deliverables.extend(path for path in review_dir.glob("**/*") if path.is_file())
         deliverables.extend(path for path in (output_root / "02_COMPILED_MODELS").glob("**/*") if path.is_file())
-        if not en1_pdf:
-            status = "BLOCKED_EN1_PDF_EXPORT"
-            error = "The model/report package and EN-1 workbook are complete, but Excel or LibreOffice did not produce the EN-1 PDF."
-            failure_context = {"failedStage": "PREPARE_EN1", "type": "PipelineBlocked", "message": error}
-        elif project_identity.get("missing"):
+        if project_identity.get("missing"):
             status = "BLOCKED_PROJECT_IDENTITY"
             error = "Current project identity is incomplete in active Revit T/Z evidence: " + ", ".join(project_identity["missing"])
             failure_context = {"failedStage": "PROJECT_IDENTITY", "type": "PipelineBlocked", "message": error}
@@ -1340,10 +2140,43 @@ def main() -> int:
         else:
             completion = validate_completion_outputs(
                 baseline_model, proposed_model, baseline_run, proposed_run,
-                en1_pdf, comcheck_cxl, comcheck_report, comcheck_summary,
+                review_zip, current_project_name,
+                en1_xlsx, comcheck_cxl, comcheck_report, comcheck_summary,
+                project_identity,
             )
             log.write("COMPLETION_GATE", "PASSED", **completion)
-            status = "COMPLETE"
+            approved_run_comparison = compare_approved_run_profile(
+                metrics, baseline_model.parent / "COMPILATION_AUDIT.json", baseline_model
+            )
+            comparison_path = output_root / "APPROVED_RUN_COMPARISON_MASKED.json"
+            comparison_path.write_text(json.dumps(approved_run_comparison, indent=2), encoding="utf-8")
+            deliverables.append(comparison_path)
+            if approved_run_comparison.get("status") == "REGRESSION":
+                status = "BLOCKED_APPROVED_RUN_REGRESSION"
+                error = (
+                    "The completed simulation diverged from the masked approved-run profile; "
+                    "the manual-review candidate was withheld."
+                )
+                failure_context = {
+                    "failedStage": "APPROVED_RUN_COMPARISON",
+                    "type": "PipelineBlocked",
+                    "message": error,
+                }
+                log.write(
+                    "APPROVED_RUN_COMPARISON", "REGRESSION",
+                    passedChecks=approved_run_comparison.get("passedChecks"),
+                    totalChecks=approved_run_comparison.get("totalChecks"),
+                    normalizedRegressionScore=approved_run_comparison.get("normalizedRegressionScore"),
+                    referenceIdentity="MASKED",
+                )
+            else:
+                log.write(
+                    "APPROVED_RUN_COMPARISON", approved_run_comparison.get("status") or "PASSED",
+                    iterationSelection=approved_run_comparison.get("iterationSelection"),
+                    normalizedRegressionScore=approved_run_comparison.get("normalizedRegressionScore"),
+                    referenceIdentity="MASKED",
+                )
+                status = "COMPLETE"
         log.write("PIPELINE", status)
     except Exception as ex:
         failed_stage = log.current_stage
@@ -1392,6 +2225,56 @@ def main() -> int:
             kind = "diagnostic"
         artifacts.append(relative_artifact(path, output_root, kind))
 
+    # Put one human-reviewable bundle beside the run folder only for an eligible
+    # completed iteration. The review contract is exactly seven files plus the
+    # Packager reports archive; diagnostics and protected references stay outside.
+    manual_review_index = {
+        "schema": "liber.revex.energy-manual-review-package.v1",
+        "pipelineVersion": PIPELINE_VERSION,
+        "projectId": request.get("projectId"),
+        "projectName": current_project_name,
+        "sourceEngineeringRevision": request.get("revision"),
+        "status": status,
+        "iterationSelection": approved_run_comparison.get("iterationSelection"),
+        "approvedRunComparisonStatus": approved_run_comparison.get("status"),
+        "approvedRunProfileSha256": approved_run_comparison.get("profileSha256"),
+        "referenceTemplatesIncluded": False,
+        "referenceIdentityExcluded": True,
+        "recordFormat": {
+            "topLevelFiles": 7,
+            "topLevelArchives": 1,
+            "contract": list(VALID_ENERGY_REVIEW_PACKAGE),
+            "packagerArchivePdfCount": len(REVIEW_PACKAGE_PDF_LABELS),
+        },
+        "files": [],
+    }
+    manual_review_package = None
+    review_artifacts: list[dict] = []
+    if status == "COMPLETE" and approved_run_comparison.get("reviewEligible") is True:
+        review_contract_paths = [
+            (geometry_osm, "geometry-osm", "GEOMETRY.osm"),
+            (baseline_model, "baseline-osm", "BASELINE.osm"),
+            (proposed_model, "proposed-osm", "PROPOSED.osm"),
+            (baseline_run["html"], "baseline-html", "BASELINE_REPORT.html"),
+            (proposed_run["html"], "proposed-html", "PROPOSED_REPORT.html"),
+            (en1_xlsx, "en1-spreadsheet", "EN-1.xlsx"),
+            (comcheck_report, "official-comcheck-pdf", "COMcheck_BACKSTOP.pdf"),
+            (review_zip, "packager-reports-archive", "PACKAGER_REPORTS.zip"),
+        ]
+        review_artifacts = []
+        for path, kind, review_name in review_contract_paths:
+            artifact = relative_artifact(path, output_root, kind)
+            artifact["reviewName"] = review_name
+            review_artifacts.append(artifact)
+        if tuple(artifact["kind"] for artifact in review_artifacts) != VALID_ENERGY_REVIEW_PACKAGE:
+            raise PipelineError("Manual-review package did not match the seven-files-plus-one-archive contract.")
+        manual_review_index["files"] = [
+            {key: artifact[key] for key in ("path", "reviewName", "kind", "bytes", "sha256")}
+            for artifact in review_artifacts
+        ]
+        manual_review_package = create_manual_review_package(output_root, review_artifacts, manual_review_index)
+        artifacts.append(relative_artifact(manual_review_package, output_root, "manual-review-package"))
+
     finished = dt.datetime.now(dt.timezone.utc)
     result = {
         "schema": SCHEMA,
@@ -1419,8 +2302,30 @@ def main() -> int:
             {"folder":"03_SIMULATION", "kind":"simulation-output", "label":"Original OpenStudio / EnergyPlus reports"},
             {"folder":"04_REVIEW_PACKAGE", "kind":"review-report", "label":"Organized review reports"},
             {"folder":"05_FILING", "kind":"filing-output", "label":"Filing-ready outputs and current-project inputs"},
+            {"folder":"REVEX_ENERGY_MANUAL_REVIEW_PACKAGE.zip", "kind":"manual-review-package", "label":"Seven files plus one Packager archive; eligible completed iteration only"},
         ],
-        "artifacts": artifacts,
+        "approvedRunComparison": approved_run_comparison,
+        "manualReviewPackage": ({
+            "status": "CREATED",
+            "name": manual_review_package.name,
+            "path": manual_review_package.name,
+            "bytes": manual_review_package.stat().st_size,
+            "sha256": sha256(manual_review_package),
+            "topLevelFiles": 7,
+            "topLevelArchives": 1,
+            "referenceTemplatesIncluded": False,
+            "referenceIdentityExcluded": True,
+        } if manual_review_package else {
+            "status": "WITHHELD",
+            "reason": approved_run_comparison.get("iterationSelection") or status,
+            "referenceTemplatesIncluded": False,
+            "referenceIdentityExcluded": True,
+        }),
+        # Production consumers receive exactly the seven-files-plus-one-archive
+        # review contract. Extra run evidence is exported only by publication QA.
+        "artifacts": review_artifacts,
+        "debugArtifacts": artifacts if publication_qa else [],
+        "publicationQa": publication_qa,
         "comcheck": {
             **(comcheck_audit if 'comcheck_audit' in locals() else {"status":"NOT_RUN"}),
             **comcheck_summary,

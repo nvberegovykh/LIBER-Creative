@@ -1,25 +1,23 @@
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get -o Acquire::Retries=3 update && apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
     ca-certificates curl gnupg python3 python3-pip python3-tk ruby libgl1 libglib2.0-0 \
     libreoffice-core libreoffice-calc fonts-liberation fontconfig \
  && rm -rf /var/lib/apt/lists/*
 
-# Official COMcheck has disabled its legacy file-upload transport. REVEX forms a
-# clean project through COMcheck's own browser model instead. Chrome and its
-# matching driver are resolved together while the immutable worker image builds.
+# Official COMcheck legacy file upload is disabled; REVEX forms a clean project through COMcheck's own browser model.
 RUN curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
       | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
  && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" \
       > /etc/apt/sources.list.d/google-chrome.list \
- && apt-get update \
- && apt-get install -y --no-install-recommends google-chrome-stable \
+ && apt-get -o Acquire::Retries=3 update \
+ && apt-get -o Acquire::Retries=3 install -y --no-install-recommends google-chrome-stable \
  && google-chrome --version \
  && rm -rf /var/lib/apt/lists/*
 
 # Controlled simulation runtime: REVEX does not use a workstation OpenStudio installation.
 RUN curl -fL --retry 4 "https://github.com/NatLabRockies/OpenStudio/releases/download/v3.10.0/OpenStudio-3.10.0%2B86d7e215a1-Ubuntu-22.04-x86_64.deb" -o /tmp/openstudio.deb \
- && apt-get update && apt-get install -y /tmp/openstudio.deb \
+ && apt-get -o Acquire::Retries=3 update && apt-get -o Acquire::Retries=3 install -y /tmp/openstudio.deb \
  && rm -f /tmp/openstudio.deb && rm -rf /var/lib/apt/lists/* \
  && OSCLI="$(find /usr /opt -type f -name openstudio -perm -111 2>/dev/null | head -1)" \
  && test -n "$OSCLI" && ln -sf "$OSCLI" /usr/local/bin/openstudio \
@@ -33,7 +31,10 @@ COPY src/Liber.Revex.Revit/Engineering/Energy /opt/revex/energy
 COPY server/revex-energy-worker/app.py /opt/revex/server/app.py
 COPY server/revex-energy-worker/verify_revex_r49_worker.py /opt/revex/server/verify_revex_r49_worker.py
 COPY server/revex-energy-worker/requirements-server.txt /opt/revex/server/requirements-server.txt
-RUN python3 -m pip install --no-cache-dir -r /opt/revex/energy/requirements.txt -r /opt/revex/server/requirements-server.txt
+RUN python3 -m pip install --no-cache-dir \
+    -r /opt/revex/energy/requirements.txt \
+    -r /opt/revex/energy/GeometryCo/requirements.txt \
+    -r /opt/revex/server/requirements-server.txt
 RUN python3 -c "from selenium import webdriver; o=webdriver.ChromeOptions(); o.binary_location='/usr/bin/google-chrome'; o.add_argument('--headless=new'); o.add_argument('--no-sandbox'); o.add_argument('--disable-dev-shm-usage'); d=webdriver.Chrome(options=o); d.get('data:text/plain,REVEX-COMCHECK-DRIVER-READY'); d.quit()"
 RUN python3 /opt/revex/energy/verify_revex_r49_energy.py \
  && python3 /opt/revex/server/verify_revex_r49_worker.py

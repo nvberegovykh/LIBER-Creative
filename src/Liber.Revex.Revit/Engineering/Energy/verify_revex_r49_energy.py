@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+from collections import Counter
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 import os
 import shutil
 import sys
@@ -13,6 +16,7 @@ import tempfile
 import threading
 from pathlib import Path
 import xml.etree.ElementTree as ET
+import zipfile
 
 from openpyxl import load_workbook
 
@@ -32,24 +36,58 @@ def local_text(root, name: str) -> str:
     return str(node.text or "").strip() if node is not None else ""
 
 
+LOAD_TYPES = (
+    "OS:People", "OS:Lights", "OS:ElectricEquipment", "OS:GasEquipment",
+    "OS:SteamEquipment", "OS:OtherEquipment", "OS:InternalMass",
+    "OS:SpaceInfiltration", "OS:DesignSpecification:OutdoorAir",
+)
+HVAC_TYPES = (
+    "OS:PlantLoop", "OS:AirLoopHVAC", "OS:ZoneHVAC", "OS:Coil", "OS:Fan",
+    "OS:Boiler", "OS:Chiller", "OS:Pump", "OS:HeatExchanger", "OS:WaterHeater",
+)
+
+
+def behavior_inventory(compiler, model_path: Path) -> dict:
+    counts = Counter(obj.obj_type for obj in compiler.parse_osm(model_path).objects)
+    return {
+        "schedules": {key: value for key, value in sorted(counts.items()) if key.startswith("OS:Schedule")},
+        "loads": {key: value for key, value in sorted(counts.items()) if key.startswith(LOAD_TYPES)},
+        "systems": {key: value for key, value in sorted(counts.items()) if key.startswith(HVAC_TYPES)},
+    }
+
+
 class MockComcheckHandler(BaseHTTPRequestHandler):
     pdf_bytes = b""
+    index_count = 0
+    upload_count = 0
+    session_contract_verified = False
 
     def log_message(self, *_args) -> None:
         return
 
-    def _write(self, body: bytes, content_type: str, status: int = 200, cookie: str | None = None) -> None:
+    def _write(self, body: bytes, content_type: str, status: int = 200, cookies: list[str] | None = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        if cookie:
+        for cookie in cookies or []:
             self.send_header("Set-Cookie", cookie)
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self) -> None:
         if self.path.endswith("/index.html"):
-            self._write(b"<html>COMcheck test</html>", "text/html", cookie="JSESSIONID=qa; Path=/CheckWeb")
+            type(self).index_count += 1
+            jsession = f"qa-http-{type(self).index_count}"
+            self._write(b"<html>COMcheck test</html>", "text/html",
+                        cookies=[f"JSESSIONID={jsession}; Path=/CheckWeb"])
+        elif self.path.endswith("/dwr/engine.js"):
+            body = (b'dwr.engine._sessionCookieName = "JSESSIONID";\n'
+                    b'dwr.engine._instanceId = -1;\n'
+                    b'var g={dwr:{_:[]}};\n'
+                    b'dwr.engine._instanceId = g.dwr._.length;\n'
+                    b'dwr.engine.transport.setDwrSession=function(dwrsess){};\n'
+                    b'// DWRSESSIONID\n')
+            self._write(body, "text/javascript")
         elif "/report.html?" in self.path:
             self._write(b'<a href="report/current/pdf">Your compliance report</a>', "text/html")
         elif self.path.endswith("/report/current/pdf"):
@@ -59,17 +97,50 @@ class MockComcheckHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length") or 0)
-        _ = self.rfile.read(length)
+        request_body = self.rfile.read(length)
+        cookie_header = self.headers.get("Cookie") or ""
         if self.path.endswith("/__System.generateId.dwr"):
-            body = b'dwr.engine.remote.handleCallback("0","0","REVEXR49DWRSESSION123456789012345");'
-        elif self.path.endswith("/ProjectService.uploadProject.dwr"):
-            body = b'dwr.engine.remote.handleCallback("1","0",{projectName:"CURRENT TEST PROJECT"});'
-        elif self.path.endswith("/ProjectService.calculateEnvelopeCompliance.dwr"):
+            # DWR3 correlates the Java application session through JSESSIONID. Its browser
+            # engine does not add the legacy httpSessionId request field during bootstrap.
+            assert b"httpSessionId=" not in request_body, request_body[:2000]
+            assert b"instanceId=0\n" in request_body, request_body[:2000]
+            assert b"instanceId=-1" not in request_body, request_body[:2000]
+            assert b"scriptSessionId=\n" in request_body, request_body[:2000]
+            # Exercise the real DWR3 response shape: plain calls are prefixed with the
+            # script-tag protection statement when allowScriptTagRemoting is false, then
+            # wrapped for the initialized engine instance. REVEX must still parse callback.
+            body = (b"throw 'allowScriptTagRemoting is false.';\n//#DWR-REPLY\n"
+                    b"(function(){if(!window.dwr)return;var dwr=window.dwr._[0];"
+                    b'dwr.engine.remote.handleCallback( "0", "0", "REVEXR49DWRSESSION123456789012345" );})();')
+            self._write(body, "text/javascript")
+            return
+        if self.path.endswith("/ProjectService.uploadProject.dwr"):
+            type(self).upload_count += 1
+            expected_http = f"qa-http-{type(self).index_count}".encode()
+            required = [
+                b'name="instanceId"\r\n\r\n0',
+                b'name="page"\r\n\r\n%2FCheckWeb%2Findex.html',
+                b'name="scriptSessionId"\r\n\r\nREVEXR49DWRSESSION123456789012345/',
+            ]
+            assert all(token in request_body for token in required), request_body[:5000]
+            assert b'name="httpSessionId"' not in request_body, request_body[:5000]
+            assert f"JSESSIONID=qa-http-{type(self).index_count}" in cookie_header, cookie_header
+            assert "DWRSESSIONID=REVEXR49DWRSESSION123456789012345" in cookie_header, cookie_header
+            assert b"revex-" not in request_body
+            type(self).session_contract_verified = True
+            if type(self).upload_count == 1:
+                body = (b'<html><script>dwr.engine._executeScript("dwr.engine.remote.handleException('
+                        b'\\\"1\\\",\\\"0\\\",{javaClassName:\\\"gov.energycodes.check.common.exception.InvalidSessionException\\\",message:null});");'
+                        b'</script></html>')
+            else:
+                body = b'dwr.engine.remote.handleCallback("1","0",{projectName:"CURRENT TEST PROJECT"});'
+            self._write(body, "text/html")
+            return
+        if self.path.endswith("/ProjectService.calculateEnvelopeCompliance.dwr"):
             body = b'dwr.engine.remote.handleCallback("2","0",{envelopeStatus:{passes:true,complianceIndex:12.3,statusMessage:"Passes"}});'
         else:
             body = b"dwr.engine.remote.handleBatchException({message:'unexpected test endpoint'},'0');"
         self._write(body, "text/javascript")
-
 
 def mock_comcheck_pdf(path: Path) -> bytes:
     from reportlab.pdfgen import canvas
@@ -82,10 +153,23 @@ def mock_comcheck_pdf(path: Path) -> bytes:
     return pdf.read_bytes()
 
 
+def mock_en1_workbook(path: Path) -> Path:
+    from openpyxl import Workbook
+    target = path / "EN-1_READY_TO_INSERT.xlsx"
+    wb = Workbook()
+    first = wb.active
+    first.title = pipeline.EN1_PRINT_SHEETS[0]
+    for name in pipeline.EN1_PRINT_SHEETS[1:]:
+        wb.create_sheet(name)
+    wb.save(target)
+    return target
+
+
 def main() -> int:
     required = [
         pipeline.EN1_TEMPLATE, pipeline.COMCHECK_CXL_TEMPLATE,
         pipeline.BASELINE_REFERENCE, pipeline.PROPOSED_REFERENCE, pipeline.GEOMETRYCO,
+        pipeline.PACKAGER,
     ]
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
@@ -105,6 +189,15 @@ def main() -> int:
             "title": "CURRENT TEST PROJECT", "address": "999 CURRENT AVENUE",
             "city": "BROOKLYN", "state": "NY", "zip": "11201",
             "evidenceDigest": "a" * 64, "evidenceSheets": ["T001 · TITLE", "Z001 · ZONING"],
+        },
+        "comcheckSemanticVersion": "qa-schedule-semantic",
+        "comcheckSemantic": {
+            "energyCode": "2020 NYC Energy Conservation Code - NYC Stretch",
+            "wholeBuildingType": "Multifamily",
+            "floorAreaFt2": 2000,
+            "climateZone": "4A",
+            "sources": [{"semanticType": "wholeBuildingType", "evidence": "Building Area 1-Multifamily: Residential Floor Area 2000"}],
+            "scheduleNamesAuthoritative": False,
         },
         "pages": [
             {"pageType": "T", "confidence": 0.99, "project": {**z_project, "title": None},
@@ -135,6 +228,17 @@ def main() -> int:
     assert identity["address"] == z_project["address"]
     assert identity["evidenceDigest"] == "a" * 64
     assert "FORBIDDEN" not in str(identity)
+    same_project_identity = {**identity, "title": "79 WINTHROP STREET", "address": "79 WINTHROP STREET"}
+    pipeline.assert_no_reference_identity_text(
+        "79 WINTHROP STREET", "same-project publication identity", same_project_identity
+    )
+    try:
+        pipeline.assert_no_reference_identity_text(
+            "79 WINTHROP STREET / BEREGOVYKH", "reference-person leak", same_project_identity
+        )
+        raise AssertionError("Reference applicant/modeler identity was accepted as current-project identity")
+    except pipeline.PipelineError:
+        pass
 
     consent = {
         "schema": pipeline.COMCHECK_CONSENT_SCHEMA,
@@ -160,6 +264,66 @@ def main() -> int:
         pass
     assert pipeline.require_comcheck_consent(consent, "project_qa", "eng_qa_immutable_001") == consent
 
+    # COMcheck reconciliation: EN thermal-boundary diagrams own orientation/area while
+    # EN/COMcheck rows own U/SHGC/R. A stray filing-table number or dropped area cell must
+    # never become building geometry when complete diagram geometry exists.
+    reconciliation_pages = [{
+        "pageType": "EN", "confidence": 1.0, "envelope": [
+            {"kind": "door", "assemblyType": "D4_Door filing row", "grossAreaFt2": 19,
+             "uFactor": 0.30, "shgc": 0.30, "confidence": 1.0,
+             "evidence": "D4_Door filing row 19 0.300 0.300"},
+            {"kind": "window", "assemblyType": "G2.1 Window filing row", "orientation": "WEST",
+             "uFactor": 0.30, "shgc": 0.30, "confidence": 1.0,
+             "evidence": "G2.1 Window filing row 0.300 0.300"},
+            {"kind": "wall", "assemblyType": "W1 filing row", "orientation": "EAST",
+             "grossAreaFt2": 999, "cavityR": 13, "continuousR": 8, "confidence": 1.0,
+             "evidence": "W1 filing row 999 R13 R8"},
+            {"kind": "door", "assemblyType": "Glass Door D4.1", "orientation": "EAST",
+             "grossAreaFt2": 74, "confidence": 1.0, "evidence": "D4.1 Glass Door 74 SF"},
+            {"kind": "window", "assemblyType": "Window Fixed G2.1", "orientation": "WEST",
+             "grossAreaFt2": 146, "confidence": 1.0, "evidence": "G2.1 Window Fixed 146 SF"},
+            {"kind": "wall", "assemblyType": "Wall W1.1", "orientation": "EAST",
+             "grossAreaFt2": 759, "confidence": 1.0, "evidence": "W1.1 Wall 759 SF"},
+        ]
+    }]
+    reconciled, reconciliation = pipeline.canonicalize_comcheck_envelope_rows(reconciliation_pages)
+    assert reconciliation["geometryMode"] == "EN_THERMAL_BOUNDARY_DIAGRAM_PLUS_THERMAL_TABLE"
+    assert reconciliation["thermalPropertyMergeErrorCount"] == 0, reconciliation
+    assert any(r.get("kind") == "door" and r.get("orientation") == "EAST" and float(r.get("grossAreaFt2")) == 74 for r in reconciled)
+    assert any(r.get("kind") == "window" and r.get("orientation") == "WEST" and float(r.get("grossAreaFt2")) == 146 for r in reconciled)
+    assert any(r.get("kind") == "wall" and r.get("orientation") == "EAST" and float(r.get("grossAreaFt2")) == 759 for r in reconciled)
+    assert not any(float(r.get("grossAreaFt2") or 0) == 19 for r in reconciled), "Spurious filing-table area leaked into authoritative diagram geometry"
+    assert not any(float(r.get("grossAreaFt2") or 0) == 999 for r in reconciled), "Aggregated filing-table geometry overrode the EN thermal-boundary diagram"
+
+    # COMcheck child openings must fit inside same-orientation gross wall hosts. This reproduces
+    # the production class where all north fenestration was previously attached to the first wall.
+    host_a = ET.Element("wall-a")
+    host_b = ET.Element("wall-b")
+    opening_plan, host_errors = pipeline._opening_host_plan(
+        [(host_a, {"orientation": "NORTH", "grossAreaFt2": 300, "assemblyType": "A"}),
+         (host_b, {"orientation": "NORTH", "grossAreaFt2": 1200, "assemblyType": "B"})],
+        [{"kind": "window", "orientation": "NORTH", "grossAreaFt2": 700, "assemblyType": "G1"},
+         {"kind": "door", "orientation": "NORTH", "grossAreaFt2": 250, "assemblyType": "D1"}],
+    )
+    assert not host_errors, host_errors
+    assert len(opening_plan) == 2
+    assert any(host is host_b for _, host in opening_plan), "Large opening was not moved to a wall with enough gross capacity."
+
+    template_tree = ET.parse(pipeline.COMCHECK_CXL_TEMPLATE)
+    template_root = template_tree.getroot()
+    template_walls = [node for node in template_root.iter() if node.tag.rsplit("}", 1)[-1] == "agWall"]
+    assert pipeline._xml_child_text(pipeline._wall_exemplar(template_walls, "Solid Concrete, 12in. Thickness, Furring: Metal"), "wallType") == "CONCRETE_AG_WALL"
+    assert pipeline._xml_child_text(pipeline._wall_exemplar(template_walls, "Concrete Block, 8in., Furring: Metal"), "wallType") == "MASONRY_AG_WALL"
+    assert pipeline._xml_child_text(pipeline._wall_exemplar(template_walls, "Steel-Framed, 16in. o.c."), "wallType") == "METAL_FRAME_16_AG_WALL"
+
+    from comcheck_backstop import ComcheckClient, _dwr_error
+    assert _dwr_error('dwr.engine.remote.handleException("0","0",{message:"schema invalid: test"});') == "schema invalid: test"
+    assert _dwr_error("dwr.engine.remote.handleBatchException({message:'upload failed'},'0');") == "upload failed"
+    # Match DWR 3 engine.js tokenify exactly: least-significant 6-bit digits are emitted first.
+    assert ComcheckClient._dwr_tokenify(1) == "2"
+    assert ComcheckClient._dwr_tokenify(64) == "12"
+    assert ComcheckClient._parse_engine_contract('dwr.engine._instanceId = -1;')[1] == "0"
+
     workbook = load_workbook(pipeline.EN1_TEMPLATE)
     info = workbook["1,2,3 Information"]
     pipeline.blank_en1_identity_fields(info)
@@ -177,6 +341,19 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="revex-r49-energy-qa-") as temp:
         folder = Path(temp)
         log = pipeline.RunLog(folder, "r49-offline-qa", "release QA")
+        console_bytes = io.BytesIO()
+        console_probe = io.TextIOWrapper(console_bytes, encoding="cp1252", errors="strict")
+        prior_stdout = sys.stdout
+        try:
+            sys.stdout = console_probe
+            log.write("WINDOWS_CONSOLE_ENCODING", "PASSED", replacement="\ufffd", ellipsis="…")
+            console_probe.flush()
+        finally:
+            sys.stdout = prior_stdout
+        assert b"\\ufffd" in console_bytes.getvalue()
+        subprocess_environment = pipeline.utf8_subprocess_environment()
+        assert subprocess_environment["PYTHONUTF8"] == "1"
+        assert subprocess_environment["PYTHONIOENCODING"] == "utf-8"
         cxl, audit_pdf, audit = pipeline.prepare_project_comcheck(facts, identity, folder, log)
         assert audit["status"] == "INPUT_READY", audit
         assert audit["officialDoeReport"] is None, "Input preparation must not record a failed official report."
@@ -192,7 +369,23 @@ def main() -> int:
         assert local_text(root, "floorArea") == "2000.000"
         assert {local_text(node, "grossArea") for node in root.iter() if node.tag.rsplit("}", 1)[-1] in ("agWall", "roof", "floor")} == {"1000.000", "500.000"}
         assert "1991.000" not in cxl.read_text(encoding="utf-8"), "Template model areas must not survive into the current-project CXL."
-        assert local_text(root, "powerDensity") == "0.650000"
+        # powerDensity is code-derived whole-building-use metadata, not the project's proposed LPD.
+        # Proposed lighting is represented by current fixture rows; never overwrite the code enum
+        # metadata with an unrelated scan value.
+        assert local_text(root, "powerDensity") == "0.68"
+        assert local_text(root, "wholeBldgType") == "WHOLE_BUILDING_MULTIFAMILY"
+        assert local_text(root, "state") == "New York", "COMcheck climate-location enum must not be postal NY."
+        location = next(node for node in root.iter() if node.tag.rsplit("}", 1)[-1] == "location")
+        assert local_text(location, "city") == "New York", "COMcheck climate-location enum must not be postal Brooklyn."
+        assert next((node for node in root.iter() if node.tag.rsplit("}", 1)[-1] == "lighting"), None) is not None
+        assert next((node for node in root.iter() if node.tag.rsplit("}", 1)[-1] == "wholeBldgUse"), None) is not None
+        assert not pipeline._validate_comcheck_cxl_structure(root)
+        assert audit["cxlStructure"]["scheduleSemanticVersion"] == "qa-schedule-semantic"
+        assert audit["cxlStructure"]["scheduleNamesAuthoritative"] is False
+        assert audit["cxlStructure"]["currentFloorAreaFt2"] == 2000
+        slab = next(node for node in root.iter() if node.tag.rsplit("}", 1)[-1] == "floor")
+        assert local_text(slab, "depthOfInsulation"), "Slab structural insulation depth was stripped."
+        assert local_text(slab, "insulationPosition"), "Slab structural insulation position was stripped."
         assert "FORBIDDEN EN IDENTITY" not in cxl.read_text(encoding="utf-8")
 
         stamped_models = []
@@ -205,7 +398,43 @@ def main() -> int:
             pipeline.assert_no_reference_identity_text(stamped_text, f"{role} QA model")
             stamped_models.append(stamped)
 
+        # OSM fields are comma/semicolon delimited, so arbitrary project identity text
+        # must survive escaped delimiter characters without corrupting object boundaries.
+        punctuation_identity = {
+            **identity,
+            "title": "CURRENT & TEST, PROJECT; PHASE A",
+            "address": "999 CURRENT, AVENUE; SUITE A",
+        }
+        punctuation_model = folder / "BASELINE_PUNCTUATION_IDENTITY.osm"
+        shutil.copy2(pipeline.BASELINE_REFERENCE, punctuation_model)
+        pipeline.stamp_compiled_project_identity(
+            punctuation_model, punctuation_identity, "BASELINE_PUNCTUATION", log
+        )
+        punctuation_text = punctuation_model.read_text(encoding="utf-8")
+        assert "CURRENT & TEST&#44 PROJECT&#59 PHASE A" in punctuation_text
+        assert "999 CURRENT&#44 AVENUE&#59 SUITE A" in punctuation_text
+        punctuation_compiler = pipeline.load_module(
+            pipeline.GEOMETRYCO, "revex_geometryco_punctuation_identity_qa"
+        )
+        punctuation_reparsed = punctuation_compiler.parse_osm(punctuation_model)
+        assert len(punctuation_reparsed.by_handle) == len(punctuation_reparsed.objects)
+        actual_duplicate = folder / "ACTUAL_DUPLICATE_HANDLE.osm"
+        actual_duplicate.write_text(
+            "OS:Facility,\n  {00000000-0000-0000-0000-000000000001};\n\n"
+            "OS:Building,\n  {00000000-0000-0000-0000-000000000001},\n  X;\n",
+            encoding="utf-8",
+        )
+        try:
+            punctuation_compiler.parse_osm(actual_duplicate)
+        except punctuation_compiler.CompileError as exc:
+            assert "Duplicate handle" in str(exc)
+        else:
+            raise AssertionError("GeometryCo parser must still reject genuine duplicate object handles.")
+
         MockComcheckHandler.pdf_bytes = mock_comcheck_pdf(folder)
+        MockComcheckHandler.index_count = 0
+        MockComcheckHandler.upload_count = 0
+        MockComcheckHandler.session_contract_verified = False
         server = ThreadingHTTPServer(("127.0.0.1", 0), MockComcheckHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -225,31 +454,186 @@ def main() -> int:
         assert response.is_file()
         assert official["officialDoeReport"] is True
         assert official["code"] == "2020 NYCECC Appendix CA Modeling Envelope Backstop"
+        assert MockComcheckHandler.session_contract_verified
+        assert MockComcheckHandler.upload_count == 2, "InvalidSessionException must trigger exactly one fresh session bootstrap."
+        assert MockComcheckHandler.index_count == 2, "Fresh session retry must discard and rebuild HTTP/DWR cookies."
+        compiler = pipeline.load_module(pipeline.GEOMETRYCO, "revex_geometryco_record_contract_qa")
+        vectors, local_ai_provider, local_ai_error = compiler._local_ai_embeddings([
+            "Architectural bedroom adjacent to corridor on an upper level.",
+            "Unconditioned mechanical shaft with exterior exposure.",
+        ])
+        assert local_ai_error is None, local_ai_error
+        assert vectors and len(vectors) == 2 and all(len(vector) == 384 for vector in vectors)
+        assert local_ai_provider in {
+            "DmlExecutionProvider", "CUDAExecutionProvider", "OpenVINOExecutionProvider",
+            "CoreMLExecutionProvider", "CPUExecutionProvider",
+        }
+        log.dependency(
+            "GeometryCo local-AI inference", True,
+            provider=local_ai_provider, model="onnx-community/all-MiniLM-L6-v2-ONNX",
+            vectors=len(vectors), dimensions=len(vectors[0]),
+        )
         compiled = folder / "02_COMPILED_MODELS"
+        geometry_fixture = folder / "APPROVED_GEOMETRY_FIXTURE.osm"
+        shutil.copy2(pipeline.BASELINE_REFERENCE, geometry_fixture)
+        compilation = compiler.compile_baseline_proposed_pair(
+            geometry_fixture,
+            pipeline.BASELINE_REFERENCE,
+            pipeline.PROPOSED_REFERENCE,
+            compiled,
+            require_native_check=False,
+        )
+        assert compilation["success"] is True
+        expected_geometry = {"spaces": 159, "surfaces": 1930, "subsurfaces": 294}
+        expected_schedules = {"baseline": 243, "proposed": 89}
+        expected_systems = {"baseline": 13, "proposed": 18}
+        reference_paths = {"baseline": pipeline.BASELINE_REFERENCE, "proposed": pipeline.PROPOSED_REFERENCE}
+        output_paths = {
+            "baseline": compiled / "BASELINE_UPDATED_GEOMETRY.osm",
+            "proposed": compiled / "PROPOSED_UPDATED_GEOMETRY.osm",
+        }
+        for role in ("baseline", "proposed"):
+            role_report = compilation["reports"][role]
+            assert role_report["exact_geometry_lock"]["passed"] is True
+            assert role_report["exact_geometry_lock"]["new_space_identity_passed"] is True
+            assert {key: role_report["exact_geometry_lock"][key] for key in expected_geometry} == expected_geometry
+            assert role_report["space_mapping"]["count"] == 159
+            assert role_report["space_mapping"]["ambiguous_count"] == 0
+            assert role_report["schedule_lock"]["passed"] is True
+            assert role_report["schedule_lock"]["changed_schedule_objects"] == 0
+            assert role_report["schedule_lock"]["changed_protected_schedule_references"] == 0
+            assert role_report["serialized_roundtrip_validation"]["passed"] is True
+            repairs = role_report.get("energyplus_compatibility_repairs") or {"count": 0, "lossless": True}
+            assert repairs.get("lossless") is True
+            before = behavior_inventory(compiler, reference_paths[role])
+            after = behavior_inventory(compiler, output_paths[role])
+            assert after == before, f"{role} schedules, loads, or HVAC/system inventory changed"
+            compiled_model = compiler.parse_osm(output_paths[role])
+            invalid_special_ground = []
+            for surface in compiled_model.by_type.get("OS:Surface", []):
+                if len(surface.fields) <= 5 or surface.fields[5] != "GroundFCfactorMethod":
+                    continue
+                handle = surface.fields[3] if len(surface.fields) > 3 else ""
+                construction = compiled_model.by_handle.get(handle) if handle else None
+                if construction is None or construction.obj_type not in {
+                    "OS:Construction:FfactorGroundFloor", "OS:Construction:CfactorUndergroundWall",
+                }:
+                    invalid_special_ground.append(surface.name)
+            assert not invalid_special_ground, (
+                f"{role} retained GroundFCfactorMethod without an explicit F/C-factor "
+                f"construction: {invalid_special_ground[:10]}"
+            )
+            assert sum(after["schedules"].values()) == expected_schedules[role]
+            assert sum(after["systems"].values()) == expected_systems[role]
+            pipeline.stamp_compiled_project_identity(output_paths[role], identity, role.upper(), log)
+
         baseline_run_dir = folder / "03_SIMULATION" / "BASELINE"
         proposed_run_dir = folder / "03_SIMULATION" / "PROPOSED"
-        compiled.mkdir(parents=True)
         baseline_run_dir.mkdir(parents=True)
         proposed_run_dir.mkdir(parents=True)
-        baseline_osm = compiled / "BASELINE_UPDATED_GEOMETRY.osm"
-        proposed_osm = compiled / "PROPOSED_UPDATED_GEOMETRY.osm"
-        for path in (baseline_osm, proposed_osm):
-            path.write_text("OS:Building,\n" + ("REVEX-CURRENT-MODEL\n" * 300), encoding="utf-8")
+        baseline_osm = output_paths["baseline"]
+        proposed_osm = output_paths["proposed"]
         runs = []
         for run_dir in (baseline_run_dir, proposed_run_dir):
             html = run_dir / "eplustbl.html"
             idf = run_dir / "in.idf"
-            html.write_text("<html>" + ("current simulation " * 40) + "</html>", encoding="utf-8")
+            html.write_text("<html><head><title>CURRENT TEST PROJECT</title></head><body><p>Building: CURRENT TEST PROJECT</p>" + ("current simulation " * 40) + "</body></html>", encoding="utf-8")
             idf.write_text("Version,24.2;\n" + ("!- current model\n" * 40), encoding="utf-8")
+            (run_dir / "eplusout.err").write_text("Program Version,EnergyPlus, Version 24.2\n************* EnergyPlus Completed Successfully-- 0 Warning; 0 Severe Errors; Elapsed Time=00hr 00min 01.00sec", encoding="utf-8")
             (run_dir / "eplusout.end").write_text("EnergyPlus Completed Successfully-- 0 Warning; 0 Severe Errors;", encoding="utf-8")
             runs.append({"folder": run_dir, "html": html, "idf": idf})
-        en1_pdf = folder / "EN-1_READY_TO_INSERT.pdf"
-        en1_pdf.write_bytes(MockComcheckHandler.pdf_bytes)
+
+        packager = pipeline.load_module(pipeline.PACKAGER, "revex_record_review_packager_qa")
+        review_dir = folder / "04_REVIEW_PACKAGE"
+        review_zip = Path(packager.generate_package(
+            str(runs[0]["html"]), str(runs[1]["html"]), str(review_dir),
+            z_project["title"], True, standard_version="NYCECC 2020",
+            baseline_model_file=str(runs[0]["idf"]), proposed_model_file=str(runs[1]["idf"]),
+        ))
+        expected_review_names = {f"{z_project['title']} - {label}.pdf" for label in pipeline.REVIEW_PACKAGE_PDF_LABELS}
+        with zipfile.ZipFile(review_zip) as package:
+            assert {Path(name).name for name in package.namelist() if not name.endswith("/")} == expected_review_names
+
+        en1_xlsx = mock_en1_workbook(folder)
         completion = pipeline.validate_completion_outputs(
-            baseline_osm, proposed_osm, runs[0], runs[1], en1_pdf, cxl, report, official
+            baseline_osm, proposed_osm, runs[0], runs[1], review_zip, z_project["title"],
+            en1_xlsx, cxl, report, official
         )
         assert completion["compiledOsmCount"] == 2
         assert completion["officialDoeReport"] is True
+        assert completion["reviewPackagePdfCount"] == 9
+
+        approved_metrics = {
+            "modeledSquareFeet": pipeline.APPROVED_RUN_PROFILE["modeledSquareFeet"],
+            "conditionedSquareFeet": pipeline.APPROVED_RUN_PROFILE["conditionedSquareFeet"],
+        }
+        for role in ("baseline", "proposed"):
+            expected = pipeline.APPROVED_RUN_PROFILE["roles"][role]
+            approved_metrics[role] = {
+                "siteKbtu": expected["siteKbtu"],
+                "siteEuiKbtuPerFt2": expected["siteEuiKbtuPerFt2"],
+                "electricKwh": expected["electricKwh"],
+                "gasTherm": expected["gasTherm"],
+                "unmetHours": expected["unmetHours"],
+                "cost": 40402.0 if role == "baseline" else 25556.0,
+                "endUses": {label: {"sharePct": value} for label, value in expected["endUseSharePct"].items()},
+            }
+        approved_comparison = pipeline.compare_approved_run_profile(
+            approved_metrics, compiled / "COMPILATION_AUDIT.json", baseline_osm
+        )
+        assert approved_comparison["status"] == "PASSED", approved_comparison
+        assert approved_comparison["iterationSelection"] == "BEST_WORKING_ITERATION"
+        regressed_metrics = json.loads(json.dumps(approved_metrics))
+        regressed_metrics["proposed"]["siteKbtu"] *= 1.20
+        regressed_metrics["proposed"]["siteEuiKbtuPerFt2"] *= 1.20
+        regression = pipeline.compare_approved_run_profile(
+            regressed_metrics, compiled / "COMPILATION_AUDIT.json", baseline_osm
+        )
+        assert regression["status"] == "REGRESSION", regression
+        assert regression["reviewEligible"] is False
+
+        geometry_dir = folder / "01_ORIGINAL_MODELS"
+        geometry_dir.mkdir()
+        geometry_osm = geometry_dir / "REVIT_GEOMETRY_ORIGINAL.osm"
+        shutil.copy2(baseline_osm, geometry_osm)
+        en1_xlsx = folder / "EN-1_READY_TO_INSERT.xlsx"
+        review_workbook = load_workbook(pipeline.EN1_TEMPLATE)
+        review_info = review_workbook["1,2,3 Information"]
+        pipeline.blank_en1_identity_fields(review_info)
+        pipeline.apply_en1_project_identity(review_info, identity)
+        review_workbook.save(en1_xlsx)
+        review_workbook.close()
+        pipeline.assert_no_reference_identity_xlsx(en1_xlsx)
+        review_artifacts = []
+        for path, kind, review_name in (
+            (geometry_osm, "geometry-osm", "GEOMETRY.osm"),
+            (baseline_osm, "baseline-osm", "BASELINE.osm"),
+            (proposed_osm, "proposed-osm", "PROPOSED.osm"),
+            (runs[0]["html"], "baseline-html", "BASELINE_REPORT.html"),
+            (runs[1]["html"], "proposed-html", "PROPOSED_REPORT.html"),
+            (en1_xlsx, "en1-spreadsheet", "EN-1.xlsx"),
+            (report, "official-comcheck-pdf", "COMcheck_BACKSTOP.pdf"),
+            (review_zip, "packager-reports-archive", "PACKAGER_REPORTS.zip"),
+        ):
+            artifact = pipeline.relative_artifact(path, folder, kind)
+            artifact["reviewName"] = review_name
+            review_artifacts.append(artifact)
+        assert tuple(artifact["kind"] for artifact in review_artifacts) == pipeline.VALID_ENERGY_REVIEW_PACKAGE
+        manual_package = pipeline.create_manual_review_package(folder, review_artifacts, {
+            "schema": "liber.revex.energy-manual-review-package.v1",
+            "projectName": z_project["title"],
+            "referenceTemplatesIncluded": False,
+            "referenceIdentityExcluded": True,
+            "files": review_artifacts,
+        })
+        with zipfile.ZipFile(manual_package) as package:
+            names = {name for name in package.namelist() if not name.endswith("/")}
+            assert len(names) == 8
+            assert names == {artifact["reviewName"] for artifact in review_artifacts}
+            assert all("/" not in name and "\\" not in name for name in names)
+            index = json.loads(package.comment)
+            assert index["referenceTemplatesIncluded"] is False
+            assert index["referenceIdentityExcluded"] is True
 
     print({
         "activeRevitTzIdentityOnly": True,
@@ -264,6 +648,19 @@ def main() -> int:
         "wrongRevisionConsentRejected": True,
         "exactRevisionConsentAccepted": True,
         "compiledOsmCompletionGate": True,
+        "approvedRecordGeometryCounts": {"spaces": 159, "surfaces": 1930, "subsurfaces": 294, "thermalZones": 2},
+        "baselineScheduleObjects": 243,
+        "proposedScheduleObjects": 89,
+        "baselineHvacSystemObjects": 13,
+        "proposedHvacSystemObjects": 18,
+        "loadsAndSystemsInventoryPreserved": True,
+        "approvedNinePdfReviewFormat": True,
+        "maskedApprovedRunComparison": True,
+        "referenceRegressionWithholdsReviewCandidate": True,
+        "userReviewContractItems": 8,
+        "productionUserArtifactsExactlySevenFilesPlusOneArchive": True,
+        "manualReviewPackageBesideRun": True,
+        "manualReviewPackageExcludesProtectedReferences": True,
         "filingSheets": len(pipeline.EN1_PRINT_SHEETS),
     })
     return 0

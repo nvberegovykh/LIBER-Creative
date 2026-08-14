@@ -61,8 +61,16 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 UUID_RE = re.compile(r"^\{[0-9a-fA-F-]{36}\}$")
 
-COMPILER_VERSION = "4.3.1"
+COMPILER_VERSION = "4.3.4"
 MINIMUM_MAPPING_CONFIDENCE = 0.75
+
+# GeometryCo normalizes an authoritative Revit/gbXML shell for EnergyPlus; it
+# must not turn floating-point residue into a project-blocking geometry error.
+# Keep the translation tolerance well below ordinary architectural modeling
+# precision and below EnergyPlus' own millimetre-scale surface cleanup.
+GEOMETRY_LINEAR_TOLERANCE_M = 1.0e-4   # 0.1 mm
+GEOMETRY_PLANE_TOLERANCE_M = 1.0e-4    # 0.1 mm
+
 
 BASE_GEOMETRY_TYPES = {
     "OS:Space",
@@ -221,6 +229,15 @@ def parse_osm(path: Path) -> ModelData:
             buf.append(ch)
             continue
         if not in_quote and ch in ",;":
+            # OpenStudio text fields may contain encoded delimiter characters such as
+            # ``&#44;`` / ``&#59;`` (and occasionally named entities).  The entity's
+            # terminating semicolon is field data, not the OSM object terminator.
+            # Treat only a semicolon that is *not* closing an entity as structural.
+            if ch == ";":
+                tail = "".join(buf)
+                if re.search(r"&(?:#(?:[0-9]+|[xX][0-9A-Fa-f]+)|[A-Za-z][A-Za-z0-9]+)$", tail):
+                    buf.append(ch)
+                    continue
             flush_token()
             if ch == ";":
                 while tokens and tokens[0] == "":
@@ -715,12 +732,13 @@ def _convex_opening_carriers(parent_poly: Any, child_polys: Sequence[Any]) -> Li
         raise CompileError("Shapely is required for opening-aware surface decomposition") from exc
     if not child_polys:
         return []
-    tolerance = max(1e-10, float(parent_poly.area) * 1e-9)
+    area_tolerance = max(1e-9, float(parent_poly.area) * 1e-9)
+    linear_tolerance = GEOMETRY_LINEAR_TOLERANCE_M
     margin = max(1e-5, math.sqrt(float(parent_poly.area)) * 1e-4)
     for index, child in enumerate(child_polys):
-        if not child.is_valid or child.area <= tolerance:
+        if not child.is_valid or child.area <= area_tolerance:
             raise CompileError(f"Child opening polygon {index + 1} is invalid or degenerate")
-        if not parent_poly.buffer(tolerance).covers(child):
+        if not parent_poly.buffer(linear_tolerance).covers(child):
             raise CompileError(
                 f"Child opening polygon {index + 1} extends outside its non-convex parent; "
                 "lossless parent decomposition is not possible"
@@ -728,7 +746,7 @@ def _convex_opening_carriers(parent_poly: Any, child_polys: Sequence[Any]) -> Li
 
     def build(group: List[int]) -> Any:
         hull = unary_union([child_polys[index] for index in group]).convex_hull
-        if hull.difference(parent_poly.buffer(tolerance)).area > tolerance:
+        if hull.difference(parent_poly.buffer(linear_tolerance)).area > area_tolerance:
             raise CompileError(
                 "Openings span a concave recess in their parent surface; "
                 "a single lossless convex carrier cannot contain them"
@@ -743,8 +761,8 @@ def _convex_opening_carriers(parent_poly: Any, child_polys: Sequence[Any]) -> Li
                 if (
                     not carrier.interiors
                     and not metrics["is_nonconvex"]
-                    and carrier.buffer(tolerance).covers(hull)
-                    and carrier.area > hull.area + tolerance
+                    and carrier.buffer(linear_tolerance).covers(hull)
+                    and carrier.area > hull.area + area_tolerance
                 ):
                     return carrier
             local_margin *= 0.5
@@ -759,7 +777,7 @@ def _convex_opening_carriers(parent_poly: Any, child_polys: Sequence[Any]) -> Li
         merge_pair: Optional[Tuple[int, int]] = None
         for left in range(len(carriers)):
             for right in range(left + 1, len(carriers)):
-                if carriers[left].intersection(carriers[right]).area > tolerance:
+                if carriers[left].intersection(carriers[right]).area > area_tolerance:
                     merge_pair = (left, right)
                     break
             if merge_pair:
@@ -937,6 +955,489 @@ def _semantic_references(model: ModelData, handle: str, ignore_handles: Optional
     return result
 
 
+
+GROUND_CONTACT_PARENT_BOUNDARIES = {
+    "ground",
+    "groundfcfactormethod",
+    "foundation",
+}
+
+
+def _is_ground_contact_parent_boundary(value: str) -> bool:
+    key = (value or "").strip().lower()
+    return key in GROUND_CONTACT_PARENT_BOUNDARIES or key.startswith("ground")
+
+
+def _surface_contains_subsurface_with_tolerance(
+    model: ModelData, parent: OSMObject, child: OSMObject,
+    linear_tolerance: float = GEOMETRY_LINEAR_TOLERANCE_M,
+) -> Tuple[bool, Dict[str, float]]:
+    """Return whether a child is EnergyPlus-compatible with a candidate parent.
+
+    Geometry coordinates are authoritative and are never snapped here.  The
+    tolerance is applied only to the *relationship test*.  This is important:
+    OSM/gbXML round-trips routinely create 1e-8 m coordinate residue, while the
+    prior validator accidentally passed an area tolerance to Shapely.buffer(),
+    mixing m2 and m and rejecting otherwise valid openings.
+    """
+    try:
+        from shapely.geometry import Polygon, Point
+    except Exception as exc:
+        raise CompileError("Shapely is required for opening-parent topology validation") from exc
+    parent_points = object_points_global(model, parent)
+    child_points = object_points_global(model, child)
+    basis = _plane_basis(parent_points)
+    if basis is None:
+        return False, {"plane_offset_m": float("inf"), "outside_area_m2": float("inf"), "outside_distance_m": float("inf")}
+    origin, _u, _v, normal = basis
+    max_plane_offset = max((abs(_dot(_vec_sub(point, origin), normal)) for point in child_points), default=float("inf"))
+    parent_poly = Polygon(_project_plane(parent_points, basis))
+    child_poly = Polygon(_project_plane(child_points, basis))
+    if not parent_poly.is_valid or not child_poly.is_valid or child_poly.area <= 1e-10:
+        return False, {"plane_offset_m": max_plane_offset, "outside_area_m2": float("inf"), "outside_distance_m": float("inf")}
+    outside_area = float(child_poly.difference(parent_poly).area)
+    outside_distance = max((Point(point).distance(parent_poly) for point in child_poly.exterior.coords), default=0.0)
+    covered = (
+        max_plane_offset <= GEOMETRY_PLANE_TOLERANCE_M
+        and parent_poly.buffer(linear_tolerance).covers(child_poly)
+    )
+    return covered, {
+        "plane_offset_m": max_plane_offset,
+        "outside_area_m2": outside_area,
+        "outside_distance_m": outside_distance,
+    }
+
+
+def repair_unambiguous_opening_parents(model: ModelData) -> List[dict]:
+    """Repair parent links from room-shell geometry without moving geometry.
+
+    If a SubSurface's recorded parent is not compatible, search only the same
+    authoritative Space shell for a coplanar Surface that contains it.  A unique
+    candidate is a relationship repair (mapping), not a geometry rewrite.
+    Paired/interzone openings are left for pair-aware validation unless the
+    existing parent is already valid; guessing across two zones is not safe.
+    """
+    repairs: List[dict] = []
+    for child in list(model.by_type.get("OS:SubSurface", [])):
+        if len(child.fields) <= 4:
+            continue
+        parent = model.by_handle.get(child.fields[4])
+        if not parent or parent.obj_type != "OS:Surface":
+            continue
+        parent_boundary = parent.fields[5] if len(parent.fields) > 5 else ""
+        parent_is_ground = _is_ground_contact_parent_boundary(parent_boundary)
+        ok, metrics = _surface_contains_subsurface_with_tolerance(model, parent, child)
+        if ok and not parent_is_ground:
+            # Record numeric residue as a normalization diagnostic, not an error.
+            if metrics["outside_area_m2"] > 0.0 or metrics["outside_distance_m"] > 0.0:
+                repairs.append({
+                    "type": "opening_parent_tolerance_acceptance",
+                    "opening": child.name,
+                    "parent": parent.name,
+                    "coordinates_unchanged": True,
+                    **metrics,
+                })
+            continue
+        # Do not independently move one side of an interzone opening pair.
+        if len(child.fields) > 5 and child.fields[5]:
+            continue
+        space_handle = parent.fields[4] if len(parent.fields) > 4 else ""
+        if not space_handle:
+            continue
+        current_boundary = (parent.fields[5] if len(parent.fields) > 5 else "").strip().lower()
+        ranked = []
+        for candidate in model.by_type.get("OS:Surface", []):
+            if candidate.handle == parent.handle or len(candidate.fields) <= 4 or candidate.fields[4] != space_handle:
+                continue
+            boundary = candidate.fields[5] if len(candidate.fields) > 5 else ""
+            if _is_ground_contact_parent_boundary(boundary):
+                continue
+            candidate_ok, candidate_metrics = _surface_contains_subsurface_with_tolerance(model, candidate, child)
+            if not candidate_ok:
+                continue
+            same_boundary = int(boundary.strip().lower() == current_boundary)
+            candidate_area = newell_area_and_normal(object_points_global(model, candidate))[0]
+            ranked.append((same_boundary, -candidate_metrics["outside_distance_m"], -candidate_area, candidate, candidate_metrics))
+        if not ranked:
+            continue
+        ranked.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+        best = ranked[0]
+        # A deterministic unique best candidate is enough; if top scores are
+        # geometrically tied, preserve the original link and let validation fail
+        # rather than inventing semantics.
+        if len(ranked) > 1 and best[:3] == ranked[1][:3]:
+            continue
+        old_parent = parent.name
+        child.fields[4] = best[3].handle or ""
+        repairs.append({
+            "type": "opening_parent_relinked_from_space_shell",
+            "opening": child.name,
+            "from_parent": old_parent,
+            "to_parent": best[3].name,
+            "coordinates_unchanged": True,
+            **best[4],
+        })
+    if repairs:
+        model.reindex()
+    return repairs
+
+
+def _clean_projected_ring(coords: Sequence[Tuple[float, float]], tolerance: float = GEOMETRY_LINEAR_TOLERANCE_M) -> List[Tuple[float, float]]:
+    """Remove numerical duplicate corners from a derived translation polygon.
+
+    This never edits authoritative source geometry; it is used only on polygons
+    created by intersection/decomposition. EnergyPlus would collapse these
+    near-zero edges itself, often producing a degenerate triangle, so GeometryCo
+    removes them deterministically before serialization.
+    """
+    work = [(float(x), float(y)) for x, y in coords]
+    changed = True
+    while changed and len(work) >= 3:
+        changed = False
+        for i in range(len(work)):
+            px, py = work[i - 1]
+            x, y = work[i]
+            if math.hypot(x - px, y - py) <= tolerance:
+                del work[i]
+                changed = True
+                break
+    return work
+
+
+def repair_unpaired_openings_spanning_coplanar_parents(model: ModelData) -> List[dict]:
+    """Losslessly split an unpaired opening that spans segmented parent surfaces.
+
+    Revit/gbXML may segment one physical wall into several coplanar OS:Surfaces
+    while retaining one physical opening polygon. EnergyPlus requires each
+    FenestrationSurface:Detailed to reference a single base surface. When the
+    authoritative opening is fully covered by same-space, same-boundary,
+    coplanar surfaces, split only the *translation representation* of the
+    opening and assign each exact piece to the surface that contains it. The
+    opening union, room shell, and coordinates are preserved.
+
+    Interzone/paired openings and semantically referenced openings are not
+    guessed here; those remain hard errors unless a unique parent relink was
+    possible earlier.
+    """
+    try:
+        from shapely.geometry import Polygon
+        from shapely.ops import unary_union
+    except Exception as exc:
+        raise CompileError("Shapely is required for segmented-parent opening normalization") from exc
+
+    repairs: List[dict] = []
+    additions: List[OSMObject] = []
+    ap_additions: List[OSMObject] = []
+    processed: set = set()
+    for child in list(model.by_type.get("OS:SubSurface", [])):
+        if not child.handle or child.handle in processed or len(child.fields) <= 4:
+            continue
+        if len(child.fields) > 5 and child.fields[5]:
+            continue
+        parent = model.by_handle.get(child.fields[4])
+        if not parent or parent.obj_type != "OS:Surface":
+            continue
+        boundary = parent.fields[5] if len(parent.fields) > 5 else ""
+        parent_ok, _metrics = _surface_contains_subsurface_with_tolerance(model, parent, child)
+        if parent_ok and not _is_ground_contact_parent_boundary(boundary):
+            continue
+        if _semantic_references(model, child.handle, {child.handle}):
+            continue
+        space_handle = parent.fields[4] if len(parent.fields) > 4 else ""
+        if not space_handle:
+            continue
+        space = model.by_handle.get(space_handle)
+        child_points = object_points_global(model, child)
+        child_basis = _plane_basis(child_points)
+        if child_basis is None:
+            continue
+        child_poly = Polygon(_project_plane(child_points, child_basis))
+        if not child_poly.is_valid or child_poly.area <= 1e-10:
+            continue
+        current_boundary = boundary.strip().lower()
+        area_tolerance = max(1e-8, float(child_poly.area) * 1e-8)
+        candidates = []
+        for candidate in model.by_type.get("OS:Surface", []):
+            if len(candidate.fields) <= 4 or candidate.fields[4] != space_handle:
+                continue
+            candidate_boundary = candidate.fields[5] if len(candidate.fields) > 5 else ""
+            if _is_ground_contact_parent_boundary(candidate_boundary):
+                continue
+            # Preserve boundary semantics; Outdoors pieces may be reassigned only
+            # across Outdoors pieces, Surface only across Surface, etc. A Ground
+            # source has no legal fenestration semantics, so any non-ground shell
+            # candidate is eligible and the later score stays geometric.
+            if (not _is_ground_contact_parent_boundary(boundary) and
+                    candidate_boundary.strip().lower() != current_boundary):
+                continue
+            candidate_points = object_points_global(model, candidate)
+            basis = _plane_basis(candidate_points)
+            if basis is None:
+                continue
+            origin, _u, _v, normal = basis
+            max_plane = max((abs(_dot(_vec_sub(point, origin), normal)) for point in child_points), default=float("inf"))
+            if max_plane > GEOMETRY_PLANE_TOLERANCE_M:
+                continue
+            poly = Polygon(_project_plane(candidate_points, child_basis))
+            if not poly.is_valid or poly.area <= 1e-10:
+                continue
+            overlap = float(poly.intersection(child_poly).area)
+            if overlap <= 1e-10:
+                continue
+            candidates.append((candidate, poly, overlap))
+        if len(candidates) < 2:
+            continue
+        coverage = unary_union([poly for _candidate, poly, _overlap in candidates])
+        if not coverage.buffer(GEOMETRY_LINEAR_TOLERANCE_M).covers(child_poly):
+            continue
+
+        # Deterministically carve disjoint pieces from the exact opening polygon.
+        # Largest-overlap candidates claim first; the final tolerance-only sliver
+        # is assigned to the largest piece without moving any source vertex.
+        candidates.sort(key=lambda item: (-item[2], item[0].name, item[0].handle or ""))
+        remaining = child_poly
+        claimed: List[Tuple[OSMObject, Any]] = []
+        for candidate, poly, _overlap in candidates:
+            if remaining.is_empty:
+                break
+            hit = remaining.intersection(poly)
+            for part in _polygon_parts(hit):
+                if part.area > area_tolerance:
+                    claimed.append((candidate, part))
+            remaining = remaining.difference(poly)
+        if not remaining.is_empty and float(remaining.area) > area_tolerance:
+            continue
+        if not claimed:
+            continue
+        if not remaining.is_empty and float(remaining.area) > 0.0:
+            best_index = max(range(len(claimed)), key=lambda i: float(claimed[i][1].area))
+            candidate, part = claimed[best_index]
+            claimed[best_index] = (candidate, part.union(remaining).buffer(0))
+
+        # Decompose each claimed polygon into EnergyPlus-safe triangles/quads if
+        # necessary, while preserving its exact union.
+        pieces: List[Tuple[OSMObject, List[Tuple[float,float,float]]]] = []
+        for candidate, part in claimed:
+            for polygon in _polygon_parts(part):
+                coords = _clean_projected_ring(list(polygon.exterior.coords)[:-1])
+                if len(coords) < 3:
+                    continue
+                cleaned = Polygon(coords)
+                if not cleaned.is_valid or cleaned.area <= area_tolerance:
+                    continue
+                metrics = _projected_polygon_convexity(cleaned)
+                if cleaned.interiors or len(coords) > 4 or metrics["is_nonconvex"]:
+                    global_parts, _part_metrics = _triangulate_projected_polygon(cleaned, child_basis)
+                    for points in global_parts:
+                        pieces.append((candidate, points))
+                else:
+                    pieces.append((candidate, _unproject_plane(coords, child_basis)))
+        if not pieces:
+            continue
+
+        original_area = float(child_poly.area)
+        piece_polys = [Polygon(_project_plane(points, child_basis)) for _candidate, points in pieces]
+        union = unary_union(piece_polys)
+        missing = float(child_poly.difference(union).area)
+        extra = float(union.difference(child_poly).area)
+        if missing > area_tolerance or extra > area_tolerance:
+            continue
+
+        original_name = child.name
+        created: List[OSMObject] = []
+        for index, (candidate, global_points) in enumerate(pieces):
+            target = child if index == 0 else child.clone()
+            if index > 0:
+                target.handle = new_handle()
+                target.fields[1] = f"{original_name}__REVEX_parent_part_{index + 1:02d}"
+                additions.append(target)
+            while len(target.fields) <= 5:
+                target.fields.append("")
+            target.fields[4] = candidate.handle or ""
+            target.fields[5] = ""
+            local_points = _inverse_transform_points(space, global_points)
+            _set_vertices(target, local_points)
+            created.append(target)
+        for ap in list(model.by_type.get("OS:AdditionalProperties", [])):
+            if len(ap.fields) > 1 and ap.fields[1] == child.handle:
+                for target in created[1:]:
+                    clone = ap.clone()
+                    clone.handle = new_handle()
+                    clone.fields[1] = target.handle or ""
+                    ap_additions.append(clone)
+        processed.add(child.handle)
+        repairs.append({
+            "type": "opening_split_across_coplanar_parent_segments",
+            "opening": original_name,
+            "source_parent": parent.name,
+            "piece_count": len(created),
+            "parent_count": len({target.fields[4] for target in created}),
+            "source_opening_geometry_unchanged": True,
+            "translation_union_within_tolerance": True,
+            "room_shell_unchanged": True,
+            "original_area": original_area,
+            "piece_area": sum(float(poly.area) for poly in piece_polys),
+            "missing_area": missing,
+            "extra_area": extra,
+        })
+    if additions or ap_additions:
+        model.objects.extend(additions)
+        model.objects.extend(ap_additions)
+        model.reindex()
+    return repairs
+
+
+def subsurface_parent_topology_errors(model: ModelData) -> List[str]:
+    """Validate only impossible opening-parent topology after normalization.
+
+    Floating-point edge residue within GEOMETRY_LINEAR_TOLERANCE_M is accepted
+    without moving a vertex.  Ground-contact parents remain illegal because
+    EnergyPlus cannot host fenestration on them and are repaired separately.
+    """
+    errors: List[str] = []
+    for child in model.by_type.get("OS:SubSurface", []):
+        parent_handle = child.fields[4] if len(child.fields) > 4 else ""
+        parent = model.by_handle.get(parent_handle)
+        if not parent or parent.obj_type != "OS:Surface":
+            errors.append(f"OS:SubSurface {child.name} has no valid OS:Surface parent")
+            continue
+        boundary = parent.fields[5] if len(parent.fields) > 5 else ""
+        if _is_ground_contact_parent_boundary(boundary):
+            errors.append(f"OS:SubSurface {child.name} is attached to ground-contact parent {parent.name} ({boundary})")
+            continue
+        try:
+            ok, metrics = _surface_contains_subsurface_with_tolerance(model, parent, child)
+            if not ok:
+                if metrics["plane_offset_m"] > GEOMETRY_PLANE_TOLERANCE_M:
+                    errors.append(
+                        f"OS:SubSurface {child.name} is not coplanar with parent {parent.name} "
+                        f"(offset {metrics['plane_offset_m']:.6g} m)"
+                    )
+                else:
+                    errors.append(
+                        f"OS:SubSurface {child.name} is materially outside parent {parent.name} "
+                        f"(outside {metrics['outside_area_m2']:.6g} m2, edge {metrics['outside_distance_m']:.6g} m)"
+                    )
+        except Exception as exc:
+            errors.append(f"OS:SubSurface {child.name} topology check failed: {exc}")
+    return errors
+
+
+def repair_ground_contact_opening_parents(model: ModelData) -> List[dict]:
+    """Losslessly split ground-contact parents that contain real openings.
+
+    A real opening is physical evidence that at least the local carrier around
+    that opening exchanges with an exterior/adjacent environment rather than
+    soil.  EnergyPlus forbids a window/door directly on Ground/ground-contact
+    parents.  Instead of deleting the opening or reclassifying the whole wall,
+    partition the exact parent polygon into disjoint pieces: small convex
+    exterior carriers around all openings plus the original ground-contact
+    remainder.  Opening coordinates are untouched; the union of parent pieces
+    is exactly the original opaque parent boundary.
+
+    This is deliberately project-independent: no room, sheet, address, element
+    name, or known-project identifier participates in the decision.
+    """
+    repairs: List[dict] = []
+    surface_additions: List[OSMObject] = []
+    ap_additions: List[OSMObject] = []
+
+    for parent in list(model.by_type.get("OS:Surface", [])):
+        if not parent.handle:
+            continue
+        boundary = parent.fields[5] if len(parent.fields) > 5 else ""
+        if not _is_ground_contact_parent_boundary(boundary):
+            continue
+        children = [
+            child for child in model.by_type.get("OS:SubSurface", [])
+            if len(child.fields) > 4 and child.fields[4] == parent.handle
+        ]
+        if not children:
+            continue
+
+        pieces, assignments, metrics = _partition_surface_around_openings(model, parent, children)
+        carrier_indices = set(assignments.values())
+        if not carrier_indices:
+            raise CompileError(
+                f"Ground-contact parent {parent.name} has openings but no exterior carrier could be formed"
+            )
+
+        parent_points = object_points_global(model, parent)
+        original_normal = newell_area_and_normal(parent_points)[1]
+        space = model.by_handle.get(parent.fields[4]) if len(parent.fields) > 4 else None
+        original_fields = list(parent.fields)
+        created: List[OSMObject] = []
+
+        for index, global_piece in enumerate(pieces):
+            piece = list(global_piece)
+            if _dot(newell_area_and_normal(piece)[1], original_normal) < 0:
+                piece.reverse()
+            target = parent if index == 0 else parent.clone()
+            if index > 0:
+                target.handle = new_handle()
+                target.fields[1] = f"{parent.name}__REVEX_ground_split_{index + 1:02d}"
+                surface_additions.append(target)
+            while len(target.fields) <= 10:
+                target.fields.append("")
+
+            # Construction selection happens later from the approved template.
+            # Blank the imported construction so the carrier receives an exterior
+            # construction and the remainder receives the appropriate ground one.
+            target.fields[3] = ""
+            if index in carrier_indices:
+                target.fields[5] = "Outdoors"
+                target.fields[6] = ""
+                target.fields[7] = "SunExposed"
+                target.fields[8] = "WindExposed"
+            else:
+                target.fields[5] = original_fields[5] if len(original_fields) > 5 else boundary
+                target.fields[6] = original_fields[6] if len(original_fields) > 6 else ""
+                target.fields[7] = original_fields[7] if len(original_fields) > 7 else "NoSun"
+                target.fields[8] = original_fields[8] if len(original_fields) > 8 else "NoWind"
+
+            local_piece = _inverse_transform_points(space, piece)
+            _set_vertices(target, local_piece)
+            created.append(target)
+
+        # Re-parent every opening to its lossless exterior carrier.
+        for child in children:
+            piece_index = assignments.get(child.handle or "")
+            if piece_index is None or piece_index >= len(created):
+                raise CompileError(
+                    f"Opening {child.name} could not be assigned to a ground-contact exterior carrier"
+                )
+            while len(child.fields) <= 4:
+                child.fields.append("")
+            child.fields[4] = created[piece_index].handle or ""
+
+        # Preserve diagnostic/additional metadata on every new opaque piece.
+        for ap in list(model.by_type.get("OS:AdditionalProperties", [])):
+            if len(ap.fields) > 1 and ap.fields[1] == parent.handle:
+                for target in created[1:]:
+                    clone = ap.clone()
+                    clone.handle = new_handle()
+                    clone.fields[1] = target.handle or ""
+                    ap_additions.append(clone)
+
+        repairs.append({
+            "type": "ground_contact_parent_with_openings_partition",
+            "source": parent.name,
+            "original_boundary": boundary,
+            "opening_count": len(children),
+            "piece_count": len(created),
+            "carrier_count": len(carrier_indices),
+            "opening_coordinates_unchanged": True,
+            "parent_union_unchanged": True,
+            **metrics,
+        })
+
+    if surface_additions or ap_additions:
+        model.objects.extend(surface_additions)
+        model.objects.extend(ap_additions)
+        model.reindex()
+    return repairs
+
+
 def repair_energyplus_geometry(model: ModelData, report: Optional[dict]=None, enabled: bool=True) -> List[dict]:
     """Apply only provably lossless geometry compatibility repairs.
 
@@ -948,6 +1449,15 @@ def repair_energyplus_geometry(model: ModelData, report: Optional[dict]=None, en
     repairs=[]
     if not enabled:
         return repairs
+    parent_link_repairs = repair_unambiguous_opening_parents(model)
+    repairs.extend(parent_link_repairs)
+    segmented_parent_repairs = repair_unpaired_openings_spanning_coplanar_parents(model)
+    repairs.extend(segmented_parent_repairs)
+    ground_parent_repairs = repair_ground_contact_opening_parents(model)
+    repairs.extend(ground_parent_repairs)
+    topology_errors = subsurface_parent_topology_errors(model)
+    if topology_errors:
+        raise CompileError("Opening-parent topology invalid after safe repair: " + "; ".join(topology_errors[:12]))
     processed=set()
     additions=[]
     ap_additions=[]
@@ -1122,6 +1632,9 @@ def repair_energyplus_geometry(model: ModelData, report: Optional[dict]=None, en
             "EnergyPlus compatibility repair left non-convex shadow-casting surfaces: "
             + ", ".join(remaining_nonconvex[:8])
         )
+    final_topology_errors = subsurface_parent_topology_errors(model)
+    if final_topology_errors:
+        raise CompileError("Opening-parent topology invalid after EnergyPlus compatibility repair: " + "; ".join(final_topology_errors[:12]))
     if report is not None:
         report["energyplus_compatibility_repairs"]={
             "count":len(repairs),
@@ -2014,6 +2527,15 @@ def infer_constructions(template: ModelData, geom_model: ModelData, geometry_sou
             if len(surf.fields)>6: surf.fields[6]=""
         else:
             surf.fields[3]=chosen
+            # GroundFCfactorMethod is a construction-specific OpenStudio boundary,
+            # not a generic synonym for Ground.  Geometry can legitimately arrive
+            # from the Baseline with an F/C-factor boundary while the independently
+            # approved Proposed template uses an ordinary/default ground assembly.
+            # Never serialize that invalid hybrid: EnergyPlus requires an explicit
+            # F/C-factor construction whenever this special boundary is retained.
+            if len(surf.fields)>5 and surf.fields[5]=="GroundFCfactorMethod":
+                surf.fields[5]="Ground"
+                if len(surf.fields)>6: surf.fields[6]=""
 
     for sub in geom_model.by_type.get("OS:SubSurface",[]):
         while len(sub.fields)<=3: sub.fields.append("")
@@ -2022,6 +2544,196 @@ def infer_constructions(template: ModelData, geom_model: ModelData, geometry_sou
         sub.fields[3]=choose_common(sub_exact.get(key,Counter()) or sub_generic.get(gkey,Counter()),f"subsurface {sub.name}",strict,warnings,template)
 
 
+
+
+SURFACE_DEFAULT_CONSTRUCTION_FIELD = {
+    "Floor": 2,
+    "Wall": 3,
+    "RoofCeiling": 4,
+}
+
+SUBSURFACE_DEFAULT_CONSTRUCTION_FIELD = {
+    "FixedWindow": 2,
+    "OperableWindow": 3,
+    "Door": 4,
+    "GlassDoor": 5,
+    "OverheadDoor": 6,
+    "Skylight": 7,
+    "TubularDaylightDome": 8,
+    "TubularDaylightDiffuser": 9,
+}
+
+
+def _default_construction_set_for_space(
+    template: ModelData,
+    geom_model: ModelData,
+    space: Optional[OSMObject],
+) -> Tuple[Optional[OSMObject], str]:
+    """Resolve the approved template construction-set inheritance chain.
+
+    Geometry spaces retain template assignment handles.  Resolve exactly the same
+    Space -> SpaceType -> Building fallback chain here so the compiler can make
+    implicit OpenStudio construction defaults explicit before EnergyPlus.
+    """
+    candidates: List[Tuple[str, str]] = []
+    if space is not None:
+        if len(space.fields) > 3 and space.fields[3]:
+            candidates.append(("space", space.fields[3]))
+        if len(space.fields) > 2 and space.fields[2]:
+            space_type = template.by_handle.get(space.fields[2])
+            if space_type and space_type.obj_type == "OS:SpaceType" and len(space_type.fields) > 2 and space_type.fields[2]:
+                candidates.append(("space_type", space_type.fields[2]))
+    for building in template.by_type.get("OS:Building", []):
+        if len(building.fields) > 6 and building.fields[6]:
+            candidates.append(("building", building.fields[6]))
+
+    for source, handle in candidates:
+        construction_set = template.by_handle.get(handle)
+        if construction_set and construction_set.obj_type == "OS:DefaultConstructionSet":
+            return construction_set, source
+    return None, ""
+
+
+def _default_surface_construction(
+    template: ModelData,
+    geom_model: ModelData,
+    surface: OSMObject,
+) -> Tuple[str, str]:
+    space = geom_model.by_handle.get(surface.fields[4]) if len(surface.fields) > 4 else None
+    construction_set, inherited_from = _default_construction_set_for_space(template, geom_model, space)
+    if construction_set is None:
+        return "", inherited_from
+
+    surface_type = surface.fields[2] if len(surface.fields) > 2 else ""
+    boundary = surface.fields[5] if len(surface.fields) > 5 else ""
+    if boundary == "Adiabatic":
+        handle = construction_set.fields[7] if len(construction_set.fields) > 7 else ""
+        return handle, inherited_from
+
+    group_index = 3 if boundary == "Surface" else 4 if boundary in {"Ground", "GroundFCfactorMethod"} else 2
+    group_handle = construction_set.fields[group_index] if len(construction_set.fields) > group_index else ""
+    group = template.by_handle.get(group_handle)
+    field_index = SURFACE_DEFAULT_CONSTRUCTION_FIELD.get(surface_type)
+    if not group or group.obj_type != "OS:DefaultSurfaceConstructions" or field_index is None:
+        return "", inherited_from
+    handle = group.fields[field_index] if len(group.fields) > field_index else ""
+    return handle, inherited_from
+
+
+def _default_subsurface_construction(
+    template: ModelData,
+    geom_model: ModelData,
+    subsurface: OSMObject,
+) -> Tuple[str, str]:
+    parent = geom_model.by_handle.get(subsurface.fields[4]) if len(subsurface.fields) > 4 else None
+    if not parent or parent.obj_type != "OS:Surface":
+        return "", ""
+    space = geom_model.by_handle.get(parent.fields[4]) if len(parent.fields) > 4 else None
+    construction_set, inherited_from = _default_construction_set_for_space(template, geom_model, space)
+    if construction_set is None:
+        return "", inherited_from
+
+    boundary = parent.fields[5] if len(parent.fields) > 5 else ""
+    group_index = 6 if boundary in {"Surface", "Adiabatic"} else 5
+    group_handle = construction_set.fields[group_index] if len(construction_set.fields) > group_index else ""
+    group = template.by_handle.get(group_handle)
+    subtype = subsurface.fields[2] if len(subsurface.fields) > 2 else ""
+    field_index = SUBSURFACE_DEFAULT_CONSTRUCTION_FIELD.get(subtype)
+    if not group or group.obj_type != "OS:DefaultSubSurfaceConstructions" or field_index is None:
+        return "", inherited_from
+    handle = group.fields[field_index] if len(group.fields) > field_index else ""
+    return handle, inherited_from
+
+
+def materialize_effective_constructions(
+    template: ModelData,
+    geom_model: ModelData,
+    report: dict,
+) -> None:
+    """Make every geometry construction explicit before native translation.
+
+    OpenStudio OSM permits construction inheritance, but imported/replaced geometry
+    can reach the ForwardTranslator with a blank construction after boundary-type
+    changes.  EnergyPlus requires an actual construction_name.  Preserve the
+    approved template behavior by resolving the assigned template construction-set
+    hierarchy, never by object name or a project-specific surface identifier.
+    """
+    rows: List[dict] = []
+    by_source = Counter()
+    by_type = Counter()
+
+    for surface in geom_model.by_type.get("OS:Surface", []):
+        while len(surface.fields) <= 3:
+            surface.fields.append("")
+        if surface.fields[3]:
+            continue
+        handle, inherited_from = _default_surface_construction(template, geom_model, surface)
+        construction = template.by_handle.get(handle) if handle else None
+        if not construction or not construction.obj_type.startswith("OS:Construction"):
+            boundary = surface.fields[5] if len(surface.fields) > 5 else ""
+            raise CompileError(
+                f"No approved effective construction can be resolved for surface {surface.name} "
+                f"({surface.fields[2] if len(surface.fields)>2 else ''}, {boundary})."
+            )
+        surface.fields[3] = handle
+        by_source[inherited_from or "unknown"] += 1
+        by_type[f"surface:{surface.fields[2] if len(surface.fields)>2 else ''}"] += 1
+        rows.append({
+            "object_type": "OS:Surface",
+            "object": surface.name,
+            "construction": resolve_ref(template, handle),
+            "inherited_from": inherited_from,
+            "boundary": surface.fields[5] if len(surface.fields) > 5 else "",
+        })
+
+    for subsurface in geom_model.by_type.get("OS:SubSurface", []):
+        while len(subsurface.fields) <= 3:
+            subsurface.fields.append("")
+        if subsurface.fields[3]:
+            continue
+        handle, inherited_from = _default_subsurface_construction(template, geom_model, subsurface)
+        construction = template.by_handle.get(handle) if handle else None
+        if not construction or not construction.obj_type.startswith("OS:Construction"):
+            parent = geom_model.by_handle.get(subsurface.fields[4]) if len(subsurface.fields) > 4 else None
+            boundary = parent.fields[5] if parent and len(parent.fields) > 5 else ""
+            raise CompileError(
+                f"No approved effective construction can be resolved for subsurface {subsurface.name} "
+                f"({subsurface.fields[2] if len(subsurface.fields)>2 else ''}, parent boundary {boundary})."
+            )
+        subsurface.fields[3] = handle
+        by_source[inherited_from or "unknown"] += 1
+        by_type[f"subsurface:{subsurface.fields[2] if len(subsurface.fields)>2 else ''}"] += 1
+        rows.append({
+            "object_type": "OS:SubSurface",
+            "object": subsurface.name,
+            "construction": resolve_ref(template, handle),
+            "inherited_from": inherited_from,
+            "parent": resolve_ref(geom_model, subsurface.fields[4]) if len(subsurface.fields) > 4 else "",
+        })
+
+    geom_model.reindex()
+    report["effective_construction_materialization"] = {
+        "passed": True,
+        "materialized": len(rows),
+        "by_inheritance_source": dict(sorted(by_source.items())),
+        "by_object_type": dict(sorted(by_type.items())),
+        "rows": rows,
+        "strategy": "approved template Space -> SpaceType -> Building construction-set inheritance made explicit",
+    }
+
+
+def validate_explicit_geometry_constructions(model: ModelData) -> List[str]:
+    errors: List[str] = []
+    for obj_type in ("OS:Surface", "OS:SubSurface"):
+        for obj in model.by_type.get(obj_type, []):
+            handle = obj.fields[3] if len(obj.fields) > 3 else ""
+            if not handle:
+                errors.append(f"{obj_type} {obj.name} has no explicit construction")
+                continue
+            construction = model.by_handle.get(handle)
+            if not construction or not construction.obj_type.startswith("OS:Construction"):
+                errors.append(f"{obj_type} {obj.name} has invalid construction reference {handle}")
+    return errors
 
 
 def _pair_behavior_key(model: ModelData, obj: OSMObject, profiles: Dict[str,Tuple[str,...]], include_profiles: bool=True) -> Tuple[Any,...]:
@@ -2587,7 +3299,7 @@ def validate_geometry(model: ModelData, include_energyplus_limits: bool=True) ->
                     ppoly=Polygon(_project_plane(parent_points,parent_basis))
                     spoly=Polygon(_project_plane(pts,parent_basis))
                     if ppoly.is_valid and spoly.is_valid:
-                        outside=float(spoly.difference(ppoly.buffer(1e-7)).area)
+                        outside=float(spoly.difference(ppoly.buffer(GEOMETRY_LINEAR_TOLERANCE_M)).area)
                         if outside>max(1e-8,float(spoly.area)*1e-8):
                             errors.append(f"Subsurface {sub.name} extends outside parent {parent.name} by {outside:.6g} m2")
     if include_energyplus_limits:
@@ -2637,6 +3349,15 @@ def validate_references(model: ModelData) -> List[str]:
             mate=model.by_handle.get(surf.fields[6]) if len(surf.fields)>6 else None
             if not mate or mate.obj_type!="OS:Surface" or len(mate.fields)<=6 or mate.fields[6]!=surf.handle:
                 errors.append(f"Nonreciprocal surface pair {surf.name}")
+        if len(surf.fields)>5 and surf.fields[5]=="GroundFCfactorMethod":
+            construction_handle=surf.fields[3] if len(surf.fields)>3 else ""
+            construction=model.by_handle.get(construction_handle) if construction_handle else None
+            if not construction or construction.obj_type not in {
+                "OS:Construction:FfactorGroundFloor", "OS:Construction:CfactorUndergroundWall"
+            }:
+                errors.append(
+                    f"GroundFCfactorMethod surface {surf.name} has no explicit F/C-factor construction"
+                )
     for sub in model.by_type.get("OS:SubSurface",[]):
         parent=model.by_handle.get(sub.fields[4]) if len(sub.fields)>4 else None
         if not parent or parent.obj_type!="OS:Surface":
@@ -3079,6 +3800,11 @@ def compile_template(template_path: Path, geometry_path: Path, output_path: Path
     generated_constructions=[]
     infer_constructions(template,geom_model,geometry,new_profiles,strict,report["warnings"],generated_constructions)
     reconcile_paired_constructions(template,geom_model,report,strict,generated_constructions)
+    # Pair reconciliation may faithfully select an implicit/default construction pair
+    # demonstrated by the approved template. Materialize only after every geometry
+    # mutation so no original or compiler-reconciled Surface/SubSurface can reach
+    # native translation with a blank EnergyPlus construction_name.
+    materialize_effective_constructions(template,geom_model,report)
 
     direct=clone_direct_space_objects(template,retained,old_space_handles,new_to_old,geom_model,report,strict,config)
     remap_retained_geometry_references(
@@ -3114,7 +3840,8 @@ def compile_template(template_path: Path, geometry_path: Path, output_path: Path
 
     output_objects=retained+generated_constructions+geom_model.objects+imported_ap+direct
     output=ModelData(output_path,output_objects)
-    errors=validate_geometry(output, include_energyplus_limits=True)+validate_references(output)+validate_construction_pairs(output)
+    errors=(validate_geometry(output, include_energyplus_limits=True)+validate_references(output)+
+            validate_explicit_geometry_constructions(output)+validate_construction_pairs(output))
     if errors: raise CompileError("Compiled model validation failed: "+"; ".join(errors[:12]))
 
     # Schedule hard lock: all original schedules must be field-for-field identical, and every original
@@ -3149,6 +3876,7 @@ def compile_template(template_path: Path, geometry_path: Path, output_path: Path
     serialized_errors = (
         validate_geometry(serialized, include_energyplus_limits=True)
         + validate_references(serialized)
+        + validate_explicit_geometry_constructions(serialized)
         + validate_construction_pairs(serialized)
     )
     if serialized_errors:

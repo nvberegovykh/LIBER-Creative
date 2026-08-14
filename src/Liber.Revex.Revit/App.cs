@@ -14,6 +14,7 @@ public sealed class App : IExternalApplication
         RevexDiagnostics.LogEnvironmentSnapshot();
         application.ControlledApplication.DocumentChanged += RevexAffectedViewTracker.OnDocumentChanged;
         application.ViewActivated += UI.RendairWindowManager.OnViewActivated;
+        ReleaseEvidenceAutomation.TryStart(application);
         const string tabName = "LIBER";
         try
         {
@@ -44,6 +45,7 @@ public sealed class App : IExternalApplication
 
     public Result OnShutdown(UIControlledApplication application)
     {
+        ReleaseEvidenceAutomation.Stop(application);
         try { application.ControlledApplication.DocumentChanged -= RevexAffectedViewTracker.OnDocumentChanged; } catch { }
         try { application.ViewActivated -= UI.RendairWindowManager.OnViewActivated; } catch { }
         RevexDiagnostics.Info("APP", "LIBER REVEX shutdown.");
