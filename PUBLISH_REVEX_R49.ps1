@@ -301,7 +301,7 @@ function Remove-ProjectLevelWorkerInvokerGrants([string]$Gcloud, [string]$Projec
   Write-Step "Remove project-wide Cloud Run invocation grants that would bypass the dedicated worker policy"
   $policy = ((Invoke-Captured "Inspect project-level Cloud Run invocation policy" $Gcloud @("projects", "get-iam-policy", $ProjectId, "--format=json")).Text | ConvertFrom-Json)
   $invokerBindings = @($policy.bindings | Where-Object { [string]$_.role -eq "roles/run.invoker" })
-  $conditional = @($invokerBindings | Where-Object { $null -ne $_.condition })
+  $conditional = @($invokerBindings | Where-Object { $null -ne $_.PSObject.Properties['condition'] -and $null -ne $_.condition })
   if ($conditional.Count) {
     throw "Project-level conditional roles/run.invoker bindings exist. REVEX will not guess how to remove a project-wide conditional grant; remove or scope it explicitly before publishing."
   }
@@ -922,7 +922,7 @@ try {
   $WorkerUrl = (Invoke-Captured "Resolve deployed worker URL" $Gcloud @("run", "services", "describe", $Service, "--project=$ProjectId", "--region=$Region", "--format=value(status.url)")).Text.Trim()
   if (-not $WorkerUrl) { throw "Cloud Run did not expose the private r49 worker URL." }
   $policy = ((Invoke-Captured "Inspect private worker invocation policy" $Gcloud @("run", "services", "get-iam-policy", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
-  $conditionalWorkerInvokers = @($policy.bindings | Where-Object { [string]$_.role -eq "roles/run.invoker" -and $null -ne $_.condition })
+  $conditionalWorkerInvokers = @($policy.bindings | Where-Object { [string]$_.role -eq "roles/run.invoker" -and $null -ne $_.PSObject.Properties['condition'] -and $null -ne $_.condition })
   if ($conditionalWorkerInvokers.Count) {
     throw "The dedicated worker has conditional roles/run.invoker bindings. REVEX will not remove or reinterpret conditional worker access automatically."
   }
