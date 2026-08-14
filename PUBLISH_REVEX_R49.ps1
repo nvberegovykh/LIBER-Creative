@@ -62,6 +62,11 @@ $Preflight = [ordered]@{
   }
   checkpoints = @()
 }
+$script:BrokerTokenCreatorGrantActive = $false
+$script:BrokerTokenCreatorGcloud = ""
+$script:BrokerTokenCreatorSa = ""
+$script:BrokerTokenCreatorMember = ""
+$script:BrokerTokenCreatorRole = "roles/iam.serviceAccountTokenCreator"
 
 [IO.File]::WriteAllText($LogPath, "", [Text.UTF8Encoding]::new($false))
 try { [IO.File]::WriteAllText($LatestLogPath, "", [Text.UTF8Encoding]::new($false)) } catch { }
@@ -688,6 +693,52 @@ function Remove-ProjectLevelWorkerInvokerGrants([string]$Gcloud, [string]$Projec
   Write-Log "Project-wide roles/run.invoker bindings are absent; the dedicated worker service policy can now be evaluated without project-level bypass grants." Green
 }
 
+function Grant-BrokerIdentityProbeAuthority(
+  [string]$Gcloud,
+  [string]$BrokerSa,
+  [string]$DeployerMember
+) {
+  Write-Step "Prepare broker CLI-impersonation authority before GitHub/cloud deployment work"
+  $policy = ((Invoke-Captured "Inspect broker token-creation policy before publication" $Gcloud @(
+    "iam", "service-accounts", "get-iam-policy", $BrokerSa, "--project=$ProjectId", "--format=json"
+  )).Text | ConvertFrom-Json)
+  $members = @(Get-IamRoleMembers $policy $script:BrokerTokenCreatorRole)
+  $script:BrokerTokenCreatorGcloud = $Gcloud
+  $script:BrokerTokenCreatorSa = $BrokerSa
+  $script:BrokerTokenCreatorMember = $DeployerMember
+  if ($DeployerMember -notin $members) {
+    Invoke-Native "Grant temporary publisher Service Account Token Creator for the later broker-identity smoke test" $Gcloud @(
+      "iam", "service-accounts", "add-iam-policy-binding", $BrokerSa,
+      "--project=$ProjectId", "--member=$DeployerMember",
+      "--role=$script:BrokerTokenCreatorRole", "--quiet"
+    )
+    $script:BrokerTokenCreatorGrantActive = $true
+    Write-Log "Temporary broker impersonation authority was granted before the GitHub/final deployment interval; propagation is not deferred to the smoke-test boundary." Green
+  } else {
+    $script:BrokerTokenCreatorGrantActive = $false
+    Write-Log "Publisher already has Service Account Token Creator on the broker identity; no temporary IAM mutation was required." Green
+  }
+}
+
+function Remove-BrokerIdentityProbeAuthority([switch]$BestEffort) {
+  if (-not $script:BrokerTokenCreatorGrantActive) { return }
+  $result = Invoke-Captured "Remove temporary publisher Service Account Token Creator from broker identity" $script:BrokerTokenCreatorGcloud @(
+    "iam", "service-accounts", "remove-iam-policy-binding", $script:BrokerTokenCreatorSa,
+    "--project=$ProjectId", "--member=$script:BrokerTokenCreatorMember",
+    "--role=$script:BrokerTokenCreatorRole", "--quiet"
+  ) -AllowFailure
+  if ($result.ExitCode -eq 0) {
+    $script:BrokerTokenCreatorGrantActive = $false
+    Write-Log "Temporary broker impersonation authority removed." Green
+    return
+  }
+  if ($BestEffort) {
+    Write-Log "Temporary broker impersonation authority cleanup needs attention; original publication failure is preserved. Exit=$($result.ExitCode)." Yellow
+    return
+  }
+  throw "Temporary broker impersonation authority could not be removed after the smoke test."
+}
+
 function Test-BrokerIdentityWorkerInvocation(
   [string]$Gcloud,
   [string]$BrokerSa,
@@ -695,64 +746,59 @@ function Test-BrokerIdentityWorkerInvocation(
   [string]$WorkerUrl
 ) {
   Write-Step "Prove the deployed broker identity can invoke the private r49 worker"
-  $saPolicy = ((Invoke-Captured "Inspect broker token-creation policy" $Gcloud @(
+  $saPolicy = ((Invoke-Captured "Verify broker CLI-impersonation role is present before token mint" $Gcloud @(
     "iam", "service-accounts", "get-iam-policy", $BrokerSa, "--project=$ProjectId", "--format=json"
   )).Text | ConvertFrom-Json)
-  $oidcRole = "roles/iam.serviceAccountOpenIdTokenCreator"
-  $tokenCreators = @(Get-IamRoleMembers $saPolicy $oidcRole)
-  $temporaryGrant = $DeployerMember -notin $tokenCreators
+  $tokenCreators = @(Get-IamRoleMembers $saPolicy $script:BrokerTokenCreatorRole)
+  if ($DeployerMember -notin $tokenCreators) {
+    throw "The publisher does not have the required Service Account Token Creator binding on the broker identity at the smoke-test boundary. The release will not substitute blind retries for a missing IAM binding."
+  }
   $identityToken = $null
+  $lastSafeError = ""
+  $maxTokenAttempts = 12
+  for ($attempt = 1; $attempt -le $maxTokenAttempts -and -not $identityToken; $attempt++) {
+    $tokenResult = Invoke-SecretCaptured "Mint broker identity token without logging credentials (attempt $attempt/$maxTokenAttempts)" $Gcloud @(
+      "auth", "print-identity-token",
+      "--impersonate-service-account=$BrokerSa",
+      "--audiences=$WorkerUrl",
+      "--include-email",
+      "--quiet"
+    ) -AllowFailure
+    if ($tokenResult.ExitCode -eq 0) {
+      $identityToken = [string]($tokenResult.Lines |
+        Where-Object { [string]$_ -match '^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$' } |
+        Select-Object -Last 1)
+      if (-not $identityToken) { throw "gcloud reported success but did not return a parseable broker identity token." }
+      break
+    }
+    $safe = ([string]$tokenResult.Text -replace 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+','<REDACTED_ID_TOKEN>')
+    $safe = [regex]::Replace($safe, 'ya29\.[A-Za-z0-9._-]+', '<REDACTED_ACCESS_TOKEN>')
+    $safe = ($safe -replace '[\r\n]+',' ').Trim()
+    if ($safe.Length -gt 700) { $safe = $safe.Substring(0,700) + '...' }
+    $lastSafeError = $safe
+    $isPropagationDenial = $safe -match '(?i)(PERMISSION_DENIED|permission.*iam\.serviceAccounts\.(getOpenIdToken|getAccessToken)|iam\.serviceAccounts\.(getOpenIdToken|getAccessToken)|403)'
+    if (-not $isPropagationDenial) { throw "Broker identity-token mint failed for a non-propagation reason; no retry loop was used. $safe" }
+    if ($attempt -lt $maxTokenAttempts) {
+      Write-Log "Correct Token Creator binding is present but IAM Credentials still reports a propagation denial; retrying in five seconds." DarkYellow
+      Start-Sleep -Seconds 5
+    }
+  }
+  if (-not $identityToken) { throw "Broker Token Creator binding is present, but IAM Credentials still denied token mint after the post-GitHub residual propagation window. Last sanitized response: $lastSafeError" }
   try {
-    if ($temporaryGrant) {
-      Invoke-Native "Grant temporary broker OIDC-token test authority" $Gcloud @(
-        "iam", "service-accounts", "add-iam-policy-binding", $BrokerSa,
-        "--project=$ProjectId", "--member=$DeployerMember",
-        "--role=$oidcRole", "--quiet"
-      )
-    }
-    for ($attempt = 1; $attempt -le 12 -and -not $identityToken; $attempt++) {
-      $tokenResult = Invoke-SecretCaptured "Mint one bounded broker identity token without logging it (attempt $attempt/12)" $Gcloud @(
-        "auth", "print-identity-token",
-        "--impersonate-service-account=$BrokerSa",
-        "--audiences=$WorkerUrl",
-        "--include-email",
-        "--quiet"
-      ) -AllowFailure
-      if ($tokenResult.ExitCode -eq 0) {
-        $identityToken = [string]($tokenResult.Lines |
-          Where-Object { [string]$_ -match '^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$' } |
-          Select-Object -Last 1)
-      }
-      if (-not $identityToken -and $attempt -lt 12) {
-        Write-Log "Broker OIDC-token authority is not effective yet; waiting five seconds before the bounded retry." DarkYellow
-        Start-Sleep -Seconds 5
-      }
-    }
-    if (-not $identityToken) { throw "Google Cloud did not mint the bounded broker identity token." }
     $response = Invoke-WebRequest -UseBasicParsing -Uri ($WorkerUrl + "/healthz") -Headers @{ Authorization = "Bearer $identityToken" } -TimeoutSec 20
     if ([int]$response.StatusCode -ne 200) { throw "The broker identity health probe returned HTTP $($response.StatusCode)." }
     $health = $response.Content | ConvertFrom-Json
-    if ($health.ok -ne $true -or [string]$health.version -ne $ReleaseTag -or [string]$health.service -ne "REVEX Energy Worker" -or [string]$health.sourceCandidate -ne $CanonicalSourceCommit) {
-      throw "The broker identity reached a worker payload that is not bound to immutable candidate $CanonicalSourceCommit."
-    }
+    if ($health.ok -ne $true -or [string]$health.version -ne $ReleaseTag -or [string]$health.service -ne "REVEX Energy Worker" -or [string]$health.sourceCandidate -ne $CanonicalSourceCommit) { throw "The broker identity reached a worker payload that is not bound to immutable candidate $CanonicalSourceCommit." }
     Add-PreflightCheckpoint "BROKER_TO_PRIVATE_WORKER_SMOKE" ([ordered]@{
       authenticatedIdentity = $BrokerSa
       workerVersion = [string]$health.version
       sourceCandidate = [string]$health.sourceCandidate
       healthStatus = 200
-      temporaryOidcTokenCreatorGrantRemoved = $temporaryGrant
+      tokenCreatorBindingPreparedBeforeGitHubGate = $true
+      blindRetryLoop = $false
     })
     Write-Log "Authenticated broker-identity invocation succeeded against the exact private r49 worker." Green
-  } finally {
-    $identityToken = $null
-    if ($temporaryGrant) {
-      Invoke-Native "Remove temporary broker OIDC-token test authority" $Gcloud @(
-        "iam", "service-accounts", "remove-iam-policy-binding", $BrokerSa,
-        "--project=$ProjectId", "--member=$DeployerMember",
-        "--role=$oidcRole", "--quiet"
-      )
-    }
-  }
+  } finally { $identityToken = $null }
 }
 
 function Verify-LiveCompanion {
@@ -1586,6 +1632,13 @@ try {
   if (-not $Gcloud) { Install-WingetPackage "Google.CloudSDK" "Google Cloud CLI"; $Gcloud = Resolve-Executable @("gcloud.cmd", "gcloud.exe", "gcloud") }
   foreach ($tool in @($Git,$Gh,$Gcloud,$Firebase)) { if (-not $tool) { throw "A required publishing tool did not become available after the offline gate." } }
 
+  $deployer = (Invoke-Captured "Resolve publisher identity before publication IAM preparation" $Gcloud @("auth", "list", "--filter=status:ACTIVE", "--format=value(account)")).Text.Trim().Split([Environment]::NewLine)[0]
+  if (-not $deployer) { throw "Google Cloud did not identify the active publisher." }
+  $deployerMember = if ($deployer.EndsWith('.gserviceaccount.com')) { "serviceAccount:$deployer" } else { "user:$deployer" }
+  $BrokerSa = "revex-energy-broker@$ProjectId.iam.gserviceaccount.com"
+  Ensure-ServiceAccount $Gcloud $BrokerSa "REVEX authenticated Energy broker"
+  Grant-BrokerIdentityProbeAuthority $Gcloud $BrokerSa $deployerMember
+
   $ghAuth = Invoke-Captured "Verify GitHub authentication" $Gh @("auth", "status", "--hostname", "github.com") -AllowFailure
   if ($ghAuth.ExitCode -ne 0) { Invoke-InteractiveNoLog "Essential GitHub approval" $Gh @("auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web") }
   Invoke-Native "Configure GitHub authentication for Git" $Gh @("auth", "setup-git")
@@ -1750,6 +1803,7 @@ try {
     Write-Log "Private worker correctly denied or concealed the unauthenticated health probe ($status)." Green
   }
   Test-BrokerIdentityWorkerInvocation $Gcloud $BrokerSa $deployerMember $WorkerUrl
+  Remove-BrokerIdentityProbeAuthority
   Write-Log "The broker service account is the sole dedicated runtime invoker binding for this worker. Project administrators retain administrative authority by design." Green
   $runState = ((Invoke-Captured "Verify ready r49 Cloud Run revision" $Gcloud @("run", "services", "describe", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")).Text | ConvertFrom-Json)
   $deployedImage = [string]$runState.spec.template.spec.containers[0].image
@@ -1812,6 +1866,7 @@ try {
   if (-not $NoPause) { try { Read-Host "Press Enter to close" | Out-Null } catch { } }
 } catch {
   $failure = $_
+  try { Remove-BrokerIdentityProbeAuthority -BestEffort } catch { }
   try {
     if ([string]$script:Preflight.status -ne "PASSED") {
       $script:Preflight.status = "FAILED"
