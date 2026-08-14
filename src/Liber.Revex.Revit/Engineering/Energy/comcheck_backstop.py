@@ -589,19 +589,30 @@ class FreshProjectBrowserClient:
         result = self.driver.execute_script(
             """
             const values=arguments[0],parentIndex=arguments[1],fields={};
-            for(const [key,value] of Object.entries(values))fields[key]=createInputField(value);
-            const child=values.component==='WINDOW'||values.component==='DOOR';
-            if(child){
-              const parent=envelopeTable.getList()[parentIndex];
-              if(!parent)return {ok:false,error:'missing parent '+parentIndex};
-              envelopeTable.options.selected=parent;
+            try{
+              for(const [key,value] of Object.entries(values))fields[key]=createInputField(value);
+              const child=values.component==='WINDOW'||values.component==='DOOR';
+              const list=envelopeTable.getList();
+              const parent=child?list[parentIndex]:null;
+              if(child&&!parent)return {ok:false,error:'missing parent '+parentIndex};
+              const row=envelopeTable.buildNewComponent(fields);
+              // addToServer is COMcheck's authoritative EnvelopeView.add adapter.
+              // The rest of addComponent/finish only performs parent discovery,
+              // dialog closure, and redraw work that is invalid in a headless
+              // clean-project translation. Insert the accepted row into the
+              // same local model explicitly so later children resolve correctly.
+              const status=envelopeTable.addToServer(row,parent);
+              if(status!==true)return {ok:false,error:'addToServer returned false'};
+              enableSave();
+              if(child)parent.children.push(row);else list.push(row);
+              const index=child?-1:list.indexOf(row);
+              return {
+                ok:true,index,id:row.id,component:row.component&&row.component.value,
+                type:row.type&&row.type.value,rows:list.length,parentId:parent&&parent.id
+              };
+            }catch(error){
+              return {ok:false,error:String(error),stack:String(error&&error.stack||'')};
             }
-            const row=envelopeTable.buildNewComponent(fields);
-            const added=envelopeTable.addComponent(row,child);
-            if(added==null)return {ok:false,error:'addComponent returned null'};
-            envelopeTable.finish(added,'add');
-            const list=envelopeTable.getList();
-            return {ok:true,index:list.indexOf(added),id:added.id,component:added.component.value,type:added.type.value,rows:list.length};
             """,
             values, parent_index,
         )
