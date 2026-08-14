@@ -12,56 +12,18 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Selenium
         run: python -m pip install --disable-pip-version-check selenium pypdf
-      - name: Live COMcheck actual Open Project path
+      - name: Inspect fresh-project COMcheck controls
         shell: python
         run: |
-          import pathlib,re,tempfile,urllib.request,json
+          import json
           from selenium import webdriver
-          from selenium.webdriver.common.by import By
           from selenium.webdriver.support.ui import WebDriverWait
           base='https://legacy-comcheck.energycode.pnl.gov/CheckWeb/'
-          ref=pathlib.Path('src/Liber.Revex.Revit/Engineering/Energy/References/COMcheck_250_MIDWOOD_STRUCTURE_REFERENCE.cxl').resolve()
-          with tempfile.TemporaryDirectory() as td:
-              td=pathlib.Path(td)
-              o=webdriver.ChromeOptions();o.add_argument('--headless=new');o.add_argument('--no-sandbox');o.add_argument('--disable-dev-shm-usage')
-              d=webdriver.Chrome(options=o); d.set_script_timeout(45)
-              try:
-                  w=WebDriverWait(d,45);d.get(base+'index.html');w.until(lambda x:x.execute_script("return typeof ProjectService!=='undefined' && typeof dwr!=='undefined' && typeof USER_PROJECT!=='undefined' && USER_PROJECT!==null"))
-                  print('SITE_UPLOAD_WRAPPER=',d.execute_script("return typeof window.uploadProject==='function' ? String(window.uploadProject) : 'MISSING'"))
-                  print('OPEN_PROJECT_GLOBALS=',d.execute_script("return Object.keys(window).filter(k=>/open.*project|project.*open|upload/i.test(k)).sort().join(' | ')"))
-                  print('OPEN_PROJECT_CONTROLS=',d.execute_script("return Array.from(document.querySelectorAll('a,button,input,[onclick]')).map((e,i)=>({i,tag:e.tagName,id:e.id,cls:e.className,text:(e.innerText||e.value||e.title||'').trim(),onclick:e.getAttribute('onclick')})).filter(x=>/open\s*project/i.test(x.text)||/open.*project/i.test(x.onclick||'')).slice(0,30)"))
-
-                  exported=d.execute_async_script("""
-                    const done=arguments[arguments.length-1]; let settled=false; const finish=x=>{if(!settled){settled=true;done(JSON.stringify(x))}};
-                    ProjectService.downloadProject({callback:r=>finish({ok:true,path:String(r)}),exceptionHandler:(m,e)=>finish({ok:false,error:String(m),javaClassName:e&&e.javaClassName}),errorHandler:(m,e)=>finish({ok:false,error:String(m),javaClassName:e&&e.javaClassName}),timeout:30000});
-                  """)
-                  er=json.loads(exported); print('DOWNLOAD_PROJECT_RESULT=',exported)
-                  if not er.get('ok'): raise RuntimeError('clean export failed')
-                  cookies='; '.join(f"{c['name']}={c['value']}" for c in d.get_cookies());ua=d.execute_script('return navigator.userAgent')
-                  clean_bytes=urllib.request.urlopen(urllib.request.Request(urllib.request.urljoin(base,er['path']),headers={'Cookie':cookies,'User-Agent':ua,'Referer':base+'index.html'}),timeout=45).read()
-                  clean=td/'COMCHECK_LIVE_CLEAN_REFERENCE.cxl';clean.write_bytes(clean_bytes)
-                  print('CLEAN_EXPORT_BYTES=',len(clean_bytes))
-
-                  opened=d.execute_script("""
-                    const es=Array.from(document.querySelectorAll('a,button,input,[onclick]'));
-                    const e=es.find(x=>/open\s*project/i.test((x.innerText||x.value||x.title||'').trim())||/open.*project/i.test(x.getAttribute('onclick')||''));
-                    if(!e) return 'NO_CONTROL'; e.click(); return JSON.stringify({tag:e.tagName,id:e.id,text:(e.innerText||e.value||e.title||'').trim(),onclick:e.getAttribute('onclick')});
-                  """)
-                  print('OPEN_PROJECT_CLICK=',opened)
-                  w.until(lambda x:x.execute_script("return !!document.getElementById('fileToUpload')"))
-                  print('REAL_FILE_INPUT=',d.execute_script("const e=document.getElementById('fileToUpload');return JSON.stringify({id:e.id,name:e.name,outer:e.outerHTML,visible:!!(e.offsetWidth||e.offsetHeight||e.getClientRects().length)})"))
-
-                  def upload(path,label,expected=''):
-                      e=d.find_element(By.ID,'fileToUpload'); e.send_keys(str(path))
-                      print(label+'_FILE_STATE=',d.execute_script("const e=document.getElementById('fileToUpload');return JSON.stringify({value:e.value,files:Array.from(e.files||[]).map(f=>({name:f.name,size:f.size,type:f.type}))})"))
-                      r=d.execute_async_script("""
-                        const expected=arguments[0],done=arguments[arguments.length-1],el=document.getElementById('fileToUpload'),file=dwr.util.getValue('fileToUpload'),filename=$('#fileToUpload').val();
-                        let settled=false; const finish=x=>{if(!settled){settled=true;done(JSON.stringify(x))}};
-                        ProjectService.uploadProject(filename,file,{callback:r=>{const s=JSON.stringify(r);finish({ok:true,identityPresent:expected?s.includes(expected):true,bytes:s.length,prefix:s.slice(0,1000)})},exceptionHandler:(m,e)=>finish({ok:false,error:String(m),javaClassName:e&&e.javaClassName,message:e&&e.message}),errorHandler:(m,e)=>finish({ok:false,error:String(m),javaClassName:e&&e.javaClassName,message:e&&e.message}),timeout:30000});
-                      """,expected)
-                      print(label+'=',r); return json.loads(r)
-
-                  clean_result=upload(clean,'CLEAN_EXPORT_REIMPORT')
-                  if not clean_result.get('ok'): raise RuntimeError('actual COMcheck Open Project path cannot re-import its own export')
-                  print('REVEX_COMCHECK_ACTUAL_UI_REIMPORT=PASSED')
-              finally:d.quit()
+          o=webdriver.ChromeOptions();o.add_argument('--headless=new');o.add_argument('--no-sandbox');o.add_argument('--disable-dev-shm-usage')
+          d=webdriver.Chrome(options=o)
+          try:
+              w=WebDriverWait(d,45);d.get(base+'index.html');w.until(lambda x:x.execute_script("return typeof USER_PROJECT!=='undefined' && USER_PROJECT!==null"))
+              print('SELECTS=',json.dumps(d.execute_script("return Array.from(document.querySelectorAll('select')).map(e=>({id:e.id,name:e.name,value:e.value,html:e.outerHTML.slice(0,5000),options:Array.from(e.options).map(o=>({text:o.text,value:o.value})).filter(o=>/new york|nyc|2020|appendix|90\.1/i.test(o.text+' '+o.value))}))"),indent=2))
+              print('INPUTS=',json.dumps(d.execute_script("return Array.from(document.querySelectorAll('input,button,a')).map(e=>({tag:e.tagName,id:e.id,name:e.name,type:e.type,value:e.value,text:(e.innerText||e.title||'').trim(),onclick:e.getAttribute('onclick')})).filter(x=>/project title|height|stor|building|area|wall|roof|floor|window|door|compliance|report/i.test(JSON.stringify(x))).slice(0,200)"),indent=2))
+              print('GLOBALS=',d.execute_script("return Object.keys(window).filter(k=>/code|location|envelope|wall|roof|floor|window|door|building|compliance/i.test(k)).sort().slice(0,300).join(' | ')"))
+          finally:d.quit()
