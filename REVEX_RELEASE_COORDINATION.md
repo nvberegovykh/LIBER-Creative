@@ -69,3 +69,16 @@ Every candidate change must keep the `.ps1`, source ZIP candidate id/hash/size, 
 ## 7. Debugging rule for future chats/agents
 
 Start from this file and the newest preflight/log, not from chat recollection alone. Do not restart exploration of already-passed stages unless evidence shows they regressed. Record any new release boundary or architecture decision here before handing off or changing another subsystem.
+
+## 8. 2026-08-14 clean-COMcheck acceptance boundary
+
+The `36fb4e...` real 79 run proved the preserved chain through both EnergyPlus runs, Review Packager, EN-1 preparation, and official clean-project COMcheck. COMcheck returned an official five-page report and the pipeline completed. The next failure was only the release wrapper interpreting `NOT_APPLICABLE_DIFFERENT_COHORT` as a regression.
+
+Approved-run comparison semantics are therefore fixed as follows:
+
+- matching cohort + `PASSED` + `BEST_WORKING_ITERATION` + `reviewEligible=true` -> accepted benchmarked candidate;
+- different cohort + `NOT_APPLICABLE_DIFFERENT_COHORT` + `UNBENCHMARKED_DIFFERENT_COHORT` + `reviewEligible=true` -> accepted unbenchmarked candidate;
+- matching-cohort `REGRESSION` / `WITHHELD_REFERENCE_REGRESSION` or any `reviewEligible=false` -> blocked;
+- never label a different cohort `BEST_WORKING_ITERATION`; absence of a comparable approved cohort is not evidence of regression.
+
+This distinction is required for REVEX to work on projects whose current Revit geometry legitimately differs from the masked 79 Winthrop approved reference cohort.
