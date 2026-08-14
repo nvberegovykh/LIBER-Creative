@@ -15,11 +15,11 @@ $RunId = Get-Date -Format "yyyyMMdd-HHmmss"
 $ReleaseTag = "0.8.19-r49"
 $Build = "20260813r49"
 $GbxmlEvidenceProducerSha256 = "f9b48ebce0b98c134f81b8e174c8fb0e576186c2200290c5d1ccb0ea8e6af214"
-$CanonicalSourceCommit = "43370d3c2bf74fa90f7abad0f6c561b8cc6d3df5"
-$CanonicalSourceRef = "local/revex-r49-codeql-linear-parser"
-$CanonicalSourceArchiveName = "REVEX_R49_SOURCE_43370d3c2bf74fa90f7abad0f6c561b8cc6d3df5.zip"
-$CanonicalSourceArchiveSha256 = "43370d3c2bf74fa90f7abad0f6c561b8cc6d3df5eae0e2e87443fa01bb2ade7f"
-$CanonicalSourceArchiveSize = 52809327L
+$CanonicalSourceCommit = "63f6e47c24ccd9a2c69a47b0cbb80ab560fc8e71"
+$CanonicalSourceRef = "local/revex-r49-cloud-py310-onnxruntime"
+$CanonicalSourceArchiveName = "REVEX_R49_SOURCE_63f6e47c24ccd9a2c69a47b0cbb80ab560fc8e71.zip"
+$CanonicalSourceArchiveSha256 = "63f6e47c24ccd9a2c69a47b0cbb80ab560fc8e714de3f12189a7d67884326bc9"
+$CanonicalSourceArchiveSize = 52809747L
 $CanonicalSourceArchive = Join-Path $Root $CanonicalSourceArchiveName
 $StageRoot = Join-Path $env:LOCALAPPDATA "LIBER\REVEX-R49-Publish\$RunId"
 $CanonicalSourceRoot = Join-Path $StageRoot "canonical-source"
@@ -558,6 +558,7 @@ function Assert-ReleaseBundleClosure([string]$SourceRoot) {
   $workerPath = Join-Path $SourceRoot "server\revex-energy-worker\app.py"
   $acceptancePath = Join-Path $SourceRoot "server\revex-energy-worker\run_revex_r49_release_acceptance.py"
   $pipelinePath = Join-Path $SourceRoot "src\Liber.Revex.Revit\Engineering\Energy\revex_energy_pipeline.py"
+  $geometryRequirementsPath = Join-Path $SourceRoot "src\Liber.Revex.Revit\Engineering\Energy\GeometryCo\requirements.txt"
   foreach ($required in @($graphPath,$pythonPath,$servicePath,$workflowPath,$dockerPath,$cloudBuildPath,$brokerPath,$workerPath,$acceptancePath,$pipelinePath)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Release dependency closure is missing: $required" }
   }
@@ -583,6 +584,7 @@ function Assert-ReleaseBundleClosure([string]$SourceRoot) {
   $worker = [IO.File]::ReadAllText($workerPath, [Text.Encoding]::UTF8)
   $acceptance = [IO.File]::ReadAllText($acceptancePath, [Text.Encoding]::UTF8)
   $pipeline = [IO.File]::ReadAllText($pipelinePath, [Text.Encoding]::UTF8)
+  $geometryRequirements = [IO.File]::ReadAllText($geometryRequirementsPath, [Text.Encoding]::UTF8)
   if (-not $workflow.Contains("REVEX r49 final gate") -or -not $workflow.Contains("GeometryCo/requirements.txt") -or -not $workflow.Contains("verify-revex-r49-live-comcheck.py")) { throw "GitHub final gate does not exercise the complete GeometryCo and live clean-COMcheck dependency set." }
   if (-not $docker.Contains("/opt/revex/energy/GeometryCo/requirements.txt")) { throw "Cloud worker image does not install GeometryCo runtime dependencies." }
   if (-not $cloudBuild.Contains("timeout: 1800s")) { throw "Cloud Build does not reserve enough time for the pinned OpenStudio image and full worker QA." }
@@ -591,6 +593,7 @@ function Assert-ReleaseBundleClosure([string]$SourceRoot) {
   if (-not $acceptance.Contains("semanticPassRerun") -or -not $acceptance.Contains("enrich_comcheck_schedule_facts")) { throw "Real-project acceptance cannot reuse immutable raw page facts while rerunning current COMcheck semantics." }
   if (-not $acceptance.Contains("require_review_eligible_comparison") -or -not $acceptance.Contains("UNBENCHMARKED_DIFFERENT_COHORT")) { throw "Real-project acceptance does not distinguish a valid different geometry cohort from a matching-cohort regression." }
   if (-not $pipeline.Contains("comcheckSemantic") -or -not $pipeline.Contains("scheduleSemanticVersion")) { throw "COMcheck serializer is not bound to consolidated schedule-semantic facts." }
+  if (-not $geometryRequirements.Contains('onnxruntime==1.23.2; platform_system != "Windows" and python_version < "3.11"') -or -not $geometryRequirements.Contains('onnxruntime==1.24.4; platform_system != "Windows" and python_version >= "3.11"')) { throw "GeometryCo runtime dependencies do not preserve the Linux Python 3.10/3.11+ ONNX Runtime compatibility split required by the Ubuntu 22.04 cloud worker." }
   Add-PreflightCheckpoint "RELEASE_DEPENDENCY_CLOSURE" ([ordered]@{
     gbxmlEngineVersion = $engineVersion
     gbxmlEmbeddedExternalMatch = $true
@@ -603,6 +606,7 @@ function Assert-ReleaseBundleClosure([string]$SourceRoot) {
     comcheckScheduleSemanticAgent = $true
     scheduleNamesAuthoritative = $false
     partialPageScanReuseWithSemanticRerun = $true
+    cloudWorkerPython310OnnxRuntimeCompatible = $true
   })
   Write-Log "gbXML graph/Python/C# identity and downstream worker/GitHub/broker dependency closure passed before real Revit acceptance." Green
 }
@@ -1298,7 +1302,7 @@ try {
     "src\Liber.Revex.Revit\Engineering\Energy\comcheck_backstop.py" = "c29433a0da6ebbcd6af599f3f461120f096b7ce5b4248c6a421f19373ffe2df2"
     "src\Liber.Revex.Revit\Engineering\Energy\verify_revex_r49_energy.py" = "9b14e2704bd45226b8e0d8fc174dd4018228548f98871f36734c1549bd473eb7"
     "src\Liber.Revex.Revit\Engineering\Energy\requirements.txt" = "598d9b57a4c9bcfdce8266c1241331ee7acea61eb33ce162c6b91546603ff20a"
-    "src\Liber.Revex.Revit\Engineering\Energy\GeometryCo\requirements.txt" = "63f616f8b24d4ab107f65e1354364314966f8ea738643bdd444a8d8fe7aea0ac"
+    "src\Liber.Revex.Revit\Engineering\Energy\GeometryCo\requirements.txt" = "1318bd4139433c6815ed35dc78321cf3000fbeb203e1de0621f22dc49342f659"
     "src\Liber.Revex.Revit\Engineering\Energy\GeometryCo\OpenStudio_Energy_Model_Geometry_Compiler.py" = "1fbd45afcfbc6120f56f8f4eb8947385de0c4d4b159f2bbfb70dbf8e067da85f"
     "src\Liber.Revex.Revit\Engineering\Energy\Packager\EnergyPlusReviewPackager.py" = "30ba0b2f3e1fee952382d016c68caa5dea85d7d68b439296797da5adf7f412f2"
     "src\Liber.Revex.Revit\Engineering\Energy\gbxml_to_osm.rb" = "eac568e149244dc46dfede1ecaee47b7b006cf6c6412db28822c355904a9fa77"
@@ -1332,7 +1336,7 @@ try {
     "firebase\r49-live-rules\package-lock.json" = "789bbcc5a9716e95a1924ffbe9ad19131deacb6a53376d1f352914b67b27f7d0"
     "firebase\r49-live-rules\firebase.json" = "6285cd269cfb42419e2f9c9f03a0f2c16f41198831c36bea941cb3f1f7b93bb3"
     "firebase\r49-live-rules\.gitignore" = "8bbd5e0e7c8f650b9fd6ca3a4bde39fedde690a639965b0e3b46cf33d040c20a"
-    "REVEX_RELEASE_COORDINATION.md" = "8038b0d4994d387c2e618e20f38bc0734ba27c2b24c881edcb908272296b82a0"
+    "REVEX_RELEASE_COORDINATION.md" = "92725ac422eed6c194b93f1fcc86521542c605cb49f2db6de19c0bd47ae189e7"
   }
   Restore-HashLockedSource $Expected
 
