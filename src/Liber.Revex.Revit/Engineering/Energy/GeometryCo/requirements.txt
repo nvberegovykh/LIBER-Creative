@@ -1,4 +1,5 @@
-shapely>=2.1,<3
-numpy>=1.26,<3
-onnxruntime-directml>=1.20,<2; platform_system == "Windows"
-onnxruntime>=1.20,<2; platform_system != "Windows"
+shapely==2.1.2
+numpy==2.4.6; python_version >= "3.11"
+numpy==2.2.6; python_version < "3.11"
+onnxruntime-directml==1.24.4; platform_system == "Windows"
+onnxruntime==1.24.4; platform_system != "Windows"

@@ -18,7 +18,7 @@ namespace Liber.Revex.Revit.Services;
 /// </summary>
 public sealed class GbxmlEngineeringService
 {
-    private const string EngineVersion = "1.1.8";
+    private const string EngineVersion = "1.1.9";
     private const string GraphFileName = "LIBER_gbXML_Preflight_and_Export.dyn";
     private const string PythonFileName = "LIBER_gbXML_Preflight_and_Export.py";
 
@@ -325,12 +325,65 @@ public sealed class GbxmlEngineeringService
     }
 
     /// <summary>
-    /// DynamoRevit intentionally returns after first UI-less initialization before it opens the
-    /// journal path. Therefore REVEX uses two supported ExecuteCommand calls:
-    ///   1. initialize/rebind a fresh UI-less Dynamo model to the active Revit document;
-    ///   2. execute the run graph through DynamoRevit's journal path in automation mode.
-    /// Automation mode uses DynamoRevit's synchronous process mode, so the second call does not
-    /// return until the graph evaluation has completed.
+    /// Returns true only when Revit's supported Dynamo command has created the shared
+    /// DynamoRevit model. This probe never loads Dynamo and is therefore safe inside Idling.
+    /// </summary>
+    public static bool IsDynamoHostInitialized()
+    {
+        try
+        {
+            Assembly? assembly = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a =>
+                a.GetType("Dynamo.Applications.DynamoRevit", false) != null);
+            Type? dynamoType = assembly?.GetType("Dynamo.Applications.DynamoRevit", false);
+            PropertyInfo? modelProperty = dynamoType?.GetProperty(
+                "RevitDynamoModel", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+            return modelProperty?.GetValue(null) != null;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Initializes Dynamo's UI-less synchronous automation host from a dedicated Revit
+    /// ExternalEvent. The publisher must never call this from an Idling handler because
+    /// Dynamo legitimately subscribes to Idling while its host is being created.
+    /// </summary>
+    public static void InitializeDynamoAutomationHost(UIApplication uiapp)
+    {
+        if (IsDynamoHostInitialized())
+        {
+            RevexDiagnostics.Info("GBXML", "Dynamo UI-less automation host is already initialized.");
+            return;
+        }
+
+        Assembly assembly = ResolveDynamoAssembly();
+        Type dynamoType = assembly.GetType("Dynamo.Applications.DynamoRevit", throwOnError: true)!;
+        Type dataType = assembly.GetType("Dynamo.Applications.DynamoRevitCommandData", throwOnError: true)!;
+        Type keysType = assembly.GetType("Dynamo.Applications.JournalKeys", throwOnError: true)!;
+        MethodInfo execute = ResolveDynamoExecute(dynamoType, dataType);
+        object? target = execute.IsStatic ? null : Activator.CreateInstance(dynamoType);
+        object initData = CreateDynamoCommandData(dataType, uiapp, new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [JournalKey(keysType, "ShowUiKey")] = bool.FalseString,
+            [JournalKey(keysType, "AutomationModeKey")] = bool.TrueString,
+            [JournalKey(keysType, "ModelShutDownKey")] = bool.TrueString
+        });
+
+        RevexDiagnostics.Info("GBXML", "Initializing Dynamo UI-less synchronous host in a dedicated Revit ExternalEvent context.");
+        object? result = InvokeDynamo(execute, target, initData, "external-event initialization");
+        EnsureDynamoSucceeded(result, "external-event initialization");
+        if (!IsDynamoHostInitialized())
+            throw new InvalidOperationException("Dynamo returned Succeeded without creating its shared Revit automation model.");
+    }
+
+    /// <summary>
+    /// The publisher initializes Dynamo in a dedicated Revit ExternalEvent so its event
+    /// subscriptions never occur inside the publisher's Idling callback. Normal interactive
+    /// Energy export can still initialize a fresh UI-less model here because it already runs in
+    /// the add-in's ExternalEvent. Once initialized, REVEX executes the run graph through
+    /// DynamoRevit's synchronous journal automation path.
     /// </summary>
     private static void ExecuteDynamo(UIApplication uiapp, string graphPath)
     {
@@ -339,27 +392,18 @@ public sealed class GbxmlEngineeringService
         Type dataType = assembly.GetType("Dynamo.Applications.DynamoRevitCommandData", throwOnError: true)!;
         Type keysType = assembly.GetType("Dynamo.Applications.JournalKeys", throwOnError: true)!;
 
-        MethodInfo execute = dynamoType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
-            .Where(m => m.Name == "ExecuteCommand")
-            .FirstOrDefault(m =>
-            {
-                ParameterInfo[] parameters = m.GetParameters();
-                return parameters.Length == 1 && parameters[0].ParameterType.IsAssignableFrom(dataType);
-            })
-            ?? throw new MissingMethodException(dynamoType.FullName, "ExecuteCommand(DynamoRevitCommandData)");
+        MethodInfo execute = ResolveDynamoExecute(dynamoType, dataType);
 
         object? target = execute.IsStatic ? null : Activator.CreateInstance(dynamoType);
 
-        object initData = CreateDynamoCommandData(dataType, uiapp, new Dictionary<string, string>(StringComparer.Ordinal)
+        if (!IsDynamoHostInitialized())
         {
-            [JournalKey(keysType, "ShowUiKey")] = bool.FalseString,
-            [JournalKey(keysType, "AutomationModeKey")] = bool.TrueString,
-            [JournalKey(keysType, "ModelShutDownKey")] = bool.TrueString
-        });
-
-        RevexDiagnostics.Info("GBXML", "Dynamo stage 1/2: initialize/rebind UI-less automation host (no dynPath key by design).");
-        object? initResult = InvokeDynamo(execute, target, initData, "initialization");
-        EnsureDynamoSucceeded(initResult, "initialization");
+            InitializeDynamoAutomationHost(uiapp);
+        }
+        else
+        {
+            RevexDiagnostics.Info("GBXML", "Dynamo stage 1/2: existing UI-less synchronous host verified; initialization safely skipped.");
+        }
 
         var runJournal = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -379,6 +423,16 @@ public sealed class GbxmlEngineeringService
         EnsureDynamoSucceeded(runResult, "graph execution");
         RevexDiagnostics.Info("GBXML", "DynamoRevit synchronous graph execution returned to REVEX.");
     }
+
+    private static MethodInfo ResolveDynamoExecute(Type dynamoType, Type dataType) =>
+        dynamoType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
+            .Where(m => m.Name == "ExecuteCommand")
+            .FirstOrDefault(m =>
+            {
+                ParameterInfo[] parameters = m.GetParameters();
+                return parameters.Length == 1 && parameters[0].ParameterType.IsAssignableFrom(dataType);
+            })
+        ?? throw new MissingMethodException(dynamoType.FullName, "ExecuteCommand(DynamoRevitCommandData)");
 
     private static object CreateDynamoCommandData(Type dataType, UIApplication uiapp, IDictionary<string, string> journal)
     {

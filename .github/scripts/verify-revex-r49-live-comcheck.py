@@ -111,7 +111,7 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="revex-r49-live-comcheck-") as temp:
         folder = Path(temp)
-        log = pipeline.RunLog(folder, "r49-live-comcheck", "GitHub live transport QA")
+        log = pipeline.RunLog(folder, "r49-live-comcheck", "REVEX live clean COMcheck transport QA")
         cxl, _audit_pdf, audit = pipeline.prepare_project_comcheck(facts, identity, folder, log)
         if cxl is None or not cxl.is_file() or audit.get("status") != "INPUT_READY":
             raise RuntimeError(f"Synthetic COMcheck input was not ready: {audit}")

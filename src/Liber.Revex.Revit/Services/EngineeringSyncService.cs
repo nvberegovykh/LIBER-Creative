@@ -144,7 +144,7 @@ public sealed class EngineeringSyncService
                 weather = new { city = weatherMeta.City, stateProvince = weatherMeta.StateProvince, country = weatherMeta.Country, dataSource = weatherMeta.DataSource, wmo = weatherMeta.Wmo, latitude = weatherMeta.Latitude, longitude = weatherMeta.Longitude, timeZone = weatherMeta.TimeZone, elevation = weatherMeta.Elevation, sourceFile = Path.GetFileName(resolvedWeather), file = Path.GetFileName(weather), sha256 = Sha256(weather) },
                 artifacts,
                 revitWrites = new { spaces = true, energyAnalysisDetailModel = true, enEnergyPlanTags = true, other = false },
-                companionProcessing = new { geometryCo = "4.3.1", baselineAndProposed = true, reports = true, en1 = true, pageScan = "managed-ai-t-z-en-revit-pages", structuredProjectIdentity = "active-revit-document-t-z-title-evidence", comcheckCurrentProjectCxl = true, comcheckConsent = "one-immutable-engineering-revision-only", projectComcheckFiling = true },
+                companionProcessing = new { geometryCo = "4.3.4", baselineAndProposed = true, reports = true, en1 = true, pageScan = "managed-ai-t-z-en-revit-pages", structuredProjectIdentity = "active-revit-document-t-z-title-evidence", comcheckCurrentProjectCxl = true, comcheckConsent = "one-immutable-engineering-revision-only", projectComcheckFiling = true },
                 writeBackToRevitAfterExport = false,
                 pdfInsertion = false,
                 printingSetChanges = false

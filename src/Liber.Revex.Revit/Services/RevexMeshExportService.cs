@@ -93,7 +93,9 @@ public sealed class RevexMeshExportService
     {
         string pageFolder = System.IO.Path.Combine(folder, "geometry");
         Directory.CreateDirectory(pageFolder);
-        var options = new Options { View = view, IncludeNonVisibleObjects = false, ComputeReferences = false, DetailLevel = ViewDetailLevel.Fine };
+        // The temporary REVEX sync view is already Fine. Revit forbids assigning
+        // Options.DetailLevel when Options.View is set; the view owns detail here.
+        var options = new Options { View = view, IncludeNonVisibleObjects = false, ComputeReferences = false };
         var pages = new List<PageResult>();
         int pageIndex = 1, totalElements = 0;
         long totalTriangles = 0, totalVertices = 0;

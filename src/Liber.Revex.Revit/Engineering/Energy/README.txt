@@ -5,7 +5,7 @@ One chain
 ---------
 Revit evidence -> Universal gbXML >=80% hard-stop gate / >=95% quality target -> OpenStudio geometry OSM ->
 GeometryCo 4.3.1 paired Baseline/Proposed compilation -> native
-OpenStudio/EnergyPlus simulation -> Review Packager -> EN-1 workbook/PDF.
+OpenStudio/EnergyPlus simulation -> Review Packager -> filled EN-1 workbook.
 
 The native REVEX Engineering host owns weather resolution and starts the
 pipeline automatically after an EXPORTED Engineering Sync. Companion Energy is
@@ -19,7 +19,7 @@ Runtime requirements
 - OpenStudio Application 1.10 / SDK 3.10. The worker detects flat SDK installs
   and the common nested OpenStudioApplication*/openstudio-3.10*/bin layout.
 - Python dependencies in requirements.txt; Excel or LibreOffice is used only for
-  final EN-1 PDF calculation/export.
+  filled EN-1 workbook generation; EN-1 PDF export is not a REVEX completion requirement.
 
 Approved behavior references
 ----------------------------
@@ -40,10 +40,12 @@ signature/seal areas blank; REVEX does not collect or apply those values.
 
 COMcheck boundary
 -----------------
-COMcheck_79_WINTHROP_APPROVED.pdf is bundled as reference evidence only. A run
-may expose COMcheck_REFERENCE_79_WINTHROP_APPROVED.pdf with
-projectComcheckFiling=false. REVEX never relabels that reference as another
-project's filing document.
+The generated current-project CXL is built only from current immutable evidence. EN thermal-boundary
+diagrams own orientation and gross area; EN/COMcheck schedule rows supply U/SHGC/R properties by
+unambiguous assembly-code reconciliation. A filing-table OCR artifact or dropped cell cannot become
+building geometry when diagram geometry is present. The approved CXL is schema/enum structure only;
+prior-project values are cleared before current-project population. Official COMcheck processing uses
+only the generated current-project CXL and revision-bound explicit authorization.
 
 Failure behavior
 ----------------
@@ -54,4 +56,4 @@ chain, and traceback.
 
 
 R31 PRODUCTION EXECUTION
-The production Energy worker is server-only. Revit/REVEX publishes engineering-sync.json, the >=80% hard-stop gbXML evidence package (with >=95% quality target metadata), and one verified EPW. server/revex-energy-worker builds this folder into a pinned OpenStudio 3.10 container and runs this pipeline without accepting workstation executable/template/standard/identity inputs. LibreOffice is in the image for EN-1 PDF export. Local invocation remains source/debug capability only and is not called by the production REVEX UI.
+The production Energy worker is server-only. Revit/REVEX publishes engineering-sync.json, the >=80% hard-stop gbXML evidence package (with >=95% quality target metadata), and one verified EPW. server/revex-energy-worker builds this folder into a pinned OpenStudio 3.10 container and runs this pipeline without accepting workstation executable/template/standard/identity inputs. Local invocation remains source/debug capability only and is not called by the production REVEX UI.

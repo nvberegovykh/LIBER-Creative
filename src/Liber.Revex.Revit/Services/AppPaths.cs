@@ -19,9 +19,22 @@ public static class AppPaths
         }
     }
 
-    public static string Root =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "LIBER", "REVEX");
+    public static string Root
+    {
+        get
+        {
+            string requested = Environment.GetEnvironmentVariable("REVEX_DATA_ROOT")?.Trim() ?? "";
+            if (requested.Length > 0)
+            {
+                string expanded = Environment.ExpandEnvironmentVariables(requested);
+                if (!Path.IsPathFullyQualified(expanded))
+                    throw new InvalidOperationException("REVEX_DATA_ROOT must be an absolute path.");
+                return Path.GetFullPath(expanded);
+            }
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "LIBER", "REVEX");
+        }
+    }
 
     public static string WebProfile => Path.Combine(Root, "WebView2");
     public static string Transfers => Path.Combine(Root, "Transfers");

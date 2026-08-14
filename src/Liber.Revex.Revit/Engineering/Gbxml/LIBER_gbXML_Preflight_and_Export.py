@@ -74,8 +74,8 @@ from Autodesk.Revit.DB.Mechanical import Space, SpaceFilter
 
 
 TOOL_NAME = "LIBER gbXML Preflight + Export"
-TOOL_VERSION = "1.1.8"
-ENGINE_PATCH = "UNIVERSAL-evidence-graph-entrypoints"
+TOOL_VERSION = "1.1.9"
+ENGINE_PATCH = "UNIVERSAL-evidence-graph-opening-host-fidelity"
 # Integrity contract: 80% is the hard publication stop in every required evidence domain.
 # Published results below 95% remain explicit review-quality evidence in Companion.
 PRESERVATION_TARGET = 0.95
@@ -452,6 +452,8 @@ class SpaceCreationFailureGuard(IFailuresPreprocessor):
                 overlap_warning = (
                     "space volumes overlap" in text
                     or ("space" in text and "overlap" in text and "volume" in text)
+                    or ("multiple spaces" in text and "same enclosed region" in text)
+                    or "redundant space" in text
                 )
                 if protected_id or overlap_warning:
                     rollback = True
@@ -8383,7 +8385,133 @@ def create_room_seeded_spaces(model_doc, phase, levels, room_sources, existing_i
             "failed_details":[],
             "reused_checkpoint":True,
         }
-    return _r10_create_room_seeded_spaces(model_doc, phase, levels, room_sources, existing_ids, changes, messages)
+
+    # RELEASE16 — isolate every Room seed in its own native Transaction.  Revit can
+    # defer the "Multiple Spaces are in the same enclosed region" warning until a
+    # transaction commits.  A shared seed transaction therefore allowed one stale
+    # point-query false negative to roll back every otherwise valid Space.  Strong
+    # committed Room/boundary/containment mapping is checked before each attempt;
+    # a rejected duplicate is rolled back alone and reclassified as already covered
+    # only when the existing committed topology proves it.
+    created=set(); covered_existing=0; attempted=0; failed=[]; duplicate_rollbacks=[]
+    phases=list(model_doc.Phases); indexes=phase_index_map(phases); selected_index=indexes.get(eid_value(phase.Id),0)
+
+    def committed_spaces():
+        return [
+            item for item in collect_spaces(model_doc)
+            if item is not None
+            and is_placed_spatial(item)
+            and element_exists_in_phase(item,selected_index,indexes)
+        ]
+
+    def committed_mapping():
+        spaces=committed_spaces()
+        mapping,proof=map_room_sources_to_spaces(model_doc,phase,levels,room_sources,spaces)
+        return spaces,mapping,proof
+
+    spaces,mapping,mapping_proof=committed_mapping()
+    ordered=sorted(
+        room_sources,
+        key=lambda source:(
+            float(source.get("base_z") or source.get("point").Z),
+            str(source.get("number") or ""),
+            int(source.get("id") or -1),
+        ),
+    )
+    for source in ordered:
+        pair=mapping.get(id(source))
+        hit=(pair[0] if pair else space_at_source(model_doc,phase,source,spaces))
+        if hit is not None and is_placed_spatial(hit):
+            covered_existing+=1
+            continue
+
+        attempted+=1
+        level=source_level(levels,source); point=source.get("point")
+        if level is None or point is None:
+            failed.append({"room_id":source.get("id"),"reason":"ROOM_SOURCE_HAS_NO_HOST_LEVEL"})
+            messages.append({
+                "severity":"WARNING","code":"ROOM_SOURCE_HAS_NO_HOST_LEVEL",
+                "room_id":source.get("id"),"source":source.get("source"),
+                "message":"A placed Room source could not be mapped to a host Level; final committed topology will decide the publication gate.",
+            })
+            continue
+
+        tx=Transaction(model_doc,"LIBER gbXML: seed Room Space {}".format(attempted))
+        guard=SpaceCreationFailureGuard(); candidate_id=None; candidate_change=None
+        try:
+            tx.Start(); opts=tx.GetFailureHandlingOptions(); opts.SetFailuresPreprocessor(guard); opts.SetClearAfterRollback(True); tx.SetFailureHandlingOptions(opts)
+            space=model_doc.Create.NewSpace(level,phase,UV(float(point.X),float(point.Y)))
+            if space is None: raise Exception("Revit returned no Space.")
+            candidate_id=eid_value(space.Id); tag_generated_space(space)
+            if source.get("name"):
+                try: space.Name=source["name"]
+                except Exception: pass
+            if source.get("number"):
+                try: space.Number=source["number"]
+                except Exception: pass
+            bounds=apply_room_source_extent_strict(space,source,levels); model_doc.Regenerate()
+            candidate_change={
+                "action":"created_space_from_room_source","element_id":candidate_id,
+                "room_id":source.get("id"),"room_source":source.get("source"),
+                "base_level":str(safe_element_name(level)),"bottom_ft":bounds[0],"top_ft":bounds[1],
+            }
+            status=tx.Commit()
+            if status!=TransactionStatus.Committed:
+                raise Exception("Room seed transaction did not commit: {}".format(status))
+            created.add(candidate_id); existing_ids.add(candidate_id); source["seeded_space_id"]=candidate_id
+            changes.append(candidate_change); spaces,mapping,mapping_proof=committed_mapping()
+        except Exception as ex:
+            try:
+                if tx.GetStatus()==TransactionStatus.Started: tx.RollBack()
+            except Exception: pass
+            spaces,mapping,mapping_proof=committed_mapping(); pair=mapping.get(id(source))
+            overlap=next((item for item in list(guard.failures or []) if item.get("overlap_warning")),None)
+            proven_existing=(pair[0] if pair is not None else None); proof_method=(pair[1] if pair is not None else None)
+            if overlap is not None and proven_existing is None:
+                # The failure payload normally names both the discarded candidate
+                # and the already-committed Space. Resolve only surviving positive-
+                # area Spaces; the rolled-back candidate id cannot pass this proof.
+                for failing_id in list(overlap.get("failing_element_ids") or []):
+                    try:
+                        candidate=model_doc.GetElement(ElementId(int(failing_id)))
+                        if candidate is not None and isinstance(candidate,Space) and is_placed_spatial(candidate):
+                            proven_existing=candidate; proof_method="revit_failure_existing_space_id"; break
+                    except Exception: pass
+            if overlap is not None and proven_existing is not None:
+                covered_existing+=1
+                duplicate_rollbacks.append({
+                    "room_id":source.get("id"),"existing_space_id":eid_value(proven_existing.Id),
+                    "mapping_method":proof_method,"discarded_candidate_id":candidate_id,
+                    "revit_failure":overlap.get("description"),
+                })
+                messages.append({
+                    "severity":"INFO","code":"REDUNDANT_ROOM_SEED_ROLLED_BACK_IN_ISOLATION",
+                    "room_id":source.get("id"),"existing_space_id":eid_value(proven_existing.Id),
+                    "message":"Revit rejected one redundant Room seed; only that candidate was rolled back, and independent committed topology proves the existing Space.",
+                })
+            else:
+                failed.append({
+                    "room_id":source.get("id"),"room_name":source.get("name"),
+                    "error":str(ex),"revit_failures":list(guard.failures or [])[:10],
+                    "mapping_after_rollback":mapping_proof,
+                })
+                messages.append({
+                    "severity":"WARNING","code":"ROOM_SOURCE_SPACE_CREATION_DEFERRED_TO_TOPOLOGY_GATE",
+                    "room_id":source.get("id"),"room_name":source.get("name"),
+                    "message":"An isolated Room seed was rolled back without proven existing coverage; gap fill and the strict final topology gate will determine whether export is safe.",
+                })
+
+    if duplicate_rollbacks:
+        changes.append({
+            "action":"discard_redundant_room_seed_attempts_in_isolation",
+            "count":len(duplicate_rollbacks),"details":duplicate_rollbacks[:100],
+        })
+    return created,{
+        "room_sources":len(room_sources),"covered_by_existing_space":covered_existing,
+        "attempted":attempted,"created":len(created),"kept":len(created),"failed":len(failed),
+        "failed_details":failed[:100],"discarded_redundant":len(duplicate_rollbacks),
+        "redundant_rollbacks":duplicate_rollbacks[:100],"isolated_transactions":True,
+    }
 
 
 def create_missing_spaces(model_doc, phase, levels, target_levels, room_sources, existing_ids, changes, messages):
@@ -9990,7 +10118,14 @@ def _u_clip_physical_opening_to_parent(record,parent,index):
 
 
 def _u_physical_host_parent_candidates(record,index,physical_manifest):
-    """Fallback only to the exact physical Revit host subface already captured for this opening."""
+    """Resolve an exact physical Revit host across native gbXML story splitting.
+
+    The physical host key and adjacent Revit Space ids are authoritative. A direct
+    physical-host -> XML surface match is preferred. When Revit EADM split one tall
+    host (notably a curtain wall) into several story carriers, accept only wall-like
+    XML carriers that bound the same mapped Space and geometrically intersect the
+    physical opening on essentially the same plane. No project/floor/name inference.
+    """
     pts=record_polyloop(record)
     if len(pts)<3 or not bool(record.get('host_proven')): return []
     wanted_key=str(record.get('parent_physical_surface_key') or '')
@@ -10001,6 +10136,7 @@ def _u_physical_host_parent_candidates(record,index,physical_manifest):
         if str(wallrec.get('key') or '')!=wanted_key: continue
         if not _r12_opening_supported_by_surface(pts,record_polyloop(wallrec)): continue
         carriers.append(wallrec)
+
     candidates=[]; seen=set()
     for wallrec in carriers:
         parent=find_surface_match(wallrec,index,relaxed=True)
@@ -10011,7 +10147,69 @@ def _u_physical_host_parent_candidates(record,index,physical_manifest):
         if not pieces: continue
         seen.add(pid)
         for piece in pieces: candidates.append((parent,piece,metrics,wallrec))
+    if candidates and _u_physical_reconstruction_contract(record,candidates).get('accepted'):
+        return candidates
+
+    # A relaxed direct match may identify only one story fragment of a tall host.
+    # Keep that proven fragment, then search for the remaining same-Space carriers
+    # until the full-source area contract can be satisfied.
+    # Exact host geometry is known, but its one physical face may correspond to
+    # multiple EADM story carriers. Use only same-Space, wall-like, near-coplanar
+    # carriers with positive polygon intersection. The full-source area contract
+    # below must still prove that their pieces reconstruct the opening completely.
+    expected=set(expected_xml_space_ids(record,index))
+    for wallrec in carriers:
+        for parent in list(index.get('surfaces',[]) or []):
+            ptype=normalize_text(parent.get('type') or '')
+            if 'wall' not in ptype: continue
+            adjacent=set(parent.get('adjacent') or [])
+            if expected and not expected.intersection(adjacent): continue
+            pid=str(parent.get('id') or id(parent))
+            if pid in seen: continue
+            pieces,metrics=_u_clip_physical_opening_to_parent(record,parent,index)
+            if not pieces or not metrics: continue
+            # Unlike the direct exact-host path, this story-split fallback has no
+            # originating-element id on the XML carrier, so require physical-face
+            # proximity in addition to Space identity and polygon intersection.
+            if float(metrics.get('plane_offset_ft') or 0.0)>OPENING_PARENT_EDGE_TOL_FT:
+                continue
+            seen.add(pid)
+            for piece in pieces: candidates.append((parent,piece,metrics,wallrec))
     return candidates
+
+
+def _u_physical_reconstruction_contract(record,candidates):
+    """Require a physical opening to survive reconstruction at full source area.
+
+    A positive sliver is not enough evidence to replace native Revit gbXML. This
+    prevents doors/windows from collapsing into skinny misplaced cuts when a tall
+    host is split differently by EADM. Story-split pieces are accepted only when
+    their aggregate physical area reconstructs the source within a tight,
+    model-independent tolerance; obvious duplicate carrier coverage is rejected.
+    """
+    pts=clean_consecutive(record_polyloop(record),MIN_EDGE_M/0.3048)
+    source_area=0.5*norm(newell(pts)) if len(pts)>=3 else 0.0
+    if source_area<_UNIVERSAL_OPENING_MIN_PIECE_FT2:
+        return {'accepted':False,'reason':'physical_source_area_nonpositive','source_area_ft2':float(source_area),'piece_area_ft2':0.0,'coverage_ratio':0.0,'piece_count':0,'carrier_count':0}
+    piece_area=0.0; piece_count=0; carrier_ids=set(); exact_piece_keys=set(); duplicate_piece=False
+    for parent,piece,_metrics,_ar in list(candidates or []):
+        area=0.5*norm(newell(piece)) if len(piece or [])>=3 else 0.0
+        if area<_UNIVERSAL_OPENING_MIN_PIECE_FT2: continue
+        key=tuple(sorted(tuple(round(float(v),6) for v in pt[:3]) for pt in piece))
+        if key in exact_piece_keys:
+            duplicate_piece=True; continue
+        exact_piece_keys.add(key)
+        piece_area+=area; piece_count+=1; carrier_ids.add(str(parent.get('id') or id(parent)))
+    tolerance=max(_UNIVERSAL_OPENING_MIN_PIECE_FT2*2.0,source_area*0.005)
+    delta=piece_area-source_area
+    accepted=bool(piece_count and not duplicate_piece and abs(delta)<=tolerance)
+    reason='full_physical_area_proven' if accepted else ('duplicate_piece_coverage' if duplicate_piece else ('incomplete_physical_area' if delta<0.0 else 'overlapping_or_excess_physical_area'))
+    return {
+        'accepted':accepted,'reason':reason,'source_area_ft2':round(float(source_area),6),
+        'piece_area_ft2':round(float(piece_area),6),'coverage_ratio':round(float(piece_area/source_area),6),
+        'area_delta_ft2':round(float(delta),6),'area_tolerance_ft2':round(float(tolerance),6),
+        'piece_count':piece_count,'carrier_count':len(carrier_ids),'duplicate_piece':bool(duplicate_piece)
+    }
 
 
 def _u_physical_parent_candidates(record,index,analytical_manifest,physical_manifest=None):
@@ -10153,12 +10351,15 @@ def reconcile_physical_openings(xml_path,analytical_manifest,physical_manifest,m
             cad_node=ET.SubElement(opening,qualified(ns,'CADObjectId'))
         if str(cad_node.text or '').strip()!=str(sid):
             cad_node.text=str(sid); native_identity_normalized+=1
-    # Only remove existing representations when their source identity is known and we can
-    # rebuild at least one exact host-backed parent. Otherwise preserve native output.
-    rebuildable={}
+    # Only remove an existing representation when exact source identity is known AND
+    # the candidate carriers reconstruct the complete physical opening. A single
+    # positive-intersection sliver is intentionally insufficient.
+    rebuildable={}; reconstruction_audit={}
     for sid,rec in sorted(physical.items()):
         candidates=_u_physical_parent_candidates(rec,index,analytical_manifest,physical_manifest)
-        if candidates: rebuildable[sid]=candidates
+        contract_row=_u_physical_reconstruction_contract(rec,candidates)
+        reconstruction_audit[sid]=contract_row
+        if candidates and contract_row.get('accepted'): rebuildable[sid]=candidates
     removed=0
     for surface in [e for e in root.iter() if local_name(e.tag)=='Surface']:
         for opening in [c for c in list(surface) if local_name(c.tag)=='Opening']:
@@ -10172,7 +10373,8 @@ def reconcile_physical_openings(xml_path,analytical_manifest,physical_manifest,m
             unresolved.append({'source_id':sid,'reason':'opening_type_unresolved'}); continue
         candidates=rebuildable.get(sid,[])
         if not candidates:
-            unresolved.append({'source_id':sid,'reason':'no_exact_eadm_or_physical_host_parent','host_proven':bool(rec.get('host_proven')),'parent_element_id':rec.get('parent_originating_element_id'),'parent_surface_key':rec.get('parent_physical_surface_key')}); continue
+            audit_row=reconstruction_audit.get(sid,{})
+            unresolved.append({'source_id':sid,'reason':audit_row.get('reason') or 'no_exact_eadm_or_physical_host_parent','host_proven':bool(rec.get('host_proven')),'curtain_panel':bool(rec.get('curtain_panel')),'curtain_role':rec.get('curtain_role'),'geometry_method':rec.get('geometry_method'),'parent_element_id':rec.get('parent_originating_element_id'),'parent_surface_key':rec.get('parent_physical_surface_key'),'reconstruction':audit_row}); continue
         count=0
         for parent,piece,_metrics,_ar in candidates:
             parts=_u_split_piece_max4(piece)
@@ -10181,7 +10383,10 @@ def reconcile_physical_openings(xml_path,analytical_manifest,physical_manifest,m
         if count: complete+=1
     contract=validate_export_contract(root); tree.write(xml_path,encoding='utf-8',xml_declaration=True)
     coverage=float(complete)/float(len(physical)) if physical else 1.0
-    stats={'base':base,'physical_sources':len(physical),'physical_sources_reconciled':complete,'physical_source_coverage':round(coverage,6),'opening_pieces_inserted':inserted,'known_source_representations_replaced':removed,'native_source_identity_normalized':native_identity_normalized,'split_events':split_events,'unresolved_sources':len(unresolved),'unresolved_details':unresolved[:100],'contract':contract}
+    reconstruction_rows=list(reconstruction_audit.values())
+    deterministic_curtain_ids={int(sid) for sid,rec in physical.items() if bool(rec.get('curtain_panel')) and str(rec.get('geometry_method') or '')=='element-face'}
+    reconciled_ids=set(rebuildable.keys())
+    stats={'base':base,'physical_sources':len(physical),'physical_sources_reconciled':complete,'physical_source_coverage':round(coverage,6),'opening_pieces_inserted':inserted,'known_source_representations_replaced':removed,'native_source_identity_normalized':native_identity_normalized,'split_events':split_events,'full_source_area_contract':{'accepted_sources':sum(1 for row in reconstruction_rows if row.get('accepted')),'rejected_partial_or_overlapping_sources':sum(1 for row in reconstruction_rows if not row.get('accepted')),'minimum_accepted_coverage_ratio':min([float(row.get('coverage_ratio') or 0.0) for row in reconstruction_rows if row.get('accepted')] or [1.0])},'deterministic_curtain_sources_expected':len(deterministic_curtain_ids),'deterministic_curtain_sources_reconciled':len(deterministic_curtain_ids & reconciled_ids),'unresolved_deterministic_curtain_sources':len(deterministic_curtain_ids-reconciled_ids),'unresolved_sources':len(unresolved),'unresolved_details':unresolved[:100],'contract':contract}
     messages.append({'severity':'INFO' if coverage>=PRESERVATION_TARGET and contract.get('passed') else 'WARNING','code':'PHYSICAL_OPENINGS_RECONCILED','stats':stats,'message':'Physical windows, doors and curtain panels are reconciled from Revit source identity to exact analytical host surfaces. No project/floor names or adjacency guesses are used; unresolved evidence remains native/opaque.'})
     return stats
 
@@ -10210,13 +10415,20 @@ def envelope_persistence_gate(xml_path,physical_manifest,analytical_manifest,all
     counts['physical_opening_source_coverage']=round(ratio,6)
     host_proven_ids={int(sid) for sid,rec in physical.items() if bool(rec.get('host_proven'))}
     represented_host_ids=set(represented)&host_proven_ids
+    deterministic_curtain_ids={int(sid) for sid,rec in physical.items() if bool(rec.get('curtain_panel')) and str(rec.get('geometry_method') or '')=='element-face'}
+    represented_curtain_ids=set(represented)&deterministic_curtain_ids
     counts['physical_windows_doors_expected']=len(host_proven_ids)
     counts['physical_windows_doors_preserved']=len(represented_host_ids)
+    counts['deterministic_curtain_panels_expected']=len(deterministic_curtain_ids)
+    counts['deterministic_curtain_panels_preserved']=len(represented_curtain_ids)
     counts['export_contract']=contract
     base['warnings']=[w for w in list(base.get('warnings',[]) or []) if 'host-proven physical opening(s)' not in str(w)]
     unresolved_host=len(host_proven_ids-represented_host_ids)
     if unresolved_host:
         base.setdefault('warnings',[]).append('{} host-proven physical opening source(s) remain unresolved after exact source-identity reconciliation.'.format(unresolved_host))
+    missing_curtain=deterministic_curtain_ids-represented_curtain_ids
+    if missing_curtain:
+        base.setdefault('errors',[]).append('{} deterministic Revit curtain-panel opening source(s) with exact element-face geometry are missing after story-split host reconciliation.'.format(len(missing_curtain)))
     if not contract.get('passed'): base.setdefault('errors',[]).append('Exporter contains {} opening(s) outside the compiler-facing parent/subsurface contract.'.format(contract.get('error_count',0)))
     if ratio<PRESERVATION_MINIMUM: base.setdefault('errors',[]).append('Only {:.1%} of physical Revit opening sources survive exporter reconciliation (80% hard-stop integrity gate).'.format(ratio))
     elif ratio<PRESERVATION_TARGET: base.setdefault('warnings',[]).append('Physical Revit opening source coverage is {:.1%}; below the 95% quality target; unresolved sources remain explicit QA evidence and publication continues because the 80% hard stop was cleared.'.format(ratio))
@@ -10404,10 +10616,11 @@ def run_tool():
                 "sources": len(room_sources),
                 "capped_before_creation": int(vertical_caps),
             }
-            # STAGE A — configure the model and seed one Space per unique Room source.
-            # Revit's Space containment/topology index is not authoritative until this
-            # transaction commits.  The outer TransactionGroup makes this reversible.
-            seed_transaction = Transaction(doc, "LIBER gbXML: configure and seed Room Spaces")
+            # STAGE A — commit configuration first, then seed each missing Room Space
+            # in an isolated Transaction.  The outer TransactionGroup still makes the
+            # complete maintenance pass reversible, while one redundant candidate can
+            # no longer roll back all otherwise valid spatial topology.
+            seed_transaction = Transaction(doc, "LIBER gbXML: configure Room/Space analysis")
             seed_transaction.Start()
             seed_guard = SpaceCreationFailureGuard()
             seed_options = seed_transaction.GetFailureHandlingOptions()
@@ -10486,6 +10699,27 @@ def run_tool():
                 configure_area_volume(doc, changes)
                 enable_room_bounding_links(doc, changes, messages)
                 doc.Regenerate()
+                configuration_commit = seed_transaction.Commit()
+                if configuration_commit != TransactionStatus.Committed:
+                    for failure in seed_guard.failures:
+                        messages.append({
+                            "severity":"ERROR","code":"REVIT_SPATIAL_CONFIGURATION_FAILURE_ROLLBACK",
+                            "overlap_warning":failure.get("overlap_warning",False),
+                            "element_ids":failure.get("failing_element_ids",[]),
+                            "message":failure.get("description","Revit rejected the Room/Space analysis configuration."),
+                        })
+                    group.RollBack(); group_finished=True
+                    creation_stats={
+                        "attempted":0,"kept":0,"room_seed":{},"gap_fill":{},
+                        "discarded_redundant":0,"failed_levels":["<Spatial configuration>"],
+                        "target_level_ids":[eid_value(item.Id) for item in targets],
+                        "target_levels":[str(safe_element_name(item) or eid_value(item.Id)) for item in targets],
+                    }
+                    report["space_creation"]=creation_stats
+                    return finish_space_creation_rollback_report(
+                        report,report_base,existing_spaces,creation_stats,
+                        "Revit rejected Room/Space analysis configuration before isolated seeding.",
+                    )
                 newly_seeded_ids, seed_stats = create_room_seeded_spaces(
                     doc, phase, levels, room_sources, existing_ids, changes, messages
                 )
@@ -10494,51 +10728,12 @@ def run_tool():
                 # still sees it, while creation_attempts remains truthful.
                 seeded_ids = set(newly_seeded_ids).union(prior_generated_space_ids)
                 if seed_stats.get("failed", 0):
-                    seed_transaction.RollBack()
-                    group.RollBack()
-                    group_finished = True
-                    creation_stats = {
-                        "attempted": seed_stats.get("attempted", 0),
-                        "kept": 0,
-                        "room_seed": seed_stats,
-                        "gap_fill": {},
-                        "discarded_redundant": 0,
-                        "failed_levels": ["<Room-source seeding>"],
-                        "target_level_ids": [eid_value(item.Id) for item in targets],
-                        "target_levels": [str(safe_element_name(item) or eid_value(item.Id)) for item in targets],
-                    }
-                    report["space_creation"] = creation_stats
-                    return finish_space_creation_rollback_report(
-                        report, report_base, existing_spaces, creation_stats,
-                        "Room-source Space placement raised one or more creation/constraint errors before commit.",
-                    )
-                seed_commit = seed_transaction.Commit()
-                if seed_commit != TransactionStatus.Committed:
-                    for failure in seed_guard.failures:
-                        messages.append({
-                            "severity": "ERROR",
-                            "code": "REVIT_ROOM_SEED_FAILURE_ROLLBACK",
-                            "overlap_warning": failure.get("overlap_warning", False),
-                            "element_ids": failure.get("failing_element_ids", []),
-                            "message": failure.get("description", "Revit rejected the Room-seeded Space set."),
-                        })
-                    group.RollBack()
-                    group_finished = True
-                    creation_stats = {
-                        "attempted": seed_stats.get("attempted", 0),
-                        "kept": 0,
-                        "room_seed": seed_stats,
-                        "gap_fill": {},
-                        "discarded_redundant": 0,
-                        "failed_levels": ["<Room-source seed commit>"],
-                        "target_level_ids": [eid_value(item.Id) for item in targets],
-                        "target_levels": [str(safe_element_name(item) or eid_value(item.Id)) for item in targets],
-                    }
-                    report["space_creation"] = creation_stats
-                    return finish_space_creation_rollback_report(
-                        report, report_base, existing_spaces, creation_stats,
-                        "Revit rejected the Room-seeded Space transaction; exact failure descriptions are preserved.",
-                    )
+                    messages.append({
+                        "severity":"WARNING","code":"ISOLATED_ROOM_SEED_FAILURES_PENDING_STRICT_TOPOLOGY_GATE",
+                        "count":seed_stats.get("failed",0),
+                        "details":seed_stats.get("failed_details",[])[:25],
+                        "message":"One or more isolated Room seed attempts were rolled back. Existing topology, bounded gap fill, and the strict final preservation gate will decide whether export is safe.",
+                    })
             except Exception:
                 try:
                     if seed_transaction.GetStatus() == TransactionStatus.Started:
@@ -10547,8 +10742,8 @@ def run_tool():
                     pass
                 raise
 
-            # Re-query only after commit: this is the first point at which Revit's
-            # Space.Room / GetSpaceAtPoint topology is treated as authoritative.
+            # Re-query after every isolated seed has either committed or rolled back:
+            # only committed Space.Room / boundary / containment topology is trusted.
             phase_spaces_after_seed = [
                 space for space in collect_spaces(doc)
                 if element_exists_in_phase(space, phase_index, phases_map)
@@ -10619,7 +10814,7 @@ def run_tool():
                     "kept": len(seeded_ids) + len(gap_ids),
                     "room_seed": seed_stats,
                     "gap_fill": gap_stats,
-                    "discarded_redundant": gap_stats.get("discarded_redundant", 0),
+                    "discarded_redundant": int(seed_stats.get("discarded_redundant", 0) or 0) + int(gap_stats.get("discarded_redundant", 0) or 0),
                     "failed_levels": list(gap_stats.get("failed_levels", [])),
                     "target_level_ids": [eid_value(item.Id) for item in targets],
                     "target_levels": [str(safe_element_name(item) or eid_value(item.Id)) for item in targets],
@@ -10640,6 +10835,7 @@ def run_tool():
                 if gap_commit != TransactionStatus.Committed:
                     gap_ids = set()
                     creation_stats["gap_fill_fallback_to_room_seeds"] = True
+                    creation_stats["kept"] = len(seeded_ids)
                     for failure in gap_guard.failures:
                         messages.append({
                             "severity": "WARNING",
