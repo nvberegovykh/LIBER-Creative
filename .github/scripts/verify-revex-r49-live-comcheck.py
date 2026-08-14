@@ -15,6 +15,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 ENERGY = ROOT / "src" / "Liber.Revex.Revit" / "Engineering" / "Energy"
 PIPELINE_PATH = ENERGY / "revex_energy_pipeline.py"
+sys.path.insert(0, str(ENERGY))
 
 spec = importlib.util.spec_from_file_location("revex_r49_live_comcheck_pipeline", PIPELINE_PATH)
 if spec is None or spec.loader is None:
