@@ -340,27 +340,36 @@ function Test-BrokerIdentityWorkerInvocation(
   $saPolicy = ((Invoke-Captured "Inspect broker token-creation policy" $Gcloud @(
     "iam", "service-accounts", "get-iam-policy", $BrokerSa, "--project=$ProjectId", "--format=json"
   )).Text | ConvertFrom-Json)
-  $tokenCreators = @(Get-IamRoleMembers $saPolicy "roles/iam.serviceAccountTokenCreator")
+  $oidcRole = "roles/iam.serviceAccountOpenIdTokenCreator"
+  $tokenCreators = @(Get-IamRoleMembers $saPolicy $oidcRole)
   $temporaryGrant = $DeployerMember -notin $tokenCreators
   $identityToken = $null
   try {
     if ($temporaryGrant) {
-      Invoke-Native "Grant temporary broker-token test authority" $Gcloud @(
+      Invoke-Native "Grant temporary broker OIDC-token test authority" $Gcloud @(
         "iam", "service-accounts", "add-iam-policy-binding", $BrokerSa,
         "--project=$ProjectId", "--member=$DeployerMember",
-        "--role=roles/iam.serviceAccountTokenCreator", "--quiet"
+        "--role=$oidcRole", "--quiet"
       )
     }
-    $tokenResult = Invoke-SecretCaptured "Mint one bounded broker identity token without logging it" $Gcloud @(
-      "auth", "print-identity-token",
-      "--impersonate-service-account=$BrokerSa",
-      "--audiences=$WorkerUrl",
-      "--include-email",
-      "--quiet"
-    )
-    $identityToken = [string]($tokenResult.Lines |
-      Where-Object { [string]$_ -match '^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$' } |
-      Select-Object -Last 1)
+    for ($attempt = 1; $attempt -le 12 -and -not $identityToken; $attempt++) {
+      $tokenResult = Invoke-SecretCaptured "Mint one bounded broker identity token without logging it (attempt $attempt/12)" $Gcloud @(
+        "auth", "print-identity-token",
+        "--impersonate-service-account=$BrokerSa",
+        "--audiences=$WorkerUrl",
+        "--include-email",
+        "--quiet"
+      ) -AllowFailure
+      if ($tokenResult.ExitCode -eq 0) {
+        $identityToken = [string]($tokenResult.Lines |
+          Where-Object { [string]$_ -match '^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$' } |
+          Select-Object -Last 1)
+      }
+      if (-not $identityToken -and $attempt -lt 12) {
+        Write-Log "Broker OIDC-token authority is not effective yet; waiting five seconds before the bounded retry." DarkYellow
+        Start-Sleep -Seconds 5
+      }
+    }
     if (-not $identityToken) { throw "Google Cloud did not mint the bounded broker identity token." }
     $response = Invoke-WebRequest -UseBasicParsing -Uri ($WorkerUrl + "/healthz") -Headers @{ Authorization = "Bearer $identityToken" } -TimeoutSec 20
     if ([int]$response.StatusCode -ne 200) { throw "The broker identity health probe returned HTTP $($response.StatusCode)." }
@@ -372,16 +381,16 @@ function Test-BrokerIdentityWorkerInvocation(
       authenticatedIdentity = $BrokerSa
       workerVersion = [string]$health.version
       healthStatus = 200
-      temporaryTokenCreatorGrantRemoved = $temporaryGrant
+      temporaryOidcTokenCreatorGrantRemoved = $temporaryGrant
     })
     Write-Log "Authenticated broker-identity invocation succeeded against the exact private r49 worker." Green
   } finally {
     $identityToken = $null
     if ($temporaryGrant) {
-      Invoke-Native "Remove temporary broker-token test authority" $Gcloud @(
+      Invoke-Native "Remove temporary broker OIDC-token test authority" $Gcloud @(
         "iam", "service-accounts", "remove-iam-policy-binding", $BrokerSa,
         "--project=$ProjectId", "--member=$DeployerMember",
-        "--role=roles/iam.serviceAccountTokenCreator", "--quiet"
+        "--role=$oidcRole", "--quiet"
       )
     }
   }
@@ -563,7 +572,7 @@ try {
   Write-Step "Verify hash-locked r49 source"
   $Expected = [ordered]@{
     ".github\workflows\revex-r27-0819-engineering-release.yml" = "dcc4c02966b2fa3a83ebf567a7857b116841fe23662cca04b8bdda2818e89521"
-    ".github\scripts\verify-revex-r49.js" = "8e5d64ae4cd23bffc143665b0268ab2fea7dfd43262378e8e27d3bda77f37c12"
+    ".github\scripts\verify-revex-r49.js" = "22fdc385004e2352d4f6bb41731efa02376ad15c0c56d236a61b36f3dd0920bc"
     ".github\scripts\verify-revex-r49-live-rules.js" = "8e4bf1e40eb44256dad8969849a0ac3bd91c74895492e648c07ea696503b93ae"
     ".github\scripts\patch-live-firestore-rules.js" = "8662ad8bb3a9c1090d25421538161245e534306f894839113a50a7f5ab803d2d"
     ".github\scripts\fixtures\live-firestore-base.rules" = "ba4ee3c8757dd6e745809214b2b6008e430d54dcdc585900124a38d7db6acf01"
@@ -584,9 +593,9 @@ try {
     "src\Liber.Revex.Revit\Services\GbxmlEngineeringService.cs" = "fdb9001818ca558b069bb49fb5dc39317a73554d3763a33ba4e404b5c8e3c3c6"
     "src\Liber.Revex.Revit\Services\EngineeringCompanionWebBridge.cs" = "f763c77c0b514a9d404e2f98cefccd323deb98c73edc248dd741d5d133449184"
     "src\Liber.Revex.Revit\Engineering\Companion\native-managed-energy-bridge.js" = "82d6442254f468533532d88eedd63112f30a2fc1e407b47e1f86ac1b9ba726d2"
-    "src\Liber.Revex.Revit\Engineering\Energy\revex_energy_pipeline.py" = "fbbf6d9e2554239e756a9825a21791e3aa453a9388d6550a7c5c24924d203483"
+    "src\Liber.Revex.Revit\Engineering\Energy\revex_energy_pipeline.py" = "5daa186c61cdff8913ae48eca52bfbafa158eb8e74045550bc894d5c5cd034b2"
     "src\Liber.Revex.Revit\Engineering\Energy\comcheck_backstop.py" = "ed817d0832f64fc9c1f6bfabc3bc79d010b4cd84d192884d41d494df77809d10"
-    "src\Liber.Revex.Revit\Engineering\Energy\verify_revex_r49_energy.py" = "c2414d96df22f8385ca2270038792466ed5295b7a206f1c14156e32da04c5ff8"
+    "src\Liber.Revex.Revit\Engineering\Energy\verify_revex_r49_energy.py" = "1ffcbf30b5511d3ea7017f79156ef9084af910d653c2da8f694f1acb8d507fe4"
     "src\Liber.Revex.Revit\Engineering\Energy\requirements.txt" = "e9dde285ed5fa05c6161325ccdd2906d9d9f6d6693979f1df9078c82eb98e673"
     "src\Liber.Revex.Revit\Engineering\Energy\GeometryCo\OpenStudio_Energy_Model_Geometry_Compiler.py" = "0152e06c447b36457fc973b2896d82b68596a03bdc855a519dbcd0bda253ee9f"
     "src\Liber.Revex.Revit\Engineering\Energy\Packager\EnergyPlusReviewPackager.py" = "30ba0b2f3e1fee952382d016c68caa5dea85d7d68b439296797da5adf7f412f2"
