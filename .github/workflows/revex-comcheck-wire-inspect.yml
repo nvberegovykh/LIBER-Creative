@@ -57,8 +57,7 @@ jobs:
                       "//*[contains(translate(@title,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'load project')]",
                       "//*[contains(translate(@onclick,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'load') and contains(translate(@onclick,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'project')]",
                   ]:
-                      els=driver.find_elements(By.XPATH,selector)
-                      for el in els:
+                      for el in driver.find_elements(By.XPATH,selector):
                           try:
                               if el.is_displayed():
                                   driver.execute_script('arguments[0].click();',el)
@@ -69,15 +68,14 @@ jobs:
                               pass
                       if clicked: break
                   if not clicked:
-                      # Fall back to invoking the UI-opening handler discovered in live page source.
-                      funcs=driver.execute_script("""
-                        return Object.keys(window).filter(k => /load.*project|project.*load/i.test(k) && typeof window[k]==='function');
-                      """)
+                      funcs=driver.execute_script("return Object.keys(window).filter(k => /load.*project|project.*load/i.test(k) && typeof window[k]==='function');")
                       print('LOAD_FUNCTIONS=',funcs)
                       for name in funcs:
                           try:
                               driver.execute_script('window[arguments[0]]();',name)
-                              clicked=True; print('CALLED_LOAD_FUNCTION=',name); break
+                              clicked=True
+                              print('CALLED_LOAD_FUNCTION=',name)
+                              break
                           except Exception as e:
                               print('LOAD_FUNCTION_FAILED=',name,str(e))
                   if not clicked:
@@ -86,44 +84,37 @@ jobs:
                   file_input=wait.until(lambda d: d.find_element(By.ID,'fileToUpload'))
                   print('REAL_FILE_INPUT_PRESENT=',file_input.get_attribute('outerHTML'))
                   file_input.send_keys(str(test.resolve()))
-                  # Click the modal's Load/Open control rather than calling uploadProject directly.
-                  load_buttons=driver.find_elements(By.XPATH,"//*[self::button or self::input or self::a][contains(translate(normalize-space(. | @value),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'load') or contains(translate(normalize-space(. | @value),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'open')]")
-                  submitted=False
-                  for el in load_buttons:
-                      try:
-                          if el.is_displayed() and el.id != 'fileToUpload':
-                              txt=(el.text or el.get_attribute('value') or '')
-                              if /bin if False else False: pass
-                      except Exception:
-                          pass
-                  # The official modal defines uploadProject(); invoking it here uses the real file input and modal state.
                   driver.execute_script('uploadProject();')
 
                   deadline=time.time()+45
                   last_alert=None
+                  upload_ok=False
                   while time.time()<deadline:
                       try:
                           a=driver.switch_to.alert
                           last_alert=a.text
                           print('COMCHECK_ALERT=',last_alert)
                           a.accept()
-                          if last_alert:
-                              break
+                          break
                       except NoAlertPresentException:
                           pass
                       try:
                           title=driver.execute_script("return USER_PROJECT && USER_PROJECT.project && USER_PROJECT.project.projectDetails && USER_PROJECT.project.projectDetails.title && USER_PROJECT.project.projectDetails.title.value")
                           if title=='REVEX COMCHECK LIVE QA':
+                              upload_ok=True
                               print('REVEX_COMCHECK_BROWSER_UPLOAD=PASSED')
                               break
                       except Exception:
                           pass
                       time.sleep(.25)
-                  else:
-                      raise RuntimeError('COMcheck Load Project did not complete or surface a validation message')
                   if last_alert:
-                      print('USER_PROJECT_AFTER_ALERT=',driver.execute_script("return JSON.stringify(USER_PROJECT).slice(0,4000)"))
+                      try:
+                          print('USER_PROJECT_AFTER_ALERT=',driver.execute_script("return JSON.stringify(USER_PROJECT).slice(0,4000)"))
+                      except Exception:
+                          pass
                       raise RuntimeError('COMcheck official Load Project rejected schema-intact QA CXL: '+last_alert)
+                  if not upload_ok:
+                      raise RuntimeError('COMcheck Load Project did not complete or surface a validation message')
 
                   calc=driver.execute_async_script("""
                     const done=arguments[arguments.length-1];
