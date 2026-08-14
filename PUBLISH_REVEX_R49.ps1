@@ -13,7 +13,10 @@ $Root = (Resolve-Path $PSScriptRoot).Path
 $RunId = Get-Date -Format "yyyyMMdd-HHmmss"
 $ReleaseTag = "0.8.19-r49"
 $Build = "20260813r49"
+$CanonicalSourceCommit = "c2f919faba6c68addfc5d3fb92790648f90177c7"
+$CanonicalSourceRef = "agent/revex-r49-energy-acceptance-qa"
 $StageRoot = Join-Path $env:LOCALAPPDATA "LIBER\REVEX-R49-Publish\$RunId"
+$CanonicalSourceRoot = Join-Path $StageRoot "canonical-source"
 $StageSource = Join-Path $StageRoot "source"
 $StageFunctions = Join-Path $StageSource "server\firebase-functions"
 $StageRules = Join-Path $StageRoot "live-rules-gate"
@@ -258,6 +261,140 @@ function Assert-SourceHash([string]$RelativePath, [string]$Expected) {
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required r49 source is missing: $RelativePath" }
   $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
   if ($actual -ne $Expected) { throw "Stale or partial r49 source: $RelativePath`nExpected $Expected`nActual   $actual" }
+}
+
+function Get-CanonicalSourceRelativePath([string]$RelativePath) {
+  $normalized = $RelativePath.Replace("\", "/")
+  $localCompanionPrefix = "src/Live-Companion/"
+  if ($normalized.StartsWith($localCompanionPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    return "docs/liber-apps/apps/revex/" + $normalized.Substring($localCompanionPrefix.Length)
+  }
+  return $normalized
+}
+
+function Get-Utf8CrLfText([string]$Path) {
+  $text = [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8)
+  return $text.Replace("`r`n", "`n").Replace("`r", "`n").Replace("`n", "`r`n")
+}
+
+function Get-Utf8TextSha256([string]$Text) {
+  $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Text)
+  $hasher = [Security.Cryptography.SHA256]::Create()
+  try {
+    return ([BitConverter]::ToString($hasher.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+  } finally {
+    $hasher.Dispose()
+  }
+}
+
+function Install-CanonicalSourceFile([string]$CanonicalPath, [string]$TargetPath, [string]$ExpectedHash, [bool]$NormalizeUtf8CrLf) {
+  $targetDirectory = Split-Path -Parent $TargetPath
+  New-Item -ItemType Directory -Path $targetDirectory -Force | Out-Null
+  $temporaryPath = "$TargetPath.revex-r49-repair-$RunId.tmp"
+  $backupPath = "$TargetPath.revex-r49-before-repair-$RunId.bak"
+  if ($NormalizeUtf8CrLf) {
+    [IO.File]::WriteAllText($temporaryPath, (Get-Utf8CrLfText $CanonicalPath), [Text.UTF8Encoding]::new($false))
+  } else {
+    Copy-Item -LiteralPath $CanonicalPath -Destination $temporaryPath -Force
+  }
+  $temporaryHash = (Get-FileHash -LiteralPath $temporaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($temporaryHash -ne $ExpectedHash) {
+    Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+    throw "Canonical r49 repair copy failed integrity verification: $TargetPath"
+  }
+
+  try {
+    if (Test-Path -LiteralPath $TargetPath -PathType Leaf) {
+      try {
+        [IO.File]::Replace($temporaryPath, $TargetPath, $backupPath, $true)
+      } catch {
+        if (-not (Test-Path -LiteralPath $backupPath -PathType Leaf)) {
+          Copy-Item -LiteralPath $TargetPath -Destination $backupPath -Force
+        }
+        Move-Item -LiteralPath $temporaryPath -Destination $TargetPath -Force
+      }
+    } else {
+      [IO.File]::Move($temporaryPath, $TargetPath)
+    }
+    $installedHash = (Get-FileHash -LiteralPath $TargetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($installedHash -ne $ExpectedHash) { throw "Installed source hash is $installedHash" }
+    Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
+  } catch {
+    $failure = $_.Exception.Message
+    if (Test-Path -LiteralPath $backupPath -PathType Leaf) {
+      Copy-Item -LiteralPath $backupPath -Destination $TargetPath -Force
+    }
+    Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+    throw "Atomic r49 source repair failed for $TargetPath. The prior file was preserved. $failure"
+  }
+}
+
+function Restore-HashLockedSource([System.Collections.IDictionary]$Expected, [string]$Git, [string]$Gh) {
+  Write-Step "Restore the complete r49 source set from its exact CI-approved commit"
+  New-Item -ItemType Directory -Path $StageRoot -Force | Out-Null
+  if (Test-Path -LiteralPath $CanonicalSourceRoot) {
+    throw "The isolated canonical-source directory already exists unexpectedly: $CanonicalSourceRoot"
+  }
+  Invoke-Native "Clone the read-only canonical r49 source" $Gh @(
+    "repo", "clone", $GitHubRepository, $CanonicalSourceRoot, "--",
+    "--branch", $CanonicalSourceRef, "--single-branch", "--config", "core.autocrlf=false"
+  )
+  Invoke-Native "Detach the exact CI-approved r49 source commit" $Git @(
+    "checkout", "--detach", $CanonicalSourceCommit
+  ) -WorkingDirectory $CanonicalSourceRoot
+  $canonicalHead = (Invoke-Captured "Verify the canonical r49 commit" $Git @(
+    "rev-parse", "HEAD"
+  ) -WorkingDirectory $CanonicalSourceRoot).Text.Trim().ToLowerInvariant()
+  if ($canonicalHead -ne $CanonicalSourceCommit) {
+    throw "Canonical source resolved to $canonicalHead instead of pinned commit $CanonicalSourceCommit. No local source was changed."
+  }
+
+  $repaired = @()
+  $lineEndingNormalizations = @()
+  foreach ($entry in $Expected.GetEnumerator()) {
+    $relativePath = [string]$entry.Key
+    $expectedHash = [string]$entry.Value
+    $canonicalRelativePath = Get-CanonicalSourceRelativePath $relativePath
+    $canonicalPath = Join-Path $CanonicalSourceRoot $canonicalRelativePath.Replace("/", "\")
+    if (-not (Test-Path -LiteralPath $canonicalPath -PathType Leaf)) {
+      throw "Pinned commit $CanonicalSourceCommit is missing required source: $canonicalRelativePath. No unverified replacement was accepted."
+    }
+    $canonicalHash = (Get-FileHash -LiteralPath $canonicalPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $normalizeUtf8CrLf = $false
+    if ($canonicalHash -ne $expectedHash -and $canonicalRelativePath -match '^src/Liber\.Revex\.Revit/Engineering/Energy/References/79_WINTHROP_APPROVED_(BASELINE|PROPOSED)\.osm$') {
+      $normalizedHash = Get-Utf8TextSha256 (Get-Utf8CrLfText $canonicalPath)
+      if ($normalizedHash -eq $expectedHash) {
+        $canonicalHash = $normalizedHash
+        $normalizeUtf8CrLf = $true
+        $lineEndingNormalizations += $relativePath
+      }
+    }
+    if ($canonicalHash -ne $expectedHash) {
+      throw "Pinned commit integrity mismatch: $canonicalRelativePath`nExpected $expectedHash`nCanonical $canonicalHash`nNo unverified replacement was accepted."
+    }
+
+    $targetPath = Join-Path $Root $relativePath
+    $localHash = if (Test-Path -LiteralPath $targetPath -PathType Leaf) {
+      (Get-FileHash -LiteralPath $targetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    } else { "<missing>" }
+    if ($localHash -ne $expectedHash) {
+      Install-CanonicalSourceFile $canonicalPath $targetPath $expectedHash $normalizeUtf8CrLf
+      $repaired += $relativePath
+      Write-Log "Restored hash-locked source: $relativePath ($localHash -> $expectedHash)" Yellow
+    }
+  }
+
+  foreach ($entry in $Expected.GetEnumerator()) { Assert-SourceHash $entry.Key $entry.Value }
+  Write-Log "All $($Expected.Count) locked source files match CI-approved commit $CanonicalSourceCommit." Green
+  Add-PreflightCheckpoint "CANONICAL_SOURCE_RESTORE" ([ordered]@{
+    canonicalCommit = $CanonicalSourceCommit
+    canonicalRef = $CanonicalSourceRef
+    lockedFileCount = $Expected.Count
+    repairedFileCount = $repaired.Count
+    repairedFiles = @($repaired)
+    deterministicCrLfFiles = @($lineEndingNormalizations)
+    finalFullSetVerification = $true
+  })
 }
 
 function Copy-SourceTree([string]$Source, [string]$Destination) {
@@ -569,7 +706,7 @@ try {
   if (Get-Process -Name Revit -ErrorAction SilentlyContinue) { throw "Close every Revit window, then rerun PUBLISH_REVEX_R49.cmd. This is the only required manual preparation." }
   if (-not (Test-Path -LiteralPath (Join-Path $RevitDir "RevitAPI.dll") -PathType Leaf)) { throw "Autodesk Revit 2026 was not found at $RevitDir." }
 
-  Write-Step "Verify hash-locked r49 source"
+  Write-Step "Verify and self-repair the hash-locked r49 source"
   $Expected = [ordered]@{
     ".github\workflows\revex-r27-0819-engineering-release.yml" = "dcc4c02966b2fa3a83ebf567a7857b116841fe23662cca04b8bdda2818e89521"
     ".github\scripts\verify-revex-r49.js" = "22fdc385004e2352d4f6bb41731efa02376ad15c0c56d236a61b36f3dd0920bc"
@@ -630,7 +767,16 @@ try {
     "firebase\r49-live-rules\firebase.json" = "6285cd269cfb42419e2f9c9f03a0f2c16f41198831c36bea941cb3f1f7b93bb3"
     "firebase\r49-live-rules\.gitignore" = "8bbd5e0e7c8f650b9fd6ca3a4bde39fedde690a639965b0e3b46cf33d040c20a"
   }
-  foreach ($entry in $Expected.GetEnumerator()) { Assert-SourceHash $entry.Key $entry.Value }
+  Refresh-ToolPath
+  $Git = Resolve-Executable @("git.exe", "git")
+  if (-not $Git) { Install-WingetPackage "Git.Git" "Git"; $Git = Resolve-Executable @("git.exe", "git") }
+  $Gh = Resolve-Executable @("gh.exe", "gh")
+  if (-not $Gh) { Install-WingetPackage "GitHub.cli" "GitHub CLI"; $Gh = Resolve-Executable @("gh.exe", "gh") }
+  foreach ($tool in @($Git,$Gh)) { if (-not $tool) { throw "Canonical source recovery requires Git and GitHub CLI." } }
+  $ghAuth = Invoke-Captured "Verify GitHub authentication for canonical source recovery" $Gh @("auth", "status", "--hostname", "github.com") -AllowFailure
+  if ($ghAuth.ExitCode -ne 0) { Invoke-InteractiveNoLog "Essential GitHub approval" $Gh @("auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web") }
+  Invoke-Native "Configure GitHub authentication for read-only source recovery" $Gh @("auth", "setup-git")
+  Restore-HashLockedSource $Expected $Git $Gh
 
   Refresh-ToolPath
   $Node = Resolve-Executable @("node.exe", "node")
@@ -791,10 +937,6 @@ try {
   Write-Log "Offline r49 release gate PASSED before GitHub or production-cloud mutation." Green
   Write-Log "Recorded preflight: $PreflightLatestPath" Green
 
-  $Git = Resolve-Executable @("git.exe", "git")
-  if (-not $Git) { Install-WingetPackage "Git.Git" "Git"; $Git = Resolve-Executable @("git.exe", "git") }
-  $Gh = Resolve-Executable @("gh.exe", "gh")
-  if (-not $Gh) { Install-WingetPackage "GitHub.cli" "GitHub CLI"; $Gh = Resolve-Executable @("gh.exe", "gh") }
   $Gcloud = Resolve-Executable @("gcloud.cmd", "gcloud.exe", "gcloud")
   if (-not $Gcloud) { Install-WingetPackage "Google.CloudSDK" "Google Cloud CLI"; $Gcloud = Resolve-Executable @("gcloud.cmd", "gcloud.exe", "gcloud") }
   foreach ($tool in @($Git,$Gh,$Gcloud,$Firebase)) { if (-not $tool) { throw "A required publishing tool did not become available after the offline gate." } }
