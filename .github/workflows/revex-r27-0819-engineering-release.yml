@@ -93,6 +93,28 @@ jobs:
           python src/Liber.Revex.Revit/Engineering/Energy/verify_revex_r49_energy.py
           python server/revex-energy-worker/verify_revex_r49_worker.py
 
+      - name: Live official COMcheck DWR3 bootstrap without project data
+        shell: bash
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          import sys
+          path = Path('src/Liber.Revex.Revit/Engineering/Energy/comcheck_backstop.py')
+          spec = importlib.util.spec_from_file_location('revex_comcheck_live_probe', path)
+          module = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = module
+          spec.loader.exec_module(module)
+          events = []
+          client = module.ComcheckClient(module.DEFAULT_BASE_URL, lambda event, **detail: events.append((event, detail)), timeout_seconds=30)
+          client.start()
+          if not client.session_ready or not client.dwr_id or client.instance_id != '0':
+              raise RuntimeError('Official COMcheck DWR3 browser bootstrap did not establish the expected session')
+          print('REVEX_COMCHECK_DWR3_LIVE_BOOTSTRAP=PASSED')
+          PY
+
       - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
