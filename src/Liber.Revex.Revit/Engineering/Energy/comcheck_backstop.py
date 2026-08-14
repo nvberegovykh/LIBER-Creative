@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """REVEX client for the official PNNL Legacy COMcheck-Web envelope Backstop.
 
-The production wire format mirrors DWR 3's own browser XHR transport. The
-current-project CheckXML is the only project payload transmitted. Cookies and
-script-session identifiers are process-local and never logged.
+The production wire format mirrors DWR 3's own browser transport and startup
+sequence. The current-project CheckXML is the only project payload transmitted.
+Cookies and script-session identifiers are process-local and never logged.
 """
 from __future__ import annotations
 
@@ -32,11 +32,15 @@ def _dwr_error(text: str) -> str | None:
     if "handleBatchException" not in text and "handleException" not in text:
         return None
     match = re.search(r"message\s*:\s*['\"]((?:\\.|[^'\"])*)['\"]", text, re.S)
-    if not match:
-        return "COMcheck-Web returned an unspecified DWR error."
-    value = match.group(1)
-    value = value.replace("\\'", "'").replace('\\"', '"').replace("\\n", " ").replace("\\r", " ")
-    return value[:2000]
+    if match:
+        value = match.group(1)
+        value = value.replace("\\'", "'").replace('\\"', '"').replace("\\n", " ").replace("\\r", " ")
+        if value.strip():
+            return value[:2000]
+    class_match = re.search(r"javaClassName\\?\s*:\s*\\?['\"]([^'\"]+)\\?['\"]", text, re.S)
+    if class_match:
+        return class_match.group(1)[:2000]
+    return "COMcheck-Web returned an unspecified DWR error."
 
 
 def _callback_string(text: str) -> str | None:
@@ -215,6 +219,17 @@ class ComcheckClient:
 
         if not self.allow_nonofficial:
             self._dwr_call("__System", "pageLoaded", "dwr/call/plaincall/__System.pageLoaded.dwr")
+            # COMcheck's own start_app.js makes this call before the upload UI can
+            # be used. It creates/restores the server-side USER_PROJECT bound to
+            # the HTTP/DWR session; omitting it makes uploadProject throw
+            # gov.energycodes.check.common.exception.InvalidSessionException.
+            current = self._dwr_call(
+                "ProjectService", "getCurrentProject",
+                "dwr/call/plaincall/ProjectService.getCurrentProject.dwr",
+            )
+            if "handleCallback" not in current:
+                raise ComcheckBackstopError("COMcheck-Web did not initialize its current-project application session.")
+            self.log("APPLICATION_SESSION_READY", service=OFFICIAL_HOST, method="ProjectService.getCurrentProject")
 
         self.session_ready = True
         self.log("SESSION_READY", service=OFFICIAL_HOST, protocol="DWR3_XHR",
