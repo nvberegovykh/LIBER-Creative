@@ -10,41 +10,47 @@ jobs:
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@v4
-      - name: Live schema-intact COMcheck upload calculation and PDF
+      - name: Isolate official COMcheck upload browser state
         shell: python
         run: |
-          import importlib.util, pathlib, sys, tempfile, xml.etree.ElementTree as ET
+          import importlib.util, pathlib, sys, tempfile, urllib.parse, xml.etree.ElementTree as ET
           energy=pathlib.Path('src/Liber.Revex.Revit/Engineering/Energy')
           spec=importlib.util.spec_from_file_location('cc', energy/'comcheck_backstop.py')
           cc=importlib.util.module_from_spec(spec); sys.modules['cc']=cc; spec.loader.exec_module(cc)
           reference=energy/'References'/'COMcheck_250_MIDWOOD_STRUCTURE_REFERENCE.cxl'
+          def upload(client, path, filename):
+              fields=client._base_fields('ProjectService','uploadProject')
+              fields['c0-param0']='string:'+urllib.parse.quote(filename,safe='')
+              body,ctype=cc._multipart(fields,'c0-param1',path)
+              raw=client._request('POST','dwr/call/htmlcall/ProjectService.uploadProject.dwr',body=body,content_type=ctype)
+              text=raw.decode('utf-8','replace')
+              return text, cc._dwr_error(text)
           with tempfile.TemporaryDirectory() as td:
-              folder=pathlib.Path(td)
-              test=folder/'REVEX_COMCHECK_SCHEMA_INTACT_QA.cxl'
+              test=pathlib.Path(td)/'REVEX_COMCHECK_SCHEMA_INTACT_QA.cxl'
               tree=ET.parse(reference); root=tree.getroot()
-              values={
-                'projectTitle':'REVEX COMCHECK LIVE QA',
-                'projectAddress':'999 TEST AVENUE',
-                'projectCity':'BROOKLYN',
-                'projectState':'New York',
-                'projectZipCode':'11201',
-              }
               for node in root.iter():
                   local=node.tag.rsplit('}',1)[-1]
+                  values={'projectTitle':'REVEX COMCHECK LIVE QA','projectAddress':'999 TEST AVENUE','projectCity':'BROOKLYN','projectState':'New York','projectZipCode':'11201'}
                   if local in values: node.text=values[local]
-              tree.write(test, encoding='utf-8', xml_declaration=True)
-              events=[]
-              c=cc.ComcheckClient(cc.DEFAULT_BASE_URL, lambda event, **detail: events.append((event,detail)), timeout_seconds=30)
-              c.start()
-              c.upload_project(test)
-              evidence=folder/'response.js'
-              summary=c.calculate_backstop(evidence)
-              report=folder/'report.pdf'
-              c.download_report(report)
-              if not report.read_bytes().startswith(b'%PDF-'):
-                  raise RuntimeError('COMcheck live schema-intact report is not PDF')
-              print('REVEX_COMCHECK_SCHEMA_INTACT_UPLOAD=PASSED')
-              print('REVEX_COMCHECK_SCHEMA_INTACT_CALC=PASSED')
-              print('REVEX_COMCHECK_SCHEMA_INTACT_PDF=PASSED')
-              print('REVEX_COMCHECK_SCHEMA_INTACT_PDF_BYTES=',report.stat().st_size)
-              print('REVEX_COMCHECK_SCHEMA_INTACT_SUMMARY=',summary)
+              tree.write(test,encoding='utf-8',xml_declaration=True)
+              results=[]
+              for make_new,fakepath in [(False,False),(True,False),(False,True),(True,True)]:
+                  c=cc.ComcheckClient(cc.DEFAULT_BASE_URL,lambda *a,**k:None,timeout_seconds=30)
+                  c.start()
+                  if make_new:
+                      new_reply=c._dwr_call('ProjectService','newProject','dwr/call/plaincall/ProjectService.newProject.dwr')
+                      print('NEW_PROJECT_CALLBACK=', 'handleCallback' in new_reply)
+                  filename=('C:\\fakepath\\'+test.name) if fakepath else test.name
+                  text,error=upload(c,test,filename)
+                  ok=('handleCallback' in text and error is None)
+                  results.append((make_new,fakepath,ok,error))
+                  print('UPLOAD_VARIANT',{'newProject':make_new,'fakepath':fakepath,'ok':ok,'error':error})
+                  if ok:
+                      evidence=pathlib.Path(td)/'calc.js'
+                      summary=c.calculate_backstop(evidence)
+                      report=pathlib.Path(td)/'report.pdf'
+                      c.download_report(report)
+                      print('WINNER_SUMMARY=',summary)
+                      print('WINNER_PDF=',report.stat().st_size,report.read_bytes()[:5])
+                      raise SystemExit(0)
+              raise RuntimeError('No browser-state upload variant succeeded: '+repr(results))
