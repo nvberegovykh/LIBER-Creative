@@ -527,31 +527,46 @@ class FreshProjectBrowserClient:
         result = self.driver.execute_script(
             """
             const use=arguments[0], rows=buildingUseTable.getList();
-            let row=rows.find(r=>r&&r.type&&r.constructionType&&r.floorArea&&r.powerDensity);
-            if(!row){
-              const fields={
-                component:createInputField('WHOLE_BLDG'),
-                type:createInputField(use.type),
-                constructionType:createInputField(use.constructionType),
-                floorArea:createInputField(Number(use.floorArea||0)),
-                powerDensity:createInputField(Number(use.powerDensity||0))
-              };
-              row=buildingUseTable.buildNewComponent(fields);
-              row=buildingUseTable.addComponent(row,false);
-              if(row==null)return {ok:false,error:'addComponent returned null'};
-              buildingUseTable.finish(row,'add');
-            }else{
+            const snapshot=()=>rows.map((r,i)=>({i,fields:r?Object.keys(r):[],component:r&&r.component&&r.component.value}));
+            try{
+              let row=rows.find(r=>r&&r.component&&r.type);
+              if(!row){
+                const fields={
+                  component:createInputField('WHOLE_BLDG'),
+                  type:createInputField(use.type),
+                  constructionType:createInputField(use.constructionType),
+                  floorArea:createInputField(Number(use.floorArea||0)),
+                  powerDensity:createInputField(Number(use.powerDensity||0))
+                };
+                row=buildingUseTable.buildNewComponent(fields);
+                // Building uses have no parent/child relationship. Calling the
+                // generic addComponent() still walks the fresh table's empty
+                // placeholder rows as if they were envelope parents. Use the
+                // table's own server adapter directly, then perform the exact
+                // successful local-list/finish half of addComponent().
+                const status=buildingUseTable.addToServer(row,null);
+                if(status!==true)return {ok:false,error:'addToServer returned false',rows:snapshot()};
+                enableSave();
+                rows.push(row);
+                buildingUseTable.finish(row,'add');
+              }else{
+                if(!row.constructionType)row.constructionType=createInputField(use.constructionType);
+                if(!row.floorArea)row.floorArea=createInputField(0);
+                if(!row.powerDensity)row.powerDensity=createInputField(0);
               row.type.value=use.type;
               row.constructionType.value=use.constructionType;
               row.floorArea.value=Number(use.floorArea||0);
               row.powerDensity.value=Number(use.powerDensity||0);
               buildingUseTable.updateServerComponent(row,['type','constructionType','floorArea','powerDensity']);
               buildingUseTable.redraw([row]);
+              }
+              return {
+                ok:true,id:row.id,key:row.key&&row.key.value,type:row.type&&row.type.value,
+                area:row.floorArea&&row.floorArea.value,fields:Object.keys(row),rows:snapshot()
+              };
+            }catch(error){
+              return {ok:false,error:String(error),stack:String(error&&error.stack||''),rows:snapshot()};
             }
-            return {
-              ok:true,id:row.id,key:row.key&&row.key.value,type:row.type&&row.type.value,
-              area:row.floorArea&&row.floorArea.value,fields:Object.keys(row)
-            };
             """,
             use,
         )
