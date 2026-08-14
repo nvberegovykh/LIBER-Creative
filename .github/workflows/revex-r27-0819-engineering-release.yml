@@ -41,21 +41,6 @@ jobs:
       - name: Checkout exact candidate
         uses: actions/checkout@v4
 
-      - name: Inspect live official COMcheck ProjectService proxy
-        shell: bash
-        timeout-minutes: 1
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import urllib.request
-          url='https://legacy-comcheck.energycode.pnl.gov/CheckWeb/dwr/interface/ProjectService.js'
-          req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0 REVEX-r49-live-interface-inspection'})
-          text=urllib.request.urlopen(req, timeout=30).read().decode('utf-8','replace')
-          print('REVEX_COMCHECK_PROJECTSERVICE_PROXY_BEGIN')
-          print(text)
-          print('REVEX_COMCHECK_PROJECTSERVICE_PROXY_END')
-          PY
-
       - name: Parse production publisher
         shell: pwsh
         run: |
@@ -108,29 +93,7 @@ jobs:
           python src/Liber.Revex.Revit/Engineering/Energy/verify_revex_r49_energy.py
           python server/revex-energy-worker/verify_revex_r49_worker.py
 
-      - name: Live official COMcheck DWR3 bootstrap without project data
-        shell: bash
-        timeout-minutes: 2
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import importlib.util
-          from pathlib import Path
-          import sys
-          path = Path('src/Liber.Revex.Revit/Engineering/Energy/comcheck_backstop.py')
-          spec = importlib.util.spec_from_file_location('revex_comcheck_live_probe', path)
-          module = importlib.util.module_from_spec(spec)
-          sys.modules[spec.name] = module
-          spec.loader.exec_module(module)
-          events = []
-          client = module.ComcheckClient(module.DEFAULT_BASE_URL, lambda event, **detail: events.append((event, detail)), timeout_seconds=30)
-          client.start()
-          if not client.session_ready or not client.dwr_id or client.instance_id != '0':
-              raise RuntimeError('Official COMcheck DWR3 browser bootstrap did not establish the expected session')
-          print('REVEX_COMCHECK_DWR3_LIVE_BOOTSTRAP=PASSED')
-          PY
-
-      - name: Full live official COMcheck synthetic envelope backstop
+      - name: Full live official COMcheck clean-project envelope backstop
         shell: bash
         timeout-minutes: 3
         run: |
