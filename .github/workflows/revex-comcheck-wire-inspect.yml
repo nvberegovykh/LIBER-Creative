@@ -24,7 +24,8 @@ jobs:
           ref=pathlib.Path('src/Liber.Revex.Revit/Engineering/Energy/References/COMcheck_250_MIDWOOD_STRUCTURE_REFERENCE.cxl')
           with tempfile.TemporaryDirectory() as td:
               p=pathlib.Path(td)/'REVEX_COMCHECK_CURRENT_QA.cxl'
-              text=ref.read_text(encoding='utf-8')
+              original=ref.read_text(encoding='utf-8')
+              text=original
               replacements={
                 'projectTitle':'REVEX COMCHECK LIVE QA',
                 'projectAddress':'999 TEST AVENUE',
@@ -32,16 +33,19 @@ jobs:
                 'projectState':'New York',
                 'projectZipCode':'11201',
               }
+              originals={}
               for tag,value in replacements.items():
                   pattern=rf'(<{tag}>\s*<!\[CDATA\[)(.*?)(\]\]>\s*</{tag}>)'
+                  match=re.search(pattern,text,re.S)
+                  if not match: raise RuntimeError(f'Missing reference CDATA {tag}')
+                  originals[tag]=match.group(2)
                   text,n=re.subn(pattern,lambda m:m.group(1)+value+m.group(3),text,count=1,flags=re.S)
                   if n!=1: raise RuntimeError(f'Expected one CDATA {tag}; got {n}')
               p.write_text(text,encoding='utf-8',newline='')
-              original=ref.read_text(encoding='utf-8')
               normalized=text
-              for tag,value in replacements.items():
+              for tag,value in originals.items():
                   pattern=rf'(<{tag}>\s*<!\[CDATA\[)(.*?)(\]\]>\s*</{tag}>)'
-                  normalized=re.sub(pattern,lambda m:m.group(1)+re.search(pattern,original,re.S).group(2)+m.group(3),normalized,count=1,flags=re.S)
+                  normalized=re.sub(pattern,lambda m:m.group(1)+value+m.group(3),normalized,count=1,flags=re.S)
               if normalized!=original: raise RuntimeError('Byte-preserving migration changed fields outside explicit project identity')
               print('BYTE_PRESERVATION_GATE=PASSED')
 
@@ -58,20 +62,26 @@ jobs:
                   current=d.execute_async_script("""
                     const done=arguments[arguments.length-1];
                     ProjectService.getCurrentProject(function(r){
-                      try{done(JSON.stringify(r).slice(0,20000));}catch(e){done('ERR '+String(e));}
+                      try {
+                        const s=JSON.stringify(r);
+                        done(JSON.stringify({ok:true,identityPresent:s.includes('REVEX COMCHECK LIVE QA'),bytes:s.length,prefix:s.slice(0,1600)}));
+                      } catch(e) { done(JSON.stringify({ok:false,error:String(e)})); }
                     });
                   """)
-                  print('CURRENT_PROJECT_PREFIX=',current[:2000])
-                  if 'REVEX COMCHECK LIVE QA' not in current: raise RuntimeError('official current project does not contain migrated identity')
+                  print('CURRENT_PROJECT_CHECK=',current)
+                  if '"identityPresent":true' not in current.replace(' ',''): raise RuntimeError('official current project does not contain migrated identity')
                   print('REVEX_COMCHECK_BROWSER_UPLOAD=PASSED')
                   calc=d.execute_async_script("""
                     const done=arguments[arguments.length-1];
                     ProjectService.calculateEnvelopeCompliance(true,function(r){
-                      try{done(JSON.stringify(r).slice(0,20000));}catch(e){done('ERR '+String(e));}
+                      try {
+                        const s=JSON.stringify(r);
+                        done(JSON.stringify({ok:true,bytes:s.length,hasEnvelope:/envelopeStatus|passes|complianceIndex/i.test(s),prefix:s.slice(0,3000)}));
+                      } catch(e) { done(JSON.stringify({ok:false,error:String(e)})); }
                     });
                   """)
-                  print('CALC_PREFIX=',calc[:3000])
-                  if not calc or calc.startswith('ERR '):raise RuntimeError('official envelope calculation callback failed')
+                  print('CALC_CHECK=',calc)
+                  if '"ok":true' not in calc.replace(' ','') or '"hasEnvelope":true' not in calc.replace(' ',''):raise RuntimeError('official envelope calculation callback failed')
                   print('REVEX_COMCHECK_BROWSER_CALC=PASSED')
                   report_url=base+'report.html?envelopeCertificate=true&intLightingCertificate=false&extLightingCertificate=false&mechanicalCertificate=false&mechanicalReqDescription=false'
                   d.get(report_url);w.until(lambda x:'report/current/pdf' in x.page_source)
