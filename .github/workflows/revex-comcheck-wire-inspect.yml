@@ -12,29 +12,58 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Selenium
         run: python -m pip install --disable-pip-version-check selenium
-      - name: Upload untouched reference CXL through official COMcheck browser
+      - name: Live namespace-preserved current-project CXL through COMcheck
         shell: python
         run: |
-          import pathlib,time
+          import pathlib,tempfile,time,urllib.request,xml.etree.ElementTree as ET
           from selenium import webdriver
           from selenium.webdriver.common.by import By
           from selenium.webdriver.support.ui import WebDriverWait
           from selenium.common.exceptions import NoAlertPresentException
           base='https://legacy-comcheck.energycode.pnl.gov/CheckWeb/'
-          p=pathlib.Path('src/Liber.Revex.Revit/Engineering/Energy/References/COMcheck_250_MIDWOOD_STRUCTURE_REFERENCE.cxl').resolve()
-          o=webdriver.ChromeOptions();o.add_argument('--headless=new');o.add_argument('--no-sandbox');o.add_argument('--disable-dev-shm-usage')
-          d=webdriver.Chrome(options=o)
-          try:
-              w=WebDriverWait(d,45);d.get(base+'index.html');w.until(lambda x:x.execute_script("return typeof uploadProject==='function' && typeof USER_PROJECT!=='undefined' && USER_PROJECT!==null"))
-              d.execute_script("let e=document.createElement('input');e.type='file';e.id='fileToUpload';e.name='fileToUpload';document.body.appendChild(e);")
-              d.find_element(By.ID,'fileToUpload').send_keys(str(p));d.execute_script('uploadProject();')
-              deadline=time.time()+45
-              while time.time()<deadline:
+          ref=pathlib.Path('src/Liber.Revex.Revit/Engineering/Energy/References/COMcheck_250_MIDWOOD_STRUCTURE_REFERENCE.cxl')
+          with tempfile.TemporaryDirectory() as td:
+              p=pathlib.Path(td)/'REVEX_COMCHECK_CURRENT_QA.cxl'
+              tree=ET.parse(ref);root=tree.getroot();ns=root.tag.split('}')[0].lstrip('{');ET.register_namespace('',ns)
+              vals={'projectTitle':'REVEX COMCHECK LIVE QA','projectAddress':'999 TEST AVENUE','projectCity':'BROOKLYN','projectState':'New York','projectZipCode':'11201'}
+              for n in root.iter():
+                  k=n.tag.rsplit('}',1)[-1]
+                  if k in vals:n.text=vals[k]
+              tree.write(p,encoding='utf-8',xml_declaration=True)
+              print('CURRENT_CXL_PREFIX=',p.read_text(encoding='utf-8')[:220])
+              o=webdriver.ChromeOptions();o.add_argument('--headless=new');o.add_argument('--no-sandbox');o.add_argument('--disable-dev-shm-usage')
+              d=webdriver.Chrome(options=o)
+              try:
+                  w=WebDriverWait(d,45);d.get(base+'index.html');w.until(lambda x:x.execute_script("return typeof uploadProject==='function' && typeof USER_PROJECT!=='undefined' && USER_PROJECT!==null"))
+                  d.execute_script("let e=document.createElement('input');e.type='file';e.id='fileToUpload';e.name='fileToUpload';document.body.appendChild(e);")
+                  d.find_element(By.ID,'fileToUpload').send_keys(str(p.resolve()));d.execute_script('uploadProject();')
+                  time.sleep(4)
                   try:
-                      a=d.switch_to.alert;txt=a.text;print('UNTOUCHED_REFERENCE_ALERT=',txt);a.accept();raise RuntimeError('reference rejected: '+txt)
+                      a=d.switch_to.alert;txt=a.text;print('COMCHECK_ALERT=',txt);a.accept();raise RuntimeError('COMcheck rejected namespace-preserved CXL: '+txt)
                   except NoAlertPresentException:pass
-                  title=d.execute_script("try{return USER_PROJECT.project.projectDetails.title.value}catch(e){return ''}")
-                  if title and title!='Project title':print('UNTOUCHED_REFERENCE_UPLOAD=PASSED title=',title);break
-                  time.sleep(.25)
-              else:raise RuntimeError('reference upload timeout')
-          finally:d.quit()
+                  current=d.execute_async_script("""
+                    const done=arguments[arguments.length-1];
+                    ProjectService.getCurrentProject(function(r){
+                      try{done(JSON.stringify({ok:true, text:JSON.stringify(r).slice(0,10000)}));}
+                      catch(e){done(JSON.stringify({ok:false,error:String(e)}));}
+                    });
+                  """)
+                  print('CURRENT_PROJECT_CALLBACK=',current)
+                  if 'REVEX COMCHECK LIVE QA' not in current:raise RuntimeError('uploaded project identity not present in official current-project response')
+                  print('REVEX_COMCHECK_BROWSER_UPLOAD=PASSED')
+                  calc=d.execute_async_script("""
+                    const done=arguments[arguments.length-1];
+                    ProjectService.calculateEnvelopeCompliance(true,function(r){
+                      try{done(JSON.stringify({ok:true,text:JSON.stringify(r).slice(0,10000)}));}
+                      catch(e){done(JSON.stringify({ok:false,error:String(e)}));}
+                    });
+                  """)
+                  print('CALC_CALLBACK=',calc)
+                  if '"ok":true' not in calc.replace(' ',''):raise RuntimeError('official envelope calculation callback failed')
+                  report_url=base+'report.html?envelopeCertificate=true&intLightingCertificate=false&extLightingCertificate=false&mechanicalCertificate=false&mechanicalReqDescription=false'
+                  d.get(report_url);w.until(lambda x:'report/current/pdf' in x.page_source)
+                  cookies='; '.join(f"{c['name']}={c['value']}" for c in d.get_cookies());ua=d.execute_script('return navigator.userAgent')
+                  pdf=urllib.request.urlopen(urllib.request.Request(base+'report/current/pdf',headers={'Cookie':cookies,'User-Agent':ua,'Referer':report_url}),timeout=45).read()
+                  if not pdf.startswith(b'%PDF-'):raise RuntimeError('official report endpoint returned non-PDF')
+                  print('REVEX_COMCHECK_BROWSER_PDF=PASSED bytes=',len(pdf))
+              finally:d.quit()
