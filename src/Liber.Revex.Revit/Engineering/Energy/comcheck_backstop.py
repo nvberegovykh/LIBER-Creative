@@ -358,6 +358,9 @@ def _component_values(node: ET.Element, component: str, type_field: str) -> dict
         "component": component,
         "type": _text(node, type_field),
         "userDescription": _text(node, "assemblyType") or _text(node, "description"),
+        "nonEditableDescription": _text(node, "description"),
+        "otherType": "NONE",
+        "alterationExemption": "EXEMPT_NOT_APPLICABLE",
         "grossArea": _number(node, "grossArea"),
         "orientation": _text(node, "orientation", "UNSPECIFIED_ORIENTATION"),
         "constructionType": _text(node, "constructionType", "RESIDENTIAL"),
@@ -596,13 +599,23 @@ class FreshProjectBrowserClient:
               const parent=child?list[parentIndex]:null;
               if(child&&!parent)return {ok:false,error:'missing parent '+parentIndex};
               const row=envelopeTable.buildNewComponent(fields);
-              // addToServer is COMcheck's authoritative EnvelopeView.add adapter.
-              // The rest of addComponent/finish only performs parent discovery,
-              // dialog closure, and redraw work that is invalid in a headless
-              // clean-project translation. Insert the accepted row into the
-              // same local model explicitly so later children resolve correctly.
-              const status=envelopeTable.addToServer(row,parent);
-              if(status!==true)return {ok:false,error:'addToServer returned false'};
+              // Call the same authoritative EnvelopeView.add method as the
+              // table adapter, but keep its real DWR exception instead of the
+              // adapter's generic modal alert.
+              let response=null,remoteError=null;
+              const describe=(message,error)=>({
+                message:String(message||error||'EnvelopeView.add failed'),
+                javaClassName:String(error&&error.javaClassName||''),
+                detail:String(error&&error.message||'')
+              });
+              EnvelopeView.add(row,parent&&parent.id,{
+                callback:value=>{response=value},
+                exceptionHandler:(message,error)=>{remoteError=describe(message,error)},
+                errorHandler:(message,error)=>{remoteError=describe(message,error)}
+              });
+              if(remoteError)return {ok:false,error:'EnvelopeView.add rejected row',remoteError};
+              if(!response)return {ok:false,error:'EnvelopeView.add returned no row'};
+              $.extend(row,response);
               enableSave();
               if(child)parent.children.push(row);else list.push(row);
               const index=child?-1:list.indexOf(row);
