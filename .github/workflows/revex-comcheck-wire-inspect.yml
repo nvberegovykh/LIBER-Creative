@@ -12,18 +12,42 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Selenium
         run: python -m pip install --disable-pip-version-check selenium pypdf
-      - name: Inspect fresh-project COMcheck controls
+      - name: Inspect fresh-project COMcheck mutation API
         shell: python
         run: |
-          import json
+          import json,time
           from selenium import webdriver
           from selenium.webdriver.support.ui import WebDriverWait
           base='https://legacy-comcheck.energycode.pnl.gov/CheckWeb/'
           o=webdriver.ChromeOptions();o.add_argument('--headless=new');o.add_argument('--no-sandbox');o.add_argument('--disable-dev-shm-usage')
-          d=webdriver.Chrome(options=o)
+          d=webdriver.Chrome(options=o); d.set_script_timeout(45)
           try:
               w=WebDriverWait(d,45);d.get(base+'index.html');w.until(lambda x:x.execute_script("return typeof USER_PROJECT!=='undefined' && USER_PROJECT!==null"))
-              print('SELECTS=',json.dumps(d.execute_script("return Array.from(document.querySelectorAll('select')).map(e=>({id:e.id,name:e.name,value:e.value,html:e.outerHTML.slice(0,5000),options:Array.from(e.options).map(o=>({text:o.text,value:o.value})).filter(o=>/new york|nyc|2020|appendix|90\.1/i.test(o.text+' '+o.value))}))"),indent=2))
-              print('INPUTS=',json.dumps(d.execute_script("return Array.from(document.querySelectorAll('input,button,a')).map(e=>({tag:e.tagName,id:e.id,name:e.name,type:e.type,value:e.value,text:(e.innerText||e.title||'').trim(),onclick:e.getAttribute('onclick')})).filter(x=>/project title|height|stor|building|area|wall|roof|floor|window|door|compliance|report/i.test(JSON.stringify(x))).slice(0,200)"),indent=2))
-              print('GLOBALS=',d.execute_script("return Object.keys(window).filter(k=>/code|location|envelope|wall|roof|floor|window|door|building|compliance/i.test(k)).sort().slice(0,300).join(' | ')"))
+              for n in ['processCodeChange','codeChangeResponseHandler','processBuildingUseTypeChange','buildingUseTypeChangeResponseHandler','newBuildingUse','setupEnvelopeUi','createWindow','checkCompliance','processComplianceResults']:
+                  print('FUNC_'+n+'=',d.execute_script(f"return typeof window['{n}']==='function'?String(window['{n}']):'MISSING'"))
+              print('ENVELOPE_TABLE_KEYS=',d.execute_script("return Object.keys(envelopeTable||{}).sort().join(' | ')"))
+              print('BUILDING_TABLE_KEYS=',d.execute_script("return Object.keys(buildingUseTable||{}).sort().join(' | ')"))
+              print('ENV_BUTTONS=',json.dumps(d.execute_script("return Array.from(document.querySelectorAll('a')).filter(e=>['Roof','Ext. Wall','Window','Door','Floor'].includes((e.innerText||'').trim())).map(e=>({text:e.innerText.trim(),outer:e.outerHTML,href:e.getAttribute('href'),onclick:e.getAttribute('onclick')}))"),indent=2))
+
+              # Prove exact target code/location/identity can be applied through COMcheck's own controls.
+              before=d.execute_script("return JSON.stringify(USER_PROJECT)")
+              d.execute_script("""
+                function change(id,value){const e=document.getElementById(id);e.value=value;e.dispatchEvent(new Event('change',{bubbles:true}));}
+                change('code','CEZ_NYSTRETCH_NYC_90_1_11_G');
+              """)
+              w.until(lambda x:x.execute_script("return document.getElementById('code').value==='CEZ_NYSTRETCH_NYC_90_1_11_G'"))
+              time.sleep(3)
+              d.execute_script("""
+                function change(id,value){const e=document.getElementById(id);e.value=value;e.dispatchEvent(new Event('change',{bubbles:true}));}
+                change('state','New York');
+              """)
+              time.sleep(2)
+              print('NY_CITIES=',d.execute_script("return Array.from(document.getElementById('cities').options).filter(o=>/new york/i.test(o.text)).map(o=>({text:o.text,value:o.value}))"))
+              city=d.execute_script("return Array.from(document.getElementById('cities').options).find(o=>/new york/i.test(o.text))?.value||''")
+              if city:d.execute_script("arguments[0].value=arguments[1];arguments[0].dispatchEvent(new Event('change',{bubbles:true}))",d.find_element('id','cities'),city)
+              time.sleep(2)
+              for id_,val in [('projectTitle','REVEX COMCHECK LIVE QA'),('projectAddress','999 TEST AVENUE'),('projectCity','BROOKLYN'),('projectState','New York'),('projectZipCode','11201'),('feetBldgHeight','65')]:
+                  d.execute_script("const e=document.getElementById(arguments[0]); if(e){e.value=arguments[1];e.dispatchEvent(new Event('change',{bubbles:true}));}",id_,val)
+              time.sleep(3)
+              print('TARGET_STATE=',json.dumps(d.execute_script("return {code:document.getElementById('code').value,state:document.getElementById('state').value,city:document.getElementById('cities').value,title:document.getElementById('projectTitle').value,height:document.getElementById('feetBldgHeight').value,userCode:USER_PROJECT.control&&USER_PROJECT.control.code,userLocation:USER_PROJECT.location,userProject:USER_PROJECT.project,feetBldgHeight:USER_PROJECT.feetBldgHeight}"),indent=2))
           finally:d.quit()
