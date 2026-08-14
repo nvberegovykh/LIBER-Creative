@@ -11,8 +11,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Selenium
-        run: python -m pip install --disable-pip-version-check selenium pypdf
-      - name: Inspect fresh-project COMcheck mutation API
+        run: python -m pip install --disable-pip-version-check selenium
+      - name: Inspect fresh-project component dialogs
         shell: python
         run: |
           import json,time
@@ -20,34 +20,25 @@ jobs:
           from selenium.webdriver.support.ui import WebDriverWait
           base='https://legacy-comcheck.energycode.pnl.gov/CheckWeb/'
           o=webdriver.ChromeOptions();o.add_argument('--headless=new');o.add_argument('--no-sandbox');o.add_argument('--disable-dev-shm-usage')
-          d=webdriver.Chrome(options=o); d.set_script_timeout(45)
+          d=webdriver.Chrome(options=o);d.set_script_timeout(45)
           try:
-              w=WebDriverWait(d,45);d.get(base+'index.html');w.until(lambda x:x.execute_script("return typeof USER_PROJECT!=='undefined' && USER_PROJECT!==null"))
-              for n in ['processCodeChange','codeChangeResponseHandler','processBuildingUseTypeChange','buildingUseTypeChangeResponseHandler','newBuildingUse','setupEnvelopeUi','createWindow','checkCompliance','processComplianceResults']:
-                  print('FUNC_'+n+'=',d.execute_script(f"return typeof window['{n}']==='function'?String(window['{n}']):'MISSING'"))
-              print('ENVELOPE_TABLE_KEYS=',d.execute_script("return Object.keys(envelopeTable||{}).sort().join(' | ')"))
-              print('BUILDING_TABLE_KEYS=',d.execute_script("return Object.keys(buildingUseTable||{}).sort().join(' | ')"))
-              print('ENV_BUTTONS=',json.dumps(d.execute_script("return Array.from(document.querySelectorAll('a')).filter(e=>['Roof','Ext. Wall','Window','Door','Floor'].includes((e.innerText||'').trim())).map(e=>({text:e.innerText.trim(),outer:e.outerHTML,href:e.getAttribute('href'),onclick:e.getAttribute('onclick')}))"),indent=2))
-
-              # Prove exact target code/location/identity can be applied through COMcheck's own controls.
-              before=d.execute_script("return JSON.stringify(USER_PROJECT)")
-              d.execute_script("""
-                function change(id,value){const e=document.getElementById(id);e.value=value;e.dispatchEvent(new Event('change',{bubbles:true}));}
-                change('code','CEZ_NYSTRETCH_NYC_90_1_11_G');
-              """)
-              w.until(lambda x:x.execute_script("return document.getElementById('code').value==='CEZ_NYSTRETCH_NYC_90_1_11_G'"))
-              time.sleep(3)
-              d.execute_script("""
-                function change(id,value){const e=document.getElementById(id);e.value=value;e.dispatchEvent(new Event('change',{bubbles:true}));}
-                change('state','New York');
-              """)
+              w=WebDriverWait(d,45);d.get(base+'index.html');w.until(lambda x:x.execute_script("return typeof USER_PROJECT!=='undefined'&&USER_PROJECT!==null"))
+              d.execute_script("$('#code').val('CEZ_NYSTRETCH_NYC_90_1_11_G').trigger('change')")
+              w.until(lambda x:x.execute_script("return USER_PROJECT.project.buildingDetails.energyCode.value==='CEZ_NYSTRETCH_NYC_90_1_11_G'"))
               time.sleep(2)
-              print('NY_CITIES=',d.execute_script("return Array.from(document.getElementById('cities').options).filter(o=>/new york/i.test(o.text)).map(o=>({text:o.text,value:o.value}))"))
-              city=d.execute_script("return Array.from(document.getElementById('cities').options).find(o=>/new york/i.test(o.text))?.value||''")
-              if city:d.execute_script("arguments[0].value=arguments[1];arguments[0].dispatchEvent(new Event('change',{bubbles:true}))",d.find_element('id','cities'),city)
-              time.sleep(2)
-              for id_,val in [('projectTitle','REVEX COMCHECK LIVE QA'),('projectAddress','999 TEST AVENUE'),('projectCity','BROOKLYN'),('projectState','New York'),('projectZipCode','11201'),('feetBldgHeight','65')]:
-                  d.execute_script("const e=document.getElementById(arguments[0]); if(e){e.value=arguments[1];e.dispatchEvent(new Event('change',{bubbles:true}));}",id_,val)
-              time.sleep(3)
-              print('TARGET_STATE=',json.dumps(d.execute_script("return {code:document.getElementById('code').value,state:document.getElementById('state').value,city:document.getElementById('cities').value,title:document.getElementById('projectTitle').value,height:document.getElementById('feetBldgHeight').value,userCode:USER_PROJECT.control&&USER_PROJECT.control.code,userLocation:USER_PROJECT.location,userProject:USER_PROJECT.project,feetBldgHeight:USER_PROJECT.feetBldgHeight}"),indent=2))
+              d.execute_script("$('#state').val('New York').trigger('change')");time.sleep(1);d.execute_script("$('#cities').val('New York').trigger('change')");time.sleep(1)
+              print('BUILDING_METHODS=',d.execute_script("let a=[];for(let k in buildingUseTable)a.push(k);return a.sort().join(' | ')"))
+              print('ENVELOPE_METHODS=',d.execute_script("let a=[];for(let k in envelopeTable)a.push(k);return a.sort().join(' | ')"))
+              d.execute_script("newBuildingUse()")
+              time.sleep(1)
+              print('AFTER_NEW_BUILDING_USE=',json.dumps(d.execute_script("return {list:buildingUseTable.getList(),visible:Array.from(document.querySelectorAll('input,select,textarea,button')).filter(e=>e.offsetParent!==null).map(e=>({id:e.id,name:e.name,type:e.type,value:e.value,tag:e.tagName,options:e.tagName==='SELECT'?Array.from(e.options).map(o=>({t:o.text,v:o.value})).slice(0,80):undefined})).filter(x=>/building|whole|floor|area|type|description/i.test(JSON.stringify(x))).slice(0,100)}"),indent=2))
+              # Close any building-use editor if present, keeping its default row for later.
+              d.execute_script("try{if(typeof hs!=='undefined'&&hs.getExpander())hs.close()}catch(e){}")
+              time.sleep(.5)
+              for label in ['Ext. Wall','Roof','Floor','Window','Door']:
+                  d.execute_script("const e=Array.from(document.querySelectorAll('a')).find(x=>(x.innerText||'').trim()===arguments[0]);if(e)e.click()",label)
+                  time.sleep(1)
+                  print('DIALOG_'+label.replace(' ','_').replace('.','')+'=',json.dumps(d.execute_script("return {visible:Array.from(document.querySelectorAll('input,select,textarea,button')).filter(e=>e.offsetParent!==null).map(e=>({id:e.id,name:e.name,type:e.type,value:e.value,tag:e.tagName,text:e.innerText||'',options:e.tagName==='SELECT'?Array.from(e.options).map(o=>({t:o.text,v:o.value})).slice(0,120):undefined})).filter(x=>!/login|email|password/i.test(JSON.stringify(x))).slice(-160),html:Array.from(document.querySelectorAll('.highslide-container,.highslide-html,.highslide-body,#dialog')).filter(e=>e.offsetParent!==null).map(e=>e.outerHTML.slice(0,12000))}"),indent=2))
+                  d.execute_script("try{if(typeof hs!=='undefined'&&hs.getExpander())hs.close()}catch(e){}")
+                  time.sleep(.5)
           finally:d.quit()
