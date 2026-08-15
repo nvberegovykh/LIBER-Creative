@@ -30,13 +30,20 @@ public static class SettingsService
     {
         AppPaths.Ensure();
         string path = Path.Combine(AppPaths.Config, "settings.json");
+        return LoadFromPath(path);
+    }
+
+    private static BridgeSettings LoadFromPath(string path)
+    {
         try
         {
             if (!File.Exists(path))
                 return new BridgeSettings();
 
-            return JsonSerializer.Deserialize<BridgeSettings>(File.ReadAllText(path), JsonOptions)
-                   ?? new BridgeSettings();
+            BridgeSettings settings = JsonSerializer.Deserialize<BridgeSettings>(File.ReadAllText(path), JsonOptions)
+                                      ?? new BridgeSettings();
+            settings.DocumentProjectBindings ??= new Dictionary<string, RevexProjectBinding>(StringComparer.Ordinal);
+            return settings;
         }
         catch
         {
@@ -48,6 +55,23 @@ public static class SettingsService
     {
         AppPaths.Ensure();
         string path = Path.Combine(AppPaths.Config, "settings.json");
+
+        // RendairWindow is intentionally long-lived. Revit ExternalEvents can update
+        // the durable active-document binding through a freshly loaded settings object
+        // while the window still holds an older BridgeSettings instance. A later UI
+        // SaveBridgeSettings() must never erase or regress those newer bindings.
+        BridgeSettings durable = LoadFromPath(path);
+        settings.DocumentProjectBindings ??= new Dictionary<string, RevexProjectBinding>(StringComparer.Ordinal);
+        if (durable.DocumentProjectBindings != null)
+        {
+            foreach ((string fingerprint, RevexProjectBinding durableBinding) in durable.DocumentProjectBindings)
+            {
+                if (!settings.DocumentProjectBindings.TryGetValue(fingerprint, out RevexProjectBinding? incoming) ||
+                    incoming == null || durableBinding.BoundAtUtc > incoming.BoundAtUtc)
+                    settings.DocumentProjectBindings[fingerprint] = durableBinding;
+            }
+        }
+
         string temp = path + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(settings, JsonOptions));
         File.Move(temp, path, true);

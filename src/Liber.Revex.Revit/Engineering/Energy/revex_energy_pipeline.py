@@ -1212,12 +1212,33 @@ def _comcheck_row_code(row: dict) -> tuple[str, str]:
     return code, code.split(".", 1)[0]
 
 
-def _comcheck_row_has_thermal(row: dict) -> bool:
+def _comcheck_row_has_any_thermal(row: dict) -> bool:
+    """True when a scan row carries any thermal property at all.
+
+    This is intentionally broader than the construction input accepted by the current COMcheck
+    transformer. It keeps an opaque U-factor-only schedule row from being mistaken for diagram
+    geometry while still allowing us to reject it as an unusable R-value construction input.
+    """
     kind = str(row.get("kind") or "").lower()
     if kind in ("window", "door"):
         return row.get("uFactor") not in (None, "")
     if kind in ("wall", "roof", "floor"):
         return any(row.get(key) not in (None, "") for key in ("cavityR", "continuousR", "uFactor"))
+    return False
+
+
+def _comcheck_row_has_thermal(row: dict) -> bool:
+    """True only for thermal properties the current CXL construction writer can preserve.
+
+    Fenestration/doors are U-factor driven. Opaque wall/roof/floor exemplars in the retained
+    COMcheck schema are R-value driven, so a stray opaque U-factor must not be selected as the
+    current construction and then fail later as a misleading "no current R-value" row.
+    """
+    kind = str(row.get("kind") or "").lower()
+    if kind in ("window", "door"):
+        return row.get("uFactor") not in (None, "")
+    if kind in ("wall", "roof", "floor"):
+        return any(row.get(key) not in (None, "") for key in ("cavityR", "continuousR"))
     return False
 
 
@@ -1267,6 +1288,94 @@ def _comcheck_thermal_signature(row: dict) -> tuple:
     if kind in ("window", "door"):
         return (row.get("uFactor"), row.get("shgc"))
     return (row.get("uFactor"), row.get("cavityR"), row.get("continuousR"))
+
+
+def _unique_comcheck_geometry_rows(rows: list[dict]) -> list[dict]:
+    """Deduplicate repeated scans of the same diagram region without collapsing distinct regions."""
+    unique: list[dict] = []
+    seen = set()
+    for row in rows:
+        code, _ = _comcheck_row_code(row)
+        try:
+            area = round(float(row.get("grossAreaFt2") or 0), 3)
+        except (TypeError, ValueError):
+            area = 0.0
+        fingerprint = (
+            str(row.get("kind") or "").lower(), code, area,
+            _orientation(row.get("orientation")),
+            str(row.get("_sheetNumber") or "").strip().upper(),
+            re.sub(r"\s+", " ", str(row.get("evidence") or row.get("assemblyType") or row.get("description") or "")).strip().lower(),
+        )
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        unique.append(row)
+    return unique
+
+
+def _merge_roof_geometry_as_one_area(diagram_rows: list[dict], thermal_rows: list[dict]) -> tuple[dict | None, list[str], dict]:
+    """Collapse roof diagram regions into one COMcheck roof when one current construction is proven.
+
+    Thermal-boundary sheets commonly split the roof into R1/R2/R3 geometry regions even though
+    COMcheck needs one roof area using the same current roof construction. We use any individually
+    matched roof region only as a thermal anchor, require all anchors to agree on one R signature,
+    then sum every unique roof geometry region. Genuinely different roof constructions remain a
+    hard failure instead of being averaged or guessed.
+    """
+    roof_rows = _unique_comcheck_geometry_rows([row for row in diagram_rows if str(row.get("kind") or "").lower() == "roof"])
+    if not roof_rows:
+        return None, [], {"roofGeometryRowsAggregated": 0, "roofAggregateAreaFt2": None, "roofThermalAnchorCodes": []}
+
+    anchors: list[dict] = []
+    anchor_codes: list[str] = []
+    per_row_errors: list[str] = []
+    for row in roof_rows:
+        merged, error = _merge_diagram_geometry_with_thermal(row, thermal_rows)
+        if merged is not None:
+            anchors.append(merged)
+            code, _ = _comcheck_row_code(row)
+            if code:
+                anchor_codes.append(code)
+        elif error:
+            per_row_errors.append(error)
+
+    if not anchors:
+        return None, per_row_errors or ["EN roof geometry has no current R-value construction match"], {
+            "roofGeometryRowsAggregated": len(roof_rows), "roofAggregateAreaFt2": None, "roofThermalAnchorCodes": []
+        }
+
+    signatures = {_comcheck_thermal_signature(row) for row in anchors}
+    if len(signatures) != 1:
+        return None, ["EN roof geometry resolves to multiple current thermal constructions; one COMcheck roof area cannot be formed safely"], {
+            "roofGeometryRowsAggregated": len(roof_rows), "roofAggregateAreaFt2": None, "roofThermalAnchorCodes": sorted(set(anchor_codes))
+        }
+
+    total_area = 0.0
+    for row in roof_rows:
+        try:
+            area = float(row.get("grossAreaFt2"))
+        except (TypeError, ValueError):
+            return None, ["EN roof geometry contains a region without a valid gross area"], {
+                "roofGeometryRowsAggregated": len(roof_rows), "roofAggregateAreaFt2": None, "roofThermalAnchorCodes": sorted(set(anchor_codes))
+            }
+        if area <= 0:
+            return None, ["EN roof geometry contains a non-positive gross area"], {
+                "roofGeometryRowsAggregated": len(roof_rows), "roofAggregateAreaFt2": None, "roofThermalAnchorCodes": sorted(set(anchor_codes))
+            }
+        total_area += area
+
+    aggregate = dict(anchors[0])
+    aggregate["grossAreaFt2"] = total_area
+    aggregate["orientation"] = None
+    aggregate["_geometrySource"] = "EN_THERMAL_BOUNDARY_DIAGRAM_AGGREGATED_ROOF"
+    aggregate["_thermalSource"] = "EN_COMCHECK_THERMAL_TABLE"
+    aggregate["_roofRegionCount"] = len(roof_rows)
+    aggregate["_roofRegionCodes"] = sorted({code for code, _ in (_comcheck_row_code(row) for row in roof_rows) if code})
+    return aggregate, [], {
+        "roofGeometryRowsAggregated": len(roof_rows),
+        "roofAggregateAreaFt2": total_area,
+        "roofThermalAnchorCodes": sorted(set(anchor_codes)),
+    }
 
 
 def _merge_diagram_geometry_with_thermal(diagram_row: dict, thermal_rows: list[dict]) -> tuple[dict | None, str | None]:
@@ -1331,7 +1440,7 @@ def canonicalize_comcheck_envelope_rows(en_pages: list[dict]) -> tuple[list[dict
     thermal_rows = [dict(row) for row in all_rows if _comcheck_row_has_thermal(row)]
     diagram_rows = []
     for row in all_rows:
-        if _comcheck_row_has_thermal(row) or row.get("grossAreaFt2") in (None, ""):
+        if _comcheck_row_has_any_thermal(row) or row.get("grossAreaFt2") in (None, ""):
             continue
         kind = str(row.get("kind") or "").lower()
         code, _ = _comcheck_row_code(row)
@@ -1342,9 +1451,16 @@ def canonicalize_comcheck_envelope_rows(en_pages: list[dict]) -> tuple[list[dict
 
     merged_rows: list[dict] = []
     merge_errors: list[str] = []
+    roof_reconciliation = {"roofGeometryRowsAggregated": 0, "roofAggregateAreaFt2": None, "roofThermalAnchorCodes": []}
     diagram_kinds = {str(row.get("kind") or "").lower() for row in diagram_rows}
     if thermal_rows and diagram_rows:
+        roof_aggregate, roof_errors, roof_reconciliation = _merge_roof_geometry_as_one_area(diagram_rows, thermal_rows)
+        merge_errors.extend(roof_errors)
+        if roof_aggregate is not None:
+            merged_rows.append(roof_aggregate)
         for row in diagram_rows:
+            if str(row.get("kind") or "").lower() == "roof":
+                continue
             merged, error = _merge_diagram_geometry_with_thermal(row, thermal_rows)
             if error:
                 merge_errors.append(error)
@@ -1401,6 +1517,8 @@ def canonicalize_comcheck_envelope_rows(en_pages: list[dict]) -> tuple[list[dict
         "thermalPropertyMergeErrorCount": len(merge_errors),
         "thermalPropertyMergeErrors": merge_errors,
         "recoveredGrossAreaCount": recovered_area,
+        **roof_reconciliation,
+        "roofPolicy": "ONE_COMCHECK_ROOF_AREA_WHEN_ONE_CURRENT_THERMAL_SIGNATURE_IS_PROVEN",
         "narrativeRowsExcluded": True,
     }
 

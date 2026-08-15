@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '20260813r44';
+  const VERSION = '20260813r49';
   const LIMIT = 200;
   const entries = [];
   const native = () => window.chrome?.webview?.postMessage;
@@ -61,8 +61,6 @@
     const d = event.detail || {};
     emit(d.level || 'INFO', d.stage || 'APP', d.message || 'Companion app diagnostic', d);
   });
-
-
 
   function auditContracts() {
     const store = window.RevexStore;
