@@ -85,9 +85,13 @@ def main() -> int:
                     },
                     {
                         "kind": "roof", "assemblyType": "R1_Roof",
-                        "description": "Insulation Entirely Above Deck", "grossAreaFt2": 2000,
+                        "description": "Insulation Entirely Above Deck",
                         "continuousR": 30, "confidence": 1.0,
+                        "evidence": "R1_Roof R30 current construction",
                     },
+                    {"kind": "roof", "assemblyType": "Roof Region R1", "grossAreaFt2": 800, "confidence": 1.0, "evidence": "R1 roof region 800 SF"},
+                    {"kind": "roof", "assemblyType": "Roof Region R2", "grossAreaFt2": 700, "confidence": 1.0, "evidence": "R2 roof region 700 SF"},
+                    {"kind": "roof", "assemblyType": "Roof Region R3", "grossAreaFt2": 500, "confidence": 1.0, "evidence": "R3 roof region 500 SF"},
                     {
                         "kind": "floor", "assemblyType": "F1_Floor",
                         "description": "Mass Floor", "grossAreaFt2": 2000,

@@ -14,6 +14,11 @@ public static class CompanionWebBridge
         if (web.CoreWebView2 == null)
             return (false, "REVEX Companion browser is not initialized.");
 
+        // The exact browser model is paged in r49. Keep the manifest and every page
+        // in the same native file-input transaction as project/design/spec metadata.
+        // Previously the Revit exporter produced these files correctly, but this bridge
+        // omitted them, so the browser rejected the new immutable revision and kept the
+        // prior BIM pointer visible.
         string[] files = new[]
         {
             output.ProjectJson,
@@ -25,11 +30,14 @@ public static class CompanionWebBridge
             output.IntegrityJson,
             output.ViewerIfc,
             output.ViewerMesh,
+            output.ViewerMeshManifest,
             output.ViewerFbx
-        }.Concat(output.PrintingSetPdfs ?? Array.Empty<string>())
+        }.Concat(output.ViewerMeshPages ?? Array.Empty<string>())
+         .Concat(output.PrintingSetPdfs ?? Array.Empty<string>())
          .Concat(output.AffectedPlanPdfs ?? Array.Empty<string>())
          .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
          .Select(path => Path.GetFullPath(path!))
+         .Distinct(StringComparer.OrdinalIgnoreCase)
          .ToArray();
 
         string[] required = new[]
@@ -39,6 +47,19 @@ public static class CompanionWebBridge
         }.Where(path => !string.IsNullOrWhiteSpace(path)).Select(path => path!).ToArray();
         if (required.Length != 7 || required.Any(path => !File.Exists(path)))
             return (false, "The REVEX sync package is incomplete or has no IFC authority model; it was not published.");
+
+        bool hasPagedGeometry = !string.IsNullOrWhiteSpace(output.ViewerMeshManifest) &&
+                                File.Exists(output.ViewerMeshManifest) &&
+                                output.ViewerMeshPages != null &&
+                                output.ViewerMeshPages.Count > 0 &&
+                                output.ViewerMeshPages.All(File.Exists);
+        bool hasLegacyGeometry = !string.IsNullOrWhiteSpace(output.ViewerMesh) && File.Exists(output.ViewerMesh);
+        if (!hasPagedGeometry && !hasLegacyGeometry)
+            return (false, "The REVEX sync package has no complete exact Revit geometry stream; the prior BIM revision remains current.");
+
+        RevexDiagnostics.Info("SYNC", hasPagedGeometry
+            ? $"Companion attachment includes paged exact geometry: manifest={Path.GetFileName(output.ViewerMeshManifest)}; pages={output.ViewerMeshPages.Count}."
+            : $"Companion attachment includes legacy exact geometry: {Path.GetFileName(output.ViewerMesh)}.");
 
         // NavigationCompleted can fire before REVEX app.js has bound the hidden
         // file input's change handler. Wait for the hosted Companion's explicit
@@ -129,6 +150,6 @@ public static class CompanionWebBridge
             """);
         }
 
-        return (true, $"Revision {output.Revision} attached; Companion is validating and publishing it.");
+        return (true, $"Revision {output.Revision} attached with {(hasPagedGeometry ? output.ViewerMeshPages.Count + " exact geometry page(s)" : "exact geometry")}; Companion is validating and publishing it.");
     }
 }

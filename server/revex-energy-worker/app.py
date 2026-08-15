@@ -106,7 +106,7 @@ def upload_with_token(bucket, local: Path, object_path: str, content_type: str |
     return {"path": object_path, "url": firebase_url(bucket.name, object_path, token), "bytes": local.stat().st_size, "sha256": sha256(local)}
 
 
-COMCHECK_SEMANTIC_VERSION = "20260814r49-schedule1"
+COMCHECK_SEMANTIC_VERSION = "20260815r49-schedule2"
 COMCHECK_SEMANTIC_SCHEMA = {
     "type": "object",
     "properties": {
@@ -301,7 +301,10 @@ def _building_use_from_semantic_blob(blob: str) -> tuple[str | None, float | Non
     # COMcheck building-area/use schedules often encode the use name and its directly associated
     # floor area in one row. Schedule names are intentionally ignored; row semantics control.
     patterns = (
-        r"(?i)\bBuilding\s+Area\s*\d*\s*[-:]\s*([A-Za-z][A-Za-z0-9 /&-]{1,60}?)\s*:\s*(?:Residential\s+)?Floor\s+Area\s*([0-9][0-9,]*(?:\.\d+)?)",
+        # Revit/PDF text extraction is inconsistent about the dash/colon around COMcheck's
+        # Building Area row. Treat punctuation as optional but keep the semantic anchors
+        # (Building Area -> use name -> Floor Area -> numeric area) mandatory.
+        r"(?i)\bBuilding\s+Area(?:\s+\d+)?\s*[-:]?\s*([A-Za-z][A-Za-z0-9 /&-]{1,60}?)\s*(?::|-)?\s*(?:Residential\s+)?Floor\s+Area\s*[:=]?\s*([0-9][0-9,]*(?:\.\d+)?)",
         r"(?i)\bBldg\.?\s*Use\s*\d+\s*[-:]\s*([A-Za-z][A-Za-z0-9 /&-]{1,60}?)(?=\]|\)|,|\s\(b\)|$)",
     )
     for index, pattern in enumerate(patterns):
