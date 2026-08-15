@@ -1,0 +1,177 @@
+{
+  "schema": "liber.revex.rvx-architecture-snapshot.v1",
+  "snapshotDate": "2026-08-15",
+  "purpose": "Recovery and future Atlantist scene-core extraction reference",
+  "source": {
+    "repository": "nvberegovykh/LIBER-Creative",
+    "candidateCommit": "8007dc24b9c1b8cfb947470341cf19d6c866af77",
+    "cleanBackupBranch": "backup/revex-rvx-atlantist-core-stage-20260815",
+    "documentationBranch": "backup/revex-rvx-atlantist-core-stage-docs-20260815",
+    "build": "20260813r49"
+  },
+  "archive": {
+    "canonicalName": "REVEX_R49_SOURCE_8007dc24b9c1b8cfb947470341cf19d6c866af77.zip",
+    "sha256": "605d985e2b2d2a91ba83849d31b33e07698c0859cf57cd71257690a9d874d796",
+    "bytes": 52888407,
+    "recoveryName": "REVEX_RVX_ATLANTIST_CORE_STAGE_BACKUP_20260815_8007dc24b9c1b8cfb947470341cf19d6c866af77.zip",
+    "recoveryDriveFileId": "1LNTW_5-00EaMAo7utkf9fysmHOxuvpOy"
+  },
+  "rvx": {
+    "role": "browser-native exact Revit-derived display transport/cache",
+    "manifestSchema": "liber.revex.geometry-pages.v1",
+    "format": "rvxmesh-gzip-pages",
+    "binaryFormat": "RVXSCN2",
+    "binaryVersion": 2,
+    "magic": "RVXSCN2\\0",
+    "targetPageRawBytes": 25165824,
+    "tessellationDetail": 0.35,
+    "units": "revit_internal_feet",
+    "axisMapping": "Revit(X,Y,Z)->Viewer(X,Z,-Y)",
+    "record": {
+      "recordType": "uint8",
+      "elementId": "float64",
+      "materialPartCount": "int32",
+      "partMaterialId": "float64",
+      "partVertexCount": "int32",
+      "vertex": ["float32 x", "float32 y", "float32 z", "float32 nx", "float32 ny", "float32 nz"]
+    },
+    "curtainWallPolicy": "host-container-excluded-panels-and-mullions-exact"
+  },
+  "authorityModel": {
+    "authoring": "active Revit RVT",
+    "exchange": "IFC",
+    "browserDisplay": "RVX paged tessellation",
+    "compatibilityFallback": "FBX",
+    "loadingIndexFallback": "element bounding boxes and metadata"
+  },
+  "physicalScene": {
+    "spatialObjectsRendered": false,
+    "exclude": [
+      "Rooms",
+      "Spaces",
+      "Areas",
+      "separation/boundary lines",
+      "analytical objects",
+      "lighting/electrical/energy analysis areas",
+      "imports/CAD",
+      "views/sheets/cameras",
+      "levels/grids/reference objects"
+    ]
+  },
+  "viewer": {
+    "engine": "Three.js",
+    "features": [
+      "progressive RVX page loading",
+      "metadata-first indexing",
+      "material grouping",
+      "Revit ElementId/UniqueId mapping",
+      "orbit/pan/zoom",
+      "fit",
+      "element picking",
+      "search/tree",
+      "first-person walk",
+      "WASD+Q/E movement",
+      "floor/eye-height/FOV controls",
+      "six-face section box",
+      "visible THREE.Box3Helper section helper",
+      "local clipping",
+      "reversible hide/show",
+      "reversible delete/restore",
+      "hidden/deleted registry",
+      "camera/history hooks"
+    ],
+    "intentionalLimits": [
+      "review edits do not write to RVT",
+      "material-layer section cut caps are not synthesized",
+      "spatial/analysis objects are not physical scene geometry"
+    ]
+  },
+  "revision": {
+    "mode": "append-only immutable source revisions plus mutable user overlays",
+    "idPattern": "rev_YYYYMMDDTHHMMSSfffZ",
+    "stagingCommit": "atomic",
+    "integrity": "per-asset bytes + SHA-256",
+    "pointerRule": "advance only after complete exact geometry and integrity validation",
+    "binding": "active-revit-evidence-v1",
+    "stableOverlayIdentity": "Revit UniqueId preferred",
+    "sourceSyncCannotOverwrite": [
+      "design decisions",
+      "design images",
+      "comments",
+      "BIM issues",
+      "approvals",
+      "spec authored fields",
+      "manual mappings",
+      "chat",
+      "manual project documents"
+    ]
+  },
+  "cloud": {
+    "binaryRevisionAssets": "Firebase Storage",
+    "revisionPointersAndEditableState": "Firestore",
+    "localFallback": "localStorage",
+    "accessModel": "project-scoped owner/member/admin; outsider/anonymous/cross-project denied"
+  },
+  "applicationProjections": {
+    "designBook": "approved structure + Revit design schedules + synced model, with per-position immutable versions",
+    "specBook": "independent native Revit schedule presentations with fields/widths/merges/sort-groups/itemization/row-order preserved",
+    "documents": "revision-scoped printing sets and affected plan PDFs; manual docs preserved separately",
+    "energy": "separable exact-project/exact-engineering-revision downstream pipeline"
+  },
+  "hostBridge": {
+    "host": "Revit 2026 WebView2 add-in",
+    "transaction": "one controlled native file-input attachment per revision",
+    "readinessBarrier": true,
+    "singlePublishEventGuard": true,
+    "requiresIfc": true,
+    "requiresExactGeometry": true
+  },
+  "primaryFiles": {
+    "docs/liber-apps/apps/revex/viewer-r26.js": "e180fb1356278ee169d3f1132878dc3c6d92c6c2",
+    "docs/liber-apps/apps/revex/store.js": "4627376535bbf10cfcfa91777f5cfff76bb9089e",
+    "docs/liber-apps/apps/revex/integrity.js": "80cf64aa09365629884a37af1f21c84b24e6403c",
+    "docs/liber-apps/apps/revex/review-integrity-r50.js": "5435a805357404b9a89da067137d18825304ecfd",
+    "docs/liber-apps/apps/revex/app.js": "032330c75f7e623dd444c713038c1279950fe836",
+    "src/Liber.Revex.Revit/Services/RevexMeshExportService.cs": "8b2638c0e99a79da240214e6e5c1f67822d6cb48",
+    "src/Liber.Revex.Revit/Services/ViewerExportService.cs": "7a7da7acc97f8290fa208b4bb29d252105b587ef",
+    "src/Liber.Revex.Revit/Services/CompanionWebBridge.cs": "7991da654de3d3a1bfcc9c193e4c162d1dff846e",
+    "src/Liber.Revex.Revit/Models/RevexSyncModels.cs": "49b003b2e68eb34dfb93584d66eb8aedf5f9d7af",
+    "src/Liber.Revex.Revit/Services/RevexSyncService.cs": "bcb75c473f6e78b8c1f551afdff0698dff7d7b07",
+    "src/Liber.Revex.Revit/Services/DesignBookScheduleService.cs": "5c8f7ccdd4155d87fced9cc4695ddb018c080541"
+  },
+  "atlantistExtractionTargets": [
+    "SceneRevision",
+    "GeometryPageManifest",
+    "RVXSceneCodec/RVXPageDecoder",
+    "GeometryStreamLoader",
+    "MetadataIndex",
+    "MaterialRegistry",
+    "ElementIdentity",
+    "SelectionService",
+    "SpatialIndex",
+    "NavigationController",
+    "WalkController",
+    "SectionBoxController",
+    "ReviewOverlayStore",
+    "IssueAnchor/CameraState",
+    "HostAdapter",
+    "RevisionStore",
+    "IntegrityVerifier"
+  ],
+  "invariants": [
+    "RVT is authoritative in Revit-companion mode",
+    "RVX is display transport, not authoring authority",
+    "Rooms/Spaces/Areas stay invisible in the physical viewer",
+    "curtain host boxes never replace physical panels/mullions",
+    "partial geometry cannot advance the BIM pointer",
+    "source sync cannot destroy user overlays/history",
+    "review delete never mutates RVT",
+    "stable UniqueId is preferred for cross-revision overlay identity",
+    "one host sync produces at most one cloud publication",
+    "native schedule presentation remains schedule-specific",
+    "Design versions are position-specific",
+    "affected plan exports share the same source revision",
+    "Energy consumes only the exact evidence-bound project/revision",
+    "renderer remains separable from Energy/Spec/Design implementations"
+  ]
+}
