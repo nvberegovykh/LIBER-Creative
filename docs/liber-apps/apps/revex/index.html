@@ -358,7 +358,7 @@
         <form id="render-form" class="render-controls sp-form">
           <div class="render-source" id="render-source"><span>Current BIM viewport</span></div>
           <label>Save to Design Book chapter<select id="render-chapter"></select></label>
-          <label>Prompt<textarea id="render-prompt" rows="7" maxlength="5000" placeholder="WALLT prepares this from your request and REVEX context."></textarea></label>
+          <label>Prompt<textarea id="render-prompt" rows="7" maxlength="5000" placeholder="Describe the render intent; REVEX preserves geometry and refines it for Google AI."></textarea></label>
           <div class="render-options">
             <label>Environment<select id="render-environment"><option>Natural daylight</option><option>Bright overcast</option><option>Warm late-afternoon daylight</option><option>Night exterior - physically plausible</option></select></label>
             <label>Staging<select id="render-staging"><option>Preserve modeled objects only</option><option>Minimal real-estate staging</option><option>No loose furniture</option></select></label>
@@ -366,12 +366,12 @@
           </div>
           <label class="render-check"><input id="render-materials" type="checkbox" checked /> Use Revit material intent</label>
           <button class="button sp-btn" id="render-prepare" type="submit">Prepare AI render</button>
-          <div id="render-status" class="render-status" role="status">WALLT is ready to operate the REVEX render workflow.</div>
+          <div id="render-status" class="render-status" role="status">REVEX AI Render is ready for the current viewport.</div>
           <label class="result-upload">Save generated result<input id="render-result-upload" type="file" accept="image/*" /></label>
         </form>
         <div class="render-workspace">
           <div class="render-workspace-head"><strong>Nano Banana 2</strong><span>current REVEX viewport + camera context</span></div>
-          <iframe id="render-frame" title="Rendair workspace" allow="clipboard-read; clipboard-write" referrerpolicy="strict-origin-when-cross-origin"></iframe>
+          <iframe id="render-frame" title="REVEX AI render workspace" allow="clipboard-read; clipboard-write" referrerpolicy="strict-origin-when-cross-origin"></iframe>
           <div id="render-frame-empty" class="render-frame-empty">Preparing the REVEX AI render workspace…</div>
         </div>
       </div>
