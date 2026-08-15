@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260813r44';
+  const BUILD='20260813r49';
   const VERSION='0.8.19';
   if(root.__revexShellR20) return;
   root.__revexShellR20=true;
@@ -63,7 +63,7 @@
   function bindProjectBridge(){
     const select=document.getElementById('project-select'); if(!select) return;
     if(!select.dataset.revexNativeProjectBridge){
-      select.dataset.revexNativeProjectBridge='r20'; select.addEventListener('change',()=>postProject('change')); select.addEventListener('input',()=>postProject('input'));
+      select.dataset.revexNativeProjectBridge='r49'; select.addEventListener('change',()=>postProject('change')); select.addEventListener('input',()=>postProject('input'));
     }
     postProject('bind');
   }
@@ -77,17 +77,17 @@
   function alignParentShell(){
     try{
       const parent=root.parent&&root.parent!==root?root.parent:null, manager=parent?.appsManager; if(!manager) return;
-      if(!manager.__revexR20KeepAlive&&typeof manager.isKeepAliveApp==='function'){
-        const original=manager.isKeepAliveApp.bind(manager); manager.isKeepAliveApp=(src)=>/apps\/revex\/index\.html/i.test(String(src||''))?false:original(src); manager.__revexR20KeepAlive=true;
+      if(!manager.__revexR49KeepAlive&&typeof manager.isKeepAliveApp==='function'){
+        const original=manager.isKeepAliveApp.bind(manager); manager.isKeepAliveApp=(src)=>/apps\/revex\/index\.html/i.test(String(src||''))?false:original(src); manager.__revexR49KeepAlive=true;
       }
-      if(!manager.__revexR20FreshLaunch&&typeof manager.openAppInShell==='function'){
+      if(!manager.__revexR49FreshLaunch&&typeof manager.openAppInShell==='function'){
         const original=manager.openAppInShell.bind(manager); manager.openAppInShell=(app,appUrl)=>{
           const isRevex=String(app?.id||'')==='revex'||/apps\/revex\/index\.html/i.test(String(appUrl||'')); if(!isRevex) return original(app,appUrl);
           let url=String(appUrl||''); try{const u=new URL(url,parent.location.href);u.searchParams.set('build',BUILD);u.searchParams.set('fresh',String(Date.now()));url=u.href;}catch(_){url+=(url.includes('?')?'&':'?')+'build='+BUILD+'&fresh='+Date.now();}
           return original(app,url);
-        }; manager.__revexR20FreshLaunch=true;
+        }; manager.__revexR49FreshLaunch=true;
       }
-      if(Array.isArray(manager.apps)){const app=manager.apps.find(row=>row?.id==='revex');if(app){app.version=VERSION;app.lastUpdated='2026-08-12';app.path='apps/revex/index.html?build='+BUILD;}}
+      if(Array.isArray(manager.apps)){const app=manager.apps.find(row=>row?.id==='revex');if(app){app.version=VERSION;app.lastUpdated='2026-08-14';app.path='apps/revex/index.html?build='+BUILD;}}
       const card=parent.document?.querySelector?.('.app-card[data-app-id="revex"] .app-version');if(card)card.textContent='v'+VERSION;
     }catch(error){console.warn('[REVEX] shell alignment',error);}
   }

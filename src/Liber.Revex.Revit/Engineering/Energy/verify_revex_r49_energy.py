@@ -295,6 +295,39 @@ def main() -> int:
     assert not any(float(r.get("grossAreaFt2") or 0) == 19 for r in reconciled), "Spurious filing-table area leaked into authoritative diagram geometry"
     assert not any(float(r.get("grossAreaFt2") or 0) == 999 for r in reconciled), "Aggregated filing-table geometry overrode the EN thermal-boundary diagram"
 
+    # Roof diagrams are geometry regions, not independent COMcheck constructions. R1/R2/R3
+    # must become one summed roof area when at least one region proves the single current roof
+    # R-value construction. An opaque U-factor-only floor schedule row is not a usable CXL
+    # construction and must not outrank the current R-value floor row.
+    roof_pages = [{
+        "pageType": "EN", "confidence": 1.0, "envelope": [
+            {"kind": "roof", "assemblyType": "R1 roof construction", "cavityR": 26.4, "continuousR": 15,
+             "confidence": 1.0, "evidence": "R1 roof R26.4 R15"},
+            {"kind": "roof", "assemblyType": "Roof region R1", "grossAreaFt2": 1000,
+             "confidence": 1.0, "evidence": "R1 roof region 1000 SF"},
+            {"kind": "roof", "assemblyType": "Roof region R2", "grossAreaFt2": 700,
+             "confidence": 1.0, "evidence": "R2 roof region 700 SF"},
+            {"kind": "roof", "assemblyType": "Roof region R3", "grossAreaFt2": 813,
+             "confidence": 1.0, "evidence": "R3 roof region 813 SF"},
+            {"kind": "floor", "assemblyType": "F1 U-only schedule artifact", "grossAreaFt2": 218,
+             "uFactor": 0.10, "confidence": 1.0, "evidence": "F1 floor U-0.10"},
+            {"kind": "floor", "assemblyType": "F1 floor construction", "continuousR": 8,
+             "confidence": 1.0, "evidence": "F1 floor R8"},
+            {"kind": "floor", "assemblyType": "Floor region F1", "grossAreaFt2": 218,
+             "confidence": 1.0, "evidence": "F1 floor region 218 SF"},
+        ]
+    }]
+    roof_reconciled, roof_reconciliation = pipeline.canonicalize_comcheck_envelope_rows(roof_pages)
+    roofs = [row for row in roof_reconciled if row.get("kind") == "roof"]
+    floors = [row for row in roof_reconciled if row.get("kind") == "floor"]
+    assert len(roofs) == 1, roofs
+    assert abs(float(roofs[0]["grossAreaFt2"]) - 2513.0) < 0.001, roofs[0]
+    assert float(roofs[0]["cavityR"]) == 26.4 and float(roofs[0]["continuousR"]) == 15.0
+    assert roof_reconciliation["roofGeometryRowsAggregated"] == 3, roof_reconciliation
+    assert abs(float(roof_reconciliation["roofAggregateAreaFt2"]) - 2513.0) < 0.001
+    assert roof_reconciliation["thermalPropertyMergeErrorCount"] == 0, roof_reconciliation
+    assert len(floors) == 1 and float(floors[0]["continuousR"]) == 8.0, floors
+
     # COMcheck child openings must fit inside same-orientation gross wall hosts. This reproduces
     # the production class where all north fenestration was previously attached to the first wall.
     host_a = ET.Element("wall-a")

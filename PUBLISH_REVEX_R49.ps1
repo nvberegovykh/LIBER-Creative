@@ -14,13 +14,13 @@ $Root = (Resolve-Path $PSScriptRoot).Path
 $RunId = Get-Date -Format "yyyyMMdd-HHmmss"
 $ReleaseTag = "0.8.19-r49"
 $Build = "20260813r49"
-$PublisherOrchestration = "20260814r49-cloudrun-native-health-v2"
+$PublisherOrchestration = "20260815r49-comcheck-roof-v4"
 $GbxmlEvidenceProducerSha256 = "f9b48ebce0b98c134f81b8e174c8fb0e576186c2200290c5d1ccb0ea8e6af214"
-$CanonicalSourceCommit = "7c450801e1515af649c7f4ad4bfc4b45f32c59c8"
-$CanonicalSourceRef = "local/revex-r49-cloud-worker-runtime-closure"
-$CanonicalSourceArchiveName = "REVEX_R49_SOURCE_7c450801e1515af649c7f4ad4bfc4b45f32c59c8.zip"
-$CanonicalSourceArchiveSha256 = "7c450801e1515af649c7f4ad4bfc4b45f32c59c867446dae61037e159709fa50"
-$CanonicalSourceArchiveSize = 52810258L
+$CanonicalSourceCommit = "89131bf4bbff6e5bcaa34936c07cee25887375e9"
+$CanonicalSourceRef = "agent/revex-r49-review-integrity-20260814"
+$CanonicalSourceArchiveName = "REVEX_R49_SOURCE_89131bf4bbff6e5bcaa34936c07cee25887375e9.zip"
+$CanonicalSourceArchiveSha256 = "6d35bb32372b2b74d29cd3ab0c230c2efc74f95d6383aaf11a5d93d1cae6d0fe"
+$CanonicalSourceArchiveSize = 52891290L
 $CanonicalSourceArchive = Join-Path $Root $CanonicalSourceArchiveName
 $StageRoot = Join-Path $env:LOCALAPPDATA "LIBER\REVEX-R49-Publish\$RunId"
 $CanonicalSourceRoot = Join-Path $StageRoot "canonical-source"
@@ -345,6 +345,10 @@ function Get-CanonicalSourceRelativePath([string]$RelativePath) {
   if ($normalized.StartsWith($localCompanionPrefix, [StringComparison]::OrdinalIgnoreCase)) {
     return "docs/liber-apps/apps/revex/" + $normalized.Substring($localCompanionPrefix.Length)
   }
+  $localSpecificationsPrefix = "src/Live-Specifications/"
+  if ($normalized.StartsWith($localSpecificationsPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    return "docs/liber-apps/apps/specifications/" + $normalized.Substring($localSpecificationsPrefix.Length)
+  }
   return $normalized
 }
 
@@ -519,6 +523,7 @@ function New-IsolatedCanonicalSourceStage([System.Collections.IDictionary]$Expec
   New-Item -ItemType Directory -Path $StageSource -Force | Out-Null
   Copy-SourceTree (Join-Path $CanonicalSourceRoot "src\Liber.Revex.Revit") (Join-Path $StageSource "src\Liber.Revex.Revit")
   Copy-SourceTree (Join-Path $CanonicalSourceRoot "docs\liber-apps\apps\revex") (Join-Path $StageSource "src\Live-Companion")
+  Copy-SourceTree (Join-Path $CanonicalSourceRoot "docs\liber-apps\apps\specifications") (Join-Path $StageSource "src\Live-Specifications")
   Copy-SourceTree (Join-Path $CanonicalSourceRoot "server\revex-energy-worker") (Join-Path $StageSource "server\revex-energy-worker")
   Copy-SourceTree (Join-Path $CanonicalSourceRoot "server\firebase-functions") (Join-Path $StageSource "server\firebase-functions")
   Copy-Item -LiteralPath (Join-Path $Root "PUBLISH_REVEX_R49.ps1") -Destination (Join-Path $StageSource "PUBLISH_REVEX_R49.ps1") -Force
@@ -547,6 +552,7 @@ function New-IsolatedCanonicalSourceStage([System.Collections.IDictionary]$Expec
     lockedFileCount = $Expected.Count
     fullRevitSourceTree = $true
     fullCompanionSourceTree = $true
+    nativeSpecificationsCompatibility = $true
     fullWorkerAndBrokerSourceTrees = $true
     independentOfDriveAfterCreation = $true
   })
@@ -557,6 +563,10 @@ function Assert-ReleaseBundleClosure([string]$SourceRoot) {
   $graphPath = Join-Path $SourceRoot "src\Liber.Revex.Revit\Engineering\Gbxml\LIBER_gbXML_Preflight_and_Export.dyn"
   $pythonPath = Join-Path $SourceRoot "src\Liber.Revex.Revit\Engineering\Gbxml\LIBER_gbXML_Preflight_and_Export.py"
   $servicePath = Join-Path $SourceRoot "src\Liber.Revex.Revit\Services\GbxmlEngineeringService.cs"
+  $companionBridgePath = Join-Path $SourceRoot "src\Liber.Revex.Revit\Services\CompanionWebBridge.cs"
+  $settingsServicePath = Join-Path $SourceRoot "src\Liber.Revex.Revit\Services\SettingsService.cs"
+  $reviewRuntimePath = Join-Path $SourceRoot "src\Live-Companion\review-integrity-r50.js"
+  $specCompatPath = Join-Path $SourceRoot "src\Live-Specifications\revex-source-compat-r49.js"
   $workflowPath = Join-Path $SourceRoot ".github\workflows\revex-r27-0819-engineering-release.yml"
   $dockerPath = Join-Path $SourceRoot "server\revex-energy-worker\Dockerfile"
   $cloudBuildPath = Join-Path $SourceRoot "server\revex-energy-worker\cloudbuild.yaml"
@@ -566,7 +576,7 @@ function Assert-ReleaseBundleClosure([string]$SourceRoot) {
   $acceptancePath = Join-Path $SourceRoot "server\revex-energy-worker\run_revex_r49_release_acceptance.py"
   $pipelinePath = Join-Path $SourceRoot "src\Liber.Revex.Revit\Engineering\Energy\revex_energy_pipeline.py"
   $geometryRequirementsPath = Join-Path $SourceRoot "src\Liber.Revex.Revit\Engineering\Energy\GeometryCo\requirements.txt"
-  foreach ($required in @($graphPath,$pythonPath,$servicePath,$workflowPath,$dockerPath,$cloudBuildPath,$brokerPath,$workerPath,$workerVerifierPath,$acceptancePath,$pipelinePath,$geometryRequirementsPath)) {
+  foreach ($required in @($graphPath,$pythonPath,$servicePath,$companionBridgePath,$settingsServicePath,$reviewRuntimePath,$specCompatPath,$workflowPath,$dockerPath,$cloudBuildPath,$brokerPath,$workerPath,$workerVerifierPath,$acceptancePath,$pipelinePath,$geometryRequirementsPath)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Release dependency closure is missing: $required" }
   }
   $graph = Get-Content -LiteralPath $graphPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -580,6 +590,14 @@ function Assert-ReleaseBundleClosure([string]$SourceRoot) {
   if (-not $versionMatch.Success) { throw "gbXML Python engine has no TOOL_VERSION." }
   $engineVersion = $versionMatch.Groups[1].Value
   $service = [IO.File]::ReadAllText($servicePath, [Text.Encoding]::UTF8)
+  $companionBridge = [IO.File]::ReadAllText($companionBridgePath, [Text.Encoding]::UTF8)
+  $settingsService = [IO.File]::ReadAllText($settingsServicePath, [Text.Encoding]::UTF8)
+  $reviewRuntime = [IO.File]::ReadAllText($reviewRuntimePath, [Text.Encoding]::UTF8)
+  $specCompat = [IO.File]::ReadAllText($specCompatPath, [Text.Encoding]::UTF8)
+  if (-not $companionBridge.Contains("ViewerMeshManifest") -or -not $companionBridge.Contains("ViewerMeshPages") -or -not $companionBridge.Contains("hasPagedGeometry")) { throw "Native Companion bridge does not attach the complete paged Revit geometry revision." }
+  if (-not $settingsService.Contains("durableBinding.BoundAtUtc > incoming.BoundAtUtc")) { throw "Settings persistence can regress the active-document project binding." }
+  if (-not $reviewRuntime.Contains("spatialObjectsVisible: false") -or -not $reviewRuntime.Contains("setSectionFace") -or -not $reviewRuntime.Contains("commitBimOverlay")) { throw "Physical BIM review runtime is incomplete." }
+  if (-not $specCompat.Contains("revex-storage-index-v1") -or -not $specCompat.Contains("nativePresentation:true")) { throw "Spec Book cannot hydrate native per-schedule Revit presentation." }
   if (-not $service.Contains("EngineVersion = `"$engineVersion`"")) { throw "GbxmlEngineeringService EngineVersion does not match the bundled Python/Dynamo engine ($engineVersion)." }
   $producerMaterial = ((Get-FileHash -LiteralPath $pythonPath -Algorithm SHA256).Hash.ToLowerInvariant()) + "`n" + ((Get-FileHash -LiteralPath $graphPath -Algorithm SHA256).Hash.ToLowerInvariant()) + "`n" + ((Get-FileHash -LiteralPath $servicePath -Algorithm SHA256).Hash.ToLowerInvariant())
   $producerDigest = Get-Utf8TextSha256 $producerMaterial
@@ -607,6 +625,8 @@ function Assert-ReleaseBundleClosure([string]$SourceRoot) {
   if (-not $acceptance.Contains("semanticPassRerun") -or -not $acceptance.Contains("enrich_comcheck_schedule_facts")) { throw "Real-project acceptance cannot reuse immutable raw page facts while rerunning current COMcheck semantics." }
   if (-not $acceptance.Contains("require_review_eligible_comparison") -or -not $acceptance.Contains("UNBENCHMARKED_DIFFERENT_COHORT")) { throw "Real-project acceptance does not distinguish a valid different geometry cohort from a matching-cohort regression." }
   if (-not $pipeline.Contains("comcheckSemantic") -or -not $pipeline.Contains("scheduleSemanticVersion")) { throw "COMcheck serializer is not bound to consolidated schedule-semantic facts." }
+  if (-not $pipeline.Contains("_merge_roof_geometry_as_one_area") -or -not $pipeline.Contains("ONE_COMCHECK_ROOF_AREA_WHEN_ONE_CURRENT_THERMAL_SIGNATURE_IS_PROVEN")) { throw "COMcheck envelope normalization does not preserve the one-roof-area policy for one proven current roof construction." }
+  if (-not $worker.Contains('COMCHECK_SEMANTIC_VERSION = "20260815r49-schedule2"')) { throw "Managed worker does not include the punctuation-tolerant EN-008 COMcheck schedule semantic pass." }
   if (-not $geometryRequirements.Contains('onnxruntime==1.23.2; platform_system != "Windows" and python_version < "3.11"') -or -not $geometryRequirements.Contains('onnxruntime==1.24.4; platform_system != "Windows" and python_version >= "3.11"')) { throw "GeometryCo runtime dependencies do not preserve the Linux Python 3.10/3.11+ ONNX Runtime compatibility split required by the Ubuntu 22.04 cloud worker." }
   Add-PreflightCheckpoint "RELEASE_DEPENDENCY_CLOSURE" ([ordered]@{
     gbxmlEngineVersion = $engineVersion
@@ -620,6 +640,8 @@ function Assert-ReleaseBundleClosure([string]$SourceRoot) {
     comcheckScheduleSemanticAgent = $true
     scheduleNamesAuthoritative = $false
     partialPageScanReuseWithSemanticRerun = $true
+    comcheckRoofGeometryPolicy = "one-aggregate-roof-per-proven-current-thermal-signature"
+    comcheckScheduleSemanticVersion = "20260815r49-schedule2"
     cloudWorkerPython310OnnxRuntimeCompatible = $true
     cloudWorkerAcceptanceModulePackaged = $true
     cloudWorkerServerModuleCompileGate = $true
@@ -872,7 +894,7 @@ function Test-BrokerIdentityWorkerInvocation(
 
 function Verify-LiveCompanion {
   for ($attempt = 1; $attempt -le 60; $attempt++) {
-    Write-Log "Live r49 verification attempt $attempt/60 (three bounded requests)."
+    Write-Log "Live r49 verification attempt $attempt/60 (five bounded requests)."
     try {
       $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
       $headers = @{ "Cache-Control" = "no-cache, no-store"; "Pragma" = "no-cache" }
@@ -880,10 +902,15 @@ function Verify-LiveCompanion {
       $base = $LiveUrl.Substring(0, $LiveUrl.LastIndexOf('/') + 1)
       $app = Invoke-WebRequest -UseBasicParsing -Uri ($base + "app.js?r49_verify=" + $stamp) -TimeoutSec 20 -Headers $headers
       $viewer = Invoke-WebRequest -UseBasicParsing -Uri ($base + "viewer-r26.js?r49_verify=" + $stamp) -TimeoutSec 20 -Headers $headers
+      $review = Invoke-WebRequest -UseBasicParsing -Uri ($base + "review-integrity-r50.js?r49_verify=" + $stamp) -TimeoutSec 20 -Headers $headers
+      $specBase = $base.Replace("/revex/", "/specifications/")
+      $specCompat = Invoke-WebRequest -UseBasicParsing -Uri ($specBase + "revex-source-compat-r49.js?r49_verify=" + $stamp) -TimeoutSec 20 -Headers $headers
       if ($index.StatusCode -eq 200 -and $index.Content.Contains($Build) -and $index.Content.Contains("Show hidden only") -and
           $app.Content.Contains("activationToken") -and $app.Content.Contains("revex:native-project-binding") -and
-          $viewer.Content.Contains("REVEX_PAGED_MISSING_GEOMETRY_PROXY") -and $viewer.Content.Contains("clearEditGroups")) {
-        Write-Log "Live Companion verified: $Build with project cancellation, progressive geometry, reversible visibility and fullscreen Design Book images." Green
+          $viewer.Content.Contains("REVEX_PAGED_MISSING_GEOMETRY_PROXY") -and $viewer.Content.Contains("clearEditGroups") -and
+          $review.Content.Contains("spatialObjectsVisible: false") -and $review.Content.Contains("setSectionFace") -and $review.Content.Contains("commitBimOverlay") -and
+          $specCompat.Content.Contains("revex-storage-index-v1") -and $specCompat.Content.Contains("nativePresentation:true")) {
+        Write-Log "Live Companion verified: $Build with current paged geometry, physical-only review controls, reversible visibility, per-position versions and native Revit schedules." Green
         return
       }
     } catch { Write-Log ("Live verification pending: " + $_.Exception.Message) Yellow }
@@ -1171,6 +1198,8 @@ function Try-ReuseRealRevitEvidenceGate([string]$ModelPath, [string]$WeatherPath
       if ($matches.Count -eq 0) { continue }
       $checkpoint = $matches[-1]
       if ([string]$checkpoint.detail.modelSha256 -ne $currentModelHash) { continue }
+      $canonical = @($priorPreflight.checkpoints | Where-Object { [string]$_.name -eq "CANONICAL_SOURCE_RESTORE" } | Select-Object -Last 1)
+      if ($canonical.Count -ne 1 -or [string]$canonical[0].detail.canonicalCommit -ne $CanonicalSourceCommit) { continue }
       $producerProperty = $checkpoint.detail.PSObject.Properties["producerGbxmlBundleSha256"]
       if ($null -eq $producerProperty -or [string]$producerProperty.Value -ne $GbxmlEvidenceProducerSha256) {
         continue
@@ -1467,7 +1496,8 @@ try {
   Write-Step "Verify and self-repair the hash-locked r49 source"
   $Expected = [ordered]@{
     ".github\workflows\revex-r27-0819-engineering-release.yml" = "9c6303fc2752271d01c9e70a040f259652c7bba06c4bf0c4942e4823d4732663"
-    ".github\scripts\verify-revex-r49-live-comcheck.py" = "2dcc8fbca40dfc33ffbd14699a2209a8cdcc27773549f5aa63738467de076191"
+    ".github\scripts\verify-revex-r49-live-comcheck.py" = "7f1122d79a175d6be78dc22cecb40720a37dfefb17f035cf1cab61217ea9aed4"
+    ".github\scripts\REVEX_R49_COMCHECK_ROOF_REGRESSION.md" = "bed6303ccf0f1ce984b6708d0472b7667338ebbdeac3a14b597523512136ab0c"
     ".github\scripts\verify-revex-r49.js" = "ed44a35b2271f82c3fa9038eb3fb9516fc6a4069f5fbf68ea8480689595349ac"
     ".github\scripts\verify-revex-r49-live-rules.js" = "8e4bf1e40eb44256dad8969849a0ac3bd91c74895492e648c07ea696503b93ae"
     ".github\scripts\patch-live-firestore-rules.js" = "8662ad8bb3a9c1090d25421538161245e534306f894839113a50a7f5ab803d2d"
@@ -1479,7 +1509,8 @@ try {
     "src\Liber.Revex.Revit\Revit\RevitRequestHandler.cs" = "068dd2a78799ce4e2da2c94d399ca2131ec79563298c82def2362ab26945f932"
     "src\Liber.Revex.Revit\UI\RendairWindow.cs" = "03ad436ab81540e59625caad89e1774251d08ff58700c29be553cfffb7a1911f"
     "src\Liber.Revex.Revit\UI\RendairWindowManager.cs" = "e2b21d9c49b599bd3214299e3d472bee2cc39464ee708d6641afb074cc26b14e"
-    "src\Liber.Revex.Revit\Services\SettingsService.cs" = "bec8072046e9a7f1bb09b79db5d7ac5f87cae30edbc75bc47fcff3311ec3311f"
+    "src\Liber.Revex.Revit\Services\SettingsService.cs" = "ef00d31378aec9898083f0a51d5564aa2819b6e8723a46d4441842a19c616590"
+    "src\Liber.Revex.Revit\Services\CompanionWebBridge.cs" = "d3e936c470d2847c3e95576042592b81a43cfd6e7e80598561ed041968875a21"
     "src\Liber.Revex.Revit\Services\AppPaths.cs" = "db21564c4216fedc0a13b8ca483b9692f4f2aa9062c2c61a7aec8a57cabb7860"
     "src\Liber.Revex.Revit\Services\ReleaseEvidenceAutomation.cs" = "fa21a9d3903427701f4a06a7cdae7016814e8a5e9e403fba67574423a866225c"
     "src\Liber.Revex.Revit\Services\ProjectIdentityEvidenceService.cs" = "6cef37b8ee6be7d3a9a9b6df08bbb7cae814fa8cc28316ce64a9d23048cb704a"
@@ -1493,9 +1524,9 @@ try {
     "src\Liber.Revex.Revit\Engineering\Gbxml\LIBER_gbXML_Preflight_and_Export.dyn" = "bf167fa2242434376d163c7ed1dd2c29e61e0489cac4b220e6370bc8ee89e908"
     "src\Liber.Revex.Revit\Services\EngineeringCompanionWebBridge.cs" = "f763c77c0b514a9d404e2f98cefccd323deb98c73edc248dd741d5d133449184"
     "src\Liber.Revex.Revit\Engineering\Companion\native-managed-energy-bridge.js" = "82d6442254f468533532d88eedd63112f30a2fc1e407b47e1f86ac1b9ba726d2"
-    "src\Liber.Revex.Revit\Engineering\Energy\revex_energy_pipeline.py" = "c8c8594769bca2b39649c970e904b407faa9629f6120abfc2f7ae887bf3fd58f"
+    "src\Liber.Revex.Revit\Engineering\Energy\revex_energy_pipeline.py" = "6519e268a9a0909ef24bf55cf69c273b415c7b573c1c71a209e4846b8fc0c82a"
     "src\Liber.Revex.Revit\Engineering\Energy\comcheck_backstop.py" = "c29433a0da6ebbcd6af599f3f461120f096b7ce5b4248c6a421f19373ffe2df2"
-    "src\Liber.Revex.Revit\Engineering\Energy\verify_revex_r49_energy.py" = "9b14e2704bd45226b8e0d8fc174dd4018228548f98871f36734c1549bd473eb7"
+    "src\Liber.Revex.Revit\Engineering\Energy\verify_revex_r49_energy.py" = "092e53ca2f1d4c8de50566bc7ab7b49024b12064d3f883b7a6719d73c7c45cf2"
     "src\Liber.Revex.Revit\Engineering\Energy\requirements.txt" = "598d9b57a4c9bcfdce8266c1241331ee7acea61eb33ce162c6b91546603ff20a"
     "src\Liber.Revex.Revit\Engineering\Energy\GeometryCo\requirements.txt" = "1318bd4139433c6815ed35dc78321cf3000fbeb203e1de0621f22dc49342f659"
     "src\Liber.Revex.Revit\Engineering\Energy\GeometryCo\OpenStudio_Energy_Model_Geometry_Compiler.py" = "1fbd45afcfbc6120f56f8f4eb8947385de0c4d4b159f2bbfb70dbf8e067da85f"
@@ -1505,7 +1536,11 @@ try {
     "src\Liber.Revex.Revit\Engineering\Energy\References\79_WINTHROP_APPROVED_PROPOSED.osm" = "6c4954f5427e4bebec7cf2a26681161be96407646ebf6902a38b1d2f62a7abdb"
     "src\Liber.Revex.Revit\Engineering\Energy\References\EN-1_79_WINTHROP_AMENDMENT.xlsx" = "3468acae967ac123a19c3d0f3232c39f701df09c914df8a144184afbd4a7524e"
     "src\Liber.Revex.Revit\Engineering\Energy\References\COMcheck_250_MIDWOOD_STRUCTURE_REFERENCE.cxl" = "b3259682b844c7d7b03c2bd5adabd0930c0a6d98708cec21e09ab17354022657"
-    "src\Live-Companion\index.html" = "53e652e7b0b2bdf20e2db9521ae29e00ece3dfe4e05967e4b28fe4dae3ed7a50"
+    "src\Live-Companion\index.html" = "ff2ef758899fe9427f0eb2172eb5b4bee5eeb7e8a1821e11c50aded94b5d7f94"
+    "src\Live-Companion\diagnostics-r29.js" = "19b5acf13953ef551f9fd634c1e1620a5c3e1ddc5b66bd8ef5aa98cec4e77cb1"
+    "src\Live-Companion\shell-integrity.js" = "e769c8053ffc6c69f6ccb97e5feff264bd7f048e5cfd992bfdd7fd365ff7193e"
+    "src\Live-Companion\ui-integrity.js" = "24aec7248fee3d153bdcc0c02554054d0446125c767cda9b49dfe79f0e10372a"
+    "src\Live-Companion\review-integrity-r50.js" = "098ec2f9c1fbf37314110fcde57bbc1b3dfb1d1896aa71f3c3b39a929b447a84"
     "src\Live-Companion\app.js" = "70efca1351401ec24bb297963a0f447ad1af07c1f5eb4f7acb89360c68dead97"
     "src\Live-Companion\store.js" = "d06e50a604486b912462995b33d154769fa4e3c763d1e6253450b47270de8cd3"
     "src\Live-Companion\integrity.js" = "365e5a378bb1c579a75e2c41c3c4683f043c843e5af26b2bc64ad5ca37c4042f"
@@ -1513,9 +1548,11 @@ try {
     "src\Live-Companion\viewer-r26.js" = "3052d63a16b9f861d9c0b71e80ccb13c0dbd41112b7056287c0b2dab73507174"
     "src\Live-Companion\history-r24.js" = "046c279d78f0eb2ed58c32c291d94fb3affcd81d26101f7873674a411d338aac"
     "src\Live-Companion\styles.css" = "1d5c2d11a800e967b1d9e5d2cd92a6eebbb209b8183f927eba7d2267d8a734e9"
-    "src\Live-Companion\energy-r27.js" = "32bfa614b955e02fdf7652f517b874fe384041d5e5b61361cefcd3e2d18771e0"
-    "server\revex-energy-worker\app.py" = "fd64da71b87331f5efb3cbfa494979ef65def12d53ac105cb15ad1a5b8fe1ed7"
-    "server\revex-energy-worker\verify_revex_r49_worker.py" = "8405a3e59448e5f2c6b51aeb001624e5c4672461de7bca8c1c9410c561c2404d"
+    "src\Live-Companion\energy-r27.js" = "9ffc2760247d9572e9f862698a9f2d3e1b69d58e4e17637689492f7b52353957"
+    "src\Live-Specifications\index.html" = "569caa35fbbd019eaece940af6f6b2a16f67f5075e1685d2c68ce697d219160f"
+    "src\Live-Specifications\revex-source-compat-r49.js" = "8e23ffc60872dd572c13216148520ba58b50d6d966e6398dbdc32bce89df5bca"
+    "server\revex-energy-worker\app.py" = "07cc88813e158a29f7b7090422eecdbef8bc007fecf5706080c4cf84ee6fa1d5"
+    "server\revex-energy-worker\verify_revex_r49_worker.py" = "27afb8e07fa1991d25981b631a32586a44aaa8d541407e397dda46f88cb86fee"
     "server\revex-energy-worker\run_revex_r49_release_acceptance.py" = "93533a8cf3792d9c41882de62ee9469a07c93a9ddebfe7452562458666eb88df"
     "server\revex-energy-worker\Dockerfile" = "89a75fdd9ef42534dda1fa535a2c6701afe35751964db9404cc635f46fa2a303"
     "server\revex-energy-worker\cloudbuild.yaml" = "a12fe6c236c4a464de6faaf5792e194f8deca58bc8c87350b1e5ba0b889dcbb4"
@@ -1641,7 +1678,9 @@ try {
   })
   Invoke-Native "Parse live Companion" $Node @("--check", (Join-Path $StageSource "src\Live-Companion\app.js"))
   Invoke-Native "Parse progressive BIM viewer" $Node @("--check", (Join-Path $StageSource "src\Live-Companion\viewer-r26.js"))
+  Invoke-Native "Parse physical-model review controls" $Node @("--check", (Join-Path $StageSource "src\Live-Companion\review-integrity-r50.js"))
   Invoke-Native "Parse Engineering cloud store" $Node @("--check", (Join-Path $StageSource "src\Live-Companion\store.js"))
+  Invoke-Native "Parse native Revit schedule compatibility" $Node @("--check", (Join-Path $StageSource "src\Live-Specifications\revex-source-compat-r49.js"))
   Invoke-Native "Parse revision-scoped managed Energy bridge" $Node @("--check", (Join-Path $StageSource "src\Liber.Revex.Revit\Engineering\Companion\native-managed-energy-bridge.js"))
   Invoke-Native "Parse Firebase broker" $Node @("--check", (Join-Path $StageFunctions "index.js"))
   Invoke-Native "Parse shared Firebase project-access policy" $Node @("--check", (Join-Path $StageFunctions "project-access.js"))
@@ -1793,6 +1832,7 @@ try {
   $branch = "agent/revex-r49-final-$RunId"
   Invoke-Native "Create isolated r49 publication branch" $Git @("checkout", "-b", $branch) -WorkingDirectory $RepoRoot
   Copy-SourceTree (Join-Path $StageSource "src\Live-Companion") (Join-Path $RepoRoot "docs\liber-apps\apps\revex")
+  Copy-SourceTree (Join-Path $StageSource "src\Live-Specifications") (Join-Path $RepoRoot "docs\liber-apps\apps\specifications")
   Copy-SourceTree (Join-Path $StageSource "src\Liber.Revex.Revit") (Join-Path $RepoRoot "src\Liber.Revex.Revit")
   Copy-SourceTree (Join-Path $StageSource "server\revex-energy-worker") (Join-Path $RepoRoot "server\revex-energy-worker")
   Copy-SourceTree (Join-Path $StageSource "server\firebase-functions") (Join-Path $RepoRoot "server\firebase-functions")
@@ -1812,7 +1852,7 @@ try {
   Copy-Item -LiteralPath (Join-Path $Root "PUBLISH_REVEX_R49.ps1") -Destination (Join-Path $RepoRoot "PUBLISH_REVEX_R49.ps1") -Force
   Copy-Item -LiteralPath (Join-Path $Root "PUBLISH_REVEX_R49.cmd") -Destination (Join-Path $RepoRoot "PUBLISH_REVEX_R49.cmd") -Force
   Invoke-Native "Stage only the r49 release" $Git @("add", "--",
-    "docs/liber-apps/apps/revex", "src/Liber.Revex.Revit",
+    "docs/liber-apps/apps/revex", "docs/liber-apps/apps/specifications", "src/Liber.Revex.Revit",
     "server/revex-energy-worker", "server/firebase-functions",
     "firebase/revex-project-access-r43.rules", "firebase/r49-live-rules",
     ".github/scripts/verify-revex-r49.js",
@@ -1832,7 +1872,7 @@ try {
     Invoke-Native "Set release email" $Git @("config", "user.email", "$login@users.noreply.github.com") -WorkingDirectory $RepoRoot
     Invoke-Native "Commit REVEX r49" $Git @("commit", "-m", "REVEX 0.8.19 r49: finalize active-document sync and managed Energy chain") -WorkingDirectory $RepoRoot
     Invoke-Native "Push r49 release branch" $Git @("push", "--set-upstream", "origin", $branch) -WorkingDirectory $RepoRoot
-    $pr = (Invoke-Captured "Open r49 publication PR" $Gh @("pr", "create", "--repo", $GitHubRepository, "--base", "main", "--head", $branch, "--title", "REVEX 0.8.19 r49: final active-document and Energy chain", "--body", "Hash-locked r49: active-document project binding, progressive paged BIM, reversible visibility, native schedules, fullscreen Design Book images, and strict managed Energy outputs with per-revision COMcheck consent.") -WorkingDirectory $RepoRoot).Text.Trim().Split([Environment]::NewLine)[-1]
+    $pr = (Invoke-Captured "Open r49 publication PR" $Gh @("pr", "create", "--repo", $GitHubRepository, "--base", "main", "--head", $branch, "--title", "REVEX 0.8.19 r49: final active-document and Energy chain", "--body", "Hash-locked r49: current paged BIM delivery, physical-only review controls, reversible visibility, per-position Design Book versions, native Revit schedule fidelity, and strict active-document Energy outputs with per-revision COMcheck consent.") -WorkingDirectory $RepoRoot).Text.Trim().Split([Environment]::NewLine)[-1]
     Write-Log "The r49 PR cannot merge until its named final gate is present and successful." Yellow
     $headSha = (Invoke-Captured "Resolve r49 release commit" $Git @("rev-parse", "HEAD") -WorkingDirectory $RepoRoot).Text.Trim()
     $requiredCheck = "REVEX r49 final gate"

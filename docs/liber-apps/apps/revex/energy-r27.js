@@ -12,6 +12,11 @@ const state = () => window.__revexState || {};
 const projectId = () => clean(state().projectId || new URLSearchParams(location.search).get('projectId'));
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
 const size = (value) => { const n=Number(value||0); return !n?'':n<1024?`${n} B`:n<1048576?`${(n/1024).toFixed(1)} KB`:`${(n/1048576).toFixed(1)} MB`; };
+const evidenceBindingValid = (manifest) => {
+  const binding = manifest?.projectBinding || {};
+  return clean(binding.version) === 'active-revit-evidence-v1' &&
+    Boolean(clean(binding.identityEvidenceDigest)) && Boolean(clean(binding.documentUniqueId));
+};
 
 function setRun(message, tone = '') {
   const node = $('#energy-run-status');
@@ -38,6 +43,15 @@ function renderSource() {
     facts.innerHTML = '';
     authorize.hidden = true;
     setRun('Waiting for active-document Engineering evidence that clears the ≥80% hard-stop gate.');
+    return;
+  }
+  if (!evidenceBindingValid(manifest)) {
+    const legacyRevision = sourceState?.revision || manifest?.revision || 'legacy revision';
+    setBadge('Re-sync required', 'quiet');
+    summary.innerHTML = `Stored revision <b>${esc(legacyRevision)}</b> predates the verified active-Revit-document evidence contract and cannot run downstream Energy.`;
+    facts.innerHTML = '<dt>Required action</dt><dd>Open the authoritative Revit model and click SYNC ENGINEERING. REVEX will not run this stale revision as a substitute.</dd>';
+    authorize.hidden = true;
+    setRun('This stored Engineering revision is not bound to verified active-Revit-document evidence. Create a fresh SYNC ENGINEERING revision.', 'bad');
     return;
   }
   const ratios = Object.values(manifest.publicationIntegrity?.ratios || {}).map(Number).filter(Number.isFinite);
@@ -128,4 +142,4 @@ $('#project-select')?.addEventListener('change', () => { boundProject=''; setTim
 renderSource();
 renderResult();
 if (!$('#view-energy')?.hidden) subscribe();
-console.info('[REVEX] Energy UI', { build: BUILD, execution: 'private-worker-authenticated-broker', consent: 'per-immutable-revision' });
+console.info('[REVEX] Energy UI', { build: BUILD, execution: 'private-worker-authenticated-broker', consent: 'per-immutable-revision', staleEvidenceRuns: 'blocked' });
