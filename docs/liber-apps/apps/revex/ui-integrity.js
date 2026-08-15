@@ -22,14 +22,19 @@
     if(render&&render.textContent!=='Render')render.textContent='Render';
   }
 
-  function loadReviewIntegrity(){
-    if(document.querySelector('script[data-revex-review-integrity]')) return;
+  function loadModule(marker,src,stage){
+    if(document.querySelector(`script[${marker}]`)) return;
     const script=document.createElement('script');
     script.type='module';
-    script.dataset.revexReviewIntegrity='1';
-    script.src='review-integrity-r50.js?v=20260813r49-review1';
-    script.onerror=()=>root.__revexBrowserDiagnostics?.emit?.('ERROR','REVIEW_RUNTIME','Could not load review-integrity-r50.js.',{initiator:'ui integrity loader'});
+    script.setAttribute(marker,'1');
+    script.src=src;
+    script.onerror=()=>root.__revexBrowserDiagnostics?.emit?.('ERROR',stage,`Could not load ${src}.`,{initiator:'ui integrity loader'});
     document.head.appendChild(script);
+  }
+
+  function loadReviewIntegrity(){
+    loadModule('data-revex-review-integrity','review-integrity-r50.js?v=20260813r49-review1','REVIEW_RUNTIME');
+    loadModule('data-revex-spatial-review','spatial-review-r50.js?v=20260813r49-review1','SPATIAL_REVIEW_RUNTIME');
   }
 
   function bind(){
@@ -40,5 +45,5 @@
 
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
   setTimeout(bind,250);setTimeout(bind,1000);
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',labels:'source-text',reviewRuntime:'r49-review1'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',labels:'source-text',reviewRuntime:'r49-review1',spatialReview:'same-revision'});
 })(window);
