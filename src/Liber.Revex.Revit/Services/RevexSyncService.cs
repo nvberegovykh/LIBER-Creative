@@ -12,7 +12,6 @@ public sealed class RevexSyncService
 {
     private readonly DesignBookScheduleService _schedules = new();
     private readonly ViewerExportService _viewer = new();
-    private readonly SpatialReviewExportService _spatialReview = new();
     private readonly IfcExportService _ifc = new();
     private readonly PrintingSetExportService _printing = new();
     private readonly AffectedPlanExportService _affectedPlans = new();
@@ -43,8 +42,7 @@ public sealed class RevexSyncService
                 stage = "browser geometry and BIM metadata export";
                 RevexDiagnostics.Info("SYNC", "Stage: " + stage);
                 var viewerResult = _viewer.Export(doc, view, staging, ifcPath);
-                int spatialReviewCount = _spatialReview.AppendToViewerMetadata(doc, view, viewerResult.metadataPath);
-                RevexDiagnostics.Info("SYNC", $"Viewer export complete: elements={viewerResult.elementCount}; spatialReview={spatialReviewCount}; pages={viewerResult.meshPagePaths.Count}; manifest={viewerResult.meshManifestPath ?? "<none>"}; fbx={viewerResult.fbxPath ?? "<none>"}; elapsed={stopwatch.Elapsed}");
+                RevexDiagnostics.Info("SYNC", $"Viewer export complete: elements={viewerResult.elementCount}; pages={viewerResult.meshPagePaths.Count}; manifest={viewerResult.meshManifestPath ?? "<none>"}; fbx={viewerResult.fbxPath ?? "<none>"}; elapsed={stopwatch.Elapsed}");
                 if (viewerResult.meshManifestPath == null && viewerResult.fbxPath == null)
                     throw new InvalidOperationException("REVEX could not produce either the browser-native exact model stream or the FBX compatibility model. The revision was not published as a primitive-only BIM model.");
 
