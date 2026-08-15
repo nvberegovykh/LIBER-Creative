@@ -1,0 +1,1 @@
+.revex-illustration-canvas{filter:saturate(.86) contrast(.985) brightness(1.015);transition:filter .18s ease}.viewport-wrap:has(#walk-toggle.active) .revex-illustration-canvas{cursor:none}.viewport-wrap:has(#walk-toggle.active) .viewer-help::after{content:' · Click model for mouse look · Shift sprint · Esc exit';color:rgba(239,228,207,.72)}
