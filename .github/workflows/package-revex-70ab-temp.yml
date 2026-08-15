@@ -1,0 +1,74 @@
+name: Package REVEX 70ab canonical candidate
+
+on:
+  push:
+    branches: [ops/revex-package-70ab-20260815]
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact production candidate
+        uses: actions/checkout@v4
+        with:
+          ref: 70ab6594a0199ac5b1616fddcba32bc2a6860adb
+      - name: Build publisher-compatible 172-file archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, pathlib, zipfile
+          root=pathlib.Path('.')
+          out=pathlib.Path('REVEX_R49_SOURCE_70ab6594a0199ac5b1616fddcba32bc2a6860adb.zip')
+          files=set()
+          def add_tree(folder):
+              base=root/folder
+              if not base.exists(): raise FileNotFoundError(folder)
+              for p in base.rglob('*'):
+                  if not p.is_file(): continue
+                  if any(part in {'bin','obj','node_modules','__pycache__','.pytest_cache','.git'} for part in p.parts): continue
+                  if p.suffix.lower()=='.pyc': continue
+                  files.add(p.relative_to(root).as_posix())
+          add_tree('docs/liber-apps/apps/revex')
+          required=[
+            'docs/liber-apps/apps/specifications/index.html',
+            'docs/liber-apps/apps/specifications/revex-source-compat-r49.js',
+            'docs/liber-apps/js/firebase-loader.js',
+            '.github/workflows/revex-r27-0819-engineering-release.yml',
+            '.github/scripts/verify-revex-r49.js',
+            '.github/scripts/verify-revex-r49-live-rules.js',
+            '.github/scripts/verify-revex-r49-live-comcheck.py',
+            '.github/scripts/patch-live-firestore-rules.js',
+            '.github/scripts/fixtures/live-firestore-base.rules',
+            '.github/scripts/REVEX_R49_COMCHECK_ROOF_REGRESSION.md',
+            'REVEX_RELEASE_COORDINATION.md',
+            'firebase/revex-project-access-r43.rules'
+          ]
+          for rel in required:
+              p=root/rel
+              if not p.is_file(): raise FileNotFoundError(rel)
+              files.add(rel)
+          for folder in ['firebase/r49-live-rules','server/firebase-functions','server/revex-energy-worker','src/Liber.Revex.Revit']:
+              add_tree(folder)
+          if len(files)!=172: raise RuntimeError(f'canonical file set drift: expected 172, got {len(files)}')
+          with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=9,allowZip64=True) as z:
+              for rel in sorted(files): z.write(root/rel,rel)
+          h=hashlib.sha256()
+          with out.open('rb') as f:
+              for chunk in iter(lambda:f.read(1048576),b''): h.update(chunk)
+          meta={'commit':'70ab6594a0199ac5b1616fddcba32bc2a6860adb','filename':out.name,'files':len(files),'bytes':out.stat().st_size,'sha256':h.hexdigest()}
+          pathlib.Path('REVEX_R49_SOURCE_70ab.meta.json').write_text(json.dumps(meta,indent=2),encoding='utf-8')
+          print(json.dumps(meta,indent=2))
+          PY
+      - name: Upload canonical artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: revex-r49-canonical-70ab
+          path: |
+            REVEX_R49_SOURCE_70ab6594a0199ac5b1616fddcba32bc2a6860adb.zip
+            REVEX_R49_SOURCE_70ab.meta.json
+          retention-days: 3
+          if-no-files-found: error
