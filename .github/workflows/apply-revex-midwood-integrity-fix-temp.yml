@@ -1,0 +1,46 @@
+name: Apply REVEX Midwood Energy consistency fix
+
+on:
+  push:
+    branches: [agent/revex-energy-midwood-integrity-20260815]
+    paths:
+      - '.github/scripts/apply-revex-midwood-integrity-fix.py'
+      - '.github/workflows/apply-revex-midwood-integrity-fix-temp.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/revex-energy-midwood-integrity-20260815
+          fetch-depth: 0
+      - name: Apply exact source patch
+        run: python .github/scripts/apply-revex-midwood-integrity-fix.py
+      - name: Parse and verify synchronized engine
+        run: |
+          python -m py_compile src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.py
+          python -m py_compile src/Liber.Revex.Revit/Engineering/Energy/verify_revex_r49_energy.py
+          python - <<'PY'
+          import json, pathlib
+          root=pathlib.Path('.')
+          source=(root/'src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.py').read_text(encoding='utf-8-sig')
+          graph=json.loads((root/'src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn').read_text(encoding='utf-8-sig'))
+          nodes=[node for node in graph['Nodes'] if node.get('NodeType')=='PythonScriptNode']
+          assert len(nodes)==1 and nodes[0]['Code']==source
+          assert 'REVIT_TO_GBXML_GEOMETRY_INTEGRITY_REVIEW' in source
+          print('gbXML Python/Dynamo identity and publication-consistency contract passed')
+          PY
+      - name: Commit product patch
+        run: |
+          git config user.name 'Nikita Beregovykh'
+          git config user.email '116811305+nvberegovykh@users.noreply.github.com'
+          git add src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.py \
+                  src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn \
+                  src/Liber.Revex.Revit/Engineering/Energy/verify_revex_r49_energy.py
+          git diff --cached --quiet && { echo 'No product changes staged'; exit 1; }
+          git commit -m 'REVEX: keep accepted gbXML review warnings non-fatal'
+          git push origin HEAD:agent/revex-energy-midwood-integrity-20260815
