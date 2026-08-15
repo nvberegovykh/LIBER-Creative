@@ -17,14 +17,18 @@ jobs:
           ref: e1a646818e1ee508ce29f496c55433bd30a9a08a
 
       - name: Build publisher-compatible canonical archive
-        shell: python
+        shell: bash
         run: |
+          set -euo pipefail
+          python - <<'PY'
           import hashlib, json, pathlib, zipfile
           root = pathlib.Path('.')
           out = pathlib.Path('REVEX_R49_SOURCE_e1a646818e1ee508ce29f496c55433bd30a9a08a.zip')
           files = set()
           def add_tree(folder):
               base = root / folder
+              if not base.exists():
+                  raise FileNotFoundError(folder)
               for p in base.rglob('*'):
                   if not p.is_file():
                       continue
@@ -36,7 +40,7 @@ jobs:
                       continue
                   files.add(rel)
           add_tree('docs/liber-apps/apps/revex')
-          for rel in [
+          required = [
               'docs/liber-apps/apps/specifications/index.html',
               'docs/liber-apps/apps/specifications/revex-source-compat-r49.js',
               '.github/workflows/revex-r27-0819-engineering-release.yml',
@@ -49,19 +53,27 @@ jobs:
               '.github/scripts/REVEX_R49_COMCHECK_ROOF_REGRESSION.md',
               'REVEX_RELEASE_COORDINATION.md',
               'firebase/revex-project-access-r43.rules',
-          ]:
-              if (root.joinpath(rel).is_file(): files.add(rel)
+          ]
+          for rel in required:
+              p = root / rel
+              if not p.is_file():
+                  raise FileNotFoundError(rel)
+              files.add(rel)
           add_tree('firebase/r49-live-rules')
           add_tree('server/firebase-functions')
           add_tree('server/revex-energy-worker')
           add_tree('src/Liber.Revex.Revit')
-          with zipfile.ZipFile(out, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+          with zipfile.ZipFile(out, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9, allowZip64=True) as z:
               for rel in sorted(files):
                   z.write(root / rel, rel)
-          digest = hashlib.sha256(out.read_bytes()).hexdigest()
-          meta = {'commit':'e1a646818e1ee508ce29f496c55433bd30a9a08a','filename':out.name,'bytes':out.stat().st_size,'sha256':digest,'files':len(files)}
+          digest = hashlib.sha256()
+          with out.open('rb') as handle:
+              for chunk in iter(lambda: handle.read(1024*1024), b''):
+                  digest.update(chunk)
+          meta = {'commit':'e1a646818e1ee508ce29f496c55433bd30a9a08a','filename':out.name,'bytes':out.stat().st_size,'sha256':digest.hexdigest(),'files':len(files)}
           pathlib.Path('REVEX_R49_SOURCE_e1a6468.meta.json').write_text(json.dumps(meta,indent=2),encoding='utf-8')
           print(json.dumps(meta,indent=2))
+          PY
 
       - name: Upload canonical package
         uses: actions/upload-artifact@v4
