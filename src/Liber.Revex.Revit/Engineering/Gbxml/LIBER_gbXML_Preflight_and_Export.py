@@ -7702,6 +7702,32 @@ def validate_gbxml(xml_path, expected_space_count):
     }
 
 
+def reconcile_publication_message_severity(messages, publication_threshold_met):
+    """Make final message severity agree with the explicit >=80% publication contract.
+
+    Strict read-only geometry proof remains recorded in geometry_integrity. When every
+    required evidence domain clears the hard stop, that proof is a review-quality warning,
+    not a fatal error. Below the hard stop the original ERROR remains untouched.
+    """
+    if not publication_threshold_met:
+        return messages
+    for item in messages:
+        if (
+            item.get("severity") == "ERROR"
+            and item.get("code") == "REVIT_TO_GBXML_GEOMETRY_INTEGRITY_FAILED"
+        ):
+            item["severity"] = "WARNING"
+            item["original_code"] = item.get("code")
+            item["code"] = "REVIT_TO_GBXML_GEOMETRY_INTEGRITY_REVIEW"
+            item["publication_threshold_met"] = True
+            item["message"] = (
+                "Final read-only Revit-to-gbXML strict geometry proof remains below the "
+                "quality target, but every required evidence domain cleared the 80% hard "
+                "stop. The gbXML is published with this explicit review warning."
+            )
+    return messages
+
+
 def message_counts(messages):
     counts = {"ERROR": 0, "WARNING": 0, "INFO": 0}
     for item in messages:
@@ -11416,6 +11442,7 @@ def run_tool():
         )
         acceptable = bool(nonempty_xml and publication_threshold_met)
         if acceptable:
+            reconcile_publication_message_severity(messages, publication_threshold_met)
             os.replace(partial_xml, final_xml)
             report["gbxml_path"] = final_xml
             if xml_validation.get("passed") and quality_target_met:

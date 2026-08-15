@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import ast
 import io
 from collections import Counter
 from datetime import datetime, timezone
@@ -174,6 +175,40 @@ def main() -> int:
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
         raise AssertionError("Missing r49 filing structure dependencies: " + ", ".join(missing))
+
+    # Accepted >=80% gbXML must not remain internally marked as failed merely because
+    # the stricter read-only proof is below the 95% review target. Exercise the exact
+    # pure helper from the Revit exporter without importing its Revit/Python.NET runtime.
+    gbxml_engine = HERE.parent / "Gbxml" / "LIBER_gbXML_Preflight_and_Export.py"
+    gbxml_graph = HERE.parent / "Gbxml" / "LIBER_gbXML_Preflight_and_Export.dyn"
+    engine_source = gbxml_engine.read_text(encoding="utf-8-sig")
+    graph = json.loads(gbxml_graph.read_text(encoding="utf-8-sig"))
+    python_nodes = [node for node in graph["Nodes"] if node.get("NodeType") == "PythonScriptNode"]
+    assert len(python_nodes) == 1 and python_nodes[0]["Code"] == engine_source, "gbXML .dyn/Python identity drift"
+    call_marker = "        if acceptable:\n            reconcile_publication_message_severity(messages, publication_threshold_met)\n"
+    assert call_marker in engine_source, "accepted gbXML path does not invoke publication severity reconciliation"
+    engine_ast = ast.parse(engine_source)
+    helper_node = next(
+        node for node in engine_ast.body
+        if isinstance(node, ast.FunctionDef) and node.name == "reconcile_publication_message_severity"
+    )
+    helper_module = ast.Module(body=[helper_node], type_ignores=[])
+    ast.fix_missing_locations(helper_module)
+    helper_ns: dict = {}
+    exec(compile(helper_module, str(gbxml_engine), "exec"), helper_ns)
+    reconcile_messages = helper_ns["reconcile_publication_message_severity"]
+    accepted_messages = [
+        {"severity": "ERROR", "code": "REVIT_TO_GBXML_GEOMETRY_INTEGRITY_FAILED", "message": "strict proof"},
+        {"severity": "ERROR", "code": "OTHER_FATAL", "message": "must remain fatal"},
+    ]
+    reconcile_messages(accepted_messages, True)
+    assert accepted_messages[0]["severity"] == "WARNING"
+    assert accepted_messages[0]["code"] == "REVIT_TO_GBXML_GEOMETRY_INTEGRITY_REVIEW"
+    assert accepted_messages[0]["original_code"] == "REVIT_TO_GBXML_GEOMETRY_INTEGRITY_FAILED"
+    assert accepted_messages[1]["severity"] == "ERROR"
+    blocked_messages = [{"severity": "ERROR", "code": "REVIT_TO_GBXML_GEOMETRY_INTEGRITY_FAILED"}]
+    reconcile_messages(blocked_messages, False)
+    assert blocked_messages[0]["severity"] == "ERROR", "sub-80 geometry integrity failure was incorrectly downgraded"
 
     z_project = {
         "title": "CURRENT TEST PROJECT", "address": "999 CURRENT AVENUE",
