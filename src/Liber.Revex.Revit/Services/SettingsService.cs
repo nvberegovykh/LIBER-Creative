@@ -59,16 +59,16 @@ public static class SettingsService
         // RendairWindow is intentionally long-lived. Revit ExternalEvents can update
         // the durable active-document binding through a freshly loaded settings object
         // while the window still holds an older BridgeSettings instance. A later UI
-        // SaveBridgeSettings() must never erase those newer document bindings.
-        // Merge the durable binding map from disk before the atomic replacement.
+        // SaveBridgeSettings() must never erase or regress those newer bindings.
         BridgeSettings durable = LoadFromPath(path);
         settings.DocumentProjectBindings ??= new Dictionary<string, RevexProjectBinding>(StringComparer.Ordinal);
         if (durable.DocumentProjectBindings != null)
         {
-            foreach ((string fingerprint, RevexProjectBinding binding) in durable.DocumentProjectBindings)
+            foreach ((string fingerprint, RevexProjectBinding durableBinding) in durable.DocumentProjectBindings)
             {
-                if (!settings.DocumentProjectBindings.ContainsKey(fingerprint))
-                    settings.DocumentProjectBindings[fingerprint] = binding;
+                if (!settings.DocumentProjectBindings.TryGetValue(fingerprint, out RevexProjectBinding? incoming) ||
+                    incoming == null || durableBinding.BoundAtUtc > incoming.BoundAtUtc)
+                    settings.DocumentProjectBindings[fingerprint] = durableBinding;
             }
         }
 
