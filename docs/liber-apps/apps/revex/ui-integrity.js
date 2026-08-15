@@ -1,8 +1,9 @@
 (function(root){
   'use strict';
-  const BUILD='20260813r44';
+  const BUILD='20260813r49';
   if(root.__revexUiIntegrityR20) return;
   root.__revexUiIntegrityR20=true;
+
   function updateProjectId(){
     const select=document.getElementById('project-select'); if(!select) return;
     let badge=document.getElementById('project-id-badge');
@@ -14,17 +15,30 @@
     const id=String(select.value||'').trim(); badge.hidden=!id;
     const text=id?`ID ${id}`:''; if(badge.textContent!==text)badge.textContent=text;
   }
+
   function enforceLabels(){
     const invite=document.getElementById('invite-project-button'), render=document.getElementById('render-button');
     if(invite&&invite.textContent!=='Invite')invite.textContent='Invite';
     if(render&&render.textContent!=='Render')render.textContent='Render';
   }
+
+  function loadReviewIntegrity(){
+    if(document.querySelector('script[data-revex-review-integrity]')) return;
+    const script=document.createElement('script');
+    script.type='module';
+    script.dataset.revexReviewIntegrity='1';
+    script.src='review-integrity-r50.js?v=20260813r49-review1';
+    script.onerror=()=>root.__revexBrowserDiagnostics?.emit?.('ERROR','REVIEW_RUNTIME','Could not load review-integrity-r50.js.',{initiator:'ui integrity loader'});
+    document.head.appendChild(script);
+  }
+
   function bind(){
     const select=document.getElementById('project-select');
     if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}
-    updateProjectId();enforceLabels();
+    updateProjectId();enforceLabels();loadReviewIntegrity();
   }
+
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
   setTimeout(bind,250);setTimeout(bind,1000);
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',labels:'source-text',observer:false});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',labels:'source-text',reviewRuntime:'r49-review1'});
 })(window);
