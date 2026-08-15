@@ -27,17 +27,13 @@ jobs:
           files = set()
           def add_tree(folder):
               base = root / folder
-              if not base.exists():
-                  raise FileNotFoundError(folder)
+              if not base.exists(): raise FileNotFoundError(folder)
               for p in base.rglob('*'):
-                  if not p.is_file():
-                      continue
+                  if not p.is_file(): continue
                   rel = p.relative_to(root).as_posix()
                   parts = set(p.parts)
-                  if parts & {'bin','obj','node_modules','__pycache__','.pytest_cache','.git'}:
-                      continue
-                  if p.suffix.lower() == '.pyc':
-                      continue
+                  if parts & {'bin','obj','node_modules','__pycache__','.pytest_cache','.git'}: continue
+                  if p.suffix.lower() == '.pyc': continue
                   files.add(rel)
           add_tree('docs/liber-apps/apps/revex')
           required = [
@@ -50,26 +46,22 @@ jobs:
               '.github/scripts/verify-revex-design-release-r51.js',
               '.github/scripts/patch-live-firestore-rules.js',
               '.github/scripts/fixtures/live-firestore-base.rules',
-              '.github/scripts/REVEX_R49_COMCHECK_ROOF_REGRESSION.md',
               'REVEX_RELEASE_COORDINATION.md',
               'firebase/revex-project-access-r43.rules',
           ]
           for rel in required:
               p = root / rel
-              if not p.is_file():
-                  raise FileNotFoundError(rel)
+              if not p.is_file(): raise FileNotFoundError(rel)
               files.add(rel)
           add_tree('firebase/r49-live-rules')
           add_tree('server/firebase-functions')
           add_tree('server/revex-energy-worker')
           add_tree('src/Liber.Revex.Revit')
           with zipfile.ZipFile(out, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9, allowZip64=True) as z:
-              for rel in sorted(files):
-                  z.write(root / rel, rel)
+              for rel in sorted(files): z.write(root / rel, rel)
           digest = hashlib.sha256()
           with out.open('rb') as handle:
-              for chunk in iter(lambda: handle.read(1024*1024), b''):
-                  digest.update(chunk)
+              for chunk in iter(lambda: handle.read(1024*1024), b''): digest.update(chunk)
           meta = {'commit':'e1a646818e1ee508ce29f496c55433bd30a9a08a','filename':out.name,'bytes':out.stat().st_size,'sha256':digest.hexdigest(),'files':len(files)}
           pathlib.Path('REVEX_R49_SOURCE_e1a6468.meta.json').write_text(json.dumps(meta,indent=2),encoding='utf-8')
           print(json.dumps(meta,indent=2))
