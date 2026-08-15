@@ -7,6 +7,7 @@
 
   const originalListIn=Store.listIn.bind(Store);
   const cache=new Map();
+  const forcedRefresh=new Set();
 
   async function packageJson(url){
     const key=String(url||'').trim();
@@ -33,10 +34,24 @@
         schedule=schedules.find((row)=>String(row?.sourceScheduleId||row?.presentation?.scheduleUniqueId||'')===String(source.sourceScheduleId));
       }
       if(!schedule) throw new Error(`Schedule ${source.sourceScheduleId||source.id||''} is missing from its immutable REVEX package.`);
+      // r48 published per-schedule source documents with an intentionally empty Firestore
+      // payload and an immutable storage index. The legacy Spec loop nevertheless marked
+      // that rev as applied, so existing projects can contain generic rows but never the
+      // source schedule's native presentation. Force exactly one refresh per source on
+      // this page load when that stale appliedRev equals the current rev; the normal app
+      // then writes the real appliedRev after rebuilding the section.
+      const refreshKey=String(source.id||source.sourceScheduleId||source.payloadIndex||'');
+      const needsOneRefresh=!!refreshKey&&String(source.appliedRev||'')===String(source.rev||'')&&!forcedRefresh.has(refreshKey);
+      if(needsOneRefresh) forcedRefresh.add(refreshKey);
       // Keep the original schedule object intact. SpecSync.normalisePush consumes its
       // native presentation directly, preserving each Revit schedule's own fields,
       // merges, widths, grouping, itemization and source row order.
-      return {...source,payload:[schedule],payloadHydratedFrom:source.payloadUrl};
+      return {
+        ...source,
+        payload:[schedule],
+        payloadHydratedFrom:source.payloadUrl,
+        ...(needsOneRefresh?{appliedRev:'__revex-r49-native-presentation-refresh__'}:{})
+      };
     }catch(error){
       console.error('[REVEX Spec] source hydration failed',source.id,error);
       return {...source,payloadHydrationError:String(error?.message||error)};
@@ -49,5 +64,5 @@
     return Promise.all(rows.map(hydrate));
   };
 
-  console.info('[REVEX Spec] r49 source compatibility active',{perSchedulePayload:true,nativePresentation:true});
+  console.info('[REVEX Spec] r49 source compatibility active',{perSchedulePayload:true,nativePresentation:true,repairPriorEmptyPayload:true});
 })(window);
