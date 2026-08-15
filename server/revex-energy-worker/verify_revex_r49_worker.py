@@ -139,6 +139,10 @@ def main() -> int:
             "Random Schedule Name | Building Area 1-Multifamily: Residential Floor Area 10059"
         )
         assert use == "Multifamily" and area == 10059.0 and "Floor Area 10059" in evidence
+        use_flat, area_flat, _ = worker._building_use_from_semantic_blob(
+            "Building Area 1 Multifamily Residential Floor Area 10,059"
+        )
+        assert use_flat == "Multifamily" and area_flat == 10059.0
         use2, area2, _ = worker._building_use_from_semantic_blob(
             "Unrelated title [Bldg. Use 1 - Multifamily] (b)"
         )
