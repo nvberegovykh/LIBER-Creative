@@ -1,0 +1,63 @@
+name: Apply and parse REVEX publisher v6
+
+on:
+  push:
+    branches: [agent/revex-r49-publisher-v6-20260815]
+    paths:
+      - '.github/scripts/apply-revex-publisher-v6.py'
+      - '.github/workflows/apply-revex-publisher-v6-temp.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/revex-r49-publisher-v6-20260815
+          fetch-depth: 0
+      - name: Apply publisher v6
+        run: python .github/scripts/apply-revex-publisher-v6.py
+      - name: Parse publisher and assert immutable release contract
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PWD 'PUBLISH_REVEX_R49.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          $text = [IO.File]::ReadAllText((Join-Path $PWD 'PUBLISH_REVEX_R49.ps1'))
+          foreach ($needle in @(
+            '20260815r49-google-render-walk-v6',
+            '70ab6594a0199ac5b1616fddcba32bc2a6860adb',
+            'REVEX_R49_SOURCE_70ab6594a0199ac5b1616fddcba32bc2a6860adb.zip',
+            '25aceb5d18d3a043372142207648daf3638a69a5f8f77781b8333dc29bb3195b',
+            'Parse direct Google renderer',
+            'Parse ACC-like workspace runtime',
+            'Parse shared Firebase OAuth loader',
+            'gemini-3.1-flash-image',
+            'REVEX_LIGHTWEIGHT_OBJECT_OUTLINES',
+            'reauthenticateWithPopup',
+            'reconcile_publication_message_severity(messages, publication_threshold_met)'
+          )) {
+            if (-not $text.Contains($needle)) { throw "Publisher v6 missing contract: $needle" }
+          }
+          Write-Host 'REVEX publisher v6 PowerShell parse and contract PASSED.'
+      - name: Commit publisher only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Nikita Beregovykh'
+          git config user.email '116811305+nvberegovykh@users.noreply.github.com'
+          git add PUBLISH_REVEX_R49.ps1
+          git diff --cached --quiet && { echo 'No publisher changes staged'; exit 1; }
+          git commit -m 'REVEX r49: lock Google renderer and Walk production candidate'
+          git push origin HEAD:agent/revex-r49-publisher-v6-20260815
