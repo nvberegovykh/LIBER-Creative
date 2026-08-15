@@ -185,6 +185,8 @@ def main() -> int:
     graph = json.loads(gbxml_graph.read_text(encoding="utf-8-sig"))
     python_nodes = [node for node in graph["Nodes"] if node.get("NodeType") == "PythonScriptNode"]
     assert len(python_nodes) == 1 and python_nodes[0]["Code"] == engine_source, "gbXML .dyn/Python identity drift"
+    call_marker = "        if acceptable:\n            reconcile_publication_message_severity(messages, publication_threshold_met)\n"
+    assert call_marker in engine_source, "accepted gbXML path does not invoke publication severity reconciliation"
     engine_ast = ast.parse(engine_source)
     helper_node = next(
         node for node in engine_ast.body

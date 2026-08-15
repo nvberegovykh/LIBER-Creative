@@ -11442,6 +11442,7 @@ def run_tool():
         )
         acceptable = bool(nonempty_xml and publication_threshold_met)
         if acceptable:
+            reconcile_publication_message_severity(messages, publication_threshold_met)
             os.replace(partial_xml, final_xml)
             report["gbxml_path"] = final_xml
             if xml_validation.get("passed") and quality_target_met:
