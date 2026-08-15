@@ -1,0 +1,60 @@
+name: REVEX Google renderer + Walk validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/liber-apps/apps/revex/index.html'
+      - 'docs/liber-apps/apps/revex/render-agent.js'
+      - 'docs/liber-apps/apps/revex/render-agent.css'
+      - 'docs/liber-apps/apps/revex/workspace-r51.js'
+      - 'docs/liber-apps/apps/revex/workspace-r51.css'
+      - 'docs/liber-apps/js/firebase-loader.js'
+      - '.github/workflows/revex-r51-google-render-walk-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Parse browser runtimes
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check docs/liber-apps/apps/revex/render-agent.js
+          node --check docs/liber-apps/js/firebase-loader.js
+          cp docs/liber-apps/apps/revex/workspace-r51.js /tmp/workspace-r51.mjs
+          node --check /tmp/workspace-r51.mjs
+      - name: Verify renderer and navigation contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          R='docs/liber-apps/apps/revex/render-agent.js'
+          W='docs/liber-apps/apps/revex/workspace-r51.js'
+          I='docs/liber-apps/apps/revex/index.html'
+          F='docs/liber-apps/js/firebase-loader.js'
+          grep -q "const MODEL = 'gemini-3.1-flash-image'" "$R"
+          grep -q "x-goog-user-project" "$R"
+          grep -q "https://www.googleapis.com/auth/cloud-platform" "$R"
+          grep -q "https://www.googleapis.com/auth/generative-language.retriever" "$R"
+          grep -q "GEOMETRY LOCK" "$R"
+          grep -q "responseModalities: \['TEXT', 'IMAGE'\]" "$R"
+          grep -q "captureRenderReference" "$W"
+          grep -q "requestPointerLock" "$W"
+          grep -q "ShiftLeft" "$W"
+          grep -q "spatialObjectsVisible: false" "$W"
+          grep -q "REVEX_LIGHTWEIGHT_OBJECT_OUTLINES" "$W"
+          grep -q "workspace-r51.js?v=20260815r49-workspace1" "$I"
+          grep -q "render-agent.js?v=20260815r49-google-render1" "$I"
+          grep -q "reauthenticateWithPopup" "$F"
+          ! grep -qi "rendair" "$R"
+          ! grep -qi "rendair" "$I"
+          ! grep -q "x-goog-api-key" "$R"
+          echo 'REVEX Google renderer / Walk source contract passed.'
