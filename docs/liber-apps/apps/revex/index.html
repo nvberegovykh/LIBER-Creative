@@ -15,7 +15,8 @@
   <link rel="stylesheet" href="../specifications/styles.css?v=20260813r49" />
   <link rel="stylesheet" href="styles.css?v=20260813r49" />
   <link rel="stylesheet" href="runtime.css?v=20260813r49" />
-  <link rel="stylesheet" href="render-agent.css?v=20260813r49" />
+  <link rel="stylesheet" href="render-agent.css?v=20260815r49-google-render1" />
+  <link rel="stylesheet" href="workspace-r51.css?v=20260815r49-workspace1" />
   <link rel="stylesheet" href="history-r24.css?v=20260813r49" />
   <link rel="stylesheet" href="integrity.css?v=20260813r49" />
   <link rel="stylesheet" href="r20.css?v=20260813r49" />
@@ -350,14 +351,14 @@
   <div id="render-dialog" class="render-modal sp-modal" role="dialog" aria-modal="true" aria-labelledby="render-dialog-title" hidden>
     <section class="render-card sp-modal-card">
       <header class="render-head">
-        <div><div class="eyebrow">RENDAIR + WALLT + REVIT</div><h2 id="render-dialog-title">REVEX Render</h2><p id="render-context">Current BIM view</p></div>
+        <div><div class="eyebrow">GOOGLE NANO BANANA 2 + REVEX</div><h2 id="render-dialog-title">REVEX Render</h2><p id="render-context">Current BIM view</p></div>
         <button id="render-close" class="icon-button sp-icon-btn" type="button" aria-label="Close render dialog">×</button>
       </header>
       <div class="render-layout">
         <form id="render-form" class="render-controls sp-form">
           <div class="render-source" id="render-source"><span>Current BIM viewport</span></div>
           <label>Save to Design Book chapter<select id="render-chapter"></select></label>
-          <label>Prompt<textarea id="render-prompt" rows="7" maxlength="5000" placeholder="WALLT prepares this from your request and REVEX context."></textarea></label>
+          <label>Prompt<textarea id="render-prompt" rows="7" maxlength="5000" placeholder="Describe the render intent; REVEX preserves geometry and refines it for Google AI."></textarea></label>
           <div class="render-options">
             <label>Environment<select id="render-environment"><option>Natural daylight</option><option>Bright overcast</option><option>Warm late-afternoon daylight</option><option>Night exterior - physically plausible</option></select></label>
             <label>Staging<select id="render-staging"><option>Preserve modeled objects only</option><option>Minimal real-estate staging</option><option>No loose furniture</option></select></label>
@@ -365,13 +366,13 @@
           </div>
           <label class="render-check"><input id="render-materials" type="checkbox" checked /> Use Revit material intent</label>
           <button class="button sp-btn" id="render-prepare" type="submit">Prepare AI render</button>
-          <div id="render-status" class="render-status" role="status">WALLT is ready to operate the REVEX render workflow.</div>
+          <div id="render-status" class="render-status" role="status">REVEX AI Render is ready for the current viewport.</div>
           <label class="result-upload">Save generated result<input id="render-result-upload" type="file" accept="image/*" /></label>
         </form>
         <div class="render-workspace">
-          <div class="render-workspace-head"><strong>Rendair</strong><span>live workspace inside REVEX</span></div>
-          <iframe id="render-frame" title="Rendair workspace" allow="clipboard-read; clipboard-write" referrerpolicy="strict-origin-when-cross-origin"></iframe>
-          <div id="render-frame-empty" class="render-frame-empty">Loading the Rendair workspace…</div>
+          <div class="render-workspace-head"><strong>Nano Banana 2</strong><span>current REVEX viewport + camera context</span></div>
+          <iframe id="render-frame" title="REVEX AI render workspace" allow="clipboard-read; clipboard-write" referrerpolicy="strict-origin-when-cross-origin"></iframe>
+          <div id="render-frame-empty" class="render-frame-empty">Preparing the REVEX AI render workspace…</div>
         </div>
       </div>
       <div class="render-history-head"><strong>Project render history</strong><span>Saved outside the RVT</span></div>
@@ -476,7 +477,7 @@
     })();
   </script>
   <script src="../../js/secure-keys.js"></script>
-  <script src="../../js/firebase-loader.js"></script>
+  <script src="../../js/firebase-loader.js?v=20260815r49-google-oauth1"></script>
   <script src="../../js/firebase-service.js"></script>
   <script src="../../js/chat-iframe-bridge.js"></script>
   <script src="diagnostics-r29.js?v=20260813r49-review2"></script>
@@ -495,7 +496,8 @@
   <script src="viewer-host-guard-r21.js?v=20260813r49"></script>
   <script type="module" src="app.js?v=20260813r49"></script>
   <script type="module" src="viewer-r26.js?v=20260813r49"></script>
-  <script type="module" src="render-agent.js?v=20260813r49"></script>
+  <script type="module" src="workspace-r51.js?v=20260815r49-workspace1"></script>
+  <script type="module" src="render-agent.js?v=20260815r49-google-render1"></script>
   <script type="module" src="history-r24.js?v=20260813r49"></script>
   <script type="module" src="energy-r27.js?v=20260813r49-review2"></script>
 </body>
