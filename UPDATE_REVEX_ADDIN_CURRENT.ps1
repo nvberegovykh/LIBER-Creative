@@ -122,8 +122,8 @@ function Copy-BuildPayload([string]$Root) {
   if (-not $dll) { throw "Release build produced no Liber.Revex.Revit.dll." }
 
   $outputDir = $dll.Directory.FullName
-  New-Item -ItemType Directory -Path $StagePayload -Force | Out-Null
-  Copy-Item -LiteralPath (Join-Path $outputDir "*") -Destination $StagePayload -Recurse -Force
+  if (Test-Path -LiteralPath $StagePayload) { Remove-Item -LiteralPath $StagePayload -Recurse -Force }
+  Copy-Item -LiteralPath $outputDir -Destination $StagePayload -Recurse -Force
 
   $requiredPayload = @(
     "Liber.Revex.Revit.dll",
