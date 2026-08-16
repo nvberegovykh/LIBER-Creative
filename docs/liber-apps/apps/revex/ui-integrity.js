@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260816r94';
+  const BUILD='20260816r95';
   const REVEX_R87_REPLAY_CONTRACT='energy-diagnostics-r68.js?v=20260816r87-energy-replay1';
   const REVEX_R87_REPLAY_LABEL="energyDiagnostics:'revision-scoped-replay-r87'";
   const REVEX_R92_REPLAY_COMPAT='energy-replay-r92.js?v=20260816r92-hosted-replay1';
@@ -50,9 +50,9 @@
   function loadScript(src,key,type='text/javascript'){if(document.querySelector(`script[data-revex-runtime="${key}"]`))return;const script=document.createElement('script');script.dataset.revexRuntime=key;script.src=src;script.type=type;script.async=false;script.onerror=()=>root.__revexBrowserDiagnostics?.emit?.('ERROR','RUNTIME_LOAD',`Could not load ${src}.`,{initiator:'ui integrity loader'});document.head.appendChild(script);}
   function loadReviewIntegrity(){if(document.querySelector('script[data-revex-review-integrity]'))return;const script=document.createElement('script');script.type='module';script.dataset.revexReviewIntegrity='1';script.src='review-integrity-r50.js?v=20260813r49-review2';script.onerror=()=>root.__revexBrowserDiagnostics?.emit?.('ERROR','REVIEW_RUNTIME','Could not load review-integrity-r50.js.',{initiator:'ui integrity loader'});document.head.appendChild(script);}
   function loadCurrentRepairs(){
-    loadScript('energy-diagnostics-r68.js?v=20260816r89-energy-replay3','energy-diagnostics-r68');
+    loadScript('energy-diagnostics-r68.js?v=20260816r95-manual-identity1','energy-diagnostics-r68');
     loadScript('energy-identity-en1-r89.js?v=20260816r89-en1-identity1','energy-identity-en1-r89');
-    loadScript('energy-replay-r94.js?v=20260816r94-exact-job1','energy-replay-r94');
+    loadScript('energy-replay-r95.js?v=20260816r95-single-owner1','energy-replay-r95');
     loadScript('critical-controls-r93.js?v=20260816r93-critical-controls3','critical-controls-r93');
     loadScript('viewer-polish-r68.js?v=20260816r68-viewer-polish1','viewer-polish-r68','module');
     loadScript('appearance-state-r75.js?v=20260816r75-appearance1','appearance-state-r75');
@@ -61,6 +61,9 @@
     loadScript('viewer-interaction-r85-loader.js?v=20260816r85-viewer-loader1','viewer-interaction-r85-loader');
   }
   function bind(){installCanonicalOverlayStore();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
-  loadReviewIntegrity();loadCurrentRepairs();if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'published-revision+live-broker-job+reattach+sync-launch-authorization',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
+  // index.html declares the THREE import map after ui-integrity.js. Never inject a
+  // module before DOM parsing reaches that import map; doing so produced the bare
+  // specifier "three" error seen in the Revit WebView log.
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'single-native-hosted-flight+manual-revision-authorization+live-job-reattach',moduleLoad:'after-import-map',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
 })(window);

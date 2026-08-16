@@ -1,12 +1,35 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
+import re
 import shutil
 import tempfile
 
 import revex_user_identity_en1 as r89
+import revex_identity_content_agent as r88
+import revex_energy_pipeline_r69 as r69
+
+
+def _pinned_identity_consumer(facts: dict) -> dict:
+    """Execute the exact r49 identity consumer functions without heavy simulation imports."""
+    pipeline = Path(__file__).resolve().parents[2] / 'src/Liber.Revex.Revit/Engineering/Energy/revex_energy_pipeline.py'
+    tree = ast.parse(pipeline.read_text(encoding='utf-8'))
+    wanted = {'_best_page_value', 'current_project_identity'}
+    nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted]
+    assert {node.name for node in nodes} == wanted
+    namespace = {
+        're': re,
+        'REQUIRED_PROJECT_IDENTITY': ('title','address','city','state','zip'),
+        'OPTIONAL_PROJECT_IDENTITY': (
+            'houseNumber','streetName','borough','block','lot','bin','communityBoard','jobType',
+            'architecturalJobNumber','mechanicalJobNumber','plumbingJobNumber',
+        ),
+    }
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(pipeline), 'exec'), namespace)
+    return namespace['current_project_identity'](facts)
 
 
 def test_missing_only_identity() -> None:
@@ -25,23 +48,40 @@ def test_missing_only_identity() -> None:
         request.write_text(json.dumps({
             'revision':'eng_test',
             'pageFactsPath':str(facts),
+            'sourceArtifacts':[],
             'comcheckContext':{'identityOverride':{
                 'title':'SHOULD NOT OVERWRITE', 'address':'999 Wrong Street',
                 'city':'Brooklyn','state':'NY','zip':'11225'
             }}
         }), encoding='utf-8')
-        derived = r89.resolve_request(request, root)
-        assert derived != request
-        data = json.loads(derived.read_text(encoding='utf-8'))
+
+        # Reproduce the exact guard order, including r95's final missing-only projection.
+        effective = r89.resolve_request(request, root)
+        assert effective != request
+        effective = r88.resolve_request(effective, root)
+        effective = r69._resolved_request(effective, root)
+        effective = r89.resolve_request(effective, root)
+
+        data = json.loads(effective.read_text(encoding='utf-8'))
         resolved = json.loads(Path(data['pageFactsPath']).read_text(encoding='utf-8'))
         current = r89._current_project_identity(resolved)
         assert current['title'] == '18 Example Avenue'
         assert current['address'] == '18 Example Avenue'
         assert current['city'] == 'Brooklyn' and current['state'] == 'NY' and current['zip'] == '11225'
+
+        # This is the actual downstream consumer which raised PROJECT_IDENTITY in the live run.
+        consumed = _pinned_identity_consumer(resolved)
+        assert consumed['missing'] == [], consumed
+        assert consumed['title'] == '18 Example Avenue'
+        assert consumed['address'] == '18 Example Avenue'
+        assert consumed['city'] == 'Brooklyn' and consumed['state'] == 'NY' and consumed['zip'] == '11225'
+
         audit = json.loads((root/'PROJECT_IDENTITY_USER_OVERRIDE_R89.json').read_text(encoding='utf-8'))
-        assert set(audit['acceptedMissingFields']) == {'city','state','zip'}
-        assert set(audit['ignoredAlreadyEstablishedFields']) == {'title','address'}
+        # A second idempotent projection may rewrite the audit to NO_MISSING_FIELDS_TO_FILL;
+        # the derived facts remain the consumer authority and source evidence remains immutable.
         assert audit['sourceEvidenceMutated'] is False
+        assert audit['remainingMissing'] == []
+        assert current['title'] != 'SHOULD NOT OVERWRITE' and current['address'] != '999 Wrong Street'
 
 
 def make_workbook(path: Path) -> None:
@@ -101,9 +141,14 @@ test_missing_only_identity()
 test_en1_people_and_print()
 test_exact_nine_review_entries()
 print(json.dumps({
-    'schema':'liber.revex.r89-user-identity-en1-qa.v1',
+    'schema':'liber.revex.r95-user-identity-en1-qa.v1',
     'status':'PASSED',
-    'projectIdentity':{'manualFallbackOnlyFillsMissing':True,'existingRevitValuesCannotBeOverwritten':True},
+    'projectIdentity':{
+        'manualFallbackOnlyFillsMissing':True,
+        'existingRevitValuesCannotBeOverwritten':True,
+        'r88R69Survival':True,
+        'pinnedR49ConsumerBoundaryComplete':True,
+    },
     'en1':{'applicantModelerExplicit':True,'pdfPrintContractPages':16,'fitToOnePagePerFormSheet':True},
     'userOutput':{'count':9,'exactReviewNames':list(r89.PUBLIC_REVIEW_NAMES)}
 }, indent=2))
