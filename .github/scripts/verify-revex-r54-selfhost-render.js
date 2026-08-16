@@ -20,6 +20,8 @@ const broker = read('server/revex-render-functions/index.js');
 const deploy = read('server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1');
 const energyQa = read('src/Liber.Revex.Revit/Engineering/Energy/verify_revex_r49_energy.py');
 const currentGuard = read('.github/scripts/verify-revex-current-generation-r53.js');
+const currentEnergyDeploy = read('server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1');
+const unifiedDeploy = read('DEPLOY_REVEX_CURRENT_SERVICES.ps1');
 
 // Default render path is private/off-device and requires no model-provider login.
 must(workspace, "import './render-selfhost-r54.js';", 'workspace must load self-host renderer');
@@ -92,6 +94,21 @@ must(energyQa, 'REVIT_TO_GBXML_GEOMETRY_INTEGRITY_REVIEW', 'accepted geometry re
 must(energyQa, 'sub-80 geometry integrity failure was incorrectly downgraded', 'hard floor regression test missing');
 must(currentGuard, 'reconcile_publication_message_severity', 'current-generation Energy guard missing');
 
+// Production Energy deployment must use fresh/current source, never the stale r49 archive-restoration publisher.
+must(currentEnergyDeploy, '[Parameter(Mandatory = $true)]', 'current Energy deploy must require an exact source candidate');
+must(currentEnergyDeploy, 'REVEX_SOURCE_CANDIDATE=$SourceCandidate', 'Energy worker must be bound to deployed source candidate');
+must(currentEnergyDeploy, 'REVEX_ENERGY_WORKER_URL=$WorkerUrl', 'Energy broker must bind to the just-deployed worker');
+must(currentEnergyDeploy, 'verify-revex-current-generation-r53.js', 'Energy deploy must run the current-generation guard before cloud changes');
+must(currentEnergyDeploy, '--no-allow-unauthenticated', 'Energy worker must remain private');
+must(currentEnergyDeploy, 'roles/run.invoker', 'only the Energy broker may invoke private worker');
+mustNot(currentEnergyDeploy, 'REVEX_R49_SOURCE_', 'current Energy deploy must not restore the legacy immutable source archive');
+mustNot(currentEnergyDeploy, 'CanonicalSourceCommit', 'current Energy deploy must not pin the stale publisher candidate');
+must(unifiedDeploy, 'git","clone","--depth","1","--branch","main"', 'unified deployment must begin from a fresh GitHub main clone');
+must(unifiedDeploy, 'rev-parse HEAD', 'unified deployment must resolve the exact cloned main commit');
+must(unifiedDeploy, 'DEPLOY_ENERGY_CURRENT.ps1', 'unified deployment must use the current Energy path');
+must(unifiedDeploy, 'DEPLOY_RENDER_SERVER.ps1', 'unified deployment must use the private render path');
+mustNot(unifiedDeploy, 'PUBLISH_REVEX_R49.ps1', 'unified deployment must never invoke the stale publisher');
+
 console.log(JSON.stringify({
   schema: 'liber.revex.r54-selfhost-render-energy-viewer-qa.v1',
   status: 'PASSED',
@@ -102,5 +119,7 @@ console.log(JSON.stringify({
   browserInference: false,
   googleFallback: true,
   viewerFunctionPreserved: true,
-  energyAcceptedReviewPreserved: true
+  energyAcceptedReviewPreserved: true,
+  cleanCurrentDeployment: true,
+  stalePublisherUsed: false
 }, null, 2));
