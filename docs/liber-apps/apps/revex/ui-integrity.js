@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260816r71';
+  const BUILD='20260816r72';
   if(root.__revexUiIntegrityR20) return;
   root.__revexUiIntegrityR20=true;
 
@@ -94,7 +94,7 @@
     if(document.querySelector(`script[data-revex-runtime="${key}"]`))return;
     const script=document.createElement('script');
     script.dataset.revexRuntime=key;script.src=src;script.type=type;script.async=false;
-    script.onerror=()=>root.__revexBrowserDiagnostics?.emit?.('ERROR','R71_RUNTIME',`Could not load ${src}.`,{initiator:'ui integrity loader'});
+    script.onerror=()=>root.__revexBrowserDiagnostics?.emit?.('ERROR','R72_RUNTIME',`Could not load ${src}.`,{initiator:'ui integrity loader'});
     document.head.appendChild(script);
   }
 
@@ -115,6 +115,8 @@
     loadScript('appearance-r70.js?v=20260816r70-appearance1','appearance-r70');
     loadScript('companion-state-r71.js?v=20260816r71-state1','companion-state-r71');
     loadScript('model-filter-r71.js?v=20260816r71-filter1','model-filter-r71');
+    loadScript('viewer-runtime-r72.js?v=20260816r72-nonblocking1','viewer-runtime-r72');
+    loadScript('material-modal-r72.js?v=20260816r72-material-modal1','material-modal-r72');
   }
 
   function bind(){
@@ -130,5 +132,5 @@
   loadCurrentRepairs();
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
   setTimeout(bind,250);setTimeout(bind,1000);
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',labels:'source-text',reviewRuntime:'r49-review2',docsPages:'real-single-page-pdf',viewerPolish:'r68',energyFailureEvidence:'exact',appearance:'r70-independent-type-or-instance',canonicalViewerState:'r71-before-hydration',appearanceLive:'r71',modelFilter:'family-type-full-index-r71',spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',labels:'source-text',reviewRuntime:'r49-review2',docsPages:'real-single-page-pdf',viewerPolish:'r68',energyFailureEvidence:'exact',appearance:'r70-storage-r72-incremental-render',canonicalViewerState:'r71-before-hydration',appearanceLive:'r71',modelFilter:'family-type-full-index-r71',viewerRuntime:'r72-nonblocking-shadow-patches',materialIntegration:'r72-single-modal',targetFps:30,spatialObjects:'invisible'});
 })(window);
