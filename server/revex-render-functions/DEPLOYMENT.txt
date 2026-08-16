@@ -1,1 +1,0 @@
-Deploy through ../revex-render-worker/DEPLOY_RENDER_SERVER.cmd. Do not deploy this codebase with a public worker URL or unauthenticated Cloud Run ingress.
