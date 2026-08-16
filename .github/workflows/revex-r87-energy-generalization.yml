@@ -15,6 +15,7 @@ on:
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/store.js'
       - 'src/Liber.Revex.Revit/Engineering/Companion/native-managed-energy-bridge.js'
+      - '.github/scripts/probe-revex-comcheck-project-api.py'
       - '.github/scripts/verify-revex-r49-live-comcheck.py'
       - '.github/scripts/verify-revex-r87-energy-generalization.py'
       - '.github/scripts/verify-revex-r87-decision-doc.py'
@@ -36,6 +37,7 @@ on:
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/store.js'
       - 'src/Liber.Revex.Revit/Engineering/Companion/native-managed-energy-bridge.js'
+      - '.github/scripts/probe-revex-comcheck-project-api.py'
       - '.github/scripts/verify-revex-r49-live-comcheck.py'
       - '.github/scripts/verify-revex-r87-energy-generalization.py'
       - '.github/scripts/verify-revex-r87-decision-doc.py'
@@ -91,6 +93,10 @@ jobs:
         run: python -m pip install -r src/Liber.Revex.Revit/Engineering/Energy/requirements.txt
       - name: Verify Chrome runtime
         run: google-chrome --version
+      - name: Probe official COMcheck project persistence API
+        env:
+          REVEX_CHROME_BINARY: /usr/bin/google-chrome
+        run: python .github/scripts/probe-revex-comcheck-project-api.py
       - name: Run live synthetic official COMcheck consumer acceptance
         env:
           REVEX_CHROME_BINARY: /usr/bin/google-chrome
