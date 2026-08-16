@@ -1,0 +1,47 @@
+name: REVEX r86 explicit-entry validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/Liber.Revex.Revit/Revit/RevitRequestHandler.cs'
+      - 'src/Liber.Revex.Revit/UI/RendairWindow.cs'
+      - 'src/Liber.Revex.Revit/Services/EngineeringCompanionWebBridge.cs'
+      - '.github/scripts/verify-revex-r86-explicit-entry.js'
+      - '.github/workflows/revex-r86-explicit-entry.yml'
+  push:
+    branches:
+      - main
+      - 'agent/revex-r86-*'
+    paths:
+      - 'src/Liber.Revex.Revit/Revit/RevitRequestHandler.cs'
+      - 'src/Liber.Revex.Revit/UI/RendairWindow.cs'
+      - 'src/Liber.Revex.Revit/Services/EngineeringCompanionWebBridge.cs'
+      - '.github/scripts/verify-revex-r86-explicit-entry.js'
+      - '.github/workflows/revex-r86-explicit-entry.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  explicit-entry-r86:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Verify opening REVEX cannot queue hidden Revit work
+        shell: pwsh
+        run: node .github/scripts/verify-revex-r86-explicit-entry.js
+      - name: Preserve single-shot managed Energy initialization
+        shell: pwsh
+        run: node .github/scripts/verify-revex-r83-energy-single-shot.js
+      - name: Compile complete Revit 2026 add-in
+        shell: pwsh
+        run: |
+          dotnet restore src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -p:RevexCiRevitApi=true -p:Platform=x64
+          dotnet build src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -c Release -p:RevexCiRevitApi=true -p:Platform=x64 --no-restore
