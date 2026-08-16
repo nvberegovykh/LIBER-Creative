@@ -4,6 +4,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - 'REVEX-DEVELOPMENT-CONTRACT.md'
       - 'docs/liber-apps/apps/revex/viewer-runtime-r75.js'
       - 'docs/liber-apps/apps/revex/appearance-state-r75.js'
       - 'docs/liber-apps/apps/revex/companion-runtime-r75.js'
@@ -13,6 +14,8 @@ on:
       - 'src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs'
       - 'src/Liber.Revex.Revit/Services/EngineeringCompanionWebBridge.cs'
       - 'src/Liber.Revex.Revit/Engineering/Companion/native-managed-energy-bridge.js'
+      - '.github/scripts/verify-revex-r68-review-runtime.js'
+      - '.github/scripts/verify-revex-r69-energy-finish.py'
       - '.github/scripts/verify-revex-r71-companion-state.js'
       - '.github/scripts/verify-revex-r72-nonblocking-viewer.js'
       - '.github/workflows/revex-r72-nonblocking-viewer.yml'
@@ -21,6 +24,7 @@ on:
       - main
       - 'agent/revex-r75-*'
     paths:
+      - 'REVEX-DEVELOPMENT-CONTRACT.md'
       - 'docs/liber-apps/apps/revex/viewer-runtime-r75.js'
       - 'docs/liber-apps/apps/revex/appearance-state-r75.js'
       - 'docs/liber-apps/apps/revex/companion-runtime-r75.js'
@@ -30,6 +34,8 @@ on:
       - 'src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs'
       - 'src/Liber.Revex.Revit/Services/EngineeringCompanionWebBridge.cs'
       - 'src/Liber.Revex.Revit/Engineering/Companion/native-managed-energy-bridge.js'
+      - '.github/scripts/verify-revex-r68-review-runtime.js'
+      - '.github/scripts/verify-revex-r69-energy-finish.py'
       - '.github/scripts/verify-revex-r71-companion-state.js'
       - '.github/scripts/verify-revex-r72-nonblocking-viewer.js'
       - '.github/workflows/revex-r72-nonblocking-viewer.yml'
@@ -60,9 +66,17 @@ jobs:
         run: node .github/scripts/verify-revex-r71-companion-state.js
       - name: Verify r75 nonblocking viewer and immutable Energy handoff
         run: node .github/scripts/verify-revex-r72-nonblocking-viewer.js
+      - name: Preserve Energy identity and review contracts
+        run: |
+          python .github/scripts/verify-revex-r69-energy-finish.py
+          node .github/scripts/verify-revex-r68-review-runtime.js
       - name: Preserve current-generation renderer and r73 Revit Energy contracts
         run: |
           node .github/scripts/verify-revex-current-generation-r53.js
           node .github/scripts/verify-revex-r54-selfhost-render.js
-          node .github/scripts/verify-revex-r68-review-runtime.js
           if [ -f .github/scripts/verify-revex-r73-energy-topology-fallback.py ]; then python .github/scripts/verify-revex-r73-energy-topology-fallback.py; fi
+      - name: Preserve architecture lessons for future agents
+        run: |
+          grep -F 'One concern = one runtime owner' REVEX-DEVELOPMENT-CONTRACT.md
+          grep -F 'Every add-in source change must compile the real DLL in CI' REVEX-DEVELOPMENT-CONTRACT.md
+          grep -F 'Immutable Energy handoff must not use a fake browser upload' REVEX-DEVELOPMENT-CONTRACT.md
