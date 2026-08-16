@@ -22,6 +22,7 @@ const energyQa = read('src/Liber.Revex.Revit/Engineering/Energy/verify_revex_r49
 const currentGuard = read('.github/scripts/verify-revex-current-generation-r53.js');
 const currentEnergyDeploy = read('server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1');
 const unifiedDeploy = read('DEPLOY_REVEX_CURRENT_SERVICES.ps1');
+const unifiedBootstrap = read('DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1');
 
 // Default render path is private/off-device and requires no model-provider login.
 must(workspace, "import './render-selfhost-r54.js';", 'workspace must load self-host renderer');
@@ -103,11 +104,14 @@ must(currentEnergyDeploy, '--no-allow-unauthenticated', 'Energy worker must rema
 must(currentEnergyDeploy, 'roles/run.invoker', 'only the Energy broker may invoke private worker');
 mustNot(currentEnergyDeploy, 'REVEX_R49_SOURCE_', 'current Energy deploy must not restore the legacy immutable source archive');
 mustNot(currentEnergyDeploy, 'CanonicalSourceCommit', 'current Energy deploy must not pin the stale publisher candidate');
-must(unifiedDeploy, '"clone","--depth","1","--branch","main"', 'unified deployment must begin from a fresh GitHub main clone');
-must(unifiedDeploy, 'rev-parse HEAD', 'unified deployment must resolve the exact cloned main commit');
-must(unifiedDeploy, 'DEPLOY_ENERGY_CURRENT.ps1', 'unified deployment must use the current Energy path');
-must(unifiedDeploy, 'DEPLOY_RENDER_SERVER.ps1', 'unified deployment must use the private render path');
-mustNot(unifiedDeploy, 'PUBLISH_REVEX_R49.ps1', 'unified deployment must never invoke the stale publisher');
+must(unifiedDeploy, 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1', 'unified launcher must delegate to the Windows-safe current-source bootstrap');
+must(unifiedDeploy, 'Start-Transcript', 'unified launcher must preserve deployment diagnostics');
+must(unifiedBootstrap, '"clone", "--depth", "1", "--branch", "main"', 'unified bootstrap must begin from a fresh GitHub main clone');
+must(unifiedBootstrap, '"rev-parse", "HEAD"', 'unified bootstrap must resolve the exact cloned main commit');
+must(unifiedBootstrap, 'DEPLOY_ENERGY_CURRENT.ps1', 'unified bootstrap must use the current Energy path');
+must(unifiedBootstrap, 'DEPLOY_RENDER_SERVER.ps1', 'unified bootstrap must use the private render path');
+mustNot(unifiedDeploy, 'PUBLISH_REVEX_R49.ps1', 'unified launcher must never invoke the stale publisher');
+mustNot(unifiedBootstrap, 'PUBLISH_REVEX_R49.ps1', 'unified bootstrap must never invoke the stale publisher');
 
 console.log(JSON.stringify({
   schema: 'liber.revex.r54-selfhost-render-energy-viewer-qa.v1',
