@@ -6,6 +6,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     HF_HOME=/tmp/revex-hf-cache \
     HF_HUB_DISABLE_TELEMETRY=1 \
+    HF_XET_HIGH_PERFORMANCE=1 \
+    HF_ENABLE_PARALLEL_LOADING=YES \
     TOKENIZERS_PARALLELISM=false \
     PORT=8080
 
@@ -27,9 +29,12 @@ m=json.load(open('model-manifest.json', encoding='utf-8'))
 assert m['model']=='Qwen/Qwen-Image-Edit-2511'
 assert m['revision']=='6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9'
 assert m['authentication']=='none-public-repository'
+assert m['integrity']['allowMovingMain'] is False
+assert m['integrity']['allowHuggingFaceTokenRequirement'] is False
 PY
 
-# The 57.7 GB upstream is intentionally NOT baked into Artifact Registry.
-# The exact public revision is fetched on first worker use and cached only on
-# the private Cloud Run instance. This keeps model storage free and immutable.
+# The upstream weights are intentionally not copied into GitHub or the image.
+# Default runtime resolves the exact immutable public revision tokenlessly.
+# REVEX_MODEL_PATH is an optional future private immutable cache mount; it is
+# never required for normal use and never changes the approved model identity.
 CMD ["gunicorn","--bind","0.0.0.0:8080","--workers","1","--threads","4","--timeout","3600","app:APP"]
