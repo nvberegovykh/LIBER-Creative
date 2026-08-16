@@ -7,10 +7,12 @@ on:
       - 'REVEX-ENERGY-R87-DECISION.md'
       - 'server/revex-energy-worker/README_R87_GENERALIZATION.md'
       - 'server/revex-energy-worker/revex_energy_identity_normalizer.py'
+      - 'server/revex-energy-worker/revex_identity_content_agent.py'
       - 'server/revex-energy-worker/revex_energy_pipeline_r69.py'
       - 'server/revex-energy-worker/revex_energy_pipeline_guard.py'
       - 'server/revex-energy-worker/Dockerfile'
       - 'server/revex-energy-worker/verify_identity_normalizer.py'
+      - 'server/revex-energy-worker/verify_identity_content_agent.py'
       - 'docs/liber-apps/apps/revex/energy-diagnostics-r68.js'
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/store.js'
@@ -25,14 +27,17 @@ on:
     branches:
       - main
       - 'agent/revex-r87-*'
+      - 'agent/revex-r88-*'
     paths:
       - 'REVEX-ENERGY-R87-DECISION.md'
       - 'server/revex-energy-worker/README_R87_GENERALIZATION.md'
       - 'server/revex-energy-worker/revex_energy_identity_normalizer.py'
+      - 'server/revex-energy-worker/revex_identity_content_agent.py'
       - 'server/revex-energy-worker/revex_energy_pipeline_r69.py'
       - 'server/revex-energy-worker/revex_energy_pipeline_guard.py'
       - 'server/revex-energy-worker/Dockerfile'
       - 'server/revex-energy-worker/verify_identity_normalizer.py'
+      - 'server/revex-energy-worker/verify_identity_content_agent.py'
       - 'docs/liber-apps/apps/revex/energy-diagnostics-r68.js'
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/store.js'
@@ -62,16 +67,20 @@ jobs:
         run: |
           python -m py_compile \
             server/revex-energy-worker/revex_energy_identity_normalizer.py \
+            server/revex-energy-worker/revex_identity_content_agent.py \
             server/revex-energy-worker/revex_energy_pipeline_r69.py \
             server/revex-energy-worker/revex_energy_pipeline_guard.py \
             server/revex-energy-worker/verify_identity_normalizer.py \
+            server/revex-energy-worker/verify_identity_content_agent.py \
             src/Liber.Revex.Revit/Engineering/Energy/comcheck_backstop.py
       - name: Verify generalized action boundary before wiring
         run: |
           python .github/scripts/verify-revex-r87-decision-doc.py
           python .github/scripts/verify-revex-r87-worker-contract.py
-      - name: Execute generalized cross-project identity + immutable replay contract
+      - name: Execute existing generalized cross-project identity + immutable replay contract
         run: python .github/scripts/verify-revex-r87-energy-generalization.py
+      - name: Execute r88 content-aware project identity regression
+        run: python server/revex-energy-worker/verify_identity_content_agent.py
       - name: Syntax-check replay diagnostics
         run: node --check docs/liber-apps/apps/revex/energy-diagnostics-r68.js
       - name: Preserve existing Energy identity, single-shot, broker and viewer contracts
