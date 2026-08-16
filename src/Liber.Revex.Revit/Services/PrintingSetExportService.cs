@@ -105,6 +105,8 @@ public sealed class PrintingSetExportService
 
         pdfPaths.Add(pdf);
 
+        string setToken = Safe(stableId);
+        if (setToken.Length > 24) setToken = setToken[..24];
         string singlePageFolder = Path.Combine(pdfFolder, "sheets", Safe(stableId));
         Directory.CreateDirectory(singlePageFolder);
         var pages = new List<object>(views.Count);
@@ -114,7 +116,7 @@ public sealed class PrintingSetExportService
             View view = views[index];
             ViewSheet? sheet = view as ViewSheet;
             string sheetNumber = sheet?.SheetNumber ?? view.Name;
-            string singlePageBaseName = $"{index + 1:D3}__{Safe(sheetNumber)}__{revision}";
+            string singlePageBaseName = $"{setToken}__{index + 1:D3}__{Safe(sheetNumber)}__{revision}";
             string singleExpected = Path.Combine(singlePageFolder, singlePageBaseName + ".pdf");
             DeleteIfPresent(singleExpected);
 
