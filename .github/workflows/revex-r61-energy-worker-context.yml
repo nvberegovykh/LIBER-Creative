@@ -1,0 +1,39 @@
+name: REVEX r61 Energy worker build-context validation
+
+on:
+  push:
+    branches:
+      - main
+      - 'agent/revex-artifact-existing-r61-*'
+    paths:
+      - 'server/revex-energy-worker/Dockerfile'
+      - 'src/Liber.Revex.Revit/Engineering/Energy/**'
+      - 'src/Liber.Revex.Revit/Engineering/Gbxml/**'
+      - '.github/workflows/revex-r61-energy-worker-context.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/revex-energy-worker/Dockerfile'
+      - 'src/Liber.Revex.Revit/Engineering/Energy/**'
+      - 'src/Liber.Revex.Revit/Engineering/Gbxml/**'
+      - '.github/workflows/revex-r61-energy-worker-context.yml'
+
+jobs:
+  worker-context:
+    name: Energy worker contains exact gbXML QA dependency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Docker build context closes Energy QA dependency graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.py
+          test -f src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn
+          grep -F 'COPY src/Liber.Revex.Revit/Engineering/Gbxml /opt/revex/Gbxml' server/revex-energy-worker/Dockerfile
+          grep -F 'test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.py' server/revex-energy-worker/Dockerfile
+          grep -F 'test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn' server/revex-energy-worker/Dockerfile
+      - name: Preserve REVEX current-generation and renderer/Energy/viewer contracts
+        run: |
+          node .github/scripts/verify-revex-current-generation-r53.js
+          node .github/scripts/verify-revex-r54-selfhost-render.js
