@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - 'agent/revex-deploy-bootstrap-argv-r57-*'
+      - 'agent/revex-deploy-single-account-count-r58-*'
     paths:
       - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
       - 'server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1'
@@ -42,6 +43,24 @@ jobs:
           $expected = '[auth][list][--filter][status:ACTIVE][--format][value(account)]'
           if ($actual -ne $expected) {
             throw "Native argv collapsed: $actual"
+          }
+      - name: Prove one active account survives StrictMode scalar unwrapping
+        shell: powershell
+        run: |
+          Set-StrictMode -Version 3.0
+          $single = 'admin@example.com'
+          if (@($single).Count -ne 1) { throw 'Scalar account did not normalize to one item.' }
+          $selected = [string](@($single)[0])
+          if ($selected -ne 'admin@example.com') { throw "Scalar account indexing corrupted the account: $selected" }
+          $bootstrap = Get-Content -Raw .\DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1
+          foreach ($required in @(
+            '@($active).Count',
+            'Replace(''$active.Count'', ''@($active).Count'')',
+            'Replace(''$accounts.Count'', ''@($accounts).Count'')',
+            'Replace(''[string]$active[0]'', ''[string](@($active)[0])'')',
+            'Replace(''[string]$accounts[0]'', ''[string](@($accounts)[0])'')'
+          )) {
+            if (-not $bootstrap.Contains($required)) { throw "Bootstrap is missing scalar-account hardening: $required" }
           }
       - name: Preserve REVEX renderer Energy and viewer contracts
         shell: powershell
