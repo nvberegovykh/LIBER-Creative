@@ -6,6 +6,7 @@ on:
       - main
       - 'agent/revex-deploy-powershell-parse-fix-r56-*'
       - 'agent/revex-auto-firebase-auth-r59-*'
+      - 'agent/revex-broker-docs-r64-*'
     paths:
       - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
       - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
@@ -69,9 +70,11 @@ jobs:
             if ($text -match '(?m)&\s+\$GCloud\s+auth\s+list\b' -or
                 $text -match '(?m)&\s+\$GCloud\s+builds\s+get-default-service-account\b' -or
                 $text -match '(?m)&\s+\$GCloud\s+run\s+services\s+describe\b') {
-              throw "$file contains direct gcloud invocation syntax that lets PowerShell reinterpret parenthesized --format=value(...) arguments."
+              throw "$file contains direct gcloud invocation syntax that lets PowerShell reinterpret native arguments."
             }
-            if ($text -notmatch '--format=value\(account\)') {
-              throw "$file is missing the account projection that the bootstrap safely wraps before execution."
+            $splitProjection = $text.Contains('"--format","value(account)"') -or $text.Contains('"--format", "value(account)"')
+            $legacyProjection = $text.Contains('--format=value(account)')
+            if (-not ($splitProjection -or $legacyProjection)) {
+              throw "$file is missing an explicit account projection."
             }
           }
