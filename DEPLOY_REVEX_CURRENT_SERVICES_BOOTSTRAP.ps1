@@ -83,7 +83,6 @@ function Invoke-GCloudCapture([string]$Command, [string[]]$Arguments) {
 
   # Cloud Functions v2/Cloud Run rejects concurrency >1 when the function has less
   # than one vCPU. The broker intentionally uses concurrency 4, so pin one full CPU.
-  # gcloud functions deploy supports --cpu when --memory is specified.
   $text = $text.Replace(
     '"--memory","1GiB","--timeout","3600s","--concurrency","4","--max-instances","4","--quiet"',
     '"--memory","1GiB","--cpu","1","--timeout","3600s","--concurrency","4","--max-instances","4","--quiet"'
@@ -143,7 +142,6 @@ try {
 
   $Git = Require-Command "git"
   $GCloud = Require-Command "gcloud"
-  $Firebase = Require-Command "firebase"
   $Npm = Require-Command "npm"
   $Node = Require-Command "node"
 
@@ -153,10 +151,17 @@ try {
     throw "Google Cloud administrator authentication is required once. Run 'gcloud auth login', then rerun this file. Nothing was deployed."
   }
 
-  $firebaseArgs = @("projects:list", "--json")
-  $null = Invoke-NativeCapture $Firebase $firebaseArgs
-  if ($script:NativeExitCode -ne 0) {
-    throw "Firebase administrator authentication is required once. Run 'firebase login', then rerun this file. Nothing was deployed."
+  # firebase-tools is an Energy deployment dependency only. Render-only/broker-only
+  # paths are gcloud based and must not touch firebase projects:list on Windows.
+  if (-not $SkipEnergy) {
+    $Firebase = Require-Command "firebase"
+    $firebaseArgs = @("projects:list", "--json")
+    $null = Invoke-NativeCapture $Firebase $firebaseArgs
+    if ($script:NativeExitCode -ne 0) {
+      throw "Firebase administrator authentication is required once. Run 'firebase login', then rerun this file. Nothing was deployed."
+    }
+  } else {
+    Write-Host "Firebase CLI skipped in bootstrap: Energy deployment is disabled." -ForegroundColor Green
   }
 
   New-Item -ItemType Directory -Path $TempRoot -Force | Out-Null
