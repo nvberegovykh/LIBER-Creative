@@ -133,6 +133,41 @@ with tempfile.TemporaryDirectory(prefix="revex-r88-content-identity-reject-") as
     audit = json.loads((output / "PROJECT_IDENTITY_CONTENT_AGENT_R88.json").read_text(encoding="utf-8"))
     assert any("authoritative active-Revit project street" in item for item in audit["rejected"])
 
+with tempfile.TemporaryDirectory(prefix="revex-r96-content-identity-no-text-layer-") as temp:
+    folder = Path(temp)
+    _facts, _facts_path, request_path, output, _texts = build_fixture(folder)
+
+    def evidence_only_agent(selected, _facts, base):
+        assert base["address"] == "250 Example Street"
+        return {
+            "title": "Example Residence",
+            "address": "250 Example Street",
+            "city": "Brooklyn",
+            "state": "NY",
+            "zip": "11225",
+            "confidence": 0.99,
+            "evidence": [
+                {"sourceFile": selected[0][1].name, "visibleText": "250 EXAMPLE STREET BROOKLYN, NY 11225", "role": "PROJECT TITLE BLOCK"},
+                {"sourceFile": selected[1][1].name, "visibleText": "250 EXAMPLE STREET, BROOKLYN, NY 11225", "role": "PROJECT INFORMATION"},
+            ],
+            "excludedPartyEvidence": ["CONSULTANT 99 OTHER ROAD, Troy, NY 12180"],
+        }
+
+    resolved = agent.resolve_request(
+        request_path,
+        output,
+        agent=evidence_only_agent,
+        pdf_text_loader=lambda _path: "",
+    )
+    assert resolved != request_path, "multimodal T/Z evidence must resolve identity when the PDF text layer is unavailable"
+    request = json.loads(resolved.read_text(encoding="utf-8"))
+    derived = json.loads(Path(request["pageFactsPath"]).read_text(encoding="utf-8"))
+    identity = derived["structuredIdentity"]
+    assert (identity["city"], identity["state"], identity["zip"]) == ("Brooklyn", "NY", "11225")
+    audit = json.loads((output / "PROJECT_IDENTITY_CONTENT_AGENT_R88.json").read_text(encoding="utf-8"))
+    evidence_votes = [row for row in audit["votes"] if row.get("method") == "multimodal-project-evidence"]
+    assert len({row["source"] for row in evidence_votes}) >= 2
+
 source = SOURCE.read_text(encoding="utf-8").upper()
 assert "250 MIDWOOD" not in source and "79 WINTHROP" not in source
 assert "CONTENT-AWARE" in source and "CONSULTANT" in source and "MIN_AGENT_CONFIDENCE" in source
@@ -142,6 +177,7 @@ print(json.dumps({
     "status": "PASSED",
     "contentAwareRoleSeparation": True,
     "twoSourceConsensus": True,
+    "multimodalEvidenceSurvivesMissingPdfTextLayer": True,
     "partyAddressRejected": True,
     "sourceFactsImmutable": True,
     "derivedProjectionNormalized": True,

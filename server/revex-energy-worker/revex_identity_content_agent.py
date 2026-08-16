@@ -23,7 +23,7 @@ from typing import Callable
 import revex_energy_identity_normalizer as normalizer
 
 SCHEMA = "liber.revex.project-identity-resolution.v1"
-AGENT_VERSION = "20260816r88-content-identity1"
+AGENT_VERSION = "20260816r96-content-identity2"
 REQUIRED_IDENTITY = ("title", "address", "city", "state", "zip")
 LOCATION_KEYS = ("city", "state", "zip")
 MIN_AGENT_CONFIDENCE = 0.90
@@ -249,6 +249,35 @@ def validate_agent_candidate(
         parsed = normalizer.locality_near_authoritative_address(visible, merged["address"])
         if parsed and _candidate_matches(merged, parsed):
             audit["votes"].append({"source": source, "method": "bounded-visible-project-street"})
+
+    # The multimodal resolver saw the immutable PDF bytes even when the PDF text layer is
+    # fragmented or absent. Its own evidence may therefore provide an independent source
+    # vote, but only after deterministic role/street/locality checks. This breaks the
+    # circular dependency on the earlier page parser without accepting consultant identity.
+    party_role_tokens = ("architect", "engineer", "consultant", "applicant", "owner", "contractor", "vendor", "contact")
+    project_role_tokens = ("project", "title block", "titleblock", "site", "property", "building")
+    for evidence in list(candidate.get("evidence") or []):
+        source = _safe_name(evidence.get("sourceFile") or "").lower()
+        if not source or source not in tz_source_names:
+            continue
+        role = _norm(evidence.get("role"))
+        visible = _text(evidence.get("visibleText"))
+        if not role or any(token in role for token in party_role_tokens):
+            continue
+        if not any(token in role for token in project_role_tokens):
+            continue
+        if not visible or not _same_project_street(merged["address"], visible):
+            continue
+        parsed = normalizer.parse_locality(visible)
+        locality_supported = bool(parsed and _candidate_matches(merged, parsed))
+        if not locality_supported:
+            tokens = {token.lower() for token in re.findall(r"[A-Za-z0-9]+", visible)}
+            city_tokens = {token.lower() for token in re.findall(r"[A-Za-z0-9]+", merged["city"])}
+            state_token = _text(merged["state"]).lower()
+            zip_token = _text(merged["zip"]).lower()
+            locality_supported = bool(city_tokens and city_tokens.issubset(tokens) and state_token in tokens and zip_token in tokens)
+        if locality_supported:
+            audit["votes"].append({"source": source, "method": "multimodal-project-evidence"})
 
     unique_sources = {row["source"] for row in audit["votes"] if row.get("source")}
     available = len(tz_source_names)
