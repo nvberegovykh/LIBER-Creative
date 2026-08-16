@@ -19,8 +19,8 @@ def main() -> int:
     try:
         driver.get(urllib.parse.urljoin(client.base_url, "index.html"))
         client._wait(
-            lambda d: d.execute_script("return typeof USER_PROJECT!=='undefined'&&USER_PROJECT!==null"),
-            "COMcheck USER_PROJECT did not initialize.",
+            lambda d: d.execute_script("return typeof USER_PROJECT!=='undefined'&&USER_PROJECT!==null&&typeof ProjectView!=='undefined'"),
+            "COMcheck USER_PROJECT/ProjectView did not initialize.",
         )
         probe = driver.execute_script(
             """
@@ -57,8 +57,11 @@ def main() -> int:
             for(const key of globals){try{globalSources[key]=String(window[key]).slice(0,1200)}catch(_){}}
             return {
               location:String(location.href),
-              ProjectActionType:typeof ProjectAction,
-              ProjectActionKeys:typeof ProjectAction==='undefined'?[]:safeKeys(ProjectAction),
+              ProjectViewType:typeof ProjectView,
+              ProjectViewKeys:typeof ProjectView==='undefined'?[]:safeKeys(ProjectView),
+              updateProjectInfoType:typeof ProjectView!=='undefined'&&ProjectView.updateProjectInfo?typeof ProjectView.updateProjectInfo:'undefined',
+              updateProjectInfoLength:typeof ProjectView!=='undefined'&&ProjectView.updateProjectInfo?ProjectView.updateProjectInfo.length:null,
+              updateProjectInfoSource:typeof ProjectView!=='undefined'&&ProjectView.updateProjectInfo?String(ProjectView.updateProjectInfo).slice(0,2200):'',
               ProjectServiceType:typeof ProjectService,
               ProjectServiceKeys:typeof ProjectService==='undefined'?[]:safeKeys(ProjectService),
               userProjectKeys:safeKeys(USER_PROJECT),
@@ -73,6 +76,8 @@ def main() -> int:
               getCurrentProjectLength:typeof ProjectService!=='undefined'&&ProjectService.getCurrentProject?ProjectService.getCurrentProject.length:null,
               getCurrentProjectSource:typeof ProjectService!=='undefined'&&ProjectService.getCurrentProject?String(ProjectService.getCurrentProject).slice(0,1800):'',
               globalSaveProjectSource:typeof saveProject==='function'?String(saveProject).slice(0,2200):'',
+              updateServerProjectDetailsSource:typeof updateServerProjectDetails==='function'?String(updateServerProjectDetails).slice(0,1800):'',
+              updateDetailsSource:typeof updateDetails==='function'?String(updateDetails).slice(0,2200):'',
               globalProjectFunctions:globalSources,
               scripts:Array.from(document.scripts).map(s=>s.src).filter(Boolean)
             };
