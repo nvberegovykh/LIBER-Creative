@@ -26,18 +26,21 @@ jobs:
         shell: pwsh
         run: |
           $text=Get-Content -Raw RECOVER_REVEX_ENERGY_R100.ps1
+          $deploy=Get-Content -Raw server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1
           foreach($marker in @(
             '70635e2955f2341e1c72351917cf18d4955799c2',
             'DEPLOY_ENERGY_WORKER_ONLY_R69.ps1',
             'REVEX_SOURCE_CANDIDATE',
             'REVEX_VERTEX_PROJECT',
             'REVEX_VERTEX_LOCATION',
-            'roles/run.invoker',
             'git.exe',
             'auth", "list"',
             '[string[]]$Arguments',
             '& $Command @Arguments'
           )) { if(-not $text.Contains($marker)){ throw "recovery host missing $marker" } }
+          foreach($marker in @('roles/run.invoker','REVEX_VERTEX_PROJECT=$VertexProject','REVEX_VERTEX_LOCATION=$VertexLocation')) {
+            if(-not $deploy.Contains($marker)){ throw "canonical worker-only deploy missing $marker" }
+          }
           foreach($forbidden in @('firebase deploy','UPDATE_REVEX_ADDIN','SYNC ENGINEERING button')) {
             if($text.Contains($forbidden)){ throw "worker-only recovery host contains forbidden operation: $forbidden" }
           }
