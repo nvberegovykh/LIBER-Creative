@@ -31,7 +31,7 @@ try {
     if ([int]$code -ne 0) { throw "$Label failed with exit code $code." }
   }
 
-  Write-Host 'REVEX r96 Energy recovery — automatic project identity worker' -ForegroundColor White
+  Write-Host 'REVEX r96 Energy recovery - automatic project identity worker' -ForegroundColor White
   Write-Host "Exact production source: $SourceCandidate"
   Write-Host 'Scope: Energy worker only. No Revit export. No renderer. Existing broker preserved.'
 
@@ -41,7 +41,8 @@ try {
   $old = $ErrorActionPreference
   try {
     $ErrorActionPreference = 'Continue'
-    $active = @(& $GCloud @('auth','list','--filter','status:ACTIVE','--format','value(account)')) | Where-Object { $_ }
+    $authArgs = @('auth','list','--filter=status:ACTIVE','--format=value(account)')
+    $active = @(& $GCloud @authArgs) | Where-Object { $_ }
     $authCode = $LASTEXITCODE
     if ($null -eq $authCode) { $authCode = 0 }
   } finally { $ErrorActionPreference = $old }
