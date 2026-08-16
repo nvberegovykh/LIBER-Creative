@@ -3,7 +3,8 @@
   const BUILD='20260816r94';
   const REVEX_R87_REPLAY_CONTRACT='energy-diagnostics-r68.js?v=20260816r87-energy-replay1';
   const REVEX_R87_REPLAY_LABEL="energyDiagnostics:'revision-scoped-replay-r87'";
-  void REVEX_R87_REPLAY_CONTRACT; void REVEX_R87_REPLAY_LABEL;
+  const REVEX_R92_REPLAY_COMPAT='energy-replay-r92.js?v=20260816r92-hosted-replay1';
+  void REVEX_R87_REPLAY_CONTRACT; void REVEX_R87_REPLAY_LABEL; void REVEX_R92_REPLAY_COMPAT;
   if(root.__revexUiIntegrityR20) return;
   root.__revexUiIntegrityR20=true;
 
