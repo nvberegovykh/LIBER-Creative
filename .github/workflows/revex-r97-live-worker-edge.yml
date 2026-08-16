@@ -9,6 +9,9 @@ on:
       - '.github/workflows/revex-r97-live-worker-edge.yml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   live-edge:
     runs-on: ubuntu-latest
