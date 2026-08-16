@@ -15,6 +15,7 @@ on:
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/store.js'
       - 'src/Liber.Revex.Revit/Engineering/Companion/native-managed-energy-bridge.js'
+      - '.github/scripts/verify-revex-r49-live-comcheck.py'
       - '.github/scripts/verify-revex-r87-energy-generalization.py'
       - '.github/scripts/verify-revex-r87-decision-doc.py'
       - '.github/scripts/verify-revex-r87-worker-contract.py'
@@ -35,6 +36,7 @@ on:
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/store.js'
       - 'src/Liber.Revex.Revit/Engineering/Companion/native-managed-energy-bridge.js'
+      - '.github/scripts/verify-revex-r49-live-comcheck.py'
       - '.github/scripts/verify-revex-r87-energy-generalization.py'
       - '.github/scripts/verify-revex-r87-decision-doc.py'
       - '.github/scripts/verify-revex-r87-worker-contract.py'
@@ -75,3 +77,21 @@ jobs:
           node .github/scripts/verify-revex-r83-energy-single-shot.js
           node .github/scripts/verify-revex-r54-selfhost-render.js
           node .github/scripts/verify-revex-current-generation-r53.js
+
+  live-official-comcheck-consumer:
+    name: live official COMcheck project-field + PDF acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install exact Energy transport dependencies
+        run: python -m pip install -r src/Liber.Revex.Revit/Engineering/Energy/requirements.txt
+      - name: Verify Chrome runtime
+        run: google-chrome --version
+      - name: Run live synthetic official COMcheck consumer acceptance
+        env:
+          REVEX_CHROME_BINARY: /usr/bin/google-chrome
+        run: python .github/scripts/verify-revex-r49-live-comcheck.py
