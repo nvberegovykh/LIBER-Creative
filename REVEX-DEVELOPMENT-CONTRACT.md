@@ -11,22 +11,22 @@ Current ownership:
 - canonical BIM visibility: pre-app Store wrapper in `ui-integrity.js`
 - BIM appearance persistence/live state: `appearance-state-r75.js`
 - BIM rendering and appearance projection: `viewer-runtime-r75.js`
-- BIM Properties, Family → Type → Instance filter, Restore All: `companion-runtime-r75.js`
+- BIM Properties, Family → Type → Instance filter, Restore All: `companion-runtime-r75.js` plus the narrow proven r79 interface repair
 - base scene / picking / walk / section primitives: `viewer-r26.js`
 - Energy downstream execution: authenticated managed broker + private worker
 - immutable Revit evidence creation: Revit add-in only
 
-A successor runtime must replace the old owner in `ui-integrity.js`; do not load both.
+A successor runtime must replace the old owner in `ui-integrity.js`; do not load two independent owners for the same state.
 
 ## 2. Viewer performance contract
 
 The BIM viewer must remain interactive even when exact geometry is unavailable, downloading, decoding, or defective.
 
-- show the best valid lightweight proxy first
+- show the best valid lightweight representation immediately when exact geometry is not yet ready
 - target 30 FPS for normal orbit/pan/walk in the hosted Revit WebView
-- exact geometry builds off-scene and may replace the proxy only when the complete candidate is valid
+- exact geometry builds off-scene and may replace an initial fallback only when the complete candidate is valid
+- when exact geometry is already loaded, keep it during interaction unless repeated measured frame intervals miss the FPS budget; only then use the proxy temporarily
 - active user interaction preempts background geometry work
-- during interaction, an already-built lightweight proxy may temporarily replace exact geometry
 - cooperative CPU slices should stay around 5 ms before yielding to `requestAnimationFrame`
 - immutable geometry pages use browser/local cache; do not force `no-store`
 - never traverse/rebuild the entire model for one visibility or appearance edit
@@ -50,7 +50,7 @@ A same-Revit-type appearance is one type record, never N per-instance geometry o
 ## 4. Visibility edits must be instant
 
 - Hide/Show/Delete/Restore updates the current viewer optimistically before cloud round-trip.
-- Restore All uses bounded Firestore batches, not sequential per-element waits.
+- Restore All is one logical operation and persists with bounded concurrency through Store-supported writes. Do **not** assume `writeBatch` exists in the shared Firebase wrapper.
 - Compatibility booleans (`hidden`, `deleted`) are derived from canonical visibility.
 - A Show/Restore operation always clears both hidden and deleted compatibility flags.
 
@@ -94,7 +94,7 @@ For BIM materials:
 
 A separate browser window is a fallback of last resort, not the primary UX.
 
-## 8. Immutable Energy handoff must not use a fake browser upload
+## 8. Immutable Energy handoff is local data, not browser networking
 
 Revit creates a committed Engineering Sync revision folder containing at minimum:
 
@@ -103,13 +103,24 @@ Revit creates a committed Engineering Sync revision folder containing at minimum
 - `weather.epw`
 - declared evidence/report artifacts
 
-The native managed handoff exposes **only that exact immutable folder** through a private WebView2 virtual host and the managed bridge reads those URLs.
+Production handoff uses a **private, native-managed hidden file input** created only for the transfer. CDP binds the exact files from the committed local revision folder, then REVEX directly calls `__revexManagedEnergyBridge.processInput(FileList)`. No `change` event is dispatched, so legacy hosted handlers cannot observe or race the transfer.
 
-Do not use `DOM.setFileInputFiles` for the production Engineering Sync handoff. It can expose a partial FileList/race to hosted handlers.
+Do not use a normal/public Energy file input for production handoff. Do not use browser `fetch()` of a local WebView virtual host for the committed folder; CSP/CORS/browser policy can turn a valid local revision into `Failed to fetch`.
 
-The browser must re-verify manifest + XML + EPW before cloud publication.
+The managed bridge re-verifies manifest + XML + EPW before cloud publication. If the add-in or Companion restarts after Revit has already committed a revision, resume the newest matching local revision rather than rerunning Revit geometry.
 
-## 9. Revit spatial-topology failures use evidence-preserving fallback
+## 9. Current-project identity is evidence normalization, not a template value
+
+Project identity comes only from the bound active Revit document and immutable T/Z evidence. Approved PRM/EN-1 references contribute structure, schedules, constructions, systems and form topology only.
+
+- accept Revit Project Information and titleblock parameters as the same current-document evidence graph
+- accept combined/multiline address values such as `250 MIDWOOD STREET,\nBROOKLYN, NY 11225`; split city/state/ZIP deterministically before declaring evidence missing
+- page facts may fill gaps from visible T/Z text; never infer identity from browser state, file paths, prior revisions or reference projects
+- a missing normalized field is not proof that the evidence is absent; inspect the raw captured Revit fields before blocking the run
+- compiled OSM/IDF/reports must be stamped with current-project identity and retain anti-reference-identity leak guards
+- applicant/modeler/signature/seal remain blank unless explicitly supplied by the authorized filing workflow
+
+## 10. Revit spatial-topology failures use evidence-preserving fallback
 
 If Revit throws the narrow ambiguous Room/Space analytical-boundary exception before the Python evidence gate can handle it:
 
@@ -118,7 +129,7 @@ If Revit throws the narrow ambiguous Room/Space analytical-boundary exception be
 - do not guess a thermal boundary closure
 - dependency/phase/auth/programming errors remain hard failures
 
-## 10. Every add-in source change must compile the real DLL in CI
+## 11. Every add-in source change must compile the real DLL in CI
 
 Source-text assertions are not a build.
 
@@ -132,23 +143,26 @@ Production/local builds bind to the installed Autodesk Revit 2026 API. CI may us
 
 Do not ask a user to run an updater until the exact source candidate has passed the complete DLL compile gate.
 
-## 11. Windows deployment rules
+## 12. Windows deployment rules
 
 - native process exit code is authoritative
 - normal stderr/progress output from `gcloud` or similar tools is not a failure by itself
 - PowerShell `ErrorActionPreference=Stop` must not convert successful native stderr into a false failure
 - publisher/updater must identify exact source SHA
 - add-in replacement is atomic and rollback-safe
+- deployment/update launchers belong in the REVEX project root and must be source-controlled/wired before a user is asked to run them
 - do not mix a current add-in refresh with Firebase/Cloud Run/renderer deployment unless that scope is explicitly required
 
-## 12. Diagnostics are evidence, not workload
+## 13. Diagnostics are evidence, not workload
 
 - deduplicate identical browser diagnostics over a short interval and count repeats
 - do not create multiple workflow/log records for the same high-frequency browser symptom
 - preserve the first useful stack/context
 - performance must not collapse because the diagnostic system is reporting the collapse
+- **Energy failures are revision-scoped:** never show a FAILED Energy result from revision A as the status of current Engineering revision B
+- when current Engineering advances, hide old failure UI and keep its evidence accessible only as history
 
-## 13. Release discipline
+## 14. Release discipline
 
 Before merging a viewer/add-in change:
 
