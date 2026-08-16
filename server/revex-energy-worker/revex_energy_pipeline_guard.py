@@ -9,11 +9,14 @@ pointing to a temporary Cloud Run file that disappears with the instance.
 r89 first applies explicit revision-scoped user project identity only to fields
 still missing from immutable active-Revit T/Z evidence. r88 content-aware role
 separation runs next; deterministic r69 normalization/geocoding remains the final
-automatic fallback. r95 then reapplies the same missing-only explicit user projection
-at the exact consumer boundary so no intermediate resolver can detach it from the
-pinned r49 current_project_identity() consumer. On a COMPLETE pinned run, r89 fills
-explicit applicant/modeler EN-1 data, prints/validates EN-1 PDF, and finalizes the
-exact nine-file clean review contract. Source evidence is never mutated.
+automatic identity fallback. r95 reapplies the same missing-only explicit user
+projection at the exact identity consumer boundary. r100 then resolves only missing
+COMcheck facts from the same immutable active-Revit T/Z/EN PDFs: deterministic Z/T
+text owns code/stories/height/Zoning Analysis Gross Area, while a bounded >=90%
+multimodal EN reader may recover source-proven envelope rows. The pinned r49 pipeline
+remains the final CXL/schema validator. On a COMPLETE pinned run, r89 fills explicit
+applicant/modeler EN-1 data, prints/validates EN-1 PDF, and finalizes the exact
+nine-file clean review contract. Source evidence is never mutated.
 """
 from __future__ import annotations
 
@@ -55,6 +58,9 @@ EXACT_NAMES = {
     "PROJECT_IDENTITY_CONTENT_AGENT_R88.json",
     "00_PAGE_FACTS_RESOLVED_R69.json",
     "00_PIPELINE_REQUEST_RESOLVED_R69.json",
+    "00_PAGE_FACTS_COMCHECK_EVIDENCE_R100.json",
+    "00_PIPELINE_REQUEST_COMCHECK_EVIDENCE_R100.json",
+    "COMCHECK_EVIDENCE_RESOLUTION_R100.json",
 }
 PREFIXES = (
     "NATIVE_CHECK_",
@@ -206,6 +212,22 @@ def _resolve_r69_request(request_path: Path, output_root: Path) -> Path:
         return request_path
 
 
+def _resolve_comcheck_evidence_request(request_path: Path, output_root: Path) -> Path:
+    try:
+        import revex_comcheck_evidence as resolver
+        return resolver.resolve_request(request_path, output_root)
+    except Exception as exc:
+        # This resolver never masks the pinned r49 failure. If bounded recovery cannot prove
+        # the missing T/Z/EN facts, the original/partially-derived request proceeds and r49
+        # reports the exact remaining COMcheck dependency as before.
+        print(json.dumps({
+            "stage": "COMCHECK_EVIDENCE_R100",
+            "status": "UNRESOLVED",
+            "error": f"{type(exc).__name__}: {exc}",
+        }, ensure_ascii=True), flush=True)
+        return request_path
+
+
 def _finalize_complete_result(request_path: Path, result: dict, output_root: Path) -> dict:
     import revex_user_identity_en1 as user_identity
     return user_identity.finalize_complete_result(request_path, result, output_root)
@@ -228,13 +250,15 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     # Compatibility marker for prior r87/r69 dependency validators: _resolve_content_identity_request(request_path, output_root)
     # Contract order: explicit user fallback fills only missing identity; content-aware
-    # separation and deterministic normalization may enrich authoritative source evidence;
-    # then the same missing-only explicit fallback is projected once more directly at
-    # the pinned consumer boundary. This final projection is intentionally idempotent.
+    # separation and deterministic normalization may enrich authoritative identity evidence;
+    # the same missing-only explicit fallback is projected once more directly at the pinned
+    # identity consumer boundary; then r100 fills only still-missing COMcheck facts from the
+    # immutable T/Z/EN PDF set. All stages write derived copies only.
     effective_request = _resolve_user_identity_request(request_path, output_root)
     effective_request = _resolve_content_identity_request(effective_request, output_root)
     effective_request = _resolve_r69_request(effective_request, output_root)
     effective_request = _resolve_user_identity_request(effective_request, output_root)
+    effective_request = _resolve_comcheck_evidence_request(effective_request, output_root)
     command = [sys.executable, str(impl), "--request", str(effective_request), *passthrough]
     completed = subprocess.run(command, cwd=str(impl.parent), env=os.environ.copy())
     result_path = output_root / "energy-result.json"

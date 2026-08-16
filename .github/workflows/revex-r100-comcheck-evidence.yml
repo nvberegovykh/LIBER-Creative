@@ -1,0 +1,73 @@
+name: REVEX r100 COMcheck evidence recovery
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/revex-energy-worker/revex_comcheck_evidence.py'
+      - 'server/revex-energy-worker/verify_comcheck_evidence_r100.py'
+      - 'server/revex-energy-worker/revex_energy_pipeline_guard.py'
+      - 'server/revex-energy-worker/Dockerfile'
+      - '.github/workflows/revex-r100-comcheck-evidence.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  evidence-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Python syntax
+        run: |
+          python -m py_compile \
+            server/revex-energy-worker/revex_comcheck_evidence.py \
+            server/revex-energy-worker/verify_comcheck_evidence_r100.py \
+            server/revex-energy-worker/revex_energy_pipeline_guard.py
+      - name: Current Z/T + EN evidence recovery regression
+        env:
+          PYTHONPATH: server/revex-energy-worker
+        run: python server/revex-energy-worker/verify_comcheck_evidence_r100.py
+      - name: Exact dependency wiring and QA floors
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          helper=Path('server/revex-energy-worker/revex_comcheck_evidence.py').read_text(encoding='utf-8')
+          guard=Path('server/revex-energy-worker/revex_energy_pipeline_guard.py').read_text(encoding='utf-8')
+          docker=Path('server/revex-energy-worker/Dockerfile').read_text(encoding='utf-8')
+          core=Path('src/Liber.Revex.Revit/Engineering/Energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py').read_text(encoding='utf-8')
+          worker=Path('server/revex-energy-worker/app.py').read_text(encoding='utf-8')
+          for marker in (
+              'ZONING\\s+ANALYSIS\\s+AREA\\s+CALCULATION','BC\\s+GROSS\\s+AREA',
+              'GROSS\\s+AREA\\s+DEDUCTION\\s+AREA','MIN_CONFIDENCE = 0.90',
+              'resolve_vertex_project','sourceEvidenceMutated',
+          ):
+              assert marker in helper, marker
+          for marker in ('_resolve_comcheck_evidence_request','effective_request = _resolve_comcheck_evidence_request'):
+              assert marker in guard, marker
+          for marker in ('revex_comcheck_evidence.py','verify_comcheck_evidence_r100.py'):
+              assert marker in docker, marker
+          assert 'MINIMUM_MAPPING_CONFIDENCE = 0.75' in core
+          assert 'MIN_INTEGRITY = 0.80' in worker and 'QUALITY_TARGET = 0.95' in worker
+          upper=helper.upper()
+          assert '250 MIDWOOD' not in upper and '79 WINTHROP' not in upper
+          print('REVEX_R100_DEPENDENCY_AND_QA=PASSED')
+          PY
+      - name: Pinned r49 implementation is unchanged
+        run: |
+          if git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD | grep -E '^src/Liber\.Revex\.Revit/Engineering/Energy/revex_energy_pipeline\.py$'; then
+            echo 'r100 must recover evidence outside the pinned r49 implementation.' >&2
+            exit 1
+          fi
+
+  worker-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build exact worker image and run all embedded Energy QA
+        run: docker build --progress=plain -f server/revex-energy-worker/Dockerfile -t revex-energy-worker:r100 .
