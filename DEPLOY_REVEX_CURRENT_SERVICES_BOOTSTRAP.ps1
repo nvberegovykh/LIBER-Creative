@@ -40,7 +40,7 @@ function Assert-PowerShellParse([string]$Path) {
   $tokens = $null
   $errors = $null
   [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path -LiteralPath $Path), [ref]$tokens, [ref]$errors)
-  if ($errors.Count -gt 0) {
+  if (@($errors).Count -gt 0) {
     $messages = @($errors | ForEach-Object { $_.Message }) -join '; '
     throw "PowerShell parser rejected ${Path}: $messages"
   }
@@ -60,12 +60,25 @@ function Invoke-GCloudCapture([string]$Command, [string[]]$Arguments) {
       throw "Could not locate the main deployment try block in $Path."
     }
     $text = $mainTry.Replace($text, ($helper + "`r`ntry {"), 1)
-    Set-Content -LiteralPath $Path -Value $text -Encoding UTF8
   }
+
+  # Windows PowerShell + StrictMode unwraps a one-item pipeline assignment to a scalar.
+  # Normalize scalar count/index access in the disposable clone before deployment so one
+  # active administrator account is treated as one account, not as an object with no Count
+  # property (or a string indexed down to its first character).
+  $text = $text.Replace('$active.Count', '@($active).Count')
+  $text = $text.Replace('$accounts.Count', '@($accounts).Count')
+  $text = $text.Replace('[string]$active[0]', '[string](@($active)[0])')
+  $text = $text.Replace('[string]$accounts[0]', '[string](@($accounts)[0])')
+  Set-Content -LiteralPath $Path -Value $text -Encoding UTF8
+
   Assert-PowerShellParse $Path
   $verified = Get-Content -Raw -LiteralPath $Path
   if ($verified.Contains('& $GCloud @(')) {
     throw "Unsafe direct gcloud array invocation remains in $Path."
+  }
+  if ($verified.Contains('$active.Count') -or $verified.Contains('$accounts.Count')) {
+    throw "StrictMode-unsafe scalar Count access remains in $Path."
   }
 }
 
@@ -108,7 +121,7 @@ try {
 
   $authArgs = @("auth", "list", "--filter", "status:ACTIVE", "--format", "value(account)")
   $active = @(Invoke-NativeCapture $GCloud $authArgs) | Where-Object { $_ }
-  if ($script:NativeExitCode -ne 0 -or $active.Count -eq 0) {
+  if ($script:NativeExitCode -ne 0 -or @($active).Count -eq 0) {
     throw "Google Cloud administrator authentication is required once. Run 'gcloud auth login', then rerun this file. Nothing was deployed."
   }
 
