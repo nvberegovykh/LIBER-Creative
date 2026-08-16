@@ -16,6 +16,8 @@ $ImageTag = "current-$($SourceCandidate.Substring(0,12).ToLowerInvariant())"
 $Image = "$Region-docker.pkg.dev/$ProjectId/$Repository/revex-energy-worker:$ImageTag"
 $WorkerSa = "revex-energy-worker@$ProjectId.iam.gserviceaccount.com"
 $BrokerSa = "revex-energy-broker@$ProjectId.iam.gserviceaccount.com"
+$VertexProject = $ProjectId
+$VertexLocation = "global"
 $EnvPath = Join-Path $FunctionsDir ".env.$ProjectId"
 $EnvBackup = $null
 
@@ -88,14 +90,17 @@ function Assert-CurrentSource {
   $energyQa = Join-Path $Root "src\Liber.Revex.Revit\Engineering\Energy\verify_revex_r49_energy.py"
   $worker = Join-Path $Root "server\revex-energy-worker\app.py"
   $broker = Join-Path $Root "server\firebase-functions\index.js"
+  $cloudProject = Join-Path $Root "server\revex-energy-worker\revex_cloud_project.py"
+  $vertexQa = Join-Path $Root "server\revex-energy-worker\verify_vertex_project_binding_r98.py"
   $guard = Join-Path $Root ".github\scripts\verify-revex-current-generation-r53.js"
-  foreach ($path in @($gbxml,$energyQa,$worker,$broker,$guard,$CloudBuild)) {
+  foreach ($path in @($gbxml,$energyQa,$worker,$broker,$cloudProject,$vertexQa,$guard,$CloudBuild)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Current REVEX source is incomplete: $path" }
   }
   $gbxmlText = Get-Content -Raw -LiteralPath $gbxml
   $qaText = Get-Content -Raw -LiteralPath $energyQa
   $workerText = Get-Content -Raw -LiteralPath $worker
   $brokerText = Get-Content -Raw -LiteralPath $broker
+  $cloudProjectText = Get-Content -Raw -LiteralPath $cloudProject
   foreach ($marker in @('reconcile_publication_message_severity','REVIT_TO_GBXML_GEOMETRY_INTEGRITY_REVIEW')) {
     if (-not $gbxmlText.Contains($marker) -and -not $qaText.Contains($marker)) {
       throw "Current accepted-gbXML Energy contract is missing marker: $marker"
@@ -110,12 +115,16 @@ function Assert-CurrentSource {
   if (-not $brokerText.Contains('SOURCE_CANDIDATE') -or -not $brokerText.Contains('REVEX_ENERGY_WORKER_URL')) {
     throw "Current Energy broker is missing immutable source-candidate/worker binding."
   }
+  foreach ($marker in @('REVEX_VERTEX_PROJECT','GOOGLE_CLOUD_PROJECT','google.auth.default','not a valid substitute')) {
+    if (-not $cloudProjectText.Contains($marker)) { throw "Current Vertex project resolver is missing marker: $marker" }
+  }
 }
 
 try {
   Write-Host "REVEX current managed Energy deployment" -ForegroundColor Cyan
   Write-Host "Source candidate: $SourceCandidate"
   Write-Host "Project: $ProjectId  Region: $Region"
+  Write-Host "Vertex AI project: $VertexProject  location: $VertexLocation"
   Write-Host "This path builds the current source directly; it never restores the legacy r49 Drive archive."
 
   Assert-CurrentSource
@@ -129,10 +138,10 @@ try {
   )
 
   $active = @(& $GCloud @("auth","list","--filter=status:ACTIVE","--format=value(account)")) | Where-Object { $_ }
-  if ($LASTEXITCODE -ne 0 -or $active.Count -eq 0) {
+  if ($LASTEXITCODE -ne 0 -or @($active).Count -eq 0) {
     throw "Google Cloud administrator authentication is required once. Run 'gcloud auth login', then rerun the unified REVEX deployment. No cloud change was started."
   }
-  $Deployer = [string]$active[0]
+  $Deployer = [string](@($active)[0])
 
   # The root launcher performs the interactive Firebase authentication once and
   # exports REVEX_FIREBASE_AUTH_VERIFIED=1 for this exact child process. Do not
@@ -180,7 +189,7 @@ try {
     "--image=$Image","--service-account=$WorkerSa","--no-allow-unauthenticated",
     "--cpu=4","--memory=8Gi","--concurrency=1","--min-instances=0","--max-instances=3",
     "--timeout=3600",
-    "--set-env-vars=REVEX_ENERGY_TIMEOUT_SECONDS=3500,REVEX_SOURCE_CANDIDATE=$SourceCandidate",
+    "--set-env-vars=REVEX_ENERGY_TIMEOUT_SECONDS=3500,REVEX_SOURCE_CANDIDATE=$SourceCandidate,REVEX_VERTEX_PROJECT=$VertexProject,REVEX_VERTEX_LOCATION=$VertexLocation",
     "--quiet"
   )
 
@@ -222,10 +231,16 @@ try {
   if ($Ready.Count -eq 0 -or [string]$Ready[0].status -ne 'True') {
     throw "Current Energy worker did not report Ready after deployment."
   }
+  $LiveEnv = @{}
+  foreach ($row in @($RunState.spec.template.spec.containers[0].env)) { $LiveEnv[[string]$row.name] = [string]$row.value }
+  if ([string]$LiveEnv['REVEX_SOURCE_CANDIDATE'] -ne $SourceCandidate) { throw "Live worker source candidate is not the exact deployed source." }
+  if ([string]$LiveEnv['REVEX_VERTEX_PROJECT'] -ne $VertexProject) { throw "Live worker Vertex AI project is not bound to the deployment Google Cloud project." }
+  if ([string]$LiveEnv['REVEX_VERTEX_LOCATION'] -ne $VertexLocation) { throw "Live worker Vertex AI location is not the expected deployment location." }
 
   Write-Host "" 
   Write-Host "PASS: current REVEX Energy worker + broker deployed from $SourceCandidate." -ForegroundColor Green
   Write-Host "Worker: $WorkerUrl"
+  Write-Host "Vertex AI project: $($LiveEnv['REVEX_VERTEX_PROJECT'])  location: $($LiveEnv['REVEX_VERTEX_LOCATION'])"
   Write-Host "No local production simulation server was created."
 } catch {
   Write-Host "" 

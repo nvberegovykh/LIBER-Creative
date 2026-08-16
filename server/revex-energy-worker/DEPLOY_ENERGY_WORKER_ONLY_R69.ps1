@@ -16,6 +16,8 @@ $ImageTag = "current-$($SourceCandidate.Substring(0,12).ToLowerInvariant())"
 $Image = "$Region-docker.pkg.dev/$ProjectId/$Repository/revex-energy-worker:$ImageTag"
 $WorkerSa = "revex-energy-worker@$ProjectId.iam.gserviceaccount.com"
 $BrokerSa = "revex-energy-broker@$ProjectId.iam.gserviceaccount.com"
+$VertexProject = $ProjectId
+$VertexLocation = "global"
 
 function Require-Command([string]$Name) {
   $cmd = Get-Command $Name -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -82,18 +84,21 @@ function Assert-R69Source {
   $resolver = Join-Path $Root "server\revex-energy-worker\revex_energy_pipeline_r69.py"
   $normalizer = Join-Path $Root "server\revex-energy-worker\revex_energy_identity_normalizer.py"
   $contentAgent = Join-Path $Root "server\revex-energy-worker\revex_identity_content_agent.py"
+  $cloudProject = Join-Path $Root "server\revex-energy-worker\revex_cloud_project.py"
   $userIdentity = Join-Path $Root "server\revex-energy-worker\revex_user_identity_en1.py"
   $identityQa = Join-Path $Root "server\revex-energy-worker\verify_identity_normalizer.py"
   $userIdentityQa = Join-Path $Root "server\revex-energy-worker\verify_user_identity_en1_r89.py"
   $contentQa = Join-Path $Root "server\revex-energy-worker\verify_identity_content_agent.py"
+  $vertexQa = Join-Path $Root "server\revex-energy-worker\verify_vertex_project_binding_r98.py"
   $guard = Join-Path $Root "server\revex-energy-worker\revex_energy_pipeline_guard.py"
   $docker = Join-Path $Root "server\revex-energy-worker\Dockerfile"
-  foreach ($path in @($resolver,$normalizer,$contentAgent,$userIdentity,$identityQa,$contentQa,$userIdentityQa,$guard,$docker,$CloudBuild)) {
+  foreach ($path in @($resolver,$normalizer,$contentAgent,$cloudProject,$userIdentity,$identityQa,$contentQa,$userIdentityQa,$vertexQa,$guard,$docker,$CloudBuild)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Current Energy source is incomplete: $path" }
   }
   $resolverText = Get-Content -Raw -LiteralPath $resolver
   $normalizerText = Get-Content -Raw -LiteralPath $normalizer
   $contentText = Get-Content -Raw -LiteralPath $contentAgent
+  $cloudProjectText = Get-Content -Raw -LiteralPath $cloudProject
   $guardText = Get-Content -Raw -LiteralPath $guard
   $dockerText = Get-Content -Raw -LiteralPath $docker
   foreach ($marker in @('US_CENSUS_GEOCODER_PUBLIC_AR_CURRENT','00_PAGE_FACTS_RESOLVED_R69.json','derived-only-from-immutable-active-Revit-address','import revex_energy_identity_normalizer as identity_normalizer','PROJECT_IDENTITY_NORMALIZED')) {
@@ -102,11 +107,14 @@ function Assert-R69Source {
   foreach ($marker in @('normalize_verified_evidence','locality_near_authoritative_address','PARTY_BOUNDARY','project-specific address mapping')) {
     if (-not $normalizerText.Contains($marker)) { throw "General identity normalizer marker is missing: $marker" }
   }
-  foreach ($marker in @('content-aware-consensus-over-immutable-active-Revit-T-Z-evidence','MIN_AGENT_CONFIDENCE','validate_agent_candidate','excludedPartyEvidence','_structured_identity_complete')) {
+  foreach ($marker in @('content-aware-consensus-over-immutable-active-Revit-T-Z-evidence','MIN_AGENT_CONFIDENCE','validate_agent_candidate','excludedPartyEvidence','_structured_identity_complete','resolve_vertex_project')) {
     if (-not $contentText.Contains($marker)) { throw "Content-aware identity agent marker is missing: $marker" }
   }
+  foreach ($marker in @('REVEX_VERTEX_PROJECT','GOOGLE_CLOUD_PROJECT','google.auth.default','not a valid substitute')) {
+    if (-not $cloudProjectText.Contains($marker)) { throw "Vertex project resolver marker is missing: $marker" }
+  }
   foreach ($forbidden in @('250 MIDWOOD','79 WINTHROP')) {
-    if ($resolverText.ToUpperInvariant().Contains($forbidden) -or $normalizerText.ToUpperInvariant().Contains($forbidden) -or $contentText.ToUpperInvariant().Contains($forbidden)) {
+    if ($resolverText.ToUpperInvariant().Contains($forbidden) -or $normalizerText.ToUpperInvariant().Contains($forbidden) -or $contentText.ToUpperInvariant().Contains($forbidden) -or $cloudProjectText.ToUpperInvariant().Contains($forbidden)) {
       throw "Project-specific identity branch is forbidden in worker runtime: $forbidden"
     }
   }
@@ -122,13 +130,16 @@ function Assert-R69Source {
   foreach ($marker in @(
     'COPY server/revex-energy-worker/revex_energy_identity_normalizer.py',
     'COPY server/revex-energy-worker/revex_identity_content_agent.py',
+    'COPY server/revex-energy-worker/revex_cloud_project.py',
     'COPY server/revex-energy-worker/revex_user_identity_en1.py',
     'COPY server/revex-energy-worker/verify_user_identity_en1_r89.py',
     'COPY server/revex-energy-worker/verify_identity_normalizer.py',
     'COPY server/revex-energy-worker/verify_identity_content_agent.py',
+    'COPY server/revex-energy-worker/verify_vertex_project_binding_r98.py',
     'python3 /opt/revex/server/verify_identity_normalizer.py',
     'python3 /opt/revex/server/verify_identity_content_agent.py',
     'python3 /opt/revex/server/verify_user_identity_en1_r89.py',
+    'python3 /opt/revex/server/verify_vertex_project_binding_r98.py',
     'REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py',
     'REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py'
   )) {
@@ -142,6 +153,7 @@ function Assert-R69Source {
 try {
   Write-Host "REVEX current Energy worker-only deployment" -ForegroundColor Cyan
   Write-Host "Source candidate: $SourceCandidate"
+  Write-Host "Vertex AI project: $VertexProject  location: $VertexLocation"
   Write-Host "No Firebase CLI and no render/GPU deployment will run."
 
   Assert-R69Source
@@ -194,7 +206,7 @@ try {
     "run","deploy",$Service,"--project=$ProjectId","--region=$Region","--image=$Image",
     "--service-account=$WorkerSa","--no-allow-unauthenticated","--cpu=4","--memory=8Gi",
     "--concurrency=1","--min-instances=0","--max-instances=3","--timeout=3600",
-    "--set-env-vars=REVEX_ENERGY_TIMEOUT_SECONDS=3500,REVEX_SOURCE_CANDIDATE=$SourceCandidate","--quiet"
+    "--set-env-vars=REVEX_ENERGY_TIMEOUT_SECONDS=3500,REVEX_SOURCE_CANDIDATE=$SourceCandidate,REVEX_VERTEX_PROJECT=$VertexProject,REVEX_VERTEX_LOCATION=$VertexLocation","--quiet"
   )
   Invoke-Checked "Preserve Energy broker invocation access" $GCloud @(
     "run","services","add-iam-policy-binding",$Service,"--project=$ProjectId","--region=$Region",
@@ -208,10 +220,16 @@ try {
   if ($Ready.Count -eq 0 -or [string]$Ready[0].status -ne 'True') { throw "Current Energy worker did not report Ready after deployment." }
   $WorkerUrl = [string]$RunState.status.url
   if (-not $WorkerUrl) { throw "Current Energy worker reported Ready without a service URL." }
+  $LiveEnv = @{}
+  foreach ($row in @($RunState.spec.template.spec.containers[0].env)) { $LiveEnv[[string]$row.name] = [string]$row.value }
+  if ([string]$LiveEnv['REVEX_SOURCE_CANDIDATE'] -ne $SourceCandidate) { throw "Live worker source candidate is not the exact deployed source." }
+  if ([string]$LiveEnv['REVEX_VERTEX_PROJECT'] -ne $VertexProject) { throw "Live worker Vertex AI project is not bound to the deployment Google Cloud project." }
+  if ([string]$LiveEnv['REVEX_VERTEX_LOCATION'] -ne $VertexLocation) { throw "Live worker Vertex AI location is not the expected deployment location." }
 
   Write-Host ""
   Write-Host "PASS: current Energy worker-only deployment completed from $SourceCandidate." -ForegroundColor Green
   Write-Host "Worker: $WorkerUrl"
+  Write-Host "Vertex AI project: $($LiveEnv['REVEX_VERTEX_PROJECT'])  location: $($LiveEnv['REVEX_VERTEX_LOCATION'])"
   Write-Host "Existing runRevexEnergy broker and renderer were left untouched."
 } catch {
   Write-Host ""

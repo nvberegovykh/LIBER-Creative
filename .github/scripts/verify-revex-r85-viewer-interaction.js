@@ -12,11 +12,14 @@ const render=read('docs/liber-apps/apps/revex/render-agent.js');
 const must=(t,n,m)=>assert(t.includes(n),m||`Missing ${n}`);
 const not=(t,n,m)=>assert(!t.includes(n),m||`Forbidden ${n}`);
 
-must(ui,"viewer-interaction-r85-loader.js?v=20260816r85-viewer-loader1",'r85 deferred bootstrap must load');
+// r85 remains the exact interaction owner; only the loader URL token advances so
+// the Revit WebView cannot retain a pre-r97 cached loader that never imports live-worker-edge-r97.
+must(ui,"viewer-interaction-r85-loader.js?v=20260816r98-live-edge2",'cache-busted r85 deferred bootstrap must load');
 not(ui,"loadScript('viewer-repair-r79.js",'r79 must be replaced, not stacked with r85');
 not(ui,"loadScript('viewer-interaction-r85.js",'r85 module must not be injected before the page import map');
 must(loader,"document.addEventListener('DOMContentLoaded',load,{once:true})",'r85 module import must wait until parser/import-map registration completes');
 must(loader,"import('./viewer-interaction-r85.js?v=20260816r85-viewer-interaction1')",'bootstrap must import the exact r85 interaction owner');
+must(loader,"import('./live-worker-edge-r97.js?v=20260816r97-live-worker-edge2')",'bootstrap must independently import the r97 exact Energy job recovery edge');
 must(r85,"#bim-mobile-dock",'mobile BIM bottom panel switcher must exist');
 must(r85,"data-r85-panel=\"model\"",'mobile dock must expose model sidebar');
 must(r85,"data-r85-panel=\"properties\"",'mobile dock must expose properties/section sidebar');
@@ -36,7 +39,7 @@ must(styles,'.bim-view > .rail, .design-view > .chapter-rail','legacy mobile sid
 
 console.log(JSON.stringify({
  schema:'liber.revex.r85-viewer-interaction.v1',status:'PASSED',
- bootstrap:{afterImportMap:true,singleInteractionOwner:true},
+ bootstrap:{afterImportMap:true,singleInteractionOwner:true,r97LiveWorkerEdge:true},
  mobile:{twoDesktopSidebarsOneBottomDrawer:true,topChromeCompacted:true},
  selection:{element:true,section:true,emptyClearsWhenSectionOff:true,emptyReturnsSectionWhenOn:true},
  section:{xyzCentered:true,yawRotary:true,floorCutPlus5:true},
