@@ -48,6 +48,8 @@ COPY server/revex-energy-worker/verify_geometryco_source_condition_r91.py /opt/r
 COPY server/revex-energy-worker/run_revex_r49_release_acceptance.py /opt/revex/server/run_revex_r49_release_acceptance.py
 COPY server/revex-energy-worker/verify_revex_r49_worker.py /opt/revex/server/verify_revex_r49_worker.py
 COPY server/revex-energy-worker/requirements-server.txt /opt/revex/server/requirements-server.txt
+COPY server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1 /opt/revex/server/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1
+COPY server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1 /opt/revex/server/DEPLOY_ENERGY_CURRENT.ps1
 
 # Preserve GeometryCo 4.3.4 byte-for-byte as the core. The installed entrypoint
 # is a source-evidence resolver that calls back into that core and never enables
