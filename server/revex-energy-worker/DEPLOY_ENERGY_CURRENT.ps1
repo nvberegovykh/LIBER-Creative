@@ -74,7 +74,7 @@ function Ensure-ServiceAccount([string]$GCloud, [string]$Name, [string]$DisplayN
 
 function Add-ProjectRole([string]$GCloud, [string]$Member, [string]$Role, [string]$Label) {
   Invoke-Checked $Label $GCloud @(
-    "projects","add-iam-policy-binding",$ProjectId,"--member=$Member","--role=$Role,"--quiet"
+    "projects","add-iam-policy-binding",$ProjectId,"--member=$Member","--role=$Role","--quiet"
   ) -Quiet
 }
 
