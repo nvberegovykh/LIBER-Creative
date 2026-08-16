@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260816r72';
+  const BUILD='20260816r72.1';
   if(root.__revexUiIntegrityR20) return;
   root.__revexUiIntegrityR20=true;
 
@@ -16,11 +16,6 @@
     return next;
   };
 
-  // This guard is intentionally installed synchronously while ui-integrity.js
-  // is parsed, before app.js can hydrate a project or establish live listeners.
-  // Each Store method is guarded independently because compatibility runtimes
-  // may define methods later in startup. Visibility is one state; material
-  // appearance is never a geometry overlay.
   function installCanonicalOverlayStore(){
     const Store=root.RevexStore;
     if(!Store)return;
@@ -116,7 +111,7 @@
     loadScript('companion-state-r71.js?v=20260816r71-state1','companion-state-r71');
     loadScript('model-filter-r71.js?v=20260816r71-filter1','model-filter-r71');
     loadScript('viewer-runtime-r72.js?v=20260816r72-nonblocking1','viewer-runtime-r72');
-    loadScript('material-modal-r72.js?v=20260816r72-material-modal1','material-modal-r72');
+    loadScript('material-modal-r72.js?v=20260816r72-material-modal2','material-modal-r72');
   }
 
   function bind(){
@@ -126,11 +121,9 @@
     updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();
   }
 
-  // Begin loading repair runtimes immediately; bind() remains idempotent and
-  // completes DOM-dependent controls once the document is ready.
   loadReviewIntegrity();
   loadCurrentRepairs();
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
   setTimeout(bind,250);setTimeout(bind,1000);
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',labels:'source-text',reviewRuntime:'r49-review2',docsPages:'real-single-page-pdf',viewerPolish:'r68',energyFailureEvidence:'exact',appearance:'r70-storage-r72-incremental-render',canonicalViewerState:'r71-before-hydration',appearanceLive:'r71',modelFilter:'family-type-full-index-r71',viewerRuntime:'r72-nonblocking-shadow-patches',materialIntegration:'r72-single-modal',targetFps:30,spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',labels:'source-text',reviewRuntime:'r49-review2',docsPages:'real-single-page-pdf',viewerPolish:'r68',energyFailureEvidence:'exact',appearance:'r70-storage-r72-incremental-render',canonicalViewerState:'r71-before-hydration',appearanceLive:'r71',modelFilter:'family-type-full-index-r71',viewerRuntime:'r72-nonblocking-shadow-patches',materialIntegration:'r72.1-owned-provider-browser-auto-download-apply',targetFps:30,spatialObjects:'invisible'});
 })(window);
