@@ -54,7 +54,13 @@ must(energyBridge,'ReadCloudEngineeringRevisionAsync','resume must not overwrite
 assert(!energyBridge.includes('SetVirtualHostNameToFolderMapping'),'local Engineering handoff must not depend on browser virtual-host fetch');
 assert(!energyBridge.includes('processUrls(entries)'),'local Engineering handoff must not use URL ingestion');
 must(managed,'async function processInput(fileList)','managed bridge must ingest the native FileList directly');
+must(managed,'async function waitForCloudStore(Store','managed ingestion must wait for authenticated cloud Store readiness');
+must(managed,'Store?.isCloud?.() && Store?.user?.uid','cloud auth, not DOM readiness, must gate immutable publication');
+must(managed,'await waitForCloudStore(Store, projectId, revision, startedAt)','processInput must keep the preserved FileList alive until cloud auth is ready');
 must(managed,"Engineering Sync is missing engineering-sync.json",'managed bridge must verify manifest before cloud publication');
+assert(!managed.includes('async function processUrls('),'failed virtual-host URL ingestion must be removed, not left as a dead alternative');
+assert(!managed.includes('VIRTUAL_HOST'),'failed virtual-host authority must not remain in the managed bridge');
+assert(!managed.includes('fetch(parsed.href'),'managed local handoff must not reintroduce browser networking');
 
 must(energyDiagnostics,'ENERGY_STALE_FAILURE_IGNORED','old Energy failures must be revision-scoped');
 must(energyDiagnostics,'failedRevision!==current','failure UI must compare result revision with current Engineering revision');
@@ -71,4 +77,4 @@ assert(!ui.includes("loadScript('docs-pages-r68.js"),'main-thread PDF splitter m
 
 must(oldViewer,'this.model=this.proxy(rows)','base viewer must retain immediate metadata fallback while exact geometry builds');
 must(oldViewer,'if(state?.modelUrl)setTimeout','base auto detail call remains intercepted by r75 wrapper');
-console.log(JSON.stringify({schema:'liber.revex.r80-viewer-energy-qa.v1',status:'PASSED',viewer:{targetFps:30,interactionPreemptsDetail:true,adaptiveProxy:true,exactSwapOnlyAfterComplete:true,incrementalAppearance:true,hiddenRestorable:true},materials:{embeddedProperties:true,userDownloadAutoApply:true,separateWindow:false},energy:{privateManagedFileList:true,virtualHostFetchRemoved:true,preservedRevisionResume:true,staleFailureRevisionScoped:true},diagnostics:{deduplicated:true},docs:{mainThreadSplitterDisabled:true}},null,2));
+console.log(JSON.stringify({schema:'liber.revex.r81-viewer-energy-qa.v1',status:'PASSED',viewer:{targetFps:30,interactionPreemptsDetail:true,adaptiveProxy:true,exactSwapOnlyAfterComplete:true,incrementalAppearance:true,hiddenRestorable:true},materials:{embeddedProperties:true,userDownloadAutoApply:true,separateWindow:false},energy:{privateManagedFileList:true,cloudAuthGated:true,virtualHostFetchRemoved:true,deadUrlPathRemoved:true,preservedRevisionResume:true,staleFailureRevisionScoped:true},diagnostics:{deduplicated:true},docs:{mainThreadSplitterDisabled:true}},null,2));
