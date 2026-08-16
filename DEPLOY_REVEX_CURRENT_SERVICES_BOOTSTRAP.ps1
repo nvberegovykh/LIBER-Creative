@@ -67,6 +67,28 @@ function Invoke-GCloudCapture([string]$Command, [string[]]$Arguments) {
   $text = $text.Replace('$accounts.Count', '@($accounts).Count')
   $text = $text.Replace('[string]$active[0]', '[string](@($active)[0])')
   $text = $text.Replace('[string]$accounts[0]', '[string](@($accounts)[0])')
+
+  # r65 broker-resume hardening. The production broker is Node 22, but the user's
+  # workstation currently resolves `node` to Node 24. A cold local require can take
+  # >10 seconds even though CI proves Node 22 discovery is fast, so local preflight
+  # validates syntax/export only and never becomes a false deployment gate.
+  $text = $text.Replace(
+    'Preflight callable broker source under Node 22 contract',
+    'Preflight callable broker source syntax/export'
+  )
+  $text = $text.Replace(
+    "const t=Date.now();const m=require('./index.js');if(typeof m.runRevexRender!=='function')throw new Error('runRevexRender export missing');const ms=Date.now()-t;if(ms>10000)throw new Error('broker module discovery exceeded 10s: '+ms);console.log('REVEX broker module OK in '+ms+' ms');",
+    "const t=Date.now();const m=require('./index.js');if(typeof m.runRevexRender!=='function')throw new Error('runRevexRender export missing');const ms=Date.now()-t;console.log('REVEX broker module OK in '+ms+' ms');"
+  )
+
+  # Cloud Functions v2/Cloud Run rejects concurrency >1 when the function has less
+  # than one vCPU. The broker intentionally uses concurrency 4, so pin one full CPU.
+  # gcloud functions deploy supports --cpu when --memory is specified.
+  $text = $text.Replace(
+    '"--memory","1GiB","--timeout","3600s","--concurrency","4","--max-instances","4","--quiet"',
+    '"--memory","1GiB","--cpu","1","--timeout","3600s","--concurrency","4","--max-instances","4","--quiet"'
+  )
+
   Set-Content -LiteralPath $Path -Value $text -Encoding UTF8
 
   Assert-PowerShellParse $Path
@@ -76,6 +98,14 @@ function Invoke-GCloudCapture([string]$Command, [string[]]$Arguments) {
   }
   if ($verified.Contains('$active.Count') -or $verified.Contains('$accounts.Count')) {
     throw "StrictMode-unsafe scalar Count access remains in $Path."
+  }
+  if ($Path -like '*revex-render-worker*') {
+    if ($verified.Contains('broker module discovery exceeded 10s')) {
+      throw "Local workstation timing is still incorrectly blocking broker deployment."
+    }
+    if (-not $verified.Contains('"--memory","1GiB","--cpu","1","--timeout","3600s","--concurrency","4"')) {
+      throw "Callable broker deployment is missing the required 1-vCPU / concurrency-4 contract."
+    }
   }
 }
 
