@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
+# r89 patch workflow trigger: cache-bust-aware-v2
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
     if new in text:
