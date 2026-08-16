@@ -1,0 +1,40 @@
+name: REVEX r89 apply broker identity transport
+
+on:
+  push:
+    branches: ['agent/revex-r89-*']
+    paths:
+      - '.github/scripts/apply-revex-r89-broker-transport.py'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply exact broker transport patch
+        run: python .github/scripts/apply-revex-r89-broker-transport.py
+      - name: Verify broker syntax and r89 transport markers
+        run: |
+          node --check server/firebase-functions/index.js
+          python - <<'PY'
+          from pathlib import Path
+          text=Path('server/firebase-functions/index.js').read_text(encoding='utf-8')
+          for marker in ('projectIdentityOverride','en1Applicant','en1Modeler','USER_PROJECT_IDENTITY_ONLY_FILLS_MISSING_REVIT_FIELDS'):
+              assert marker in text, marker
+          PY
+      - name: Commit broker transport patch
+        run: |
+          if git diff --quiet; then echo 'No patch needed'; exit 0; fi
+          git config user.name 'REVEX r89 system patch'
+          git config user.email 'actions@users.noreply.github.com'
+          git add server/firebase-functions/index.js
+          git commit -m 'REVEX r89: transport revision identity and EN-1 people to worker'
+          git push origin HEAD:${{ github.ref_name }}
