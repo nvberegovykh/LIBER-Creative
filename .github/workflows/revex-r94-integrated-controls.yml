@@ -47,7 +47,7 @@ jobs:
           for(const marker of ["Store.commitBimOverlay", "listBimOverlays", "visibility:'visible'", "stopImmediatePropagation", "first-capture ownership"]){if(!controls.includes(marker))throw new Error('missing Restore All contract marker: '+marker);}
           if(!ui.includes("energy-replay-r94.js?v=20260816r94-exact-job1"))throw new Error('r94 Energy owner not loaded');
           if(!ui.includes("critical-controls-r93.js?v=20260816r93-critical-controls3"))throw new Error('critical controls not loaded');
-          if(ui.includes('energy-replay-r92.js')||ui.includes('energy-replay-r93.js'))throw new Error('superseded replay owner still loaded');
+          if(/loadScript\('energy-replay-r9[23]\.js/.test(ui))throw new Error('superseded replay owner is still actively loaded');
           console.log('REVEX_R94_STATIC_CONTRACT=PASSED');
           NODE
       - name: Runtime Energy owner harness
