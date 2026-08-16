@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - 'agent/revex-selfhost-render-energy-viewer-r54-*'
+      - 'agent/revex-auto-firebase-auth-r59-*'
     paths:
       - 'docs/liber-apps/apps/revex/**'
       - 'server/revex-render-worker/**'
@@ -14,6 +15,7 @@ on:
       - 'src/Liber.Revex.Revit/Engineering/Energy/**'
       - 'src/Liber.Revex.Revit/Engineering/Gbxml/**'
       - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
+      - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
       - 'DEPLOY_REVEX_CURRENT_SERVICES.cmd'
       - '.github/scripts/verify-revex-r54-selfhost-render.js'
       - '.github/scripts/verify-revex-current-generation-r53.js'
@@ -29,6 +31,7 @@ on:
       - 'src/Liber.Revex.Revit/Engineering/Energy/**'
       - 'src/Liber.Revex.Revit/Engineering/Gbxml/**'
       - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
+      - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
       - 'DEPLOY_REVEX_CURRENT_SERVICES.cmd'
       - '.github/scripts/verify-revex-r54-selfhost-render.js'
       - '.github/scripts/verify-revex-current-generation-r53.js'
@@ -88,10 +91,17 @@ jobs:
           if ($energy.Contains('CanonicalSourceCommit') -or $energy.Contains('REVEX_R49_SOURCE_')) { throw 'Current Energy deploy contains stale publisher source-restoration markers.' }
           [void][scriptblock]::Create($energy)
 
-          $unified = Get-Content -Raw DEPLOY_REVEX_CURRENT_SERVICES.ps1
-          foreach ($required in @('clone","--depth","1","--branch","main"','rev-parse HEAD','DEPLOY_ENERGY_CURRENT.ps1','DEPLOY_RENDER_SERVER.ps1')) {
-            if (-not $unified.Contains($required)) { throw "Missing unified deployment contract: $required" }
+          $launcher = Get-Content -Raw DEPLOY_REVEX_CURRENT_SERVICES.ps1
+          foreach ($required in @('DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1','Start-Transcript','firebase login --reauth')) {
+            if (-not $launcher.Contains($required)) { throw "Missing unified launcher contract: $required" }
           }
-          if ($unified.Contains('PUBLISH_REVEX_R49.ps1')) { throw 'Unified deployment invokes stale publisher.' }
-          [void][scriptblock]::Create($unified)
+          if ($launcher.Contains('PUBLISH_REVEX_R49.ps1')) { throw 'Unified launcher invokes stale publisher.' }
+          [void][scriptblock]::Create($launcher)
+
+          $bootstrap = Get-Content -Raw DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1
+          foreach ($required in @('"clone", "--depth", "1", "--branch", "main"','"rev-parse", "HEAD"','DEPLOY_ENERGY_CURRENT.ps1','DEPLOY_RENDER_SERVER.ps1')) {
+            if (-not $bootstrap.Contains($required)) { throw "Missing unified bootstrap contract: $required" }
+          }
+          if ($bootstrap.Contains('PUBLISH_REVEX_R49.ps1')) { throw 'Unified bootstrap invokes stale publisher.' }
+          [void][scriptblock]::Create($bootstrap)
           Write-Host 'Managed deployment scripts: PASS'
