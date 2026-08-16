@@ -7,17 +7,19 @@ namespace Liber.Revex.Revit.Services;
 
 public static class EngineeringCompanionWebBridge
 {
-    private const string ManagedBridgeVersion = "20260813r49";
+    private const string ManagedBridgeVersion = "20260816r83";
     private const string ManagedEnergyInputSelector = "input[data-liber-revex-native-managed-energy='1']";
     private const string ManagedEnergyInputMarker = "data-liber-revex-native-managed-energy";
     private static readonly HashSet<string> ResumeAttempted = new(StringComparer.OrdinalIgnoreCase);
 
     public static async Task<(bool ok, string message)> EnsureManagedEnergyBridgeAsync(WebView2 web)
     {
-        var installed = await EnsureManagedEnergyBridgeCoreAsync(web);
-        if (!installed.ok) return installed;
-        _ = TryResumeLatestEngineeringRevisionAsync(web);
-        return installed;
+        // Ensuring the browser bridge is initialization only. It must never turn a
+        // Companion/add-in restart into an Energy execution trigger. The supported
+        // execution edge remains the explicit SYNC ENGINEERING handoff (or the
+        // explicit revision-scoped authorization action for an already-published
+        // revision).
+        return await EnsureManagedEnergyBridgeCoreAsync(web);
     }
 
     private static async Task<(bool ok, string message)> EnsureManagedEnergyBridgeCoreAsync(WebView2 web)
