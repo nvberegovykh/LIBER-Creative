@@ -1,0 +1,83 @@
+name: REVEX r64 final broker + Docs validation
+
+on:
+  push:
+    branches:
+      - main
+      - 'agent/revex-broker-docs-r64-*'
+    paths:
+      - 'server/revex-render-functions/**'
+      - 'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
+      - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
+      - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
+      - 'src/Liber.Revex.Revit/Services/PrintingSetExportService.cs'
+      - 'src/Liber.Revex.Revit/Services/RevexSyncService.cs'
+      - 'docs/liber-apps/apps/revex/sync-docs-r24.js'
+      - '.github/workflows/revex-r64-final-broker-docs-validation.yml'
+  pull_request:
+    branches: [main]
+
+jobs:
+  final-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Resolve render broker dependencies
+        working-directory: server/revex-render-functions
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Prove callable broker discovery stays under Firebase default timeout
+        working-directory: server/revex-render-functions
+        env:
+          REVEX_RENDER_WORKER_URL: https://example.invalid
+          REVEX_RENDER_BROKER_SERVICE_ACCOUNT: revex-render-broker@liber-apps-cca20.iam.gserviceaccount.com
+        run: |
+          node --check index.js
+          node - <<'NODE'
+          const started = Date.now();
+          const broker = require('./index.js');
+          const elapsed = Date.now() - started;
+          if (typeof broker.runRevexRender !== 'function') throw new Error('runRevexRender export missing');
+          if (elapsed >= 10000) throw new Error(`broker discovery exceeded 10s: ${elapsed}ms`);
+          console.log(`broker discovery ${elapsed}ms`);
+          NODE
+
+      - name: Prove deploy path bypasses Firebase CLI discovery
+        shell: pwsh
+        run: |
+          $files = @(
+            'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1',
+            'DEPLOY_REVEX_CURRENT_SERVICES.ps1',
+            'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
+          )
+          foreach ($path in $files) {
+            $tokens = $null; $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+            if (@($errors).Count) { throw "$path parser errors: $(@($errors).Message -join '; ')" }
+          }
+          $render = Get-Content -Raw server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1
+          if ($render -notmatch 'functions","deploy","runRevexRender') { throw 'Broker is not deployed through Cloud Functions v2 gcloud path.' }
+          if ($render -match 'Firebase.*deploy|functions:revex-render') { throw 'Firebase CLI deploy dependency returned to renderer deployment.' }
+          if ($render -notmatch '\[switch\]\$BrokerOnly') { throw 'Broker-only resume switch missing.' }
+          if ($render -notmatch 'Broker: runRevexRender ACTIVE') { throw 'Post-deploy ACTIVE assertion missing.' }
+
+      - name: Prove Docs set + isolated-sheet PDF contract
+        run: |
+          node --check docs/liber-apps/apps/revex/sync-docs-r24.js
+          grep -F 'liber.revex.printing-sets.v2' src/Liber.Revex.Revit/Services/PrintingSetExportService.cs
+          grep -F 'singlePagePdf' src/Liber.Revex.Revit/Services/PrintingSetExportService.cs
+          grep -F 'singlePageFileName' src/Liber.Revex.Revit/Services/PrintingSetExportService.cs
+          grep -F 'printingResult.PdfPaths.Select' src/Liber.Revex.Revit/Services/RevexSyncService.cs
+          grep -F 'singlePageStoragePath' docs/liber-apps/apps/revex/sync-docs-r24.js
+          grep -F 'isolatedSheetViewer:true' docs/liber-apps/apps/revex/sync-docs-r24.js
+          grep -F 'isolatedSheetShare:true' docs/liber-apps/apps/revex/sync-docs-r24.js
+
+      - name: Preserve current renderer Energy viewer and Design Book contracts
+        run: |
+          node .github/scripts/verify-revex-current-generation-r53.js
+          node .github/scripts/verify-revex-r54-selfhost-render.js
