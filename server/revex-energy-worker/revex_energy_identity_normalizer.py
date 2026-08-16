@@ -30,10 +30,14 @@ CITY_PREFIX = re.compile(
     re.I,
 )
 LOCALITY = re.compile(
-    r"\b([A-Za-z][A-Za-z .'-]{1,60}?)\s*,?\s+([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)\b",
+    r"\b([A-Za-z][A-Za-z .'-]{1,60}?)\s*,?\s+([A-Za-z]{2})\s*,?\s*(\d{5}(?:-\d{4})?)\b",
     re.I,
 )
-STATE_ZIP = re.compile(r"\b([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)\b", re.I)
+STATE_ZIP = re.compile(r"\b([A-Za-z]{2})\s*,?\s*(\d{5}(?:-\d{4})?)\b", re.I)
+COMMA_PROJECT_LOCALITY = re.compile(
+    r",\s*(?P<city>[A-Za-z][A-Za-z .'-]{1,60}?)\s*,\s*(?P<state>[A-Za-z]{2})\s*,?\s*(?P<zip>\d{5}(?:-\d{4})?)\b",
+    re.I,
+)
 STREET_SUFFIX = (
     r"(?:STREET|ST|AVENUE|AVE|ROAD|RD|BOULEVARD|BLVD|DRIVE|DR|LANE|LN|COURT|CT|"
     r"PLACE|PL|WAY|PARKWAY|PKWY|HIGHWAY|HWY|TERRACE|TER|CIRCLE|CIR)"
@@ -111,6 +115,13 @@ def parse_locality(value: str) -> dict[str, str]:
         source = source[:boundary.start()].rstrip()
     if not source:
         return {}
+
+    # Deterministic titleblock header form: STREET, CITY, STATE[, ]ZIP.
+    comma = COMMA_PROJECT_LOCALITY.search(source)
+    if comma:
+        parsed = _candidate(comma.group('city'), comma.group('state'), comma.group('zip'))
+        if parsed:
+            return parsed
 
     # Common full-address case with no comma/newline between street and city.
     full = FULL_ADDRESS_LOCALITY.match(source)
@@ -194,6 +205,9 @@ def _street_part(authoritative_address: str) -> str:
     if len(lines) > 1 and re.match(r"^\d", lines[0]) and any(STATE_ZIP.search(line) for line in lines[1:]):
         return lines[0]
     source = flat(raw)
+    comma = COMMA_PROJECT_LOCALITY.search(source)
+    if comma:
+        return source[:comma.start()].strip(' ,;:-')
     full = FULL_ADDRESS_LOCALITY.match(source)
     if full:
         return full.group("street").strip(" ,;:-")
