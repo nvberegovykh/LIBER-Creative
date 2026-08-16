@@ -35,11 +35,24 @@ public sealed class RevitRequestHandler : IExternalEventHandler
             {
                 result = RevitRequestResult.Fail("No active Revit document.");
             }
+            else if (request.Kind == RevitRequestKind.ResolveActiveProjectBinding)
+            {
+                // r86 explicit-action contract: opening REVEX or switching documents must
+                // never start a Revit document scan, project-binding resolution, publish,
+                // export, Energy handoff, or any other hidden work. The historic window
+                // startup probe still may exist in an older host binary long enough to
+                // reach this handler, so make that edge an immediate no-op. Project
+                // selection is now explicit in Companion; explicit SYNC actions still
+                // resolve and verify the active-document binding as part of that action.
+                RevexDiagnostics.Stage("REVIT", "IMPLICIT_ACTION_BLOCKED", "PASSED",
+                    $"kind={request.Kind}; initiator={request.Initiator}; no document traversal performed");
+                result = RevitRequestResult.Fail(
+                    "Automatic project-binding probes are disabled. Choose the REVEX project explicitly; no Revit work was started.");
+            }
             else
             {
                 RevexDiagnostics.Info("REVIT", $"Document={uidoc.Document.Title}; ActiveView={uidoc.ActiveView?.Name ?? "<none>"}");
-                bool requiresProjectBinding = request.Kind == RevitRequestKind.ResolveActiveProjectBinding ||
-                                              request.Kind == RevitRequestKind.SyncRevexProject ||
+                bool requiresProjectBinding = request.Kind == RevitRequestKind.SyncRevexProject ||
                                               (request.Kind == RevitRequestKind.GbxmlEngineering &&
                                                request.EngineeringSettings?.AuditOnly == false);
                 RevexProjectBinding? resolvedBinding = requiresProjectBinding
@@ -47,8 +60,6 @@ public sealed class RevitRequestHandler : IExternalEventHandler
                     : null;
                 result = request.Kind switch
                 {
-                    RevitRequestKind.ResolveActiveProjectBinding =>
-                        RevitRequestResult.Bound("Active Revit document project binding resolved.", resolvedBinding!),
                     RevitRequestKind.CaptureCurrentView =>
                         CaptureCurrent(uidoc, request.Settings),
                     RevitRequestKind.CaptureBatch =>
