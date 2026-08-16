@@ -36,18 +36,36 @@ function Native-Ok([string]$Command, [string[]]$Arguments) {
   try { & $Command @Arguments *> $null; return ($LASTEXITCODE -eq 0) } catch { return $false }
 }
 
+function Assert-R69Source {
+  $resolver = Join-Path $Root "server\revex-energy-worker\revex_energy_pipeline_r69.py"
+  $guard = Join-Path $Root "server\revex-energy-worker\revex_energy_pipeline_guard.py"
+  $docker = Join-Path $Root "server\revex-energy-worker\Dockerfile"
+  foreach ($path in @($resolver,$guard,$docker,$CloudBuild)) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "r69 Energy source is incomplete: $path" }
+  }
+  $resolverText = Get-Content -Raw -LiteralPath $resolver
+  $guardText = Get-Content -Raw -LiteralPath $guard
+  $dockerText = Get-Content -Raw -LiteralPath $docker
+  foreach ($marker in @('US_CENSUS_GEOCODER_PUBLIC_AR_CURRENT','00_PAGE_FACTS_RESOLVED_R69.json','derived-only-from-immutable-active-Revit-address')) {
+    if (-not $resolverText.Contains($marker)) { throw "r69 resolver marker is missing: $marker" }
+  }
+  if (-not $guardText.Contains('import revex_energy_pipeline_r69 as resolver') -or -not $guardText.Contains('_resolve_r69_request(request_path, output_root)')) {
+    throw "r69 resolver is not wired behind the preserved Energy failure guard."
+  }
+  foreach ($marker in @('REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py','REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py')) {
+    if (-not $dockerText.Contains($marker)) { throw "r69 worker image marker is missing: $marker" }
+  }
+}
+
 try {
   Write-Host "REVEX r69 Energy worker-only deployment" -ForegroundColor Cyan
   Write-Host "Source candidate: $SourceCandidate"
   Write-Host "No Firebase CLI and no render/GPU deployment will run."
 
+  Assert-R69Source
   $GCloud = Require-Command "gcloud"
   $Node = Require-Command "node"
   Invoke-Checked "Run current-generation source guard" $Node @((Join-Path $Root ".github\scripts\verify-revex-current-generation-r53.js"))
-  if (Test-Path -LiteralPath (Join-Path $Root ".github\scripts\verify-revex-r69-energy-finish.py")) {
-    $Python = Require-Command "python"
-    Invoke-Checked "Run r69 Energy/finish deterministic guard" $Python @((Join-Path $Root ".github\scripts\verify-revex-r69-energy-finish.py"))
-  }
 
   $authArgs = @("auth","list","--filter","status:ACTIVE","--format","value(account)")
   $active = @(Invoke-GCloudCapture $GCloud $authArgs) | Where-Object { $_ }
