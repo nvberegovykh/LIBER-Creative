@@ -61,10 +61,19 @@ jobs:
           echo REVEX_BROKER_RESULT_REVISION=PASSED
       - name: No QA weakening
         run: |
-          grep -q 'MINIMUM_MAPPING_CONFIDENCE = 0.75' src/Liber.Revex.Revit/Engineering/Energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py
-          grep -q 'allowAmbiguous.*False' server/revex-energy-worker/verify_geometryco_source_condition_r91.py
-          ! grep -Eq 'allow_ambiguous["'"']?[[:space:]]*:[[:space:]]*True|MINIMUM_MAPPING_CONFIDENCE[[:space:]]*=[[:space:]]*0\.[0-6]' server/revex-energy-worker/revex_geometryco_source_condition.py
-          echo REVEX_QA_FLOOR_UNCHANGED=PASSED
+          python <<'PY'
+          from pathlib import Path
+          import re
+          core = Path('src/Liber.Revex.Revit/Engineering/Energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py').read_text(encoding='utf-8')
+          wrapper = Path('server/revex-energy-worker/revex_geometryco_source_condition.py').read_text(encoding='utf-8')
+          verify = Path('server/revex-energy-worker/verify_geometryco_source_condition_r91.py').read_text(encoding='utf-8')
+          assert 'MINIMUM_MAPPING_CONFIDENCE = 0.75' in core
+          assert '"allowAmbiguous"] is False' in verify
+          assert not re.search(r'MINIMUM_MAPPING_CONFIDENCE\s*=\s*0\.[0-6]', wrapper)
+          assert 'section.get("allow_ambiguous") is True' in wrapper
+          assert 'refuses allow_ambiguous' in wrapper
+          print('REVEX_QA_FLOOR_UNCHANGED=PASSED')
+          PY
       - name: Docker wiring contract
         run: |
           grep -q 'OpenStudio_Energy_Model_Geometry_Compiler_core.py' server/revex-energy-worker/Dockerfile
