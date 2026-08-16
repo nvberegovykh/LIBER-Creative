@@ -44,6 +44,7 @@ _spec = importlib.util.spec_from_file_location("revex_geometryco_core_r91", CORE
 if _spec is None or _spec.loader is None:
     raise RuntimeError(f"Cannot import GeometryCo core from {CORE_PATH}")
 core = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = core
 _spec.loader.exec_module(core)
 
 # Re-export the original API so existing QA/importers continue to exercise the
@@ -323,14 +324,21 @@ def compile_baseline_proposed_pair(
     original_config = copy.deepcopy(config or {})
 
     # Never accept a caller attempt to weaken the base gate through this wrapper.
-    for role in ("global", "baseline", "proposed"):
-        section = original_config.get(role) if isinstance(original_config, dict) else None
-        if isinstance(section, dict):
-            requested = section.get("minimum_mapping_confidence")
-            if requested is not None and float(requested) < core.MINIMUM_MAPPING_CONFIDENCE:
-                raise core.CompileError("REVEX r91 refuses to lower GeometryCo's 75% minimum mapping confidence.")
-            if section.get("allow_ambiguous") is True:
-                raise core.CompileError("REVEX r91 refuses allow_ambiguous; all assignments must be proven before compilation.")
+    sections = [original_config]
+    if isinstance(original_config, dict):
+        sections.extend(
+            section for section in (
+                original_config.get("global"), original_config.get("baseline"), original_config.get("proposed")
+            ) if isinstance(section, dict)
+        )
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        requested = section.get("minimum_match_score")
+        if requested is not None and float(requested) < core.MINIMUM_MAPPING_CONFIDENCE:
+            raise core.CompileError("REVEX r91 refuses to lower GeometryCo's 75% minimum mapping confidence.")
+        if section.get("allow_ambiguous") is True:
+            raise core.CompileError("REVEX r91 refuses allow_ambiguous; all assignments must be proven before compilation.")
 
     effective_config, audit = _resolve_ambiguous_from_source(
         geometry_path, baseline_path, proposed_path, outdir, original_config
