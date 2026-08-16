@@ -1,0 +1,44 @@
+name: REVEX r91 one-shot legacy QA alignment
+
+on:
+  push:
+    branches:
+      - agent/revex-r91-geometryco-overdrive
+
+permissions:
+  contents: write
+
+jobs:
+  align:
+    if: ${{ !contains(github.event.head_commit.message, 'r91-auto-test-align') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/revex-r91-geometryco-overdrive
+          fetch-depth: 1
+      - name: Align legacy recorded broker mock to exact resultRevision contract
+        run: |
+          python <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/verify-revex-r49.js')
+          text = path.read_text(encoding='utf-8')
+          old_result = "const result={projectId:'revex_current',manifest:{schema:'liber.revex.energy-result.v1',status:'COMPLETE',sourceEngineeringRevision:'eng_current'}};"
+          new_result = "const result={projectId:'revex_current',revision:'energy_current',manifest:{schema:'liber.revex.energy-result.v1',status:'COMPLETE',sourceEngineeringRevision:'eng_current',resultRevision:'energy_current'}};"
+          old_broker = "runEnergyServer:async()=>({ok:true,status:'COMPLETE'}),"
+          new_broker = "runEnergyServer:async()=>({ok:true,status:'COMPLETE',resultRevision:'energy_current'}),"
+          if old_result not in text or old_broker not in text:
+              raise SystemExit('Legacy recorded Energy mock anchors changed; refusing a blind edit.')
+          text = text.replace(old_result, new_result, 1).replace(old_broker, new_broker, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          node .github/scripts/verify-revex-r49.js --report /tmp/revex-r49-r91.json
+          git diff --check
+      - name: Commit exact mock alignment to this PR branch
+        run: |
+          git config user.name 'REVEX r91 QA'
+          git config user.email 'actions@users.noreply.github.com'
+          git add .github/scripts/verify-revex-r49.js
+          git diff --cached --quiet && exit 0
+          git commit -m 'r91-auto-test-align: exact broker result revision in recorded QA'
+          git push origin HEAD:agent/revex-r91-geometryco-overdrive
