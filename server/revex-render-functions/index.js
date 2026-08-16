@@ -1,23 +1,45 @@
 'use strict';
 
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const { onInit } = require('firebase-functions/v2/core');
 const { setGlobalOptions } = require('firebase-functions/v2');
-const { initializeApp } = require('firebase-admin/app');
-const { getFirestore, FieldValue } = require('firebase-admin/firestore');
-const { getStorage } = require('firebase-admin/storage');
-const { GoogleAuth } = require('google-auth-library');
 const { projectAccessRole } = require('./project-access');
 
-initializeApp();
 setGlobalOptions({ region: 'us-central1', maxInstances: 4 });
 
-const db = getFirestore();
+// Firebase discovers exported functions by loading this module during deploy. Keep
+// expensive Admin/Google client modules out of global discovery and initialize them
+// only in the deployed runtime. This follows Firebase's onInit deployment-timeout
+// guidance and makes broker discovery deterministic on slower Windows/CI hosts.
+let db = null;
+let FieldValue = null;
+let storage = null;
+let GoogleAuth = null;
+
+onInit(() => {
+  const { getApps, initializeApp } = require('firebase-admin/app');
+  if (!getApps().length) initializeApp();
+  const firestore = require('firebase-admin/firestore');
+  const storageApi = require('firebase-admin/storage');
+  db = firestore.getFirestore();
+  FieldValue = firestore.FieldValue;
+  storage = storageApi.getStorage();
+  GoogleAuth = require('google-auth-library').GoogleAuth;
+});
+
 const PROJECT_RE = /^[A-Za-z0-9._-]{1,160}$/;
 const JOB_RE = /^[A-Za-z0-9_-]{1,160}$/;
 const RENDER_BROKER_SERVICE_ACCOUNT = process.env.REVEX_RENDER_BROKER_SERVICE_ACCOUNT || 'revex-render-broker@liber-apps-cca20.iam.gserviceaccount.com';
 const RENDER_WORKER_URL = String(process.env.REVEX_RENDER_WORKER_URL || '').replace(/\/+$/, '');
 const SOURCE_MAX_BYTES = 24 * 1024 * 1024;
-const BUILD = '20260816r54-render-broker1';
+const BUILD = '20260816r64-render-broker2';
+
+function runtimeServices() {
+  if (!db || !FieldValue || !storage || !GoogleAuth) {
+    throw new HttpsError('unavailable', 'REVEX render broker runtime initialization is not complete. Retry the render request.');
+  }
+  return { db, FieldValue, storage, GoogleAuth };
+}
 
 function safeId(value, regex, label) {
   const text = String(value || '').trim();
@@ -36,6 +58,7 @@ function decodeImageDataUrl(value) {
 }
 
 async function assertProjectAccess(projectId, uid) {
+  const { db } = runtimeServices();
   const [projectSnap, userSnap] = await Promise.all([
     db.doc(`projects/${projectId}`).get(),
     db.doc(`users/${uid}`).get()
@@ -47,6 +70,7 @@ async function assertProjectAccess(projectId, uid) {
 }
 
 async function setJob(projectId, jobId, patch) {
+  const { db, FieldValue } = runtimeServices();
   await db.doc(`projects/${projectId}/revexRenders/${jobId}`).set({
     ...patch,
     brokerBuild: BUILD,
@@ -60,6 +84,7 @@ exports.runRevexRender = onCall({
   concurrency: 4,
   serviceAccount: RENDER_BROKER_SERVICE_ACCOUNT
 }, async (request) => {
+  const runtime = runtimeServices();
   const correlationId = `render-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Sign in to REVEX before rendering.');
   const body = request.data || {};
@@ -70,7 +95,7 @@ exports.runRevexRender = onCall({
   const jobId = safeId(body.jobId, JOB_RE, 'jobId');
   const uid = String(request.auth.uid);
   const accessRole = await assertProjectAccess(projectId, uid);
-  const jobRef = db.doc(`projects/${projectId}/revexRenders/${jobId}`);
+  const jobRef = runtime.db.doc(`projects/${projectId}/revexRenders/${jobId}`);
   const jobSnap = await jobRef.get();
   if (!jobSnap.exists) throw new HttpsError('failed-precondition', 'Create the REVEX render job before dispatching it.');
   const existing = jobSnap.data() || {};
@@ -80,7 +105,7 @@ exports.runRevexRender = onCall({
     throw new HttpsError('failed-precondition', 'The private REVEX GPU renderer has not been deployed yet.');
 
   const source = decodeImageDataUrl(body.sourceImageDataUrl);
-  const bucket = getStorage().bucket();
+  const bucket = runtime.storage.bucket();
   const base = `projects/${projectId}/revex/renders/${jobId}`;
   const sourcePath = `${base}/source.${source.contentType.endsWith('jpeg') ? 'jpg' : source.contentType.split('/')[1]}`;
   const resultPath = `${base}/result.jpg`;
@@ -107,7 +132,7 @@ exports.runRevexRender = onCall({
   await setJob(projectId, jobId, { status: 'DISPATCHED', stage: 'worker', sourcePath });
 
   try {
-    const auth = new GoogleAuth();
+    const auth = new runtime.GoogleAuth();
     const client = await auth.getIdTokenClient(RENDER_WORKER_URL);
     const response = await client.request({
       url: `${RENDER_WORKER_URL}/run`,
@@ -143,7 +168,7 @@ exports.runRevexRender = onCall({
       resultWidth: Number(result.width || 0),
       resultHeight: Number(result.height || 0),
       inferenceSeconds: Number(result.inferenceSeconds || 0),
-      completedAt: FieldValue.serverTimestamp()
+      completedAt: runtime.FieldValue.serverTimestamp()
     });
     return {
       ok: true,

@@ -7,6 +7,7 @@ on:
       - 'agent/revex-deploy-bootstrap-argv-r57-*'
       - 'agent/revex-deploy-single-account-count-r58-*'
       - 'agent/revex-auto-firebase-auth-r59-*'
+      - 'agent/revex-broker-docs-r64-*'
     paths:
       - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
       - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
@@ -82,10 +83,12 @@ jobs:
         shell: powershell
         run: |
           $launcher = Get-Content -Raw .\DEPLOY_REVEX_CURRENT_SERVICES.ps1
+          $firebaseRecovery = $launcher.Contains('& $Firebase login --reauth') -or $launcher.Contains('Invoke-NativeExitCode $Firebase @("login","--reauth")')
+          $gcloudRecovery = $launcher.Contains('& $GCloud auth login') -or $launcher.Contains('Invoke-NativeExitCode $GCloud @("auth","login")')
+          if (-not $firebaseRecovery) { throw 'Managed launcher is missing Firebase automatic reauth.' }
+          if (-not $gcloudRecovery) { throw 'Managed launcher is missing gcloud automatic login.' }
           foreach ($required in @(
-            '& $Firebase login --reauth',
             'deployment will resume automatically after approval',
-            '& $GCloud auth login',
             'DEPLOY_REVEX_CURRENT_SERVICES.latest.log',
             'Start-Transcript'
           )) {

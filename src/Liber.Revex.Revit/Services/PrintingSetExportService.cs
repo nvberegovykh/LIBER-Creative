@@ -6,9 +6,11 @@ using System.Text.Json;
 namespace Liber.Revex.Revit.Services;
 
 /// <summary>
-/// Exports saved Revit View/Sheet Sets as immutable combined PDFs and writes a
-/// page index that REVEX Docs can browse without splitting or duplicating PDFs.
-/// No print-set/view/sheet settings are modified.
+/// Exports every saved Revit View/Sheet Set as one immutable combined PDF and,
+/// for every page in that set, a second immutable one-page PDF exported directly
+/// by Revit from the same authoritative view/sheet. REVEX Docs can therefore open
+/// and share a selected sheet as an actual single-page PDF instead of a page anchor
+/// into the multi-page set. No print-set/view/sheet settings are modified.
 /// </summary>
 public sealed class PrintingSetExportService
 {
@@ -57,7 +59,7 @@ public sealed class PrintingSetExportService
         string manifestPath = Path.Combine(folder, "printing-sets.json");
         File.WriteAllText(manifestPath, JsonSerializer.Serialize(new
         {
-            schema = "liber.revex.printing-sets.v1",
+            schema = "liber.revex.printing-sets.v2",
             revision,
             documentTitle = doc.Title,
             documentUniqueId = doc.ProjectInformation.UniqueId,
@@ -83,7 +85,7 @@ public sealed class PrintingSetExportService
     {
         string baseName = $"{Safe(name)}__{revision}";
         string expected = Path.Combine(pdfFolder, baseName + ".pdf");
-        try { if (File.Exists(expected)) File.Delete(expected); } catch { }
+        DeleteIfPresent(expected);
 
         var options = new PDFExportOptions
         {
@@ -94,12 +96,7 @@ public sealed class PrintingSetExportService
         };
         var ids = views.Select(v => v.Id).ToList();
         bool ok = doc.Export(pdfFolder, ids, options);
-        string? pdf = File.Exists(expected)
-            ? expected
-            : Directory.GetFiles(pdfFolder, "*.pdf", SearchOption.TopDirectoryOnly)
-                .Where(path => Path.GetFileNameWithoutExtension(path).StartsWith(baseName, StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(File.GetLastWriteTimeUtc)
-                .FirstOrDefault();
+        string? pdf = ResolveExport(pdfFolder, baseName, expected);
         if (!ok || string.IsNullOrWhiteSpace(pdf) || !File.Exists(pdf))
         {
             RevexDiagnostics.Warn("DOCS", $"Printing set export skipped/failed: {name}");
@@ -107,23 +104,52 @@ public sealed class PrintingSetExportService
         }
 
         pdfPaths.Add(pdf);
-        totalSheets += views.Count;
-        var pages = views.Select((view, index) =>
+
+        string setToken = Safe(stableId);
+        if (setToken.Length > 24) setToken = setToken[..24];
+        string singlePageFolder = Path.Combine(pdfFolder, "sheets", Safe(stableId));
+        Directory.CreateDirectory(singlePageFolder);
+        var pages = new List<object>(views.Count);
+
+        for (int index = 0; index < views.Count; index++)
         {
+            View view = views[index];
             ViewSheet? sheet = view as ViewSheet;
-            return new
+            string sheetNumber = sheet?.SheetNumber ?? view.Name;
+            string singlePageBaseName = $"{setToken}__{index + 1:D3}__{Safe(sheetNumber)}__{revision}";
+            string singleExpected = Path.Combine(singlePageFolder, singlePageBaseName + ".pdf");
+            DeleteIfPresent(singleExpected);
+
+            var singleOptions = new PDFExportOptions
+            {
+                Combine = true,
+                FileName = singlePageBaseName,
+                AlwaysUseRaster = false,
+                ViewLinksInBlue = false
+            };
+            bool singleOk = doc.Export(singlePageFolder, new List<ElementId> { view.Id }, singleOptions);
+            string? singlePdf = ResolveExport(singlePageFolder, singlePageBaseName, singleExpected);
+            if (!singleOk || string.IsNullOrWhiteSpace(singlePdf) || !File.Exists(singlePdf))
+                throw new InvalidOperationException($"REVEX could not export the required single-page PDF for {name} / {sheetNumber}.");
+
+            pdfPaths.Add(singlePdf);
+            string relativeSingle = Path.GetRelativePath(pdfFolder, singlePdf).Replace('\\', '/');
+            pages.Add(new
             {
                 page = index + 1,
                 kind = sheet == null ? "view" : "sheet",
                 sheetId = view.Id.Value,
                 sheetUniqueId = view.UniqueId,
-                sheetNumber = sheet?.SheetNumber ?? view.Name,
+                sheetNumber,
                 sheetName = view.Name,
                 currentRevision = sheet == null ? null : CurrentRevision(sheet),
-                printable = view.CanBePrinted
-            };
-        }).ToArray();
+                printable = view.CanBePrinted,
+                singlePagePdf = Path.Combine("printing-sets", relativeSingle).Replace('\\', '/'),
+                singlePageFileName = Path.GetFileName(singlePdf)
+            });
+        }
 
+        totalSheets += pages.Count;
         sets.Add(new
         {
             id = stableId,
@@ -131,10 +157,24 @@ public sealed class PrintingSetExportService
             name,
             pdf = Path.Combine("printing-sets", Path.GetFileName(pdf)).Replace('\\', '/'),
             fileName = Path.GetFileName(pdf),
-            pageCount = pages.Length,
+            pageCount = pages.Count,
             pages
         });
-        RevexDiagnostics.Info("DOCS", $"Printing set exported: {name}; pages={pages.Length}; pdf={pdf}");
+        RevexDiagnostics.Info("DOCS", $"Printing set exported: {name}; pages={pages.Count}; setPdf={pdf}; singlePagePdfs={pages.Count}");
+    }
+
+    private static string? ResolveExport(string folder, string baseName, string expected)
+    {
+        if (File.Exists(expected)) return expected;
+        return Directory.GetFiles(folder, "*.pdf", SearchOption.TopDirectoryOnly)
+            .Where(path => Path.GetFileNameWithoutExtension(path).StartsWith(baseName, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
+    }
+
+    private static void DeleteIfPresent(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch { }
     }
 
     private static string? CurrentRevision(ViewSheet sheet)

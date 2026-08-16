@@ -1,12 +1,12 @@
 {
   "name": "revex-render-functions",
   "private": true,
-  "version": "0.8.19-r54",
+  "version": "0.8.19-r64",
   "main": "index.js",
   "engines": { "node": "22" },
   "dependencies": {
-    "firebase-admin": "^13.5.0",
-    "firebase-functions": "^6.4.0",
-    "google-auth-library": "^10.2.1"
+    "firebase-admin": "13.10.0",
+    "firebase-functions": "6.6.0",
+    "google-auth-library": "10.9.1"
   }
 }

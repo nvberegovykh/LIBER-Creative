@@ -6,6 +6,7 @@ on:
       - main
       - 'agent/revex-selfhost-render-energy-viewer-r54-*'
       - 'agent/revex-auto-firebase-auth-r59-*'
+      - 'agent/revex-broker-docs-r64-*'
     paths:
       - 'docs/liber-apps/apps/revex/**'
       - 'server/revex-render-worker/**'
@@ -92,9 +93,13 @@ jobs:
           [void][scriptblock]::Create($energy)
 
           $launcher = Get-Content -Raw DEPLOY_REVEX_CURRENT_SERVICES.ps1
-          foreach ($required in @('DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1','Start-Transcript','& $Firebase login --reauth')) {
+          foreach ($required in @('DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1','Start-Transcript','deployment will resume automatically after approval')) {
             if (-not $launcher.Contains($required)) { throw "Missing unified launcher contract: $required" }
           }
+          $firebaseRecovery = $launcher.Contains('& $Firebase login --reauth') -or $launcher.Contains('Invoke-NativeExitCode $Firebase @("login","--reauth")')
+          $gcloudRecovery = $launcher.Contains('& $GCloud auth login') -or $launcher.Contains('Invoke-NativeExitCode $GCloud @("auth","login")')
+          if (-not $firebaseRecovery) { throw 'Unified launcher is missing Firebase interactive auth recovery.' }
+          if (-not $gcloudRecovery) { throw 'Unified launcher is missing gcloud interactive auth recovery.' }
           if ($launcher.Contains('PUBLISH_REVEX_R49.ps1')) { throw 'Unified launcher invokes stale publisher.' }
           [void][scriptblock]::Create($launcher)
 
