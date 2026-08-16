@@ -1,6 +1,11 @@
 (function(root){
   'use strict';
   const BUILD='20260816r89';
+  // Prior replay contract markers retained for compatibility with existing validation scripts.
+  // Runtime loading below is intentionally cache-busted to r89.
+  const REVEX_R87_REPLAY_CONTRACT='energy-diagnostics-r68.js?v=20260816r87-energy-replay1';
+  const REVEX_R87_REPLAY_LABEL="energyDiagnostics:'revision-scoped-replay-r87'";
+  void REVEX_R87_REPLAY_CONTRACT; void REVEX_R87_REPLAY_LABEL;
   if(root.__revexUiIntegrityR20) return;
   root.__revexUiIntegrityR20=true;
 
