@@ -146,28 +146,89 @@ public sealed class RevitRequestHandler : IExternalEventHandler
             $"REVEX revision ready: IFC + viewer data + {sync.ScheduleCount} schedules + {sync.ElementCount} model elements + {sync.AffectedPlanViewCount} affected plan views.",
             sync);
     }
+
     private RevitRequestResult RunGbxmlEngineering(UIApplication app, UIDocument uidoc, GbxmlEngineeringSettings settings)
     {
         RevexDiagnostics.Info("GBXML", "Engineering gbXML request entered.");
         GbxmlEngineeringOutput? output = null;
+        bool sourceTopologyFallback = false;
         try
         {
-            output = new GbxmlEngineeringService().Run(app, uidoc.Document, settings);
+            try
+            {
+                output = new GbxmlEngineeringService().Run(app, uidoc.Document, settings);
+            }
+            catch (Exception ex) when (
+                !settings.AuditOnly &&
+                settings.CreateOrFixSpaces &&
+                IsRecoverableSpatialTopologyFailure(ex))
+            {
+                // Revit can throw an analytical-plan topology exception through Dynamo's
+                // ExecuteCommand before the Python engine can downgrade the affected level
+                // to preservation-gate evidence. Do not ask the user to redraw a valid
+                // architectural T-junction merely to make Energy Sync run. Retry exactly
+                // once with topology mutation disabled: existing Rooms/Spaces remain the
+                // source, native EADM can still retry its tiers, and the existing direct-
+                // Revit geometry serializer remains the final deterministic fallback.
+                sourceTopologyFallback = true;
+                RevexDiagnostics.Warn("GBXML",
+                    "Revit rejected automatic Space topology at an ambiguous boundary branch. " +
+                    "Retrying once from existing source spatial elements without NewSpace/NewSpaces2 mutation. " +
+                    "No boundary geometry will be guessed. Original error: " + ex.Message);
+                RevexDiagnostics.Stage("GBXML", "SOURCE_TOPOLOGY_FALLBACK", "STARTED",
+                    "automatic topology mutation disabled; source Rooms/Spaces + EADM/direct-Revit fallback remain authoritative");
+
+                GbxmlEngineeringSettings fallbackSettings = settings with
+                {
+                    CreateOrFixSpaces = false
+                };
+                output = new GbxmlEngineeringService().Run(app, uidoc.Document, fallbackSettings);
+                RevexDiagnostics.Stage("GBXML", "SOURCE_TOPOLOGY_FALLBACK", "PASSED",
+                    $"status={output.Status}; gbxml={output.GbxmlPath ?? "<none>"}");
+            }
+
             bool ok = GbxmlEngineeringService.IsSuccessful(output, settings.AuditOnly);
             string detail = settings.AuditOnly
                 ? $"gbXML audit finished: {output.Status}."
                 : ok
-                    ? $"gbXML exported: {output.GbxmlPath}"
-                    : $"gbXML export blocked: {output.Status}. See the report and REVEX diagnostics.";
+                    ? sourceTopologyFallback
+                        ? $"gbXML exported from preserved Revit spatial topology after automatic boundary-branch fallback: {output.GbxmlPath}"
+                        : $"gbXML exported: {output.GbxmlPath}"
+                    : sourceTopologyFallback
+                        ? $"gbXML source-topology fallback finished but remained below the publication gate: {output.Status}. See the report and REVEX diagnostics."
+                        : $"gbXML export blocked: {output.Status}. See the report and REVEX diagnostics.";
             return ok
                 ? RevitRequestResult.Engineered(detail, output)
                 : RevitRequestResult.EngineeringFailed(detail, output);
         }
         catch (Exception ex)
         {
-            RevexDiagnostics.Error("GBXML", "Engineering gbXML execution failed.", ex);
+            RevexDiagnostics.Error("GBXML", sourceTopologyFallback
+                ? "Engineering gbXML source-topology fallback failed."
+                : "Engineering gbXML execution failed.", ex);
             return RevitRequestResult.EngineeringFailed(ex.Message, output);
         }
     }
 
+    private static bool IsRecoverableSpatialTopologyFailure(Exception error)
+    {
+        // Keep this deliberately narrow. Only native/Dynamo failures that explicitly
+        // describe an ambiguous Room/Space/analytical boundary branch are rerun in
+        // read-mostly source-topology mode. Dependency, phase, file, authentication,
+        // and arbitrary programming failures must remain hard failures.
+        for (Exception? current = error; current != null; current = current.InnerException)
+        {
+            string message = (current.Message ?? string.Empty).ToLowerInvariant();
+            if (message.Length == 0) continue;
+
+            if (message.Contains("ambiguous thermal boundary", StringComparison.Ordinal) ||
+                message.Contains("analytical vertex", StringComparison.Ordinal) ||
+                message.Contains("room/space boundary branch", StringComparison.Ordinal) ||
+                (message.Contains("more than two", StringComparison.Ordinal) &&
+                 (message.Contains("curve", StringComparison.Ordinal) ||
+                  message.Contains("boundary", StringComparison.Ordinal))))
+                return true;
+        }
+        return false;
+    }
 }
