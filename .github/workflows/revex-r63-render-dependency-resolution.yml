@@ -1,0 +1,43 @@
+name: REVEX r63 render dependency resolution
+
+on:
+  push:
+    branches:
+      - main
+      - 'agent/revex-render-deps-r63-*'
+    paths:
+      - 'server/revex-render-worker/requirements.txt'
+      - 'server/revex-render-worker/Dockerfile'
+      - '.github/workflows/revex-r63-render-dependency-resolution.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/revex-render-worker/requirements.txt'
+      - 'server/revex-render-worker/Dockerfile'
+      - '.github/workflows/revex-r63-render-dependency-resolution.yml'
+
+jobs:
+  resolve:
+    name: Resolve pinned renderer dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify exact safetensors floor required by diffusers 0.39
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fx 'diffusers==0.39.0' server/revex-render-worker/requirements.txt
+          grep -Fx 'safetensors==0.8.0' server/revex-render-worker/requirements.txt
+      - name: Resolve the complete pinned render environment without installing it
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip==25.2
+          python -m pip install --dry-run --ignore-installed -r server/revex-render-worker/requirements.txt
+      - name: Preserve renderer Energy and viewer contracts
+        run: |
+          node .github/scripts/verify-revex-current-generation-r53.js
+          node .github/scripts/verify-revex-r54-selfhost-render.js
