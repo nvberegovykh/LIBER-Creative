@@ -1,0 +1,47 @@
+name: REVEX r77 Energy broker-worker contract
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/firebase-functions/index.js'
+      - 'server/revex-energy-worker/DEPLOY_ENERGY_BROKER_ONLY_R77.ps1'
+      - '.github/scripts/verify-revex-r77-energy-broker-worker-contract.js'
+      - '.github/workflows/revex-r77-energy-broker-worker-contract.yml'
+  push:
+    branches:
+      - main
+      - 'agent/revex-r77-*'
+    paths:
+      - 'server/firebase-functions/index.js'
+      - 'server/revex-energy-worker/DEPLOY_ENERGY_BROKER_ONLY_R77.ps1'
+      - '.github/scripts/verify-revex-r77-energy-broker-worker-contract.js'
+      - '.github/workflows/revex-r77-energy-broker-worker-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  broker-worker-contract:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Parse broker-only PowerShell
+        shell: powershell
+        run: |
+          $tokens=$null; $errors=$null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'server/revex-energy-worker/DEPLOY_ENERGY_BROKER_ONLY_R77.ps1'),[ref]$tokens,[ref]$errors)
+          if(@($errors).Count){throw (@($errors).Message -join '; ')}
+      - name: Syntax-check callable broker
+        run: node --check server/firebase-functions/index.js
+      - name: Prove independent broker-worker source identity and resume path
+        run: node .github/scripts/verify-revex-r77-energy-broker-worker-contract.js
+      - name: Preserve current managed Energy and viewer contracts
+        shell: pwsh
+        run: |
+          node .github/scripts/verify-revex-current-generation-r53.js
+          node .github/scripts/verify-revex-r54-selfhost-render.js
+          python .github/scripts/verify-revex-r73-energy-topology-fallback.py
