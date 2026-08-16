@@ -37,17 +37,45 @@ COPY server/revex-energy-worker/revex_energy_identity_normalizer.py /opt/revex/s
 COPY server/revex-energy-worker/revex_identity_content_agent.py /opt/revex/server/revex_identity_content_agent.py
 COPY server/revex-energy-worker/revex_user_identity_en1.py /opt/revex/server/revex_user_identity_en1.py
 COPY server/revex-energy-worker/revex_energy_pipeline_r69.py /opt/revex/server/revex_energy_pipeline_r69.py
+COPY server/revex-energy-worker/revex_geometryco_source_condition.py /opt/revex/server/revex_geometryco_source_condition.py
 COPY server/revex-energy-worker/verify_failure_evidence_r55.py /opt/revex/server/verify_failure_evidence_r55.py
 COPY server/revex-energy-worker/verify_identity_normalizer.py /opt/revex/server/verify_identity_normalizer.py
 COPY server/revex-energy-worker/verify_identity_content_agent.py /opt/revex/server/verify_identity_content_agent.py
 COPY server/revex-energy-worker/verify_user_identity_en1_r89.py /opt/revex/server/verify_user_identity_en1_r89.py
+COPY server/revex-energy-worker/verify_geometryco_source_condition_r91.py /opt/revex/server/verify_geometryco_source_condition_r91.py
 COPY server/revex-energy-worker/run_revex_r49_release_acceptance.py /opt/revex/server/run_revex_r49_release_acceptance.py
 COPY server/revex-energy-worker/verify_revex_r49_worker.py /opt/revex/server/verify_revex_r49_worker.py
 COPY server/revex-energy-worker/requirements-server.txt /opt/revex/server/requirements-server.txt
+
+# Preserve GeometryCo 4.3.4 byte-for-byte as the core. The installed entrypoint
+# is a source-evidence resolver that calls back into that core and never enables
+# allow_ambiguous or lowers the 75% confidence floor.
+RUN mv /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py \
+       /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler_core.py \
+ && cp /opt/revex/server/revex_geometryco_source_condition.py \
+       /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py
+
 RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
  && test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.py \
  && test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn \
- && python3 -m py_compile /opt/revex/server/app.py /opt/revex/server/revex_energy_pipeline_guard.py /opt/revex/server/revex_energy_identity_normalizer.py /opt/revex/server/revex_identity_content_agent.py /opt/revex/server/revex_user_identity_en1.py /opt/revex/server/revex_energy_pipeline_r69.py /opt/revex/server/verify_failure_evidence_r55.py /opt/revex/server/verify_identity_normalizer.py /opt/revex/server/verify_identity_content_agent.py /opt/revex/server/verify_user_identity_en1_r89.py /opt/revex/server/run_revex_r49_release_acceptance.py /opt/revex/server/verify_revex_r49_worker.py
+ && test -f /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler_core.py \
+ && python3 -m py_compile \
+      /opt/revex/server/app.py \
+      /opt/revex/server/revex_energy_pipeline_guard.py \
+      /opt/revex/server/revex_energy_identity_normalizer.py \
+      /opt/revex/server/revex_identity_content_agent.py \
+      /opt/revex/server/revex_user_identity_en1.py \
+      /opt/revex/server/revex_energy_pipeline_r69.py \
+      /opt/revex/server/revex_geometryco_source_condition.py \
+      /opt/revex/server/verify_failure_evidence_r55.py \
+      /opt/revex/server/verify_identity_normalizer.py \
+      /opt/revex/server/verify_identity_content_agent.py \
+      /opt/revex/server/verify_user_identity_en1_r89.py \
+      /opt/revex/server/verify_geometryco_source_condition_r91.py \
+      /opt/revex/server/run_revex_r49_release_acceptance.py \
+      /opt/revex/server/verify_revex_r49_worker.py \
+      /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py \
+      /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler_core.py
 RUN python3 -m pip install --no-cache-dir \
     -r /opt/revex/energy/requirements.txt \
     -r /opt/revex/energy/GeometryCo/requirements.txt \
@@ -58,7 +86,8 @@ RUN python3 /opt/revex/energy/verify_revex_r49_energy.py \
  && python3 /opt/revex/server/verify_failure_evidence_r55.py \
  && python3 /opt/revex/server/verify_identity_normalizer.py \
  && python3 /opt/revex/server/verify_identity_content_agent.py \
- && python3 /opt/revex/server/verify_user_identity_en1_r89.py
+ && python3 /opt/revex/server/verify_user_identity_en1_r89.py \
+ && python3 /opt/revex/server/verify_geometryco_source_condition_r91.py
 
 ENV REVEX_HEADLESS=1 \
     REVEX_CHROME_BINARY=/usr/bin/google-chrome \
