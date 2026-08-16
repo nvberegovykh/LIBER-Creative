@@ -2,26 +2,20 @@
 from __future__ import annotations
 
 import copy
-import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 
 HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+
+import revex_energy_identity_normalizer as norm
+import revex_energy_pipeline_r69 as resolver
+
 NORMALIZER = HERE / "revex_energy_identity_normalizer.py"
 RESOLVER = HERE / "revex_energy_pipeline_r69.py"
-
-
-def load(name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-norm = load("revex_identity_normalizer", NORMALIZER)
-resolver = load("revex_identity_resolver", RESOLVER)
 
 # General combined-address parsing across unrelated projects/locations.
 for source, expected in (
@@ -146,7 +140,7 @@ assert resolved_identity["city"] == "Denver" and resolved_identity["state"] == "
 assert resolved["locationResolution"]["provider"] == "US_CENSUS_GEOCODER_PUBLIC_AR_CURRENT"
 
 # Implementation itself must stay project-agnostic. Live project strings belong only in
-# separate regression fixtures, never in these two runtime primitives.
+# separate regression fixtures, never in these runtime primitives.
 for path in (NORMALIZER, RESOLVER):
     source = path.read_text(encoding="utf-8").upper()
     assert "250 MIDWOOD" not in source
