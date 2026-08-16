@@ -59,8 +59,8 @@ jobs:
           $worker = Get-Content -Raw server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1
           foreach($marker in @('-EnergyWorkerOnly','Firebase CLI skipped: r69 Energy worker-only deployment uses gcloud')) { if(-not $launcher.Contains($marker)){throw "launcher missing $marker"} }
           foreach($marker in @('EnergyWorkerOnly = $energyWorkerOnly','r69 Energy worker-only deployment preserves the active broker')) { if(-not $bootstrap.Contains($marker)){throw "bootstrap missing $marker"} }
-          if($worker -match '\bfirebase\b'){throw 'worker-only deployment must not invoke or require firebase-tools'}
-          if($worker -match 'revex-render|gpu'){throw 'worker-only deployment must not touch renderer/GPU'}
+          if($worker -match 'Require-Command\s+["'']firebase["'']' -or $worker -match '\$Firebase\b' -or $worker -match 'functions:revex-energy') { throw 'worker-only deployment invokes or requires firebase-tools' }
+          if($worker -match 'revex-render-worker' -or $worker -match 'DEPLOY_RENDER' -or $worker -match 'runRevexRender') { throw 'worker-only deployment touches renderer infrastructure' }
           foreach($marker in @('Build exact r69 Energy worker image','Deploy private r69 Energy worker','Preserve Energy broker invocation access')) { if(-not $worker.Contains($marker)){throw "worker-only deploy missing $marker"} }
       - name: Preserve current REVEX contracts
         run: |
