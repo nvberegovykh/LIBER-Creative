@@ -41,16 +41,15 @@ function Invoke-NativeCapture([string]$Command, [string[]]$Arguments) {
 }
 
 function Native-Ok([string]$Command, [string[]]$Arguments) {
+  $previous = $ErrorActionPreference
   try {
-    $previous = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     & $Command @Arguments *> $null
-    $code = $LASTEXITCODE
-    $ErrorActionPreference = $previous
-    return ($code -eq 0)
+    return ($LASTEXITCODE -eq 0)
   } catch {
-    $ErrorActionPreference = $previous
     return $false
+  } finally {
+    $ErrorActionPreference = $previous
   }
 }
 
@@ -132,8 +131,8 @@ try {
     Invoke-Checked "Deploy private REVEX RTX PRO 6000 worker" $GCloud @(
       "run","deploy",$Service,"--project",$ProjectId,"--region",$Region,"--platform","managed",
       "--image",$Image,"--service-account",$WorkerSa,"--no-allow-unauthenticated",
-      "--cpu","20","--memory","80Gi","--no-cpu-throttling","--gpu","1","--gpu-type","nvidia-rtx-pro-6000",
-      "--no-gpu-zonal-redundancy","--concurrency","1","--min-instances","0","--max-instances","1","--timeout","3600",
+      "--cpu=20","--memory=80Gi","--no-cpu-throttling","--gpu=1","--gpu-type=nvidia-rtx-pro-6000",
+      "--no-gpu-zonal-redundancy","--concurrency=1","--min-instances=0","--max-instances=1","--timeout=3600",
       "--set-env-vars","HF_HUB_DISABLE_TELEMETRY=1,HF_XET_HIGH_PERFORMANCE=1,HF_ENABLE_PARALLEL_LOADING=YES",
       "--quiet"
     )
