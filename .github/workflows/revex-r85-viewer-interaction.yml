@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'docs/liber-apps/apps/revex/viewer-interaction-r85.js'
+      - 'docs/liber-apps/apps/revex/viewer-interaction-r85-loader.js'
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/render-agent.js'
       - 'docs/liber-apps/apps/revex/styles.css'
@@ -16,6 +17,7 @@ on:
       - 'agent/revex-r85-*'
     paths:
       - 'docs/liber-apps/apps/revex/viewer-interaction-r85.js'
+      - 'docs/liber-apps/apps/revex/viewer-interaction-r85-loader.js'
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/render-agent.js'
       - 'docs/liber-apps/apps/revex/styles.css'
@@ -33,8 +35,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Syntax check r85 successor runtime
-        run: node --check docs/liber-apps/apps/revex/viewer-interaction-r85.js
+      - name: Syntax check r85 bootstrap and successor runtime
+        run: |
+          node --check docs/liber-apps/apps/revex/viewer-interaction-r85-loader.js
+          node --check docs/liber-apps/apps/revex/viewer-interaction-r85.js
       - name: Verify mobile/selection/section/walk/restore/render contract
         run: node .github/scripts/verify-revex-r85-viewer-interaction.js
       - name: Preserve current viewer and Energy contracts
