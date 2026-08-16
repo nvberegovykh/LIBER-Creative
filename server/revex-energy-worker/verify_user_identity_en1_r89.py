@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -13,9 +14,25 @@ import revex_identity_content_agent as r88
 import revex_energy_pipeline_r69 as r69
 
 
+def _pinned_pipeline_path() -> Path:
+    """Resolve the exact pinned r49 implementation in repo QA and inside the worker image."""
+    candidates: list[Path] = []
+    configured = str(os.environ.get('REVEX_PIPELINE_IMPL') or '').strip()
+    if configured:
+        candidates.append(Path(configured))
+    candidates.extend([
+        Path('/opt/revex/energy/revex_energy_pipeline.py'),
+        Path(__file__).resolve().parents[2] / 'src/Liber.Revex.Revit/Engineering/Energy/revex_energy_pipeline.py',
+    ])
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    raise FileNotFoundError('Pinned r49 Energy implementation is unavailable in both worker-image and repository QA layouts: ' + '; '.join(str(path) for path in candidates))
+
+
 def _pinned_identity_consumer(facts: dict) -> dict:
     """Execute the exact r49 identity consumer functions without heavy simulation imports."""
-    pipeline = Path(__file__).resolve().parents[2] / 'src/Liber.Revex.Revit/Engineering/Energy/revex_energy_pipeline.py'
+    pipeline = _pinned_pipeline_path()
     tree = ast.parse(pipeline.read_text(encoding='utf-8'))
     wanted = {'_best_page_value', 'current_project_identity'}
     nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted]
@@ -30,6 +47,12 @@ def _pinned_identity_consumer(facts: dict) -> dict:
     }
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(pipeline), 'exec'), namespace)
     return namespace['current_project_identity'](facts)
+
+
+def test_pinned_pipeline_path() -> None:
+    pipeline = _pinned_pipeline_path()
+    assert pipeline.name == 'revex_energy_pipeline.py'
+    assert pipeline.is_file()
 
 
 def test_missing_only_identity() -> None:
@@ -137,17 +160,19 @@ def test_exact_nine_review_entries() -> None:
             assert set(z.namelist()) == set(r89.PUBLIC_REVIEW_NAMES)
 
 
+test_pinned_pipeline_path()
 test_missing_only_identity()
 test_en1_people_and_print()
 test_exact_nine_review_entries()
 print(json.dumps({
-    'schema':'liber.revex.r95-user-identity-en1-qa.v1',
+    'schema':'liber.revex.r96-user-identity-en1-qa.v1',
     'status':'PASSED',
     'projectIdentity':{
         'manualFallbackOnlyFillsMissing':True,
         'existingRevitValuesCannotBeOverwritten':True,
         'r88R69Survival':True,
         'pinnedR49ConsumerBoundaryComplete':True,
+        'workerImagePathPortable':True,
     },
     'en1':{'applicantModelerExplicit':True,'pdfPrintContractPages':16,'fitToOnePagePerFormSheet':True},
     'userOutput':{'count':9,'exactReviewNames':list(r89.PUBLIC_REVIEW_NAMES)}
