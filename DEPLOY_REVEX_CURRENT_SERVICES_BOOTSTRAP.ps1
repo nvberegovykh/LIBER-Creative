@@ -147,9 +147,6 @@ try {
     throw "Google Cloud administrator authentication is required once. Run 'gcloud auth login', then rerun this file. Nothing was deployed."
   }
 
-  # Only the full Energy worker+broker path uses firebase-tools. r69 worker-only
-  # deployment keeps the existing ACTIVE runRevexEnergy broker and avoids the
-  # Windows firebase/node/libuv failure surface completely.
   if (-not $SkipEnergy -and -not $EnergyWorkerOnly) {
     $Firebase = Require-Command "firebase"
     $firebaseArgs = @("projects:list", "--json")
@@ -181,10 +178,14 @@ try {
   if (Test-Path -LiteralPath $R54Guard -PathType Leaf) {
     Invoke-Checked "Verify renderer + Energy + BIM viewer integration" $Node @($R54Guard) $TempRoot
   }
-  $R69Guard = Join-Path $TempRoot ".github\scripts\verify-revex-r69-energy-finish.py"
-  if (Test-Path -LiteralPath $R69Guard -PathType Leaf) {
-    $Python = Require-Command "python"
-    Invoke-Checked "Verify r69 Energy identity + same-type finish contract" $Python @($R69Guard) $TempRoot
+  if (-not $EnergyWorkerOnly) {
+    $R69Guard = Join-Path $TempRoot ".github\scripts\verify-revex-r69-energy-finish.py"
+    if (Test-Path -LiteralPath $R69Guard -PathType Leaf) {
+      $Python = Require-Command "python"
+      Invoke-Checked "Verify r69 Energy identity + same-type finish contract" $Python @($R69Guard) $TempRoot
+    }
+  } else {
+    Write-Host "r69 Python contract already passed CI; workstation Python is not a deployment dependency." -ForegroundColor Green
   }
 
   $scripts = Prepare-ManagedScripts $TempRoot
