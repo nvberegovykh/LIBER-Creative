@@ -1,0 +1,52 @@
+name: REVEX r90 deterministic project header
+
+on:
+  push:
+    branches: ['agent/revex-r90-now']
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply exact deterministic header parser
+        run: python .github/scripts/apply-revex-r90-deterministic-header.py
+      - name: Compile and verify normalizer
+        run: |
+          python -m py_compile server/revex-energy-worker/revex_energy_identity_normalizer.py server/revex-energy-worker/revex_energy_pipeline_r69.py
+          cd server/revex-energy-worker
+          python verify_identity_normalizer.py
+          python - <<'PY'
+          import json, tempfile
+          from pathlib import Path
+          import revex_energy_pipeline_r69 as r69
+          td=Path(tempfile.mkdtemp())
+          facts={'structuredIdentity': {'title':'TEST','address':'250 MIDWOOD STREET, BROOKLYN, NY, 11225','city':'','state':'','zip':''}, 'pages':[]}
+          page=td/'facts.json'; page.write_text(json.dumps(facts))
+          req={'pageFactsPath':str(page),'outputFolder':str(td),'sourceArtifacts':[]}
+          rp=td/'request.json'; rp.write_text(json.dumps(req))
+          out=r69._resolved_request(rp,td)
+          assert out != rp
+          derived=json.loads(out.read_text())
+          resolved=json.loads(Path(derived['pageFactsPath']).read_text())['structuredIdentity']
+          assert resolved['city']=='BROOKLYN' and resolved['state']=='NY' and resolved['zip']=='11225', resolved
+          assert Path(derived['pageFactsPath']).name=='00_PAGE_FACTS_RESOLVED_R69.json'
+          print('REVEX_R90_ISOLATED_TEMP_PROJECTION=PASSED')
+          PY
+      - name: Commit production patch
+        shell: bash
+        run: |
+          if git diff --quiet; then echo 'No production diff'; exit 0; fi
+          git config user.name 'REVEX r90 deterministic header'
+          git config user.email 'actions@users.noreply.github.com'
+          git add server/revex-energy-worker/revex_energy_identity_normalizer.py server/revex-energy-worker/verify_identity_normalizer.py
+          git commit -m 'REVEX r90: deterministically split project header locality'
+          git push origin HEAD:${{ github.ref_name }}
