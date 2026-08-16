@@ -1,16 +1,16 @@
 (function(root){
   'use strict';
-  const BUILD='20260816r68-energy-diagnostics1';
+  const BUILD='20260816r80-energy-diagnostics1';
   const failureName=/02_GEOMETRYCO\.log|FAILURE_(?:REPORT\.json|SUMMARY\.txt)|REVEX-ENERGY-PIPELINE\.jsonl|NATIVE_CHECK_|eplusout\.err|REVEX_OPENSTUDIO_RUN\.log/i;
   const clean=v=>String(v??'').trim();
   const esc=v=>String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const state=()=>root.__revexState||{};
   const projectId=()=>clean(state().projectId||new URLSearchParams(location.search).get('projectId'));
-  let running=false;
+  let running=false,lastStaleSig='';
 
   function Store(){return root.RevexStore;}
   function diagnostic(level,stage,message,detail={}){
-    try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'energy diagnostics r68',...detail});}catch(_){}
+    try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'energy diagnostics r80',...detail});}catch(_){}
   }
   async function artifactUrl(row){
     if(row?.url)return row.url;
@@ -23,6 +23,7 @@
     const m=result?.manifest||{};
     return clean(m.sourceEngineeringRevision||m.sourceRevision||m.engineeringRevision||result?.sourceRevision);
   }
+  function currentRevisionOf(source){return clean(source?.revision||source?.manifest?.revision);}
   function exactErrorFromText(text){
     const lines=String(text||'').split(/\r?\n/).map(v=>v.trim()).filter(Boolean);
     const preferred=[...lines].reverse().find(line=>/^ERROR\s*:/i.test(line)||/CompileError|PipelineError|ValidationError|native check failed|ambiguous|could not|cannot|missing|mismatch/i.test(line));
@@ -38,8 +39,9 @@
   function setRetryPolicy(source,result){
     const button=document.getElementById('energy-authorize-backstop');
     if(!button)return;
+    const current=currentRevisionOf(source),failedRevision=sourceRevisionOf(result);
     const failed=clean(result?.manifest?.status).toUpperCase()==='FAILED';
-    const same=failed&&sourceRevisionOf(result)&&sourceRevisionOf(result)===clean(source?.revision||source?.manifest?.revision);
+    const same=failed&&current&&failedRevision&&failedRevision===current;
     if(same){
       button.disabled=true;
       button.textContent='This revision already failed · sync a new revision';
@@ -50,6 +52,19 @@
       button.removeAttribute('title');
     }
   }
+  function clearStaleFailureUi(current,failedRevision,box){
+    box.hidden=true;box.innerHTML='';
+    const run=document.getElementById('energy-run-status');
+    if(run&&run.dataset.tone==='bad'){
+      run.textContent=current?`Current Engineering revision ${current} is ready for managed processing.`:'Current Engineering revision is ready for managed processing.';
+      run.dataset.tone='quiet';
+    }
+    const sig=`${current}|${failedRevision}`;
+    if(sig!==lastStaleSig){
+      lastStaleSig=sig;
+      diagnostic('INFO','ENERGY_STALE_FAILURE_IGNORED','An older Energy failure was not shown as the status of the current Engineering revision.',{currentRevision:current,failedRevision});
+    }
+  }
   async function inspect(){
     if(running)return;
     const id=projectId(),store=Store();
@@ -58,9 +73,14 @@
     try{
       const [source,result]=await Promise.all([store.getEngineeringState(id),store.getEnergyResult(id)]);
       setRetryPolicy(source,result);
+      const current=currentRevisionOf(source),failedRevision=sourceRevisionOf(result);
       const status=clean(result?.manifest?.status).toUpperCase();
       const box=ensureBox();
       if(!box)return;
+      if(status==='FAILED'&&current&&failedRevision&&failedRevision!==current){
+        clearStaleFailureUi(current,failedRevision,box);
+        return;
+      }
       if(status!=='FAILED'){
         box.hidden=true;box.innerHTML='';return;
       }
@@ -82,10 +102,10 @@
         }catch(error){diagnostic('WARN','ENERGY_FAILURE_LOG_READ',error?.message||String(error));}
       }
       box.hidden=false;
-      box.innerHTML=`<div class="eyebrow">EXACT WORKER FAILURE</div><strong>${esc(result?.manifest?.failureContext?.failedStage||'Energy pipeline')}</strong><p>${esc(exact)}</p>${links.length?`<div class="energy-exact-failure-links">${links.join('')}</div>`:''}<small>Failure evidence belongs to immutable Engineering revision ${esc(sourceRevisionOf(result)||'—')}. Re-authorizing the same revision does not change its inputs.</small>`;
+      box.innerHTML=`<div class="eyebrow">EXACT WORKER FAILURE</div><strong>${esc(result?.manifest?.failureContext?.failedStage||'Energy pipeline')}</strong><p>${esc(exact)}</p>${links.length?`<div class="energy-exact-failure-links">${links.join('')}</div>`:''}<small>Failure evidence belongs to immutable Engineering revision ${esc(failedRevision||'—')}. Re-authorizing the same revision does not change its inputs.</small>`;
       const run=document.getElementById('energy-run-status');
       if(run&&exact&&!run.textContent.includes(exact)){run.textContent=`${result?.manifest?.failureContext?.failedStage||'Energy'}: ${exact}`;run.dataset.tone='bad';}
-      diagnostic('ERROR','ENERGY_EXACT_FAILURE',exact,{projectId:id,revision:sourceRevisionOf(result),artifactCount:rows.length});
+      diagnostic('ERROR','ENERGY_EXACT_FAILURE',exact,{projectId:id,revision:failedRevision,artifactCount:rows.length});
     }catch(error){diagnostic('WARN','ENERGY_DIAGNOSTICS',error?.message||String(error));}
     finally{running=false;}
   }
@@ -94,9 +114,10 @@
     root.__revexEnergyDiagnosticsR68={build:BUILD,inspect};
     root.addEventListener('revex:energy-open',()=>setTimeout(inspect,0));
     root.addEventListener('revex:managed-energy-status',event=>{
-      if(['BROKER_FAILED','BROKER_PASSED','CLOUD_UPLOAD_PASSED'].includes(event.detail?.stage))setTimeout(inspect,250);
+      if(['BROKER_FAILED','BROKER_PASSED','CLOUD_UPLOAD_PASSED','CONSENT_REQUIRED'].includes(event.detail?.stage))setTimeout(inspect,250);
     });
     root.addEventListener('revex:managed-energy-result',()=>setTimeout(inspect,0));
+    root.addEventListener('revex:source-revision-loaded',()=>setTimeout(inspect,0));
     if(!document.getElementById('view-energy')?.hidden)setTimeout(inspect,0);
   }
   const wait=()=>{if(Store()&&root.__revexState){install();return;}setTimeout(wait,50);};
