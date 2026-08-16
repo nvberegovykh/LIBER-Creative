@@ -77,10 +77,10 @@ jobs:
         run: |
           python .github/scripts/verify-revex-r87-decision-doc.py
           python .github/scripts/verify-revex-r87-worker-contract.py
-      - name: Execute generalized cross-project identity + immutable replay contract
-        run: |
-          python .github/scripts/verify-revex-r87-energy-generalization.py
-          python server/revex-energy-worker/verify_identity_content_agent.py
+      - name: Execute existing generalized cross-project identity + immutable replay contract
+        run: python .github/scripts/verify-revex-r87-energy-generalization.py
+      - name: Execute r88 content-aware project identity regression
+        run: python server/revex-energy-worker/verify_identity_content_agent.py
       - name: Syntax-check replay diagnostics
         run: node --check docs/liber-apps/apps/revex/energy-diagnostics-r68.js
       - name: Preserve existing Energy identity, single-shot, broker and viewer contracts
