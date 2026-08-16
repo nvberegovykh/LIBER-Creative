@@ -15,6 +15,7 @@ on:
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/store.js'
       - 'src/Liber.Revex.Revit/Engineering/Companion/native-managed-energy-bridge.js'
+      - 'src/Liber.Revex.Revit/Engineering/Energy/comcheck_backstop.py'
       - '.github/scripts/probe-revex-comcheck-project-api.py'
       - '.github/scripts/verify-revex-r49-live-comcheck.py'
       - '.github/scripts/verify-revex-r87-energy-generalization.py'
@@ -37,6 +38,7 @@ on:
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/store.js'
       - 'src/Liber.Revex.Revit/Engineering/Companion/native-managed-energy-bridge.js'
+      - 'src/Liber.Revex.Revit/Engineering/Energy/comcheck_backstop.py'
       - '.github/scripts/probe-revex-comcheck-project-api.py'
       - '.github/scripts/verify-revex-r49-live-comcheck.py'
       - '.github/scripts/verify-revex-r87-energy-generalization.py'
@@ -64,7 +66,8 @@ jobs:
             server/revex-energy-worker/revex_energy_identity_normalizer.py \
             server/revex-energy-worker/revex_energy_pipeline_r69.py \
             server/revex-energy-worker/revex_energy_pipeline_guard.py \
-            server/revex-energy-worker/verify_identity_normalizer.py
+            server/revex-energy-worker/verify_identity_normalizer.py \
+            src/Liber.Revex.Revit/Engineering/Energy/comcheck_backstop.py
       - name: Verify generalized action boundary before wiring
         run: |
           python .github/scripts/verify-revex-r87-decision-doc.py
