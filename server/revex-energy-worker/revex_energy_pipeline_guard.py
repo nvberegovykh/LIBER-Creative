@@ -6,9 +6,10 @@ its normal artifact contract when the run does not complete. This makes errors
 such as GeometryCo exit-code 2 directly inspectable from Companion instead of
 pointing to a temporary Cloud Run file that disappears with the instance.
 
-r69 additionally derives missing city/state/ZIP only from the immutable active-
-Revit street address before entering the pinned pipeline. The source evidence is
-never mutated; the resolver writes a derived request/page-facts copy in output.
+r88 first runs a content-aware, role-separated project-identity resolver over the
+immutable active-Revit T/Z evidence. Deterministic r69 normalization/geocoding remains
+only a fallback for evidence the content-aware stage cannot validate. Source evidence
+is never mutated; both stages write derived request/page-facts copies in output.
 
 The guard never changes a COMPLETE result and never converts a failed run into a
 successful one. It only preserves evidence that already exists inside the exact
@@ -47,6 +48,9 @@ EXACT_NAMES = {
     "COMcheck_BACKSTOP_RESPONSE.txt",
     "REVEX_OPENSTUDIO_RUN.log",
     "eplusout.err",
+    "00_PAGE_FACTS_CONTENT_IDENTITY_R88.json",
+    "00_PIPELINE_REQUEST_CONTENT_IDENTITY_R88.json",
+    "PROJECT_IDENTITY_CONTENT_AGENT_R88.json",
     "00_PAGE_FACTS_RESOLVED_R69.json",
     "00_PIPELINE_REQUEST_RESOLVED_R69.json",
 }
@@ -177,6 +181,22 @@ def _pipeline_impl() -> Path:
     return (Path(__file__).resolve().parents[2] / "src/Liber.Revex.Revit/Engineering/Energy/revex_energy_pipeline.py").resolve()
 
 
+def _resolve_content_identity_request(request_path: Path, output_root: Path) -> Path:
+    try:
+        import revex_identity_content_agent as content_identity
+        return content_identity.resolve_request(request_path, output_root)
+    except Exception as exc:
+        # The dedicated agent is a bounded resolver, not a new failure mask. If it cannot
+        # produce a deterministically validated identity, preserve the original request and
+        # let r69/the pinned pipeline make the explicit downstream decision.
+        print(json.dumps({
+            "stage": "PROJECT_IDENTITY_CONTENT_AGENT",
+            "status": "UNRESOLVED",
+            "error": f"{type(exc).__name__}: {exc}",
+        }, ensure_ascii=True), flush=True)
+        return request_path
+
+
 def _resolve_r69_request(request_path: Path, output_root: Path) -> Path:
     try:
         import revex_energy_pipeline_r69 as resolver
@@ -207,7 +227,10 @@ def main(argv: Iterable[str] | None = None) -> int:
     if not impl.is_file() or impl.resolve() == Path(__file__).resolve():
         raise RuntimeError(f"Pinned REVEX Energy implementation is unavailable: {impl}")
 
-    effective_request = _resolve_r69_request(request_path, output_root)
+    # Order is part of the contract: content-aware project/party separation first,
+    # deterministic r69 normalization/geocode only if anything still remains missing.
+    effective_request = _resolve_content_identity_request(request_path, output_root)
+    effective_request = _resolve_r69_request(effective_request, output_root)
     command = [sys.executable, str(impl), "--request", str(effective_request), *passthrough]
     completed = subprocess.run(command, cwd=str(impl.parent), env=os.environ.copy())
     result_path = output_root / "energy-result.json"
