@@ -55,10 +55,10 @@ jobs:
           $bootstrap = Get-Content -Raw .\DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1
           foreach ($required in @(
             '@($active).Count',
-            "Replace('$active.Count', '@($active).Count')",
-            "Replace('$accounts.Count', '@($accounts).Count')",
-            "Replace('[string]$active[0]', '[string](@($active)[0])')",
-            "Replace('[string]$accounts[0]', '[string](@($accounts)[0])')"
+            'Replace(''$active.Count'', ''@($active).Count'')',
+            'Replace(''$accounts.Count'', ''@($accounts).Count'')',
+            'Replace(''[string]$active[0]'', ''[string](@($active)[0])'')',
+            'Replace(''[string]$accounts[0]'', ''[string](@($accounts)[0])'')'
           )) {
             if (-not $bootstrap.Contains($required)) { throw "Bootstrap is missing scalar-account hardening: $required" }
           }
