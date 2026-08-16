@@ -114,10 +114,10 @@ try {
   if ($MainSha -notmatch '^[0-9a-f]{40}$') { throw "GitHub main did not resolve to an exact SHA." }
   Write-Host "Current main: $MainSha" -ForegroundColor Green
 
-  Write-Host ">> Deploy exact current Energy worker + broker only" -ForegroundColor DarkCyan
+  Write-Host ">> Deploy current Energy worker + broker, then prove the live source SHA" -ForegroundColor DarkCyan
   $ProgressPreference = "SilentlyContinue"
   Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/nvberegovykh/LIBER-Creative/$MainSha/DEPLOY_REVEX_CURRENT_SERVICES.ps1" -OutFile $DeployScript
-  $deployCode = Invoke-Native "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $DeployScript, "-ProjectId", $ProjectId, "-Region", $Region, "-SkipRender", "-NoPause", "-SourceRef", $MainSha)
+  $deployCode = Invoke-Native "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $DeployScript, "-ProjectId", $ProjectId, "-Region", $Region, "-SkipRender", "-NoPause")
   if ($deployCode -ne 0) { throw "Current Energy worker+broker deployment failed with exit code $deployCode." }
 
   Write-Host ">> Verify the exact live broker-worker dependency edge" -ForegroundColor DarkCyan
@@ -128,7 +128,7 @@ try {
   $WorkerUrl = [string]$worker.status.url
   $WorkerSource = Read-WorkerEnv $worker "REVEX_SOURCE_CANDIDATE"
   if (-not $WorkerUrl) { throw "Energy worker has no live URL." }
-  if ($WorkerSource -ne $MainSha) { throw "Live worker source mismatch: expected $MainSha, got $WorkerSource." }
+  if ($WorkerSource -ne $MainSha) { throw "Live worker source mismatch: expected $MainSha, got $WorkerSource. Main moved during deployment; rerun this same recovery once." }
 
   $functionText = Invoke-Capture $GCloud @("functions", "describe", "runRevexEnergy", "--gen2", "--project=$ProjectId", "--region=$Region", "--format=json")
   $function = $functionText | ConvertFrom-Json
@@ -138,7 +138,7 @@ try {
   $BrokerSource = [string]$function.serviceConfig.environmentVariables.REVEX_SOURCE_CANDIDATE
   if ($LiveBrokerSa -ne $BrokerSa) { throw "Broker runtime identity mismatch: expected $BrokerSa, got $LiveBrokerSa." }
   if ($BrokerWorkerUrl.TrimEnd('/') -ne $WorkerUrl.TrimEnd('/')) { throw "Broker points to a different worker URL: $BrokerWorkerUrl vs $WorkerUrl." }
-  if ($BrokerSource -ne $MainSha) { throw "Live broker source mismatch: expected $MainSha, got $BrokerSource." }
+  if ($BrokerSource -ne $MainSha) { throw "Live broker source mismatch: expected $MainSha, got $BrokerSource. Main moved during deployment; rerun this same recovery once." }
 
   $policyText = Invoke-Capture $GCloud @("run", "services", "get-iam-policy", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")
   $policy = $policyText | ConvertFrom-Json
@@ -147,12 +147,12 @@ try {
   })
   if ($invoker.Count -eq 0) { throw "Live worker IAM does not allow the actual Energy broker service account to invoke it." }
 
-  Write-Host "PASS: live broker and worker are both exact main $MainSha, broker identity is exact, worker URL is exact, worker is Ready, and run.invoker binding is present." -ForegroundColor Green
+  Write-Host "PASS: live broker and worker are exact source $MainSha, broker identity is exact, worker URL is exact, worker is Ready, and run.invoker binding is present." -ForegroundColor Green
 
-  Write-Host ">> Update the Revit add-in to the exact same source" -ForegroundColor DarkCyan
+  Write-Host ">> Update the Revit add-in, then prove it matches the live worker source" -ForegroundColor DarkCyan
   Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/nvberegovykh/LIBER-Creative/$MainSha/UPDATE_REVEX_ADDIN_CURRENT.ps1" -OutFile $UpdateScript
   Write-Host "If Revit is open, save and close it once. This same recovery process will wait and continue automatically." -ForegroundColor Yellow
-  $updateCode = Invoke-Native "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $UpdateScript, "-SourceRef", $MainSha)
+  $updateCode = Invoke-Native "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $UpdateScript)
   if ($updateCode -ne 0) { throw "Server edge is repaired, but the current add-in update failed with exit code $updateCode." }
   $InstalledSha = Assert-InstalledSource $MainSha
 
