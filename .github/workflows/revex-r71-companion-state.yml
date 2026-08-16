@@ -1,0 +1,52 @@
+name: REVEX r71 Companion state validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - 'docs/liber-apps/apps/revex/companion-state-r71.js'
+      - 'docs/liber-apps/apps/revex/model-filter-r71.js'
+      - 'docs/liber-apps/apps/revex/appearance-r70.js'
+      - 'docs/liber-apps/sw.js'
+      - '.github/scripts/verify-revex-r71-companion-state.js'
+      - '.github/workflows/revex-r71-companion-state.yml'
+  push:
+    branches:
+      - main
+      - 'agent/revex-r71-*'
+    paths:
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - 'docs/liber-apps/apps/revex/companion-state-r71.js'
+      - 'docs/liber-apps/apps/revex/model-filter-r71.js'
+      - 'docs/liber-apps/apps/revex/appearance-r70.js'
+      - 'docs/liber-apps/sw.js'
+      - '.github/scripts/verify-revex-r71-companion-state.js'
+      - '.github/workflows/revex-r71-companion-state.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  companion-state:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check Companion runtimes
+        run: |
+          node --check docs/liber-apps/apps/revex/ui-integrity.js
+          node --check docs/liber-apps/apps/revex/appearance-r70.js
+          node --check docs/liber-apps/apps/revex/companion-state-r71.js
+          node --check docs/liber-apps/apps/revex/model-filter-r71.js
+          node --check docs/liber-apps/sw.js
+      - name: Verify pre-hydration state, live appearance and model filter contracts
+        run: node .github/scripts/verify-revex-r71-companion-state.js
+      - name: Preserve current viewer and Energy contracts
+        run: |
+          node .github/scripts/verify-revex-current-generation-r53.js
+          node .github/scripts/verify-revex-r54-selfhost-render.js
+          node .github/scripts/verify-revex-r68-review-runtime.js
+          python .github/scripts/verify-revex-r69-energy-finish.py
