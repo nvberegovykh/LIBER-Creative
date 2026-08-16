@@ -8,6 +8,7 @@ on:
       - 'docs/liber-apps/apps/revex/material-modal-r72.js'
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/viewer-r26.js'
+      - 'src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs'
       - '.github/scripts/verify-revex-r72-nonblocking-viewer.js'
       - '.github/workflows/revex-r72-nonblocking-viewer.yml'
   push:
@@ -19,6 +20,7 @@ on:
       - 'docs/liber-apps/apps/revex/material-modal-r72.js'
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/viewer-r26.js'
+      - 'src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs'
       - '.github/scripts/verify-revex-r72-nonblocking-viewer.js'
       - '.github/workflows/revex-r72-nonblocking-viewer.yml'
 
@@ -33,17 +35,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Syntax check r72 browser runtimes
         run: |
           node --check docs/liber-apps/apps/revex/viewer-runtime-r72.js
           node --check docs/liber-apps/apps/revex/material-modal-r72.js
           node --check docs/liber-apps/apps/revex/ui-integrity.js
-      - name: Verify nonblocking viewer and material integration contracts
+      - name: Verify nonblocking viewer and owned material integration contracts
         run: node .github/scripts/verify-revex-r72-nonblocking-viewer.js
-      - name: Preserve current Companion and Energy contracts
+      - name: Preserve current Companion, Energy and r73 recovery contracts
         run: |
           node .github/scripts/verify-revex-r71-companion-state.js
           node .github/scripts/verify-revex-current-generation-r53.js
           node .github/scripts/verify-revex-r54-selfhost-render.js
           node .github/scripts/verify-revex-r68-review-runtime.js
           python .github/scripts/verify-revex-r69-energy-finish.py
+          if [ -f .github/scripts/verify-revex-r73-energy-topology-fallback.py ]; then python .github/scripts/verify-revex-r73-energy-topology-fallback.py; fi
