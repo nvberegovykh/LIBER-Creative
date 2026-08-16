@@ -1,9 +1,22 @@
 (() => {
   'use strict';
 
-  const VERSION = '20260813r49';
+  const VERSION = '20260816r83';
   const ENDPOINT = 'https://legacy-comcheck.energycode.pnl.gov/CheckWeb/';
-  const active = new Map();
+
+  // The native host may ensure/inject this bridge more than once while the
+  // same Companion document remains alive. Re-injection must never create a
+  // second consent handler or a second revision execution owner.
+  const priorBridge = window.__revexManagedEnergyBridge;
+  if (priorBridge?.version === VERSION &&
+      typeof priorBridge.processInput === 'function' &&
+      typeof priorBridge.authorizeCurrentRevision === 'function') return;
+
+  const active = window.__revexManagedEnergyActive instanceof Map
+    ? window.__revexManagedEnergyActive
+    : new Map();
+  window.__revexManagedEnergyActive = active;
+
   let current = null;
   const $ = (selector) => document.querySelector(selector);
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -141,14 +154,20 @@
     return runApproved(Store, projectId, revision, startedAt);
   }
 
+  function ownTask(key, factory) {
+    if (active.has(key)) return active.get(key);
+    const task = Promise.resolve().then(factory).finally(() => active.delete(key));
+    active.set(key, task);
+    return task;
+  }
+
   async function processInput(fileList) {
     const Store = window.RevexStore;
     if (!Store) throw new Error('REVEX cloud Store is unavailable.');
     const files = Array.from(fileList || []);
     const { projectId, revision } = await readManifest(files);
     const key = `${projectId}:${revision}`;
-    if (active.has(key)) return active.get(key);
-    const task = (async () => {
+    return ownTask(key, async () => {
       const startedAt = Date.now();
       current = { projectId, revision, startedAt };
       try {
@@ -165,12 +184,9 @@
         post('BROKER_FAILED', error?.message || 'Managed Energy chain failed.', false, { projectId, revision, startedAt, error: error?.stack || String(error) });
         throw error;
       } finally {
-        active.delete(key);
         if (current?.projectId === projectId && current?.revision === revision) current = null;
       }
-    })();
-    active.set(key, task);
-    return task;
+    });
   }
 
   async function authorizeCurrentRevision() {
@@ -180,11 +196,21 @@
     const source = current?.projectId === projectId ? current?.state : await Store?.getEngineeringState?.(projectId);
     const revision = clean(source?.revision || source?.manifest?.revision);
     if (!Store || !projectId || !revision) throw new Error('Publish an active-document Engineering Sync revision first.');
-    return authorizeAndRun(Store, projectId, revision, Date.now(), true);
+    const key = `${projectId}:${revision}`;
+    return ownTask(key, () => authorizeAndRun(Store, projectId, revision, Date.now(), true));
   }
 
   window.__revexManagedEnergyBridge = { version: VERSION, processInput, authorizeCurrentRevision, resultMatches };
-  $('#energy-authorize-backstop')?.addEventListener('click', () => {
-    authorizeCurrentRevision().catch((error) => post('BROKER_FAILED', error?.message || 'Managed Energy could not start.'));
-  });
+
+  const authorizeButton = $('#energy-authorize-backstop');
+  if (authorizeButton) {
+    const handler = () => {
+      authorizeCurrentRevision().catch((error) => post('BROKER_FAILED', error?.message || 'Managed Energy could not start.'));
+    };
+    // Property ownership is intentionally singular. Combined with the version
+    // guard and global active map, one user click can create at most one broker
+    // call for one project/revision even if the host ensures the bridge again.
+    authorizeButton.onclick = handler;
+    window.__revexManagedEnergyAuthorizeHandler = handler;
+  }
 })();
