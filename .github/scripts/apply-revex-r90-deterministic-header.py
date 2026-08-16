@@ -11,7 +11,7 @@ if old not in s:
 s = s.replace(old, new, 1)
 
 old = """    # Common full-address case with no comma/newline between street and city.\n    full = FULL_ADDRESS_LOCALITY.match(source)\n"""
-new = """    # Deterministic titleblock header form: STREET, CITY, STATE[, ]ZIP.\n    # This is intentionally dumb and bounded: the first comma after the verified project\n    # street starts city, the next comma starts state, and ZIP is the following 5 digits.\n    comma = COMMA_PROJECT_LOCALITY.search(source)\n    if comma:\n        parsed = _candidate(comma.group('city'), comma.group('state'), comma.group('zip'))\n        if parsed:\n            return parsed\n\n    # Common full-address case with no comma/newline between street and city.\n    full = FULL_ADDRESS_LOCALITY.match(source)\n"""
+new = """    # Deterministic titleblock header form: STREET, CITY, STATE[, ]ZIP.\n    comma = COMMA_PROJECT_LOCALITY.search(source)\n    if comma:\n        parsed = _candidate(comma.group('city'), comma.group('state'), comma.group('zip'))\n        if parsed:\n            return parsed\n\n    # Common full-address case with no comma/newline between street and city.\n    full = FULL_ADDRESS_LOCALITY.match(source)\n"""
 if old not in s:
     raise SystemExit('r90 parse anchor not found')
 s = s.replace(old, new, 1)
@@ -22,16 +22,4 @@ if old not in s:
     raise SystemExit('r90 street-part anchor not found')
 s = s.replace(old, new, 1)
 p.write_text(s, encoding='utf-8')
-
-# Extend deterministic QA with both comma layouts actually emitted by titleblocks/PDF text.
-q = Path('server/revex-energy-worker/verify_identity_normalizer.py')
-t = q.read_text(encoding='utf-8')
-anchor = "if __name__ == '__main__':\n"
-insert = """# r90 deterministic project-header cases\nfor raw in (\n    '250 MIDWOOD STREET, BROOKLYN, NY 11225',\n    '250 MIDWOOD STREET, BROOKLYN, NY, 11225',\n    '79 WINTHROP STREET, BROOKLYN, NY 11225',\n):\n    parsed = normalizer.parse_locality(raw)\n    assert parsed == {'city': 'BROOKLYN', 'state': 'NY', 'zip': '11225'}, (raw, parsed)\n    street = normalizer._street_part(raw)\n    assert street.startswith(raw.split(',')[0]), (raw, street)\nprint('REVEX_R90_DETERMINISTIC_PROJECT_HEADER=PASSED')\n\n"""
-if insert not in t:
-    if anchor not in t:
-        raise SystemExit('r90 QA anchor not found')
-    t = t.replace(anchor, insert + anchor, 1)
-    q.write_text(t, encoding='utf-8')
-
 print('r90 deterministic header patch applied')
