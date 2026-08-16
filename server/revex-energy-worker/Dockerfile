@@ -32,6 +32,7 @@ COPY src/Liber.Revex.Revit/Engineering/Energy /opt/revex/energy
 # Keep both the .py and .dyn in the worker image so the identity regression test runs in Cloud Build.
 COPY src/Liber.Revex.Revit/Engineering/Gbxml /opt/revex/Gbxml
 COPY server/revex-energy-worker/app.py /opt/revex/server/app.py
+COPY server/revex-energy-worker/app_entry.py /opt/revex/server/app_entry.py
 COPY server/revex-energy-worker/revex_energy_pipeline_guard.py /opt/revex/server/revex_energy_pipeline_guard.py
 COPY server/revex-energy-worker/revex_energy_identity_normalizer.py /opt/revex/server/revex_energy_identity_normalizer.py
 COPY server/revex-energy-worker/revex_identity_content_agent.py /opt/revex/server/revex_identity_content_agent.py
@@ -65,6 +66,7 @@ RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
  && test -f /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler_core.py \
  && python3 -m py_compile \
       /opt/revex/server/app.py \
+      /opt/revex/server/app_entry.py \
       /opt/revex/server/revex_energy_pipeline_guard.py \
       /opt/revex/server/revex_energy_identity_normalizer.py \
       /opt/revex/server/revex_identity_content_agent.py \
@@ -102,4 +104,7 @@ ENV REVEX_HEADLESS=1 \
     REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py \
     REVEX_ENERGY_TIMEOUT_SECONDS=3500 \
     PORT=8080
-CMD ["gunicorn","--bind","0.0.0.0:8080","--workers","1","--threads","4","--timeout","3600","app:APP","--chdir","/opt/revex/server"]
+# Bind Google Cloud/Vertex routing before app.py can ever see the REVEX application
+# project id as a fallback. Canonical deployment supplies REVEX_VERTEX_PROJECT;
+# ADC is a fail-closed defense for future deployment paths.
+CMD ["gunicorn","--bind","0.0.0.0:8080","--workers","1","--threads","4","--timeout","3600","app_entry:APP","--chdir","/opt/revex/server"]
