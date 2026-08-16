@@ -35,6 +35,7 @@ COPY server/revex-energy-worker/app.py /opt/revex/server/app.py
 COPY server/revex-energy-worker/revex_energy_pipeline_guard.py /opt/revex/server/revex_energy_pipeline_guard.py
 COPY server/revex-energy-worker/revex_energy_identity_normalizer.py /opt/revex/server/revex_energy_identity_normalizer.py
 COPY server/revex-energy-worker/revex_identity_content_agent.py /opt/revex/server/revex_identity_content_agent.py
+COPY server/revex-energy-worker/revex_user_identity_en1.py /opt/revex/server/revex_user_identity_en1.py
 COPY server/revex-energy-worker/revex_energy_pipeline_r69.py /opt/revex/server/revex_energy_pipeline_r69.py
 COPY server/revex-energy-worker/verify_failure_evidence_r55.py /opt/revex/server/verify_failure_evidence_r55.py
 COPY server/revex-energy-worker/verify_identity_normalizer.py /opt/revex/server/verify_identity_normalizer.py
@@ -45,7 +46,7 @@ COPY server/revex-energy-worker/requirements-server.txt /opt/revex/server/requir
 RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
  && test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.py \
  && test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn \
- && python3 -m py_compile /opt/revex/server/app.py /opt/revex/server/revex_energy_pipeline_guard.py /opt/revex/server/revex_energy_identity_normalizer.py /opt/revex/server/revex_identity_content_agent.py /opt/revex/server/revex_energy_pipeline_r69.py /opt/revex/server/verify_failure_evidence_r55.py /opt/revex/server/verify_identity_normalizer.py /opt/revex/server/verify_identity_content_agent.py /opt/revex/server/run_revex_r49_release_acceptance.py /opt/revex/server/verify_revex_r49_worker.py
+ && python3 -m py_compile /opt/revex/server/app.py /opt/revex/server/revex_energy_pipeline_guard.py /opt/revex/server/revex_energy_identity_normalizer.py /opt/revex/server/revex_identity_content_agent.py /opt/revex/server/revex_user_identity_en1.py /opt/revex/server/revex_energy_pipeline_r69.py /opt/revex/server/verify_failure_evidence_r55.py /opt/revex/server/verify_identity_normalizer.py /opt/revex/server/verify_identity_content_agent.py /opt/revex/server/run_revex_r49_release_acceptance.py /opt/revex/server/verify_revex_r49_worker.py
 RUN python3 -m pip install --no-cache-dir \
     -r /opt/revex/energy/requirements.txt \
     -r /opt/revex/energy/GeometryCo/requirements.txt \
