@@ -3,6 +3,7 @@
 
   const VERSION = '20260813r49';
   const ENDPOINT = 'https://legacy-comcheck.energycode.pnl.gov/CheckWeb/';
+  const VIRTUAL_HOST = 'revex-engineering.local';
   const active = new Map();
   let current = null;
   const $ = (selector) => document.querySelector(selector);
@@ -50,9 +51,6 @@
   }
 
   function bindCompanion(projectId) {
-    // Never mutate only the selector or global app state. The application owns
-    // cancellation-safe activation so project, source revision, subscriptions,
-    // Spec Book and Energy all cross the boundary together.
     window.dispatchEvent(new CustomEvent('revex:native-project-binding', {
       detail: { projectId, view: 'energy', source: 'active-revit-evidence' }
     }));
@@ -161,6 +159,29 @@
     return task;
   }
 
+  async function processUrls(entries) {
+    const rows = Array.from(entries || []);
+    if (!rows.length) throw new Error('The native Engineering revision URL list is empty.');
+    const files = [];
+    for (const row of rows) {
+      const name = clean(row?.name);
+      const url = clean(row?.url);
+      if (!name || !url) throw new Error('The native Engineering revision contains an unnamed artifact.');
+      let parsed;
+      try { parsed = new URL(url); } catch (_) { throw new Error(`Invalid native Engineering artifact URL: ${name}.`); }
+      if (parsed.protocol !== 'https:' || parsed.hostname !== VIRTUAL_HOST)
+        throw new Error(`Blocked non-REVEX Engineering artifact origin for ${name}.`);
+      const response = await fetch(parsed.href, { cache: 'no-store', credentials: 'omit' });
+      if (!response.ok) throw new Error(`Could not read immutable Engineering artifact ${name} (${response.status}).`);
+      const blob = await response.blob();
+      files.push(new File([blob], name, { type: blob.type || 'application/octet-stream', lastModified: 0 }));
+    }
+    const names = files.map(file => clean(file.name).toLowerCase());
+    if (!names.includes('engineering-sync.json') || !names.some(name => name.endsWith('.xml')) || !names.some(name => name.endsWith('.epw')))
+      throw new Error('Native Engineering handoff is incomplete before managed processing.');
+    return processInput(files);
+  }
+
   async function authorizeCurrentRevision() {
     const Store = window.RevexStore;
     const projectId = clean(window.__revexState?.projectId);
@@ -170,7 +191,7 @@
     return authorizeAndRun(Store, projectId, revision, Date.now(), true);
   }
 
-  window.__revexManagedEnergyBridge = { version: VERSION, processInput, authorizeCurrentRevision, resultMatches };
+  window.__revexManagedEnergyBridge = { version: VERSION, processInput, processUrls, authorizeCurrentRevision, resultMatches };
   $('#energy-authorize-backstop')?.addEventListener('click', () => {
     authorizeCurrentRevision().catch((error) => post('BROKER_FAILED', error?.message || 'Managed Energy could not start.'));
   });

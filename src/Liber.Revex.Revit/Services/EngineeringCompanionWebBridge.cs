@@ -1,4 +1,5 @@
 using Liber.Revex.Revit.Models;
+using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 using System.IO;
 using System.Text.Json;
@@ -9,6 +10,7 @@ public static class EngineeringCompanionWebBridge
 {
     private const string ManagedBridgeVersion = "20260813r49";
     private const string EnergyInputSelector = "input[data-liber-revex-energy-input='1']";
+    private const string EngineeringVirtualHost = "revex-engineering.local";
 
     public static async Task<(bool ok, string message)> EnsureManagedEnergyBridgeAsync(WebView2 web)
     {
@@ -26,32 +28,66 @@ public static class EngineeringCompanionWebBridge
 
     public static async Task<(bool ok, string message)> AttachEngineeringSyncAsync(WebView2 web, EngineeringSyncOutput output)
     {
-        string[] files = new[] { output.ManifestPath, output.GbxmlPath, output.GbxmlReportPath, output.GbxmlSummaryPath, output.WeatherPath }
-            .Concat(output.EvidenceFiles ?? Array.Empty<string>()).Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
-            .Select(path => Path.GetFullPath(path!)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (web.CoreWebView2 == null) return (false, "REVEX Companion browser is not initialized.");
         if (!File.Exists(output.ManifestPath) || !File.Exists(output.GbxmlPath) || !File.Exists(output.WeatherPath))
             return (false, "The Engineering Sync revision is incomplete or has no verified weather input.");
+
+        string[] files = new[] { output.ManifestPath, output.GbxmlPath, output.GbxmlReportPath, output.GbxmlSummaryPath, output.WeatherPath }
+            .Concat(output.EvidenceFiles ?? Array.Empty<string>())
+            .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
+            .Select(path => Path.GetFullPath(path!))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        string root = Path.GetFullPath(output.RootFolder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string prefix = root + Path.DirectorySeparatorChar;
+        if (files.Any(path => !path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+            return (false, "The immutable Engineering Sync contains an artifact outside its committed revision folder.");
+        if (files.GroupBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase).Any(group => group.Count() > 1))
+            return (false, "The immutable Engineering Sync contains duplicate artifact names and cannot be mapped deterministically.");
+
+        string[] names = files.Select(Path.GetFileName).ToArray();
+        if (!names.Contains("engineering-sync.json", StringComparer.OrdinalIgnoreCase) ||
+            !names.Any(name => name.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)) ||
+            !names.Any(name => name.EndsWith(".epw", StringComparison.OrdinalIgnoreCase)))
+            return (false, "The committed Engineering revision is missing its manifest, Revit gbXML, or EPW before browser handoff.");
 
         var installed = await EnsureManagedEnergyBridgeAsync(web);
         if (!installed.ok) return installed;
 
-        var set = await SetFilesAsync(web, EnergyInputSelector, "data-liber-revex-native-energy-input-ready", files);
-        if (!set.ok) return set;
+        // Do not use DOM.setFileInputFiles for managed Energy. Chromium may emit a
+        // native change event while the FileList is still crossing the host boundary,
+        // allowing an older hosted handler to observe a partial set. The immutable
+        // revision already exists on disk, so expose only that exact committed folder
+        // through a private WebView2 virtual host and let the managed bridge fetch it.
+        web.CoreWebView2.SetVirtualHostNameToFolderMapping(
+            EngineeringVirtualHost,
+            root,
+            CoreWebView2HostResourceAccessKind.Allow);
 
-        string selectorJson = JsonSerializer.Serialize(EnergyInputSelector);
+        var entries = names.Select(name => new
+        {
+            name,
+            url = $"https://{EngineeringVirtualHost}/{Uri.EscapeDataString(name)}?revision={Uri.EscapeDataString(output.Revision)}"
+        }).ToArray();
+        string entriesJson = JsonSerializer.Serialize(entries);
         string started = await web.ExecuteScriptAsync($$"""
             (() => {
               const bridge = window.__revexManagedEnergyBridge;
-              const input = document.querySelector({{selectorJson}});
-              if (!bridge?.processInput || !input?.files?.length) return false;
-              void bridge.processInput(input.files);
+              if (!bridge?.processUrls) return false;
+              const entries = {{entriesJson}};
+              if (!Array.isArray(entries) || !entries.length) return false;
+              void bridge.processUrls(entries);
               return true;
             })()
             """);
         if (!string.Equals(started, "true", StringComparison.OrdinalIgnoreCase))
-            return (false, "The native managed Energy bridge could not start processing the attached Engineering revision.");
+            return (false, "The native managed Energy bridge could not start reading the immutable Engineering revision.");
 
-        return (true, $"Engineering revision {output.Revision} handed directly to the native managed-server bridge; legacy hosted Energy handlers were bypassed.");
+        RevexDiagnostics.Info("ENERGY-SYNC",
+            $"Engineering revision handed to Companion through immutable virtual host: revision={output.Revision}; artifacts={files.Length}; " +
+            string.Join(", ", names));
+        return (true, $"Engineering revision {output.Revision} handed directly to the managed-server bridge from its immutable local revision folder.");
     }
 
     public static async Task<(bool ok, string message)> AttachEnergyResultAsync(WebView2 web, EnergyPipelineOutput output)
