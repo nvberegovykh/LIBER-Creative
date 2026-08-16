@@ -1,0 +1,49 @@
+name: REVEX r72 nonblocking viewer validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/liber-apps/apps/revex/viewer-runtime-r72.js'
+      - 'docs/liber-apps/apps/revex/material-modal-r72.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - 'docs/liber-apps/apps/revex/viewer-r26.js'
+      - '.github/scripts/verify-revex-r72-nonblocking-viewer.js'
+      - '.github/workflows/revex-r72-nonblocking-viewer.yml'
+  push:
+    branches:
+      - main
+      - 'agent/revex-r72-*'
+    paths:
+      - 'docs/liber-apps/apps/revex/viewer-runtime-r72.js'
+      - 'docs/liber-apps/apps/revex/material-modal-r72.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - 'docs/liber-apps/apps/revex/viewer-r26.js'
+      - '.github/scripts/verify-revex-r72-nonblocking-viewer.js'
+      - '.github/workflows/revex-r72-nonblocking-viewer.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  viewer-r72:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check r72 browser runtimes
+        run: |
+          node --check docs/liber-apps/apps/revex/viewer-runtime-r72.js
+          node --check docs/liber-apps/apps/revex/material-modal-r72.js
+          node --check docs/liber-apps/apps/revex/ui-integrity.js
+      - name: Verify nonblocking viewer and material integration contracts
+        run: node .github/scripts/verify-revex-r72-nonblocking-viewer.js
+      - name: Preserve current Companion and Energy contracts
+        run: |
+          node .github/scripts/verify-revex-r71-companion-state.js
+          node .github/scripts/verify-revex-current-generation-r53.js
+          node .github/scripts/verify-revex-r54-selfhost-render.js
+          node .github/scripts/verify-revex-r68-review-runtime.js
+          python .github/scripts/verify-revex-r69-energy-finish.py
