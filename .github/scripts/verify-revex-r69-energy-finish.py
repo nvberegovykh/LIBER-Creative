@@ -10,7 +10,7 @@ WRAPPER = ROOT / 'server/revex-energy-worker/revex_energy_pipeline_r69.py'
 GUARD = ROOT / 'server/revex-energy-worker/revex_energy_pipeline_guard.py'
 DOCKER = ROOT / 'server/revex-energy-worker/Dockerfile'
 DEPLOY = ROOT / 'server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1'
-FINISH = ROOT / 'docs/liber-apps/apps/revex/finish-type-r69.js'
+APPEARANCE = ROOT / 'docs/liber-apps/apps/revex/appearance-r70.js'
 UI = ROOT / 'docs/liber-apps/apps/revex/ui-integrity.js'
 DOCS = ROOT / 'docs/liber-apps/apps/revex/docs-pages-r68.js'
 
@@ -70,7 +70,7 @@ wrapper_text = WRAPPER.read_text(encoding='utf-8')
 guard_text = GUARD.read_text(encoding='utf-8')
 docker_text = DOCKER.read_text(encoding='utf-8')
 deploy_text = DEPLOY.read_text(encoding='utf-8')
-finish_text = FINISH.read_text(encoding='utf-8')
+appearance_text = APPEARANCE.read_text(encoding='utf-8')
 ui_text = UI.read_text(encoding='utf-8')
 docs_text = DOCS.read_text(encoding='utf-8')
 
@@ -90,20 +90,40 @@ assert 'if ($script:NativeExitCode -ne 0 -or @($active).Count -eq 0)' in deploy_
 assert 'if ($script:NativeExitCode -ne 0 -or -not $CloudBuildSa)' in deploy_text
 assert 'if ($script:NativeExitCode -ne 0) { throw "Energy worker deployed but could not be re-read." }' in deploy_text
 
-assert "operation:'finish-type'" in finish_text
-assert "delete next.material.color" in finish_text
-assert "typeUniqueId" in finish_text
-assert 'Apply finish color to all same type' in finish_text
-assert 'Commit transform / opacity' in finish_text
-assert 'finish-type-r69.js?v=20260816r69-finish-type1' in ui_text
+# r70: appearance and geometry/visibility are different persistent lanes.
+assert "delete x.material" in appearance_text
+assert "x.visibility=v;x.hidden=v==='hidden';x.deleted=v==='deleted'" in appearance_text
+assert "revexKind:'bim-appearance'" in appearance_text
+assert "scope==='type'?typeKey(r):stable(r)" in appearance_text
+assert "`revex_appearance_${doc(`${scope}_${key}`)}`" in appearance_text
+assert "operation:`appearance-${scope}`" in appearance_text
+assert "m.map=null" in appearance_text
+assert "m.color.set(0xffffff)" in appearance_text
+assert "Commit transform" in appearance_text
+assert "Apply appearance" in appearance_text
+assert "All same Revit type" in appearance_text
+assert "<span>Family</span><select data-f" in appearance_text
+assert "<span>Type</span><select data-t" in appearance_text
+assert "https://architextures.org/textures" in appearance_text
+assert "record_in/materials/architextures" in appearance_text
+assert "REVEX does not scrape or bulk-download Architextures" in appearance_text
+assert 'appearance-r70.js?v=20260816r70-appearance1' in ui_text
+assert 'finish-type-r69.js' not in ui_text
 assert 'copyPages(source,[page-1])' in docs_text
 assert "library/revex/printing-pages/" in docs_text
 
 print(json.dumps({
-    'schema': 'liber.revex.r69-energy-finish-qa.v1',
+    'schema': 'liber.revex.r70-energy-appearance-qa.v1',
     'status': 'PASSED',
     'energyIdentity': {'immutableSource': True, 'derivedLocation': True, 'fabricationBlocked': True, 'r55GuardPreserved': True},
     'deployment': {'nativeExitCodeAuthoritative': True, 'stderrCannotFalseFail': True, 'workerOnlyPreserved': True},
     'docs': {'oldSetSplitWithoutResync': True, 'onePagePdf': True},
-    'finish': {'separateCommit': True, 'sameType': True, 'genericOverlayExcludesColor': True},
+    'viewer': {
+        'visibilityPersists': True,
+        'appearanceSeparateFromTransform': True,
+        'familyThenTypeFilter': True,
+        'typeFinishSingleRecord': True,
+        'texturePriorityColorFallback': True,
+        'architexturesUserSelectedAsset': True,
+    },
 }, indent=2))
