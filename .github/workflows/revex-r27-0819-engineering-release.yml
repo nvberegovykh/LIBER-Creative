@@ -61,19 +61,21 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Recorded-Revit, syntax, project-access and broker dependency QA
+      - name: Recorded-Revit, syntax, Design Book, project-access and broker dependency QA
         shell: bash
         run: |
           set -euo pipefail
           APP='docs/liber-apps/apps/revex'
-          for file in app.js store.js viewer-r26.js integrity.js firestore-compat.js ui-integrity.js diagnostics-r29.js energy-r27.js energy-contract-r40.js history-r24.js revex-r41-live.js shell-integrity.js; do
+          for file in app.js store.js viewer-r26.js integrity.js firestore-compat.js ui-integrity.js design-versions-r52.js diagnostics-r29.js energy-r27.js energy-contract-r40.js history-r24.js revex-r41-live.js shell-integrity.js workspace-r51.js render-agent.js; do
             cp "$APP/$file" "/tmp/${file%.js}.mjs"
             node --check "/tmp/${file%.js}.mjs"
           done
           node --check server/firebase-functions/index.js
           node --check server/firebase-functions/project-access.js
           node --check .github/scripts/verify-revex-r49-live-rules.js
+          node --check .github/scripts/verify-revex-design-property-versions-r52.js
           node .github/scripts/verify-revex-r49.js --report /tmp/revex-r49-simulation.json
+          node .github/scripts/verify-revex-design-property-versions-r52.js
           node server/firebase-functions/verify-project-access-r49.js
           npm --prefix server/firebase-functions ci --omit=dev --no-audit --no-fund
           ok=0
