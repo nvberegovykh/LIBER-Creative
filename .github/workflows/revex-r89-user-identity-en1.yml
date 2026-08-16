@@ -1,3 +1,4 @@
+# Final r89 acceptance run is intentionally user-authored so PR checks execute normally.
 name: REVEX r89 user identity + EN-1 + nine-file validation
 
 on:
