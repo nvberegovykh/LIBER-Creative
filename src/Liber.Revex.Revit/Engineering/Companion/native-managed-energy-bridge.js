@@ -3,7 +3,6 @@
 
   const VERSION = '20260813r49';
   const ENDPOINT = 'https://legacy-comcheck.energycode.pnl.gov/CheckWeb/';
-  const VIRTUAL_HOST = 'revex-engineering.local';
   const active = new Map();
   let current = null;
   const $ = (selector) => document.querySelector(selector);
@@ -62,6 +61,20 @@
     const resultProject = clean(result.projectId || manifest.projectId);
     const sourceRevision = clean(manifest.sourceEngineeringRevision || manifest.sourceRevision || manifest.engineeringRevision);
     return resultProject === projectId && sourceRevision === revision;
+  }
+
+  async function waitForCloudStore(Store, projectId, revision, startedAt, timeoutMs = 30000) {
+    const began = Date.now();
+    let announced = false;
+    while (Date.now() - began < timeoutMs) {
+      if (Store?.isCloud?.() && Store?.user?.uid) return Store;
+      if (!announced) {
+        announced = true;
+        post('AUTH_WAIT', 'Waiting for the existing LIBER cloud session before publishing this preserved Engineering revision…', false, { projectId, revision, startedAt });
+      }
+      await delay(100);
+    }
+    throw new Error('LIBER cloud session did not become ready within 30 seconds. The immutable Engineering revision remains preserved locally and was not published.');
   }
 
   function showConsent(projectId, revision) {
@@ -141,6 +154,7 @@
       try {
         post('VALIDATING', 'Validating active-document identity, immutable evidence, and project boundary…', false, current);
         bindCompanion(projectId);
+        await waitForCloudStore(Store, projectId, revision, startedAt);
         const state = await Store.syncEngineeringPackage(files, projectId);
         if (clean(state?.projectId) !== projectId || clean(state?.revision) !== revision)
           throw new Error('Cloud Engineering state did not preserve the exact active-document project and revision.');
@@ -159,39 +173,17 @@
     return task;
   }
 
-  async function processUrls(entries) {
-    const rows = Array.from(entries || []);
-    if (!rows.length) throw new Error('The native Engineering revision URL list is empty.');
-    const files = [];
-    for (const row of rows) {
-      const name = clean(row?.name);
-      const url = clean(row?.url);
-      if (!name || !url) throw new Error('The native Engineering revision contains an unnamed artifact.');
-      let parsed;
-      try { parsed = new URL(url); } catch (_) { throw new Error(`Invalid native Engineering artifact URL: ${name}.`); }
-      if (parsed.protocol !== 'https:' || parsed.hostname !== VIRTUAL_HOST)
-        throw new Error(`Blocked non-REVEX Engineering artifact origin for ${name}.`);
-      const response = await fetch(parsed.href, { cache: 'no-store', credentials: 'omit' });
-      if (!response.ok) throw new Error(`Could not read immutable Engineering artifact ${name} (${response.status}).`);
-      const blob = await response.blob();
-      files.push(new File([blob], name, { type: blob.type || 'application/octet-stream', lastModified: 0 }));
-    }
-    const names = files.map(file => clean(file.name).toLowerCase());
-    if (!names.includes('engineering-sync.json') || !names.some(name => name.endsWith('.xml')) || !names.some(name => name.endsWith('.epw')))
-      throw new Error('Native Engineering handoff is incomplete before managed processing.');
-    return processInput(files);
-  }
-
   async function authorizeCurrentRevision() {
     const Store = window.RevexStore;
     const projectId = clean(window.__revexState?.projectId);
+    await waitForCloudStore(Store, projectId, clean(current?.revision), Date.now());
     const source = current?.projectId === projectId ? current?.state : await Store?.getEngineeringState?.(projectId);
     const revision = clean(source?.revision || source?.manifest?.revision);
     if (!Store || !projectId || !revision) throw new Error('Publish an active-document Engineering Sync revision first.');
     return authorizeAndRun(Store, projectId, revision, Date.now(), true);
   }
 
-  window.__revexManagedEnergyBridge = { version: VERSION, processInput, processUrls, authorizeCurrentRevision, resultMatches };
+  window.__revexManagedEnergyBridge = { version: VERSION, processInput, authorizeCurrentRevision, resultMatches };
   $('#energy-authorize-backstop')?.addEventListener('click', () => {
     authorizeCurrentRevision().catch((error) => post('BROKER_FAILED', error?.message || 'Managed Energy could not start.'));
   });
