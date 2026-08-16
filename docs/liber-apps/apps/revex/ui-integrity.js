@@ -114,6 +114,7 @@
     loadScript('viewer-polish-r68.js?v=20260816r68-viewer-polish1','viewer-polish-r68','module');
     loadScript('appearance-r70.js?v=20260816r70-appearance1','appearance-r70');
     loadScript('companion-state-r71.js?v=20260816r71-state1','companion-state-r71');
+    loadScript('model-filter-r71.js?v=20260816r71-filter1','model-filter-r71');
   }
 
   function bind(){
@@ -129,5 +130,5 @@
   loadCurrentRepairs();
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
   setTimeout(bind,250);setTimeout(bind,1000);
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',labels:'source-text',reviewRuntime:'r49-review2',docsPages:'real-single-page-pdf',viewerPolish:'r68',energyFailureEvidence:'exact',appearance:'r70-independent-type-or-instance',canonicalViewerState:'r71-before-hydration',appearanceLive:'r71',spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',labels:'source-text',reviewRuntime:'r49-review2',docsPages:'real-single-page-pdf',viewerPolish:'r68',energyFailureEvidence:'exact',appearance:'r70-independent-type-or-instance',canonicalViewerState:'r71-before-hydration',appearanceLive:'r71',modelFilter:'family-type-full-index-r71',spatialObjects:'invisible'});
 })(window);
