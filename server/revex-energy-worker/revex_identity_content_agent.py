@@ -98,6 +98,26 @@ def current_identity(facts: dict) -> dict[str, str]:
     return identity
 
 
+def _structured_identity_complete(facts: dict) -> bool:
+    """Skip the content agent only when verified native structured identity is complete.
+
+    A page-agent value is intentionally not enough to short-circuit this stage: page scans
+    can see applicant/consultant addresses on the same sheet and are precisely what this
+    role-aware consensus stage exists to validate.
+    """
+    structured = dict(facts.get("structuredIdentity") or {})
+    values = {key: _text(structured.get(key)) for key in REQUIRED_IDENTITY}
+    if not values["city"]:
+        values["city"] = _text(structured.get("borough"))
+    if not values["address"]:
+        values["address"] = " ".join(
+            part for part in (_text(structured.get("houseNumber")), _text(structured.get("streetName"))) if part
+        )
+    if not values["title"]:
+        values["title"] = values["address"]
+    return all(values[key] for key in REQUIRED_IDENTITY)
+
+
 def _pdf_text(path: Path) -> str:
     try:
         from pypdf import PdfReader
@@ -201,7 +221,7 @@ def validate_agent_candidate(
         audit["rejected"].append(f"agent confidence {confidence:.3f} below {MIN_AGENT_CONFIDENCE:.2f}")
         return None, audit
 
-    anchor = _text(base.get("address"))
+    anchor = _text((facts.get("structuredIdentity") or {}).get("address")) or _text(base.get("address"))
     if anchor and not _same_project_street(anchor, merged["address"]):
         audit["rejected"].append("agent address does not match authoritative active-Revit project street")
         return None, audit
@@ -329,7 +349,7 @@ def resolve_request(
         return request_path
     facts = json.loads(page_path.read_text(encoding="utf-8"))
     base = current_identity(facts)
-    if all(_text(base.get(key)) for key in REQUIRED_IDENTITY):
+    if _structured_identity_complete(facts):
         return request_path
 
     artifacts = _artifact_paths(request)
