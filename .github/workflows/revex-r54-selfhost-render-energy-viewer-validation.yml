@@ -92,7 +92,7 @@ jobs:
           [void][scriptblock]::Create($energy)
 
           $launcher = Get-Content -Raw DEPLOY_REVEX_CURRENT_SERVICES.ps1
-          foreach ($required in @('DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1','Start-Transcript','firebase login --reauth')) {
+          foreach ($required in @('DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1','Start-Transcript','& $Firebase login --reauth')) {
             if (-not $launcher.Contains($required)) { throw "Missing unified launcher contract: $required" }
           }
           if ($launcher.Contains('PUBLISH_REVEX_R49.ps1')) { throw 'Unified launcher invokes stale publisher.' }
