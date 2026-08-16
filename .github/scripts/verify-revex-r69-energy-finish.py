@@ -50,8 +50,11 @@ assert set(resolved['locationResolution']['filled']) == {'city', 'state', 'zip'}
 
 parsed = r69._split_address_location('18 Example Ave, Queens, NY 11375')
 assert parsed == {'city': 'Queens', 'state': 'NY', 'zip': '11375'}
-local_only = copy.deepcopy(facts)
-local_only['structuredIdentity']['address'] = '18 Example Ave, Queens, NY 11375'
+local_only = {
+    'schema': 'liber.revex.revit-page-facts.v1',
+    'structuredIdentity': {'title': '18 Example Ave', 'address': '18 Example Ave, Queens, NY 11375'},
+    'pages': [],
+}
 resolved_local, identity_local = r69._resolve_identity(local_only, lambda _: {})
 assert identity_local['city'] == 'Queens' and identity_local['state'] == 'NY' and identity_local['zip'] == '11375'
 assert resolved_local['locationResolution']['provider'] is None
