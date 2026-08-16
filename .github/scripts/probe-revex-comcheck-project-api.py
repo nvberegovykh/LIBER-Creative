@@ -25,7 +25,13 @@ def main() -> int:
         probe = driver.execute_script(
             """
             const safeKeys=v=>{try{return v?Object.keys(v):[]}catch(_){return []}};
-            const own=(o,k)=>{try{return o&&o[k]!==undefined?o[k]:null}catch(_){return null}};
+            const describe=v=>{try{return {
+              type:typeof v,
+              ctor:v&&v.constructor&&v.constructor.name||'',
+              keys:safeKeys(v),
+              value:v&&typeof v==='object'&&'value' in v?v.value:v,
+              json:(()=>{try{return JSON.stringify(v)}catch(_){return ''}})()
+            }}catch(_){return {type:'error'}}};
             const field=(id)=>{const e=document.getElementById(id);return e?{
               id:e.id,name:e.name||'',value:e.value||'',
               onchange:e.getAttribute('onchange')||'',onblur:e.getAttribute('onblur')||''
@@ -33,6 +39,8 @@ def main() -> int:
             const project=USER_PROJECT&&USER_PROJECT.project;
             const details=project&&project.projectDetails;
             const building=project&&project.buildingDetails;
+            const detailSnapshot={};
+            for(const key of safeKeys(details))detailSnapshot[key]=describe(details[key]);
             return {
               location:String(location.href),
               ProjectActionType:typeof ProjectAction,
@@ -42,15 +50,19 @@ def main() -> int:
               userProjectKeys:safeKeys(USER_PROJECT),
               projectKeys:safeKeys(project),
               projectDetailsKeys:safeKeys(details),
+              projectDetails:detailSnapshot,
               buildingDetailsKeys:safeKeys(building),
-              projectTitle:own(project,'projectTitle'),
-              projectAddress:own(project,'projectAddress'),
-              projectCity:own(project,'projectCity'),
-              projectState:own(project,'projectState'),
-              projectZipCode:own(project,'projectZipCode'),
+              projectName:describe(USER_PROJECT&&USER_PROJECT.projectName),
               fields:['projectTitle','projectAddress','projectCity','projectState','projectZipCode'].map(field),
-              updateProjectSource:typeof ProjectAction!=='undefined'&&ProjectAction.updateProject?String(ProjectAction.updateProject).slice(0,1200):'',
-              getProjectSource:typeof ProjectAction!=='undefined'&&ProjectAction.getProject?String(ProjectAction.getProject).slice(0,1200):''
+              saveProjectType:typeof ProjectService!=='undefined'&&ProjectService.saveProject?typeof ProjectService.saveProject:'undefined',
+              saveProjectLength:typeof ProjectService!=='undefined'&&ProjectService.saveProject?ProjectService.saveProject.length:null,
+              saveProjectSource:typeof ProjectService!=='undefined'&&ProjectService.saveProject?String(ProjectService.saveProject).slice(0,1800):'',
+              getCurrentProjectLength:typeof ProjectService!=='undefined'&&ProjectService.getCurrentProject?ProjectService.getCurrentProject.length:null,
+              getCurrentProjectSource:typeof ProjectService!=='undefined'&&ProjectService.getCurrentProject?String(ProjectService.getCurrentProject).slice(0,1800):'',
+              globalSaveProjectType:typeof saveProject,
+              globalSaveProjectSource:typeof saveProject==='function'?String(saveProject).slice(0,1800):'',
+              globalSaveType:typeof save,
+              globalSaveSource:typeof save==='function'?String(save).slice(0,1800):''
             };
             """
         )
