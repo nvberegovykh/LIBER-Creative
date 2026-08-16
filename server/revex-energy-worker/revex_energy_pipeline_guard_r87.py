@@ -3,9 +3,9 @@
 
 The worker already carries verified active-Revit identity JSON and immutable T/Z PDFs.
 r87 strengthens only the locality extraction seam: city/state/ZIP may be read from text
-within a bounded window immediately following the authoritative project street.  This
+within a bounded window immediately following the authoritative project street. This
 covers multiline/titleblock PDF extraction without accepting unrelated consultant
-addresses elsewhere on the sheet.  The preserved r49 pipeline, failure guard and all
+addresses elsewhere on the sheet. The preserved r49 pipeline, failure guard and all
 other Energy behavior remain unchanged.
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import revex_energy_pipeline_guard as base_guard
+import revex_energy_pipeline_guard_base as base_guard
 import revex_energy_pipeline_r69 as identity
 
 BUILD = "20260816r87"
@@ -35,7 +35,7 @@ def location_near_authoritative_address(text: str, authoritative_address: str) -
         return {}
 
     # Require the authoritative address tokens in order, but tolerate titleblock labels,
-    # punctuation and PDF extraction gaps between them.  The locality must occur very
+    # punctuation and PDF extraction gaps between them. The locality must occur very
     # shortly after that matched project street, so an architect/engineer address elsewhere
     # on the same sheet cannot win.
     address_pattern = r"\b" + r"\b.{0,48}?\b".join(re.escape(token) for token in tokens) + r"\b"
@@ -48,7 +48,12 @@ def location_near_authoritative_address(text: str, authoritative_address: str) -
         locality = location_pattern.search(window)
         if not locality:
             continue
-        city = re.sub(r"^(?:PROJECT|SITE|PROPERTY|BUILDING|ADDRESS|LOCATION)\s+", "", locality.group(1).strip(), flags=re.I).strip(" ,-:")
+        city = re.sub(
+            r"^(?:PROJECT|SITE|PROPERTY|BUILDING|ADDRESS|LOCATION)\s+",
+            "",
+            locality.group(1).strip(),
+            flags=re.I,
+        ).strip(" ,-:")
         if not city:
             continue
         return {"city": city, "state": locality.group(2).upper(), "zip": locality.group(3)}
