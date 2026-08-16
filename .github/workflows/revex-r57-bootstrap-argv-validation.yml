@@ -1,0 +1,50 @@
+name: REVEX r57 bootstrap argv validation
+
+on:
+  push:
+    branches:
+      - main
+      - 'agent/revex-deploy-bootstrap-argv-r57-*'
+    paths:
+      - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
+      - 'server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1'
+      - 'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
+      - '.github/workflows/revex-r57-bootstrap-argv-validation.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
+      - 'server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1'
+      - 'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
+      - '.github/workflows/revex-r57-bootstrap-argv-validation.yml'
+
+jobs:
+  windows-bootstrap:
+    name: Windows bootstrap preserves native argv
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate bootstrap transformation and parsing
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1 -ValidateOnly -NoPause
+          if ($LASTEXITCODE -ne 0) { throw 'Bootstrap validation failed.' }
+      - name: Prove variable splatting keeps gcloud-style arguments separate
+        shell: powershell
+        run: |
+          $fake = Join-Path $env:RUNNER_TEMP 'fake-gcloud.cmd'
+          @'
+          @echo off
+          echo [%1][%2][%3][%4]
+          '@ | Set-Content -LiteralPath $fake -Encoding Ascii
+          $arguments = @('auth','list','--filter=status:ACTIVE','--format=value(account)')
+          $actual = (& $fake @arguments | Out-String).Trim()
+          $expected = '[auth][list][--filter=status:ACTIVE][--format=value(account)]'
+          if ($actual -ne $expected) {
+            throw "Native argv collapsed: $actual"
+          }
+      - name: Preserve REVEX renderer Energy and viewer contracts
+        shell: powershell
+        run: |
+          node .github/scripts/verify-revex-current-generation-r53.js
+          node .github/scripts/verify-revex-r54-selfhost-render.js
