@@ -214,6 +214,14 @@ public sealed class RevitRequestHandler : IExternalEventHandler
             }
 
             bool ok = GbxmlEngineeringService.IsSuccessful(output, settings.AuditOnly);
+            if (ok && !settings.AuditOnly)
+            {
+                if (output == null || string.IsNullOrWhiteSpace(output.RunFolder))
+                    throw new InvalidOperationException("Successful Engineering gbXML has no run folder for current Revit schedule evidence.");
+                string scheduleEvidence = new EngineeringScheduleEvidenceService().Export(uidoc.Document, output.RunFolder);
+                RevexDiagnostics.Dependency("ENERGY-SCHEDULES", "Current native Revit schedules", File.Exists(scheduleEvidence), scheduleEvidence);
+            }
+
             string detail = settings.AuditOnly
                 ? $"gbXML audit finished: {output.Status}."
                 : ok

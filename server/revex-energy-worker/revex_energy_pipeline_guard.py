@@ -2,21 +2,20 @@
 """REVEX managed-Energy execution guard.
 
 Runs the pinned r49 pipeline unchanged, then promotes only failure diagnostics into
-its normal artifact contract when the run does not complete. This makes errors
-such as GeometryCo exit-code 2 directly inspectable from Companion instead of
-pointing to a temporary Cloud Run file that disappears with the instance.
+its normal artifact contract when the run does not complete.
 
-r89 first applies explicit revision-scoped user project identity only to fields
-still missing from immutable active-Revit T/Z evidence. r88 content-aware role
-separation runs next; deterministic r69 normalization/geocoding remains the final
-automatic identity fallback. r95 reapplies the same missing-only explicit user
-projection at the exact identity consumer boundary. r100 then resolves only missing
-COMcheck facts from the same immutable active-Revit T/Z/EN PDFs: deterministic Z/T
-text owns code/stories/height/Zoning Analysis Gross Area, while a bounded >=90%
-multimodal EN reader may recover source-proven envelope rows. The pinned r49 pipeline
-remains the final CXL/schema validator. On a COMPLETE pinned run, r89 fills explicit
-applicant/modeler EN-1 data, prints/validates EN-1 PDF, and finalizes the exact
-nine-file clean review contract. Source evidence is never mutated.
+Current evidence order:
+1. revision-scoped explicit user identity fills only missing identity fields;
+2. content-aware identity separation + deterministic r69 normalization;
+3. explicit identity is projected once more at the exact identity boundary;
+4. r101 reconciles native Revit schedules captured in the same immutable Engineering
+   revision as gbXML. Resolved schedule facts outrank page scanning. Conflicting current
+   schedule facts are removed from the derived request and block PDF recovery so the
+   pinned pipeline fails visibly rather than choosing one silently;
+5. r100 recovers only still-missing COMcheck facts from immutable T/Z/EN PDFs;
+6. pinned r49 remains the final GeometryCo / EnergyPlus / CXL / EN-1 implementation.
+
+Source Engineering evidence is never mutated.
 """
 from __future__ import annotations
 
@@ -58,6 +57,9 @@ EXACT_NAMES = {
     "PROJECT_IDENTITY_CONTENT_AGENT_R88.json",
     "00_PAGE_FACTS_RESOLVED_R69.json",
     "00_PIPELINE_REQUEST_RESOLVED_R69.json",
+    "00_PAGE_FACTS_STRUCTURED_SCHEDULE_R101.json",
+    "00_PIPELINE_REQUEST_STRUCTURED_SCHEDULE_R101.json",
+    "STRUCTURED_SCHEDULE_PROJECTION_R101.json",
     "00_PAGE_FACTS_COMCHECK_EVIDENCE_R100.json",
     "00_PIPELINE_REQUEST_COMCHECK_EVIDENCE_R100.json",
     "COMCHECK_EVIDENCE_RESOLUTION_R100.json",
@@ -212,6 +214,27 @@ def _resolve_r69_request(request_path: Path, output_root: Path) -> Path:
         return request_path
 
 
+def _resolve_structured_schedule_request(request_path: Path, output_root: Path) -> Path:
+    try:
+        import revex_structured_schedule_projection as resolver
+        return resolver.resolve_request(request_path, output_root)
+    except Exception as exc:
+        print(json.dumps({
+            "stage": "STRUCTURED_SCHEDULE_R101",
+            "status": "UNRESOLVED",
+            "error": f"{type(exc).__name__}: {exc}",
+        }, ensure_ascii=True), flush=True)
+        return request_path
+
+
+def _structured_schedule_conflicts(request_path: Path) -> list[str]:
+    try:
+        request = json.loads(Path(request_path).read_text(encoding="utf-8"))
+        return [str(value) for value in list((request.get("structuredScheduleProjection") or {}).get("conflicts") or [])]
+    except Exception:
+        return []
+
+
 def _resolve_comcheck_evidence_request(request_path: Path, output_root: Path) -> Path:
     try:
         import revex_comcheck_evidence as resolver
@@ -248,17 +271,29 @@ def main(argv: Iterable[str] | None = None) -> int:
     if not impl.is_file() or impl.resolve() == Path(__file__).resolve():
         raise RuntimeError(f"Pinned REVEX Energy implementation is unavailable: {impl}")
 
-    # Compatibility marker for prior r87/r69 dependency validators: _resolve_content_identity_request(request_path, output_root)
-    # Contract order: explicit user fallback fills only missing identity; content-aware
-    # separation and deterministic normalization may enrich authoritative identity evidence;
-    # the same missing-only explicit fallback is projected once more directly at the pinned
-    # identity consumer boundary; then r100 fills only still-missing COMcheck facts from the
-    # immutable T/Z/EN PDF set. All stages write derived copies only.
+    # Compatibility marker for prior r87/r69 dependency validators. The runtime below
+    # deliberately threads each derived request forward instead of restarting from the
+    # original request path: _resolve_content_identity_request(request_path, output_root)
     effective_request = _resolve_user_identity_request(request_path, output_root)
     effective_request = _resolve_content_identity_request(effective_request, output_root)
     effective_request = _resolve_r69_request(effective_request, output_root)
     effective_request = _resolve_user_identity_request(effective_request, output_root)
-    effective_request = _resolve_comcheck_evidence_request(effective_request, output_root)
+
+    # r101: current native Revit schedule facts precede PDF recovery. If two valid
+    # current-revision schedules disagree on the same typed fact, keep that fact absent
+    # and skip r100 so no PDF/OCR fallback can silently choose one side of the conflict.
+    effective_request = _resolve_structured_schedule_request(effective_request, output_root)
+    structured_conflicts = _structured_schedule_conflicts(effective_request)
+    if structured_conflicts:
+        print(json.dumps({
+            "stage": "STRUCTURED_SCHEDULE_R101",
+            "status": "HARD_CONFLICT",
+            "conflicts": structured_conflicts,
+            "pdfFallbackSkipped": True,
+        }, ensure_ascii=True), flush=True)
+    else:
+        effective_request = _resolve_comcheck_evidence_request(effective_request, output_root)
+
     command = [sys.executable, str(impl), "--request", str(effective_request), *passthrough]
     completed = subprocess.run(command, cwd=str(impl.parent), env=os.environ.copy())
     result_path = output_root / "energy-result.json"
