@@ -15,6 +15,7 @@ VIEWER = ROOT / 'docs/liber-apps/apps/revex/viewer-runtime-r75.js'
 COMPANION = ROOT / 'docs/liber-apps/apps/revex/companion-runtime-r75.js'
 UI = ROOT / 'docs/liber-apps/apps/revex/ui-integrity.js'
 APP = ROOT / 'docs/liber-apps/apps/revex/app.js'
+ENERGY_DIAGNOSTICS = ROOT / 'docs/liber-apps/apps/revex/energy-diagnostics-r68.js'
 
 spec = importlib.util.spec_from_file_location('revex_r69', WRAPPER)
 assert spec and spec.loader
@@ -51,6 +52,24 @@ local_only = {'schema': 'liber.revex.revit-page-facts.v1','structuredIdentity': 
 resolved_local, identity_local = r69._resolve_identity(local_only, lambda _: {})
 assert identity_local['city'] == 'Queens' and identity_local['state'] == 'NY' and identity_local['zip'] == '11375'
 assert resolved_local['locationResolution']['provider'] is None
+
+# Exact current-project titleblock / Project Address form observed on 250 Midwood:
+# the street and locality may be separated by a newline. This must resolve solely
+# from immutable Revit evidence and must never require a template or outside lookup.
+midwood_address = '250 MIDWOOD STREET,\nBROOKLYN, NY 11225'
+midwood_calls = []
+resolved_midwood, identity_midwood = r69._resolve_identity({
+    'schema': 'liber.revex.revit-page-facts.v1',
+    'structuredIdentity': {'title': '250 MIDWOOD STREET', 'address': midwood_address},
+    'pages': [],
+}, lambda identity: midwood_calls.append(dict(identity)) or {})
+assert identity_midwood['city'] == 'BROOKLYN'
+assert identity_midwood['state'] == 'NY'
+assert identity_midwood['zip'] == '11225'
+assert resolved_midwood['locationResolution']['provider'] is None
+assert resolved_midwood['locationResolution']['remainingMissing'] == []
+assert midwood_calls == [], 'current Midwood address already contains location; Census must not be called'
+
 unresolved_facts = {'structuredIdentity': {'title': 'Unknown project'}, 'pages': []}
 unresolved, unresolved_identity = r69._resolve_identity(unresolved_facts, lambda _: {})
 assert not unresolved_identity['city'] and not unresolved_identity['state'] and not unresolved_identity['zip']
@@ -65,6 +84,7 @@ viewer_text = VIEWER.read_text(encoding='utf-8')
 companion_text = COMPANION.read_text(encoding='utf-8')
 ui_text = UI.read_text(encoding='utf-8')
 app_text = APP.read_text(encoding='utf-8')
+energy_diag_text = ENERGY_DIAGNOSTICS.read_text(encoding='utf-8')
 
 assert 'geocoding.geo.census.gov/geocoder/locations/onelineaddress' in wrapper_text
 assert 'derived-only-from-immutable-active-Revit-address' in wrapper_text
@@ -82,7 +102,7 @@ assert 'if ($script:NativeExitCode -ne 0 -or @($active).Count -eq 0)' in deploy_
 assert 'if ($script:NativeExitCode -ne 0 -or -not $CloudBuildSa)' in deploy_text
 assert 'if ($script:NativeExitCode -ne 0) { throw "Energy worker deployed but could not be re-read." }' in deploy_text
 
-# r75 successor: one persistent appearance state owner and one incremental renderer.
+# r75/r79 successor: one persistent appearance state owner and incremental renderer.
 assert "revexKind:'bim-appearance'" in appearance_text
 assert "Store.saveBimAppearance=save" in appearance_text
 assert "Store.subscribeKind(projectId,'bim-appearance'" in appearance_text
@@ -102,15 +122,19 @@ assert 'setInterval(' not in companion_text
 assert 'appearance-state-r75.js?v=20260816r75-appearance1' in ui_text
 assert 'viewer-runtime-r75.js?v=20260816r75-viewer1' in ui_text
 assert 'companion-runtime-r75.js?v=20260816r75-companion1' in ui_text
+assert 'energy-diagnostics-r68.js?v=20260816r80-energy-diagnostics1' in ui_text
+assert 'ENERGY_STALE_FAILURE_IGNORED' in energy_diag_text
+assert "failedRevision!==current" in energy_diag_text
 assert "loadScript('appearance-r70.js" not in ui_text
 assert "loadScript('docs-pages-r68.js" not in ui_text
 # Core Docs page navigation remains lightweight: one source PDF, native #page positioning.
 assert "const url = page ? `${base}#page=${page}` : base;" in app_text
 
 print(json.dumps({
-    'schema': 'liber.revex.r75-energy-appearance-qa.v1',
+    'schema': 'liber.revex.r80-energy-appearance-qa.v1',
     'status': 'PASSED',
-    'energyIdentity': {'immutableSource': True, 'derivedLocation': True, 'fabricationBlocked': True, 'r55GuardPreserved': True},
+    'energyIdentity': {'immutableSource': True, 'derivedLocation': True, 'midwoodCombinedAddress': True, 'fabricationBlocked': True, 'r55GuardPreserved': True},
+    'energyDiagnostics': {'revisionScoped': True, 'staleFailureHidden': True},
     'deployment': {'nativeExitCodeAuthoritative': True, 'stderrCannotFalseFail': True, 'workerOnlyPreserved': True},
     'docs': {'nativePdfPagePositioning': True, 'mainThreadPdfSplitterDisabled': True},
     'viewer': {'visibilityPersists': True,'appearanceSeparateFromTransform': True,'familyThenTypeFilter': True,'typeFinishSingleRecord': True,'texturePriorityColorFallback': True,'architexturesEmbeddedProperties': True,'restoreAllBatched': True},
