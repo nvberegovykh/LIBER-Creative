@@ -9,6 +9,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 3.0
+$script:NativeExitCode = 0
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $CloudBuild = Join-Path $Root "server\revex-energy-worker\cloudbuild.yaml"
 $ImageTag = "current-$($SourceCandidate.Substring(0,12).ToLowerInvariant())"
@@ -22,18 +23,59 @@ function Require-Command([string]$Name) {
   return $cmd.Source
 }
 
+# REVEX_NATIVE_EXITCODE_AUTHORITATIVE:
+# Native CLIs may write normal progress/confirmation text to stderr. With the
+# script-wide ErrorActionPreference=Stop, PowerShell can otherwise promote that
+# text to NativeCommandError before LASTEXITCODE is examined. Treat the native
+# process exit code as authoritative and restore strict PowerShell semantics
+# immediately after every invocation.
 function Invoke-Checked([string]$Label, [string]$Command, [string[]]$Arguments, [switch]$Quiet) {
   Write-Host ">> $Label" -ForegroundColor DarkCyan
-  if ($Quiet) { & $Command @Arguments *> $null } else { & $Command @Arguments }
-  if ($LASTEXITCODE -ne 0) { throw "$Label failed with exit code $LASTEXITCODE." }
+  $previous = $ErrorActionPreference
+  $code = 1
+  try {
+    $ErrorActionPreference = "Continue"
+    if ($Quiet) { & $Command @Arguments *> $null } else { & $Command @Arguments }
+    $code = $LASTEXITCODE
+    if ($null -eq $code) { $code = 0 }
+  } catch {
+    $code = 1
+  } finally {
+    $ErrorActionPreference = $previous
+  }
+  if ([int]$code -ne 0) { throw "$Label failed with exit code $code." }
 }
 
 function Invoke-GCloudCapture([string]$Command, [string[]]$Arguments) {
-  return @(& $Command @Arguments)
+  $previous = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $output = @(& $Command @Arguments)
+    $code = $LASTEXITCODE
+    if ($null -eq $code) { $code = 0 }
+    $script:NativeExitCode = [int]$code
+    return $output
+  } catch {
+    $script:NativeExitCode = 1
+    return @()
+  } finally {
+    $ErrorActionPreference = $previous
+  }
 }
 
 function Native-Ok([string]$Command, [string[]]$Arguments) {
-  try { & $Command @Arguments *> $null; return ($LASTEXITCODE -eq 0) } catch { return $false }
+  $previous = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    & $Command @Arguments *> $null
+    $code = $LASTEXITCODE
+    if ($null -eq $code) { $code = 0 }
+    return ([int]$code -eq 0)
+  } catch {
+    return $false
+  } finally {
+    $ErrorActionPreference = $previous
+  }
 }
 
 function Assert-R69Source {
@@ -69,7 +111,7 @@ try {
 
   $authArgs = @("auth","list","--filter","status:ACTIVE","--format","value(account)")
   $active = @(Invoke-GCloudCapture $GCloud $authArgs) | Where-Object { $_ }
-  if ($LASTEXITCODE -ne 0 -or @($active).Count -eq 0) {
+  if ($script:NativeExitCode -ne 0 -or @($active).Count -eq 0) {
     throw "Google Cloud administrator authentication is required once. Run 'gcloud auth login', then rerun."
   }
   $Deployer = [string](@($active)[0])
@@ -100,7 +142,7 @@ try {
   }
   $buildSaArgs = @("builds","get-default-service-account","--project=$ProjectId","--format=value(serviceAccountEmail)")
   $CloudBuildSa = ((Invoke-GCloudCapture $GCloud $buildSaArgs) -join "").Trim()
-  if ($LASTEXITCODE -ne 0 -or -not $CloudBuildSa) { throw "Cloud Build default service account was not returned." }
+  if ($script:NativeExitCode -ne 0 -or -not $CloudBuildSa) { throw "Cloud Build default service account was not returned." }
   Invoke-Checked "Grant Cloud Build builder role" $GCloud @("projects","add-iam-policy-binding",$ProjectId,"--member=serviceAccount:$CloudBuildSa","--role=roles/cloudbuild.builds.builder","--quiet") -Quiet
   Invoke-Checked "Grant Cloud Build image-push access" $GCloud @("projects","add-iam-policy-binding",$ProjectId,"--member=serviceAccount:$CloudBuildSa","--role=roles/artifactregistry.writer","--quiet") -Quiet
 
@@ -121,7 +163,7 @@ try {
 
   $serviceArgs = @("run","services","describe",$Service,"--project=$ProjectId","--region=$Region","--format=json")
   $RunState = ((Invoke-GCloudCapture $GCloud $serviceArgs) -join "`n") | ConvertFrom-Json
-  if ($LASTEXITCODE -ne 0) { throw "Energy worker deployed but could not be re-read." }
+  if ($script:NativeExitCode -ne 0) { throw "Energy worker deployed but could not be re-read." }
   $Ready = @($RunState.status.conditions | Where-Object { $_.type -eq 'Ready' } | Select-Object -First 1)
   if ($Ready.Count -eq 0 -or [string]$Ready[0].status -ne 'True') { throw "r69 Energy worker did not report Ready after deployment." }
   $WorkerUrl = [string]$RunState.status.url
