@@ -30,6 +30,8 @@ must(state,"document.getElementById('project-select')?.addEventListener('change'
 must(state,"root.addEventListener('revex:bim-appearances-changed'",'inspector must update after local or remote appearance changes');
 must(state,'data-r71-live-state','inspector must expose the currently committed live appearance state');
 must(state,'Open selected source','saved Architextures source must remain inspectable without automated downloading');
+must(state,'Edit in Architextures','numeric Architextures sources must hand off to the official editor');
+must(state,"`https://architextures.org/create/${match[1]}`",'REVEX must edit via the official Architextures Create page rather than scraping or synthesizing catalog assets');
 
 must(filter,"const rows=state()?.viewerData?.elements||[]",'Family/Type filter must resolve against the full model index');
 must(filter,"return text(row?.category||row?.family||'')",'Family filter must bridge through a core-search-indexed field before exact family filtering');
@@ -44,4 +46,4 @@ must(appearance,'Texture wins; committed design color is its fallback and overri
 must(sw,"return await fetch(request, { cache: 'no-store' })",'REVEX runtime assets must remain network-authoritative');
 must(sw,'Keeps REVEX core assets network-authoritative','service-worker cache contract must remain explicit');
 
-console.log(JSON.stringify({schema:'liber.revex.r71-companion-state-qa.v1',status:'PASSED',viewer:{canonicalVisibilityBeforeHydration:true,appearanceOutsideGeometry:true,lateStoreMethodsWrapped:true},projectState:{appearanceClearsOnSwitch:true,appearanceHydrates:true,appearanceLiveSync:true},modelFilter:{familyThenType:true,fullIndexBridge:true,manualSearchPreserved:true},inspector:{remoteAppearanceRefresh:true,sourceTraceable:true},cache:{revexCoreNetworkAuthoritative:true}},null,2));
+console.log(JSON.stringify({schema:'liber.revex.r71-companion-state-qa.v1',status:'PASSED',viewer:{canonicalVisibilityBeforeHydration:true,appearanceOutsideGeometry:true,lateStoreMethodsWrapped:true},projectState:{appearanceClearsOnSwitch:true,appearanceHydrates:true,appearanceLiveSync:true},modelFilter:{familyThenType:true,fullIndexBridge:true,manualSearchPreserved:true},inspector:{remoteAppearanceRefresh:true,sourceTraceable:true,architexturesEditorHandoff:true},cache:{revexCoreNetworkAuthoritative:true}},null,2));
