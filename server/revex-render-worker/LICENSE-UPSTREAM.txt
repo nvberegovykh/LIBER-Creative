@@ -1,0 +1,8 @@
+REVEX default self-hosted image-edit model
+
+Upstream model: Qwen/Qwen-Image-Edit-2511
+Pinned revision: 6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9
+Upstream publisher: Qwen / Alibaba Cloud
+License declared by upstream model repository: Apache License 2.0
+
+REVEX does not redistribute the model weights in this GitHub repository. The private worker retrieves the exact public upstream revision at runtime without requiring a Hugging Face account or token. Upstream license and copyright notices remain applicable to the upstream model files.
