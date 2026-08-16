@@ -36,7 +36,14 @@ function Invoke-NativeExitCode([string]$Command, [string[]]$Arguments, [switch]$
   $previous = $ErrorActionPreference
   try {
     $ErrorActionPreference = "Continue"
-    if ($Quiet) { & $Command @Arguments *> $null } else { & $Command @Arguments }
+    if ($Quiet) {
+      & $Command @Arguments *> $null
+    } else {
+      # Display native output without returning it from this helper. Otherwise
+      # PowerShell captures every child-process line together with the integer
+      # exit code and a successful deployment is falsely reported as failed.
+      & $Command @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
+    }
     $code = $LASTEXITCODE
     if ($null -eq $code) { $code = 0 }
     return [int]$code
