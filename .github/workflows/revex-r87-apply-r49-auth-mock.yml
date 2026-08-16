@@ -1,0 +1,41 @@
+name: REVEX r87 one-shot r49 authenticated Store mock patch
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/scripts/apply-revex-r87-r49-auth-mock.py'
+      - '.github/workflows/revex-r87-apply-r49-auth-mock.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-once:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 2
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply exact authenticated Store mock replacement
+        run: python .github/scripts/apply-revex-r87-r49-auth-mock.py
+      - name: Syntax-check complete QA harness
+        run: node --check .github/scripts/verify-revex-r49.js
+      - name: Prove patch scope
+        run: |
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 1
+          test "$(git diff --name-only)" = ".github/scripts/verify-revex-r49.js"
+      - name: Commit exact QA harness repair
+        run: |
+          git config user.name 'REVEX r87 QA'
+          git config user.email '116811305+nvberegovykh@users.noreply.github.com'
+          git add .github/scripts/verify-revex-r49.js
+          git commit -m 'REVEX r87: authenticate managed-Energy Store in final-gate mock'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
