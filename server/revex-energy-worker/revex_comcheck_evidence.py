@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
-"""REVEX current-project COMcheck evidence resolution.
+"""REVEX r100 current-project COMcheck evidence recovery.
 
-r101 keeps the r100 immutable T/Z/EN PDF recovery, but puts a stronger source in front of it:
-the native Revit schedule snapshot captured during the same fresh Engineering Sync as gbXML.
-Reference-project files remain structure/templates only; current values always come from the
-current immutable Engineering revision.
+This stage repairs only missing COMcheck inputs in a derived page-facts copy. It consumes
+immutable active-Revit T/Z/EN PDF evidence already published by Engineering Sync.
 
 Rules:
 - never mutate source artifacts or original page facts;
 - never use template/project-reference identity or quantities;
-- structured native Revit schedules are deterministic current-project evidence and are consumed
-  before PDF/AI recovery;
-- PDF/AI remains a bounded fallback only for facts not proven by structured schedules;
-- COMcheck whole-building floor area prefers the current Zoning Analysis Area Calculation
-  table's Gross Area total, never BC Gross, deductions, zoning floor area, modeled area or a
-  reference-project value;
-- every structured envelope row must carry an exact schedule source, area, assembly label and the
-  thermal/orientation fields required by its kind;
+- deterministic T/Z text owns stories, building height, current Gross Area total and
+  visible energy-code wording when it can prove them;
+- COMcheck whole-building floor area comes from the Zoning analysis Area Calculation
+  table's *Gross Area* total (not BC Gross, zoning floor area, conditioned/model area);
+- EN envelope rows may be recovered by a bounded multimodal sheet reader, but every row
+  must name an actual EN source PDF and include source-visible evidence; rows below the
+  existing 0.90 filing confidence floor are rejected;
 - the pinned r49 pipeline remains the final semantic/schema validator.
 """
 from __future__ import annotations
@@ -31,11 +28,9 @@ from typing import Any, Callable
 from revex_cloud_project import resolve_vertex_project
 
 SCHEMA = "liber.revex.comcheck-evidence-resolution.v1"
-VERSION = "20260816r101-structured-schedule1"
+VERSION = "20260816r100-comcheck-evidence1"
 MIN_CONFIDENCE = 0.90
 MAX_AGENT_PDFS = 8
-SCHEDULE_SCHEMA = "liber.revex.engineering-schedule-evidence.v1"
-SCHEDULE_AUTHORITY = "active-revit-document-native-schedules"
 
 
 def _text(value: Any) -> str:
@@ -57,17 +52,6 @@ def _number(value: Any) -> float | None:
     try:
         number = float(str(value).replace(",", "").strip())
     except (TypeError, ValueError):
-        return None
-    return number if number > 0 else None
-
-
-def _first_number(value: Any) -> float | None:
-    match = re.search(r"(?<![A-Za-z0-9])(-?\d[\d,]*(?:\.\d+)?)", _text(value))
-    if not match:
-        return None
-    try:
-        number = float(match.group(1).replace(",", ""))
-    except ValueError:
         return None
     return number if number > 0 else None
 
@@ -231,289 +215,6 @@ def _missing_core(facts: dict) -> list[str]:
     return missing
 
 
-def _schedule_artifact(artifacts: dict[str, Path]) -> Path | None:
-    for name, path in artifacts.items():
-        if name.endswith("revit-schedule-evidence.json"):
-            return path
-    return None
-
-
-def _load_schedule_evidence(path: Path | None) -> dict:
-    if path is None or not path.is_file():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8-sig"))
-    except Exception:
-        return {}
-    if _text(data.get("schema")) != SCHEDULE_SCHEMA or _text(data.get("authority")) != SCHEDULE_AUTHORITY:
-        return {}
-    return data
-
-
-def _schedule_headings(schedule: dict) -> list[str]:
-    fields = [field for field in list(schedule.get("fields") or []) if not bool(field.get("hidden"))]
-    headings = [_text(field.get("columnHeading") or field.get("name")) for field in fields]
-    if any(headings):
-        return headings
-    header_rows = list(schedule.get("headerRows") or [])
-    if header_rows:
-        return [_text(value) for value in list(header_rows[-1] or [])]
-    return []
-
-
-def _schedule_text(evidence: dict) -> str:
-    parts: list[str] = []
-    for schedule in list(evidence.get("schedules") or []):
-        parts.append(_text(schedule.get("name")))
-        parts.extend(_schedule_headings(schedule))
-        for row in list(schedule.get("headerRows") or []):
-            parts.extend(_text(value) for value in list(row or []))
-        for row in list(schedule.get("bodyRows") or []):
-            parts.extend(_text(value) for value in list(row or []))
-    return "\n".join(part for part in parts if part)
-
-
-def _norm_header(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", _text(value).lower()).strip()
-
-
-def _schedule_gross_area(evidence: dict) -> dict | None:
-    candidates: list[dict] = []
-    for schedule in list(evidence.get("schedules") or []):
-        name = _text(schedule.get("name"))
-        headings = _schedule_headings(schedule)
-        if not headings:
-            continue
-        gross_indices = []
-        for index, heading in enumerate(headings):
-            norm = _norm_header(heading)
-            if "gross area" not in norm:
-                continue
-            if any(token in norm for token in ("bc gross area", "deduction", "zoning floor area")):
-                continue
-            gross_indices.append(index)
-        if not gross_indices:
-            continue
-        for row in list(schedule.get("bodyRows") or []):
-            values = [_text(value) for value in list(row or [])]
-            row_text = " ".join(values)
-            if not re.search(r"\btotal(?:s)?\b", row_text, re.I):
-                continue
-            for index in gross_indices:
-                if index >= len(values):
-                    continue
-                area = _first_number(values[index])
-                if area is None:
-                    continue
-                score = 0
-                name_lower = name.lower()
-                if "zoning" in name_lower: score += 3
-                if "area" in name_lower: score += 2
-                if "calculation" in name_lower: score += 1
-                candidates.append({"value": area, "schedule": name, "column": headings[index], "score": score})
-    if not candidates:
-        return None
-    best_score = max(row["score"] for row in candidates)
-    best = [row for row in candidates if row["score"] == best_score]
-    distinct = {round(float(row["value"]), 3) for row in best}
-    if len(distinct) != 1:
-        return None
-    return best[0]
-
-
-def _schedule_kind(schedule_name: str, row_text: str) -> str:
-    source = f"{schedule_name} {row_text}".lower()
-    if re.search(r"\b(fenestration|window|glazing)\b", source): return "window"
-    if re.search(r"\bdoor\b", source): return "door"
-    if re.search(r"\broof\b", source): return "roof"
-    if re.search(r"\b(floor|slab)\b", source): return "floor"
-    if re.search(r"\bwall\b", source): return "wall"
-    return ""
-
-
-def _orientation_text(value: Any) -> str:
-    source = _text(value).upper()
-    for word in ("NORTH", "SOUTH", "EAST", "WEST"):
-        if re.search(rf"\b{word}\b", source):
-            return word
-    for short, word in (("N", "NORTH"), ("S", "SOUTH"), ("E", "EAST"), ("W", "WEST")):
-        if re.fullmatch(rf"\s*{short}\s*", source):
-            return word
-    return ""
-
-
-def _first_index(headings: list[str], predicate: Callable[[str], bool]) -> int | None:
-    for index, heading in enumerate(headings):
-        if predicate(_norm_header(heading)):
-            return index
-    return None
-
-
-def _schedule_envelope_rows(evidence: dict, source_name: str) -> list[dict]:
-    output: list[dict] = []
-    for schedule in list(evidence.get("schedules") or []):
-        name = _text(schedule.get("name"))
-        headings = _schedule_headings(schedule)
-        if not headings:
-            continue
-        contextual = _norm_header(name + " " + " ".join(headings))
-        if not re.search(r"\b(envelope|thermal|fenestration|window|glazing|door|roof|floor|slab|wall)\b", contextual):
-            continue
-
-        area_i = _first_index(headings, lambda h: h == "area" or "gross area" in h or h.startswith("area "))
-        orientation_i = _first_index(headings, lambda h: "orientation" in h or h in {"facing", "exposure", "facade"})
-        u_i = _first_index(headings, lambda h: h in {"u", "u value", "u factor", "ufactor"} or "u factor" in h)
-        shgc_i = _first_index(headings, lambda h: "shgc" in h or "solar heat gain coefficient" in h)
-        cavity_i = _first_index(headings, lambda h: "cavity" in h and ("r" in h or "resistance" in h))
-        continuous_i = _first_index(headings, lambda h: ("continuous" in h or h in {"ci", "ci r"}) and ("r" in h or "insulation" in h or "resistance" in h))
-        assembly_i = _first_index(headings, lambda h: h in {"assembly", "assembly type", "type", "type mark", "mark"} or "assembly type" in h)
-        description_i = _first_index(headings, lambda h: h in {"description", "construction", "material", "assembly description"})
-        kind_i = _first_index(headings, lambda h: h in {"kind", "category", "element type", "envelope type"})
-        if area_i is None:
-            continue
-
-        for raw_row in list(schedule.get("bodyRows") or []):
-            values = [_text(value) for value in list(raw_row or [])]
-            if area_i >= len(values):
-                continue
-            row_text = " ".join(values)
-            kind_source = values[kind_i] if kind_i is not None and kind_i < len(values) else row_text
-            kind = _schedule_kind(name, kind_source)
-            if not kind:
-                continue
-            area = _first_number(values[area_i])
-            if area is None:
-                continue
-            orientation_source = values[orientation_i] if orientation_i is not None and orientation_i < len(values) else row_text
-            orientation = _orientation_text(orientation_source) or None
-            if kind in {"wall", "window", "door"} and not orientation:
-                continue
-
-            assembly = values[assembly_i] if assembly_i is not None and assembly_i < len(values) else ""
-            description = values[description_i] if description_i is not None and description_i < len(values) else ""
-            if not assembly and not description:
-                code = re.search(r"(?<![A-Z0-9])([A-Z]{1,3}\d+(?:\.\d+)?)(?![A-Z0-9.])", row_text.upper())
-                assembly = code.group(1) if code else ""
-            if not assembly and not description:
-                continue
-
-            def numeric(index: int | None) -> float | None:
-                return _first_number(values[index]) if index is not None and index < len(values) else None
-
-            u_factor = numeric(u_i)
-            shgc = numeric(shgc_i)
-            cavity_r = numeric(cavity_i)
-            continuous_r = numeric(continuous_i)
-            if kind in {"window", "door"} and u_factor is None:
-                continue
-            if kind == "window" and shgc is None:
-                continue
-            if kind in {"wall", "roof", "floor"} and cavity_r is None and continuous_r is None:
-                continue
-
-            evidence_text = "; ".join(
-                f"{headings[index]}={value}" for index, value in enumerate(values[:len(headings)]) if value
-            )
-            output.append({
-                "sourceFile": source_name,
-                "sourceScheduleId": _text(schedule.get("uniqueId")),
-                "sourceScheduleName": name,
-                "kind": kind,
-                "assemblyType": assembly or None,
-                "description": description or None,
-                "orientation": orientation,
-                "grossAreaFt2": area,
-                "uFactor": u_factor,
-                "shgc": shgc,
-                "cavityR": cavity_r,
-                "continuousR": continuous_r,
-                "confidence": 1.0,
-                "evidence": f"Native Revit schedule {name}: {evidence_text}",
-                "structuredRevitSchedule": True,
-            })
-    return output
-
-
-def _ensure_structured_page(facts: dict, page_type: str, source_name: str, sheet_name: str) -> dict:
-    pages = facts.setdefault("pages", [])
-    for page in pages:
-        if _text(page.get("pageType")).upper() == page_type and _safe_name(page.get("sourceFile")).lower() == _safe_name(source_name).lower():
-            return page
-    page = {
-        "pageType": page_type,
-        "sheetNumber": "REVIT-SCHEDULES",
-        "sheetName": sheet_name,
-        "sourceFile": source_name,
-        "confidence": 1.0,
-        "project": {},
-        "bulk": {},
-        "envelope": [],
-        "sourceAuthority": SCHEDULE_AUTHORITY,
-    }
-    pages.append(page)
-    return page
-
-
-def _apply_schedule_evidence(derived: dict, evidence: dict, source_name: str, audit: dict) -> None:
-    if not evidence:
-        audit.update(status="UNAVAILABLE", sourceFile=source_name or None)
-        return
-    text = _schedule_text(evidence)
-    semantic = dict(derived.get("comcheckSemantic") or {})
-    resolved: dict[str, Any] = {}
-    before = set(_missing_core(derived))
-    bulk_page = _ensure_structured_page(derived, "Z", source_name, "STRUCTURED NATIVE REVIT SCHEDULE FACTS")
-
-    if "energyCode" in before:
-        code = _extract_energy_code(text)
-        if code:
-            semantic["energyCode"] = code
-            resolved["energyCode"] = code
-    if "stories" in before:
-        stories = _extract_stories(text)
-        if stories is not None:
-            _set_page_value(bulk_page, "bulk", "stories", stories)
-            resolved["stories"] = stories
-    if "buildingHeightFt" in before:
-        height = _extract_height(text)
-        if height is not None:
-            _set_page_value(bulk_page, "bulk", "buildingHeightFt", round(height, 3))
-            resolved["buildingHeightFt"] = round(height, 3)
-    if "floorAreaFt2" in before:
-        area = _schedule_gross_area(evidence)
-        if area is not None:
-            semantic["floorAreaFt2"] = round(float(area["value"]), 3)
-            resolved["floorAreaFt2"] = area
-    if not semantic.get("wholeBuildingType") and _extract_multifamily(text):
-        semantic["wholeBuildingType"] = "MULTIFAMILY"
-        resolved["wholeBuildingType"] = "MULTIFAMILY"
-
-    if "envelope" in before:
-        envelope = _schedule_envelope_rows(evidence, source_name)
-        if envelope:
-            page = _ensure_structured_page(derived, "EN", source_name, "STRUCTURED NATIVE REVIT ENVELOPE SCHEDULES")
-            page["envelope"] = envelope
-            resolved["envelopeRows"] = len(envelope)
-
-    sources = list(semantic.get("sources") or [])
-    if source_name and source_name not in sources:
-        sources.append(source_name)
-    if sources:
-        semantic["sources"] = sources
-    semantic["scheduleNamesAuthoritative"] = True
-    derived["comcheckSemantic"] = semantic
-    derived["comcheckSemanticVersion"] = VERSION
-    after = _missing_core(derived)
-    audit.update(
-        status="APPLIED",
-        sourceFile=source_name,
-        scheduleCount=int(evidence.get("scheduleCount") or len(list(evidence.get("schedules") or []))),
-        capturedScheduleCount=int(evidence.get("capturedScheduleCount") or len(list(evidence.get("schedules") or []))),
-        resolved=resolved,
-        afterMissing=after,
-    )
-
-
 ENVELOPE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -654,9 +355,8 @@ def resolve_request(
         "sourceEngineeringRevision": _text(request.get("revision")),
         "beforeMissing": before_missing,
         "sourceEvidenceMutated": False,
-        "structuredSchedules": {},
-        "deterministicPdf": {},
-        "envelopePdfFallback": {},
+        "deterministic": {},
+        "envelope": {},
     }
     if not before_missing:
         audit["status"] = "ALREADY_COMPLETE"
@@ -664,42 +364,42 @@ def resolve_request(
         return request_path
 
     artifacts = _artifact_paths(request)
-    derived = copy.deepcopy(facts)
+    rows = _source_pages(facts, artifacts)
+    if not rows:
+        audit.update(status="NO_BOUND_T_Z_EN_PDFS", afterMissing=before_missing)
+        (output_root / "COMCHECK_EVIDENCE_RESOLUTION_R100.json").write_text(json.dumps(audit, indent=2), encoding="utf-8")
+        return request_path
 
-    schedule_path = _schedule_artifact(artifacts)
-    schedule_evidence = _load_schedule_evidence(schedule_path)
-    _apply_schedule_evidence(derived, schedule_evidence, schedule_path.name if schedule_path else "", audit["structuredSchedules"])
-    remaining = _missing_core(derived)
-
-    rows = _source_pages(derived, artifacts)
     loader = pdf_text_loader or _pdf_text
     text_by_source = {row["source"]: loader(row["path"]) for row in rows}
+    derived = copy.deepcopy(facts)
+    semantic = dict(derived.get("comcheckSemantic") or {})
+
     tz_rows = [row for row in rows if row["pageType"] in {"T", "Z"}]
     en_rows = [row for row in rows if row["pageType"] == "EN"]
     all_text = "\n".join(text_by_source[row["source"]] for row in rows)
     tz_text = "\n".join(text_by_source[row["source"]] for row in tz_rows)
-    semantic = dict(derived.get("comcheckSemantic") or {})
 
-    if "energyCode" in remaining:
+    if "energyCode" in before_missing:
         code = _extract_energy_code(all_text)
         if code:
             semantic["energyCode"] = code
-            audit["deterministicPdf"]["energyCode"] = code
-    if "stories" in remaining:
+            audit["deterministic"]["energyCode"] = code
+    if "stories" in before_missing:
         stories = _extract_stories(tz_text)
         if stories is not None and tz_rows:
             target = _find_page_row(derived, tz_rows[0]["source"])
             if target is not None:
                 _set_page_value(target, "bulk", "stories", stories)
-                audit["deterministicPdf"]["stories"] = stories
-    if "buildingHeightFt" in remaining:
+                audit["deterministic"]["stories"] = stories
+    if "buildingHeightFt" in before_missing:
         height = _extract_height(tz_text)
         if height is not None and tz_rows:
             target = _find_page_row(derived, tz_rows[0]["source"])
             if target is not None:
                 _set_page_value(target, "bulk", "buildingHeightFt", round(height, 3))
-                audit["deterministicPdf"]["buildingHeightFt"] = round(height, 3)
-    if "floorAreaFt2" in remaining:
+                audit["deterministic"]["buildingHeightFt"] = round(height, 3)
+    if "floorAreaFt2" in before_missing:
         floor_area = None
         floor_source = ""
         ranked = sorted(tz_rows, key=lambda row: (0 if ("z-001" in _flat(row["page"].get("sheetNumber")).lower() or "zoning analysis" in _flat(row["page"].get("sheetName")).lower()) else 1, row["source"]))
@@ -710,16 +410,15 @@ def resolve_request(
                 break
         if floor_area is not None:
             semantic["floorAreaFt2"] = round(floor_area, 3)
-            audit["deterministicPdf"]["floorAreaFt2"] = {"value": round(floor_area, 3), "sourceFile": floor_source, "column": "Gross Area", "scope": "Zoning analysis Area Calculation / Totals"}
+            audit["deterministic"]["floorAreaFt2"] = {"value": round(floor_area, 3), "sourceFile": floor_source, "column": "Gross Area", "scope": "Zoning analysis Area Calculation / Totals"}
     if not semantic.get("wholeBuildingType") and _extract_multifamily(tz_text):
         semantic["wholeBuildingType"] = "MULTIFAMILY"
-        audit["deterministicPdf"]["wholeBuildingType"] = "MULTIFAMILY"
+        audit["deterministic"]["wholeBuildingType"] = "MULTIFAMILY"
     if semantic:
         derived["comcheckSemantic"] = semantic
         derived["comcheckSemanticVersion"] = VERSION
 
-    remaining = _missing_core(derived)
-    if "envelope" in remaining and en_rows:
+    if "envelope" in before_missing and en_rows:
         ranked_en = sorted(en_rows, key=lambda row: (0 if re.search(r"thermal|fenestr|comcheck|envelope", _flat(row["page"].get("sheetName")), re.I) else 1, row["source"]))[:MAX_AGENT_PDFS]
         agent = envelope_agent or _run_envelope_agent
         try:
@@ -727,7 +426,7 @@ def resolve_request(
             accepted, rejected = _validate_envelope_rows(candidate, ranked_en, text_by_source)
         except Exception as exc:
             accepted, rejected = [], [f"{type(exc).__name__}: {exc}"]
-        audit["envelopePdfFallback"] = {"selectedSources": [row["path"].name for row in ranked_en], "acceptedRows": len(accepted), "rejected": rejected}
+        audit["envelope"] = {"selectedSources": [row["path"].name for row in ranked_en], "acceptedRows": len(accepted), "rejected": rejected}
         if accepted:
             by_source: dict[str, list[dict]] = {}
             for row in accepted:
@@ -741,14 +440,11 @@ def resolve_request(
 
     after_missing = _missing_core(derived)
     audit["afterMissing"] = after_missing
-    if not rows and not schedule_evidence:
-        audit["status"] = "NO_BOUND_CURRENT_PROJECT_EVIDENCE"
-    else:
-        audit["status"] = "RESOLVED" if not after_missing else "PARTIAL"
+    audit["status"] = "RESOLVED" if not after_missing else "PARTIAL"
     audit_path = output_root / "COMCHECK_EVIDENCE_RESOLUTION_R100.json"
     audit_path.write_text(json.dumps(audit, ensure_ascii=True, indent=2), encoding="utf-8")
 
-    if derived == facts:
+    if after_missing == before_missing:
         return request_path
     facts_path = output_root / "00_PAGE_FACTS_COMCHECK_EVIDENCE_R100.json"
     facts_path.write_text(json.dumps(derived, ensure_ascii=True, indent=2), encoding="utf-8")
@@ -757,11 +453,5 @@ def resolve_request(
     derived_request["comcheckEvidenceResolution"] = {"schema": SCHEMA, "version": VERSION, "auditFile": audit_path.name, "afterMissing": after_missing}
     request_copy = output_root / "00_PIPELINE_REQUEST_COMCHECK_EVIDENCE_R100.json"
     request_copy.write_text(json.dumps(derived_request, ensure_ascii=True, indent=2), encoding="utf-8")
-    print(json.dumps({
-        "stage": "COMCHECK_EVIDENCE_R101",
-        "status": audit["status"],
-        "beforeMissing": before_missing,
-        "afterStructuredSchedules": audit["structuredSchedules"].get("afterMissing", before_missing),
-        "afterMissing": after_missing,
-    }, ensure_ascii=True), flush=True)
+    print(json.dumps({"stage":"COMCHECK_EVIDENCE_R100","status":audit["status"],"beforeMissing":before_missing,"afterMissing":after_missing}, ensure_ascii=True), flush=True)
     return request_copy
