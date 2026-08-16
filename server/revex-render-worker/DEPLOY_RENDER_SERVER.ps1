@@ -73,7 +73,7 @@ try {
   $Firebase = Require-Command "firebase"
   $Npm = Require-Command "npm"
 
-  $accounts = @(& $GCloud auth list --filter=status:ACTIVE --format=value(account)) | Where-Object { $_ }
+  $accounts = @(& $GCloud @("auth","list","--filter=status:ACTIVE","--format=value(account)")) | Where-Object { $_ }
   if ($LASTEXITCODE -ne 0 -or $accounts.Count -eq 0) {
     throw "Google Cloud administrator sign-in is required. Run 'gcloud auth login' once, then rerun this script. No render deployment was started."
   }
@@ -121,7 +121,7 @@ try {
     "--set-env-vars=HF_HUB_DISABLE_TELEMETRY=1,HF_XET_HIGH_PERFORMANCE=1,HF_ENABLE_PARALLEL_LOADING=YES"
   )
 
-  $WorkerUrl = (& $GCloud run services describe $Service --project=$ProjectId --region=$Region --format=value(status.url)).Trim()
+  $WorkerUrl = (& $GCloud @("run","services","describe",$Service,"--project=$ProjectId","--region=$Region","--format=value(status.url)")).Trim()
   if ($LASTEXITCODE -ne 0 -or -not $WorkerUrl) { throw "Cloud Run deployed but its service URL could not be resolved." }
   Invoke-Checked "Allow only REVEX broker to invoke private GPU worker" $GCloud @(
     "run","services","add-iam-policy-binding",$Service,"--project=$ProjectId","--region=$Region",
