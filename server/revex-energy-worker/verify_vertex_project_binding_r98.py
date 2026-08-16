@@ -8,7 +8,6 @@ from unittest.mock import patch
 import revex_cloud_project as cloud_project
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parents[1]
 
 
 def _clear_project_env() -> dict[str, str | None]:
@@ -65,9 +64,11 @@ def main() -> None:
 
     for script_name in ("DEPLOY_ENERGY_WORKER_ONLY_R69.ps1", "DEPLOY_ENERGY_CURRENT.ps1"):
         text = (HERE / script_name).read_text(encoding="utf-8")
-        assert "REVEX_VERTEX_PROJECT=$ProjectId" in text, script_name
-        assert "REVEX_VERTEX_LOCATION=global" in text, script_name
-        assert "Vertex AI project" in text, script_name
+        assert '$VertexProject = $ProjectId' in text, script_name
+        assert '$VertexLocation = "global"' in text, script_name
+        assert "REVEX_VERTEX_PROJECT=$VertexProject" in text, script_name
+        assert "REVEX_VERTEX_LOCATION=$VertexLocation" in text, script_name
+        assert "Live worker Vertex AI project" in text, script_name
 
     for path in (HERE / "revex_cloud_project.py", HERE / "revex_identity_content_agent.py"):
         upper = path.read_text(encoding="utf-8").upper()
