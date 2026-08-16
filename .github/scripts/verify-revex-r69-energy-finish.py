@@ -4,13 +4,18 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
-WRAPPER = ROOT / 'server/revex-energy-worker/revex_energy_pipeline_r69.py'
-GUARD = ROOT / 'server/revex-energy-worker/revex_energy_pipeline_guard.py'
-DOCKER = ROOT / 'server/revex-energy-worker/Dockerfile'
-DEPLOY = ROOT / 'server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1'
+SERVER = ROOT / 'server/revex-energy-worker'
+if str(SERVER) not in sys.path:
+    sys.path.insert(0, str(SERVER))
+WRAPPER = SERVER / 'revex_energy_pipeline_r69.py'
+NORMALIZER = SERVER / 'revex_energy_identity_normalizer.py'
+GUARD = SERVER / 'revex_energy_pipeline_guard.py'
+DOCKER = SERVER / 'Dockerfile'
+DEPLOY = SERVER / 'DEPLOY_ENERGY_WORKER_ONLY_R69.ps1'
 APPEARANCE = ROOT / 'docs/liber-apps/apps/revex/appearance-state-r75.js'
 VIEWER = ROOT / 'docs/liber-apps/apps/revex/viewer-runtime-r75.js'
 COMPANION = ROOT / 'docs/liber-apps/apps/revex/companion-runtime-r75.js'
@@ -61,18 +66,17 @@ resolved_midwood, identity_midwood = r69._resolve_identity({
     'structuredIdentity': {'title': '250 MIDWOOD STREET', 'address': midwood_address},
     'pages': [],
 }, lambda identity: midwood_calls.append(dict(identity)) or {})
-assert identity_midwood['city'] == 'BROOKLYN'
+assert identity_midwood['city'].upper() == 'BROOKLYN'
 assert identity_midwood['state'] == 'NY'
 assert identity_midwood['zip'] == '11225'
 assert resolved_midwood['locationResolution']['provider'] is None
 assert resolved_midwood['locationResolution']['remainingMissing'] == []
 assert midwood_calls == [], 'current Midwood address already contains location; Census must not be called'
 
-# Exact live failure topology: reduced page facts have only the street, while the raw
-# active-Revit evidence graph carries 765 Project Information/titleblock fields.  The
-# resolver must consume that verified raw artifact instead of pretending those fields do
-# not exist.  Consultant addresses on the same titleblock must not win.
-with tempfile.TemporaryDirectory(prefix='revex-r82-identity-') as temp:
+# Exact live failure topology remains a regression fixture, not a runtime branch. Reduced
+# page facts have only the street while verified raw Revit evidence contains the locality
+# plus distracting consultant addresses. The generalized normalizer must resolve it.
+with tempfile.TemporaryDirectory(prefix='revex-r87-live-regression-') as temp:
     folder = Path(temp)
     digest = 'a' * 64
     raw_identity_path = folder / 'revit-project-identity.json'
@@ -120,6 +124,7 @@ assert not unresolved_identity['city'] and not unresolved_identity['state'] and 
 assert unresolved['locationResolution']['remainingMissing'] == ['city', 'state', 'zip']
 
 wrapper_text = WRAPPER.read_text(encoding='utf-8')
+normalizer_text = NORMALIZER.read_text(encoding='utf-8')
 guard_text = GUARD.read_text(encoding='utf-8')
 docker_text = DOCKER.read_text(encoding='utf-8')
 deploy_text = DEPLOY.read_text(encoding='utf-8')
@@ -134,13 +139,22 @@ assert 'geocoding.geo.census.gov/geocoder/locations/onelineaddress' in wrapper_t
 assert 'derived-only-from-immutable-active-Revit-address' in wrapper_text
 assert '00_PAGE_FACTS_RESOLVED_R69.json' in wrapper_text
 assert '_verified_raw_revit_identity' in wrapper_text
-assert '_location_from_raw_fields' in wrapper_text
-assert '_location_from_revit_pdfs' in wrapper_text
+assert 'import revex_energy_identity_normalizer as identity_normalizer' in wrapper_text
+assert 'PROJECT_IDENTITY_NORMALIZED' in wrapper_text
+assert 'normalize_verified_evidence' in normalizer_text
+assert 'locality_near_authoritative_address' in normalizer_text
+assert 'PARTY_BOUNDARY' in normalizer_text
 assert 'import revex_energy_pipeline_r69 as resolver' in guard_text
 assert '_resolve_r69_request(request_path, output_root)' in guard_text
+assert 'COPY server/revex-energy-worker/revex_energy_identity_normalizer.py' in docker_text
 assert 'COPY server/revex-energy-worker/revex_energy_pipeline_r69.py' in docker_text
+assert 'python3 /opt/revex/server/verify_identity_normalizer.py' in docker_text
 assert 'REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py' in docker_text
 assert 'REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py' in docker_text
+assert '250 MIDWOOD' not in normalizer_text.upper()
+assert '79 WINTHROP' not in normalizer_text.upper()
+assert '250 MIDWOOD' not in wrapper_text.upper()
+assert '79 WINTHROP' not in wrapper_text.upper()
 
 assert 'REVEX_NATIVE_EXITCODE_AUTHORITATIVE' in deploy_text
 assert deploy_text.count('$ErrorActionPreference = "Continue"') >= 3
@@ -168,27 +182,31 @@ assert 'setInterval(' not in companion_text
 assert 'appearance-state-r75.js?v=20260816r75-appearance1' in ui_text
 assert 'viewer-runtime-r75.js?v=20260816r75-viewer1' in ui_text
 assert 'companion-runtime-r75.js?v=20260816r75-companion1' in ui_text
-assert 'energy-diagnostics-r68.js?v=20260816r80-energy-diagnostics1' in ui_text
+assert 'energy-diagnostics-r68.js?v=20260816r87-energy-replay1' in ui_text
 assert 'ENERGY_STALE_FAILURE_IGNORED' in energy_diag_text
 assert "failedRevision!==current" in energy_diag_text
+assert 'Retry this published revision' in energy_diag_text
+assert 'This revision already failed · sync a new revision' not in energy_diag_text
 assert "loadScript('appearance-r70.js" not in ui_text
 assert "loadScript('docs-pages-r68.js" not in ui_text
 assert "const url = page ? `${base}#page=${page}` : base;" in app_text
 
 print(json.dumps({
-    'schema': 'liber.revex.r82-energy-identity-qa.v1',
+    'schema': 'liber.revex.r87-energy-identity-qa.v1',
     'status': 'PASSED',
     'energyIdentity': {
         'immutableSource': True,
+        'generalNormalizer': True,
         'rawRevitFieldsWired': True,
-        'midwoodCombinedAddress': True,
+        'liveMidwoodRegression': True,
         'consultantAddressRejected': True,
         'revitPdfFallbackWired': True,
         'censusLastResortOnly': True,
         'fabricationBlocked': True,
+        'projectSpecificRuntimeBranches': False,
         'r55GuardPreserved': True,
     },
-    'energyDiagnostics': {'revisionScoped': True, 'staleFailureHidden': True},
+    'energyDiagnostics': {'revisionScoped': True, 'staleFailureHidden': True, 'publishedRevisionReplay': True},
     'deployment': {'nativeExitCodeAuthoritative': True, 'stderrCannotFalseFail': True, 'workerOnlyPreserved': True},
     'docs': {'nativePdfPagePositioning': True, 'mainThreadPdfSplitterDisabled': True},
     'viewer': {'visibilityPersists': True,'appearanceSeparateFromTransform': True,'familyThenTypeFilter': True,'typeFinishSingleRecord': True,'texturePriorityColorFallback': True,'architexturesEmbeddedProperties': True,'restoreAllBatched': True},

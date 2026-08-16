@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260816r80-energy-diagnostics1';
+  const BUILD='20260816r87-energy-replay1';
   const failureName=/02_GEOMETRYCO\.log|FAILURE_(?:REPORT\.json|SUMMARY\.txt)|REVEX-ENERGY-PIPELINE\.jsonl|NATIVE_CHECK_|eplusout\.err|REVEX_OPENSTUDIO_RUN\.log/i;
   const clean=v=>String(v??'').trim();
   const esc=v=>String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -10,7 +10,7 @@
 
   function Store(){return root.RevexStore;}
   function diagnostic(level,stage,message,detail={}){
-    try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'energy diagnostics r80',...detail});}catch(_){}
+    try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'energy diagnostics r87',...detail});}catch(_){}
   }
   async function artifactUrl(row){
     if(row?.url)return row.url;
@@ -42,14 +42,15 @@
     const current=currentRevisionOf(source),failedRevision=sourceRevisionOf(result);
     const failed=clean(result?.manifest?.status).toUpperCase()==='FAILED';
     const same=failed&&current&&failedRevision&&failedRevision===current;
+    button.disabled=false;
     if(same){
-      button.disabled=true;
-      button.textContent='This revision already failed · sync a new revision';
-      button.title='Repeating the same immutable revision reproduces the same deterministic worker failure. Create a new Engineering Sync revision or deploy a server fix first.';
+      button.textContent='Retry this published revision';
+      button.title='Re-run this immutable Engineering revision after a server-side repair. Revit evidence is reused exactly; no Revit export or re-sync is started.';
+      button.dataset.revexReplay='published-revision';
     }else{
-      button.disabled=false;
       button.textContent='Authorize this revision';
       button.removeAttribute('title');
+      delete button.dataset.revexReplay;
     }
   }
   function clearStaleFailureUi(current,failedRevision,box){
@@ -102,12 +103,16 @@
         }catch(error){diagnostic('WARN','ENERGY_FAILURE_LOG_READ',error?.message||String(error));}
       }
       box.hidden=false;
-      box.innerHTML=`<div class="eyebrow">EXACT WORKER FAILURE</div><strong>${esc(result?.manifest?.failureContext?.failedStage||'Energy pipeline')}</strong><p>${esc(exact)}</p>${links.length?`<div class="energy-exact-failure-links">${links.join('')}</div>`:''}<small>Failure evidence belongs to immutable Engineering revision ${esc(failedRevision||'—')}. Re-authorizing the same revision does not change its inputs.</small>`;
+      box.innerHTML=`<div class="eyebrow">EXACT WORKER FAILURE</div><strong>${esc(result?.manifest?.failureContext?.failedStage||'Energy pipeline')}</strong><p>${esc(exact)}</p>${links.length?`<div class="energy-exact-failure-links">${links.join('')}</div>`:''}<small>Failure evidence belongs to immutable Engineering revision ${esc(failedRevision||'—')}. A server-side repair can replay this published revision without regenerating Revit evidence.</small>`;
       const run=document.getElementById('energy-run-status');
       if(run&&exact&&!run.textContent.includes(exact)){run.textContent=`${result?.manifest?.failureContext?.failedStage||'Energy'}: ${exact}`;run.dataset.tone='bad';}
-      diagnostic('ERROR','ENERGY_EXACT_FAILURE',exact,{projectId:id,revision:failedRevision,artifactCount:rows.length});
+      diagnostic('ERROR','ENERGY_EXACT_FAILURE',exact,{projectId:id,revision:failedRevision,artifactCount:rows.length,replayable:sameCurrentFailure(source,result)});
     }catch(error){diagnostic('WARN','ENERGY_DIAGNOSTICS',error?.message||String(error));}
     finally{running=false;}
+  }
+  function sameCurrentFailure(source,result){
+    const current=currentRevisionOf(source),failedRevision=sourceRevisionOf(result);
+    return clean(result?.manifest?.status).toUpperCase()==='FAILED'&&!!current&&current===failedRevision;
   }
   function install(){
     if(root.__revexEnergyDiagnosticsR68)return;

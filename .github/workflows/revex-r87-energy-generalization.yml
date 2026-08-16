@@ -1,0 +1,100 @@
+name: REVEX r87 generalized Energy identity + replay validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'REVEX-ENERGY-R87-DECISION.md'
+      - 'server/revex-energy-worker/README_R87_GENERALIZATION.md'
+      - 'server/revex-energy-worker/revex_energy_identity_normalizer.py'
+      - 'server/revex-energy-worker/revex_energy_pipeline_r69.py'
+      - 'server/revex-energy-worker/revex_energy_pipeline_guard.py'
+      - 'server/revex-energy-worker/Dockerfile'
+      - 'server/revex-energy-worker/verify_identity_normalizer.py'
+      - 'docs/liber-apps/apps/revex/energy-diagnostics-r68.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - 'docs/liber-apps/apps/revex/store.js'
+      - 'src/Liber.Revex.Revit/Engineering/Companion/native-managed-energy-bridge.js'
+      - 'src/Liber.Revex.Revit/Engineering/Energy/comcheck_backstop.py'
+      - '.github/scripts/verify-revex-r49-live-comcheck.py'
+      - '.github/scripts/verify-revex-r87-energy-generalization.py'
+      - '.github/scripts/verify-revex-r87-decision-doc.py'
+      - '.github/scripts/verify-revex-r87-worker-contract.py'
+      - '.github/workflows/revex-r87-energy-generalization.yml'
+  push:
+    branches:
+      - main
+      - 'agent/revex-r87-*'
+    paths:
+      - 'REVEX-ENERGY-R87-DECISION.md'
+      - 'server/revex-energy-worker/README_R87_GENERALIZATION.md'
+      - 'server/revex-energy-worker/revex_energy_identity_normalizer.py'
+      - 'server/revex-energy-worker/revex_energy_pipeline_r69.py'
+      - 'server/revex-energy-worker/revex_energy_pipeline_guard.py'
+      - 'server/revex-energy-worker/Dockerfile'
+      - 'server/revex-energy-worker/verify_identity_normalizer.py'
+      - 'docs/liber-apps/apps/revex/energy-diagnostics-r68.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - 'docs/liber-apps/apps/revex/store.js'
+      - 'src/Liber.Revex.Revit/Engineering/Companion/native-managed-energy-bridge.js'
+      - 'src/Liber.Revex.Revit/Engineering/Energy/comcheck_backstop.py'
+      - '.github/scripts/verify-revex-r49-live-comcheck.py'
+      - '.github/scripts/verify-revex-r87-energy-generalization.py'
+      - '.github/scripts/verify-revex-r87-decision-doc.py'
+      - '.github/scripts/verify-revex-r87-worker-contract.py'
+      - '.github/workflows/revex-r87-energy-generalization.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  generalized-energy-r87:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Compile generalized worker identity layer
+        run: |
+          python -m py_compile \
+            server/revex-energy-worker/revex_energy_identity_normalizer.py \
+            server/revex-energy-worker/revex_energy_pipeline_r69.py \
+            server/revex-energy-worker/revex_energy_pipeline_guard.py \
+            server/revex-energy-worker/verify_identity_normalizer.py \
+            src/Liber.Revex.Revit/Engineering/Energy/comcheck_backstop.py
+      - name: Verify generalized action boundary before wiring
+        run: |
+          python .github/scripts/verify-revex-r87-decision-doc.py
+          python .github/scripts/verify-revex-r87-worker-contract.py
+      - name: Execute generalized cross-project identity + immutable replay contract
+        run: python .github/scripts/verify-revex-r87-energy-generalization.py
+      - name: Syntax-check replay diagnostics
+        run: node --check docs/liber-apps/apps/revex/energy-diagnostics-r68.js
+      - name: Preserve existing Energy identity, single-shot, broker and viewer contracts
+        run: |
+          python .github/scripts/verify-revex-r69-energy-finish.py
+          node .github/scripts/verify-revex-r83-energy-single-shot.js
+          node .github/scripts/verify-revex-r54-selfhost-render.js
+          node .github/scripts/verify-revex-current-generation-r53.js
+
+  live-official-comcheck-consumer:
+    name: live official COMcheck project-field + PDF acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install exact Energy transport dependencies
+        run: python -m pip install -r src/Liber.Revex.Revit/Engineering/Energy/requirements.txt
+      - name: Verify Chrome runtime
+        run: google-chrome --version
+      - name: Run live synthetic official COMcheck consumer acceptance
+        env:
+          REVEX_CHROME_BINARY: /usr/bin/google-chrome
+        run: python .github/scripts/verify-revex-r49-live-comcheck.py

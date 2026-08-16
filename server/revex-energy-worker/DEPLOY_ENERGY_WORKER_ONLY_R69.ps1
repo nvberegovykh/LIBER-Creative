@@ -80,27 +80,47 @@ function Native-Ok([string]$Command, [string[]]$Arguments) {
 
 function Assert-R69Source {
   $resolver = Join-Path $Root "server\revex-energy-worker\revex_energy_pipeline_r69.py"
+  $normalizer = Join-Path $Root "server\revex-energy-worker\revex_energy_identity_normalizer.py"
+  $identityQa = Join-Path $Root "server\revex-energy-worker\verify_identity_normalizer.py"
   $guard = Join-Path $Root "server\revex-energy-worker\revex_energy_pipeline_guard.py"
   $docker = Join-Path $Root "server\revex-energy-worker\Dockerfile"
-  foreach ($path in @($resolver,$guard,$docker,$CloudBuild)) {
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "r69 Energy source is incomplete: $path" }
+  foreach ($path in @($resolver,$normalizer,$identityQa,$guard,$docker,$CloudBuild)) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Current Energy source is incomplete: $path" }
   }
   $resolverText = Get-Content -Raw -LiteralPath $resolver
+  $normalizerText = Get-Content -Raw -LiteralPath $normalizer
   $guardText = Get-Content -Raw -LiteralPath $guard
   $dockerText = Get-Content -Raw -LiteralPath $docker
-  foreach ($marker in @('US_CENSUS_GEOCODER_PUBLIC_AR_CURRENT','00_PAGE_FACTS_RESOLVED_R69.json','derived-only-from-immutable-active-Revit-address')) {
-    if (-not $resolverText.Contains($marker)) { throw "r69 resolver marker is missing: $marker" }
+  foreach ($marker in @('US_CENSUS_GEOCODER_PUBLIC_AR_CURRENT','00_PAGE_FACTS_RESOLVED_R69.json','derived-only-from-immutable-active-Revit-address','import revex_energy_identity_normalizer as identity_normalizer','PROJECT_IDENTITY_NORMALIZED')) {
+    if (-not $resolverText.Contains($marker)) { throw "Current identity resolver marker is missing: $marker" }
+  }
+  foreach ($marker in @('normalize_verified_evidence','locality_near_authoritative_address','PARTY_BOUNDARY','project-specific address mapping')) {
+    if (-not $normalizerText.Contains($marker)) { throw "General identity normalizer marker is missing: $marker" }
+  }
+  foreach ($forbidden in @('250 MIDWOOD','79 WINTHROP')) {
+    if ($resolverText.ToUpperInvariant().Contains($forbidden) -or $normalizerText.ToUpperInvariant().Contains($forbidden)) {
+      throw "Project-specific identity branch is forbidden in worker runtime: $forbidden"
+    }
   }
   if (-not $guardText.Contains('import revex_energy_pipeline_r69 as resolver') -or -not $guardText.Contains('_resolve_r69_request(request_path, output_root)')) {
-    throw "r69 resolver is not wired behind the preserved Energy failure guard."
+    throw "The generalized identity resolver is not wired behind the preserved Energy failure guard."
   }
-  foreach ($marker in @('REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py','REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py')) {
-    if (-not $dockerText.Contains($marker)) { throw "r69 worker image marker is missing: $marker" }
+  foreach ($marker in @(
+    'COPY server/revex-energy-worker/revex_energy_identity_normalizer.py',
+    'COPY server/revex-energy-worker/verify_identity_normalizer.py',
+    'python3 /opt/revex/server/verify_identity_normalizer.py',
+    'REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py',
+    'REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py'
+  )) {
+    if (-not $dockerText.Contains($marker)) { throw "Current worker image marker is missing: $marker" }
+  }
+  if ($dockerText.Contains('revex_energy_pipeline_guard_r87.py')) {
+    throw "Exact/project-shaped r87 guard shim is forbidden; generalized identity must remain a reusable primitive."
   }
 }
 
 try {
-  Write-Host "REVEX r69 Energy worker-only deployment" -ForegroundColor Cyan
+  Write-Host "REVEX current Energy worker-only deployment" -ForegroundColor Cyan
   Write-Host "Source candidate: $SourceCandidate"
   Write-Host "No Firebase CLI and no render/GPU deployment will run."
 
@@ -146,11 +166,11 @@ try {
   Invoke-Checked "Grant Cloud Build builder role" $GCloud @("projects","add-iam-policy-binding",$ProjectId,"--member=serviceAccount:$CloudBuildSa","--role=roles/cloudbuild.builds.builder","--quiet") -Quiet
   Invoke-Checked "Grant Cloud Build image-push access" $GCloud @("projects","add-iam-policy-binding",$ProjectId,"--member=serviceAccount:$CloudBuildSa","--role=roles/artifactregistry.writer","--quiet") -Quiet
 
-  Invoke-Checked "Build exact r69 Energy worker image" $GCloud @(
+  Invoke-Checked "Build exact current Energy worker image" $GCloud @(
     "builds","submit",$Root,"--project=$ProjectId","--config=$CloudBuild",
     "--substitutions=_REGION=$Region,_REPOSITORY=$Repository,_IMAGE=revex-energy-worker,_TAG=$ImageTag"
   )
-  Invoke-Checked "Deploy private r69 Energy worker" $GCloud @(
+  Invoke-Checked "Deploy private current Energy worker" $GCloud @(
     "run","deploy",$Service,"--project=$ProjectId","--region=$Region","--image=$Image",
     "--service-account=$WorkerSa","--no-allow-unauthenticated","--cpu=4","--memory=8Gi",
     "--concurrency=1","--min-instances=0","--max-instances=3","--timeout=3600",
@@ -165,17 +185,17 @@ try {
   $RunState = ((Invoke-GCloudCapture $GCloud $serviceArgs) -join "`n") | ConvertFrom-Json
   if ($script:NativeExitCode -ne 0) { throw "Energy worker deployed but could not be re-read." }
   $Ready = @($RunState.status.conditions | Where-Object { $_.type -eq 'Ready' } | Select-Object -First 1)
-  if ($Ready.Count -eq 0 -or [string]$Ready[0].status -ne 'True') { throw "r69 Energy worker did not report Ready after deployment." }
+  if ($Ready.Count -eq 0 -or [string]$Ready[0].status -ne 'True') { throw "Current Energy worker did not report Ready after deployment." }
   $WorkerUrl = [string]$RunState.status.url
-  if (-not $WorkerUrl) { throw "r69 Energy worker reported Ready without a service URL." }
+  if (-not $WorkerUrl) { throw "Current Energy worker reported Ready without a service URL." }
 
   Write-Host ""
-  Write-Host "PASS: r69 Energy worker-only deployment completed from $SourceCandidate." -ForegroundColor Green
+  Write-Host "PASS: current Energy worker-only deployment completed from $SourceCandidate." -ForegroundColor Green
   Write-Host "Worker: $WorkerUrl"
   Write-Host "Existing runRevexEnergy broker and renderer were left untouched."
 } catch {
   Write-Host ""
-  Write-Host "REVEX r69 Energy worker-only deployment stopped safely: $($_.Exception.Message)" -ForegroundColor Red
+  Write-Host "REVEX current Energy worker-only deployment stopped safely: $($_.Exception.Message)" -ForegroundColor Red
   exit 1
 } finally {
   if (-not $NoPause -and $Host.Name -match 'ConsoleHost') { Write-Host "" }
