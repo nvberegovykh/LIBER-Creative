@@ -73,3 +73,11 @@ deploy = replace_once(
     'r89 deploy Docker QA markers'
 )
 deploy_path.write_text(deploy, encoding='utf-8')
+
+# 4) The Revit WebView is long-lived. Bump the top-level script URLs so it cannot keep the
+# old r87 diagnostics or old Energy artifact renderer after the r89 Pages deployment.
+index_path = Path('docs/liber-apps/apps/revex/index.html')
+index = index_path.read_text(encoding='utf-8')
+index = replace_once(index, 'ui-integrity.js?v=20260813r49-review2', 'ui-integrity.js?v=20260816r89-identity-en1', 'r89 ui-integrity cache bust')
+index = replace_once(index, 'energy-r27.js?v=20260813r49-review2', 'energy-r27.js?v=20260816r89-nine-output1', 'r89 Energy UI cache bust')
+index_path.write_text(index, encoding='utf-8')
