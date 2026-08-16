@@ -8,20 +8,15 @@ const must=(text,needle,label)=>assert(text.includes(needle),label||`Missing ${n
 const mustNot=(text,needle,label)=>assert(!text.includes(needle),label||`Forbidden ${needle}`);
 
 const ui=read('docs/liber-apps/apps/revex/ui-integrity.js');
-const docs=read('docs/liber-apps/apps/revex/docs-pages-r68.js');
+const app=read('docs/liber-apps/apps/revex/app.js');
 const viewer=read('docs/liber-apps/apps/revex/viewer-polish-r68.js');
 const energy=read('docs/liber-apps/apps/revex/energy-diagnostics-r68.js');
 
-must(ui,'docs-pages-r68.js?v=20260816r68-doc-pages1');
 must(ui,'energy-diagnostics-r68.js?v=20260816r68-energy-diagnostics1');
 must(ui,'viewer-polish-r68.js?v=20260816r68-viewer-polish1');
-
-must(docs,'pdf-lib@1.17.1/dist/pdf-lib.min.js','Docs PDF splitter must be version-pinned');
-must(docs,'PDFDocument.load(bytes)','Docs must split the actual full-set PDF');
-must(docs,'copyPages(source,[page-1])','Docs page documents must contain exactly the selected source page');
-must(docs,"library/revex/printing-pages/",'Split pages must persist as project/revision files');
-must(docs,"frame.src='about:blank'",'Changing pages must force the embedded PDF surface to navigate');
-mustNot(docs,'#page=','r68 page runtime must not depend on external PDF viewer page anchors');
+mustNot(ui,"loadScript('docs-pages-r68.js",'r75 must not load the main-thread full-PDF splitter');
+must(app,"const url = page ? `${base}#page=${page}` : base;",'Docs sheet position must use the already-loaded source PDF page anchor');
+must(app,"frame.src = url; frame.hidden = false",'Docs page selection must navigate the PDF surface directly');
 
 must(viewer,'material.userData.revexR68BaseColor','Viewer polish must preserve source material colors before presentation adjustment');
 must(viewer,'v.renderer.localClippingEnabled=true','Six-face clipping must explicitly remain enabled');
@@ -35,4 +30,4 @@ must(energy,'await fetch(url,{cache:\'no-store\'})','Failure evidence must be re
 must(energy,"button.disabled=true",'Same failed immutable revision must not be blindly re-authorized');
 must(energy,'ENERGY_EXACT_FAILURE','Exact worker failure must enter REVEX diagnostics');
 
-console.log(JSON.stringify({schema:'liber.revex.r68-review-runtime-qa.v1',status:'PASSED',docs:{fullSetFirst:true,realSinglePagePdfs:true,pageAnchors:false},viewer:{presentation:true,walkWebViewSafe:true,sixFaceClipPersistent:true},energy:{exactFailureEvidence:true,repeatFailedRevisionBlocked:true}},null,2));
+console.log(JSON.stringify({schema:'liber.revex.r75-review-runtime-qa.v1',status:'PASSED',docs:{sourcePdfOnce:true,nativePageAnchor:true,mainThreadSplit:false},viewer:{presentation:true,walkWebViewSafe:true,sixFaceClipPersistent:true},energy:{exactFailureEvidence:true,repeatFailedRevisionBlocked:true}},null,2));
