@@ -18,10 +18,12 @@
 
   // This guard is intentionally installed synchronously while ui-integrity.js
   // is parsed, before app.js can hydrate a project or establish live listeners.
-  // Visibility is one state; material appearance is never a geometry overlay.
+  // Each Store method is guarded independently because compatibility runtimes
+  // may define methods later in startup. Visibility is one state; material
+  // appearance is never a geometry overlay.
   function installCanonicalOverlayStore(){
     const Store=root.RevexStore;
-    if(!Store||Store.__revexR71CanonicalViewerState)return;
+    if(!Store)return;
     Store.__revexR71CanonicalViewerState=true;
 
     if(Store.commitBimOverlay&&!Store.commitBimOverlay.__revexR71Canonical){
