@@ -13,6 +13,8 @@ if str(SERVER) not in sys.path:
     sys.path.insert(0, str(SERVER))
 WRAPPER = SERVER / 'revex_energy_pipeline_r69.py'
 NORMALIZER = SERVER / 'revex_energy_identity_normalizer.py'
+CONTENT_AGENT = SERVER / 'revex_identity_content_agent.py'
+CONTENT_QA = SERVER / 'verify_identity_content_agent.py'
 GUARD = SERVER / 'revex_energy_pipeline_guard.py'
 DOCKER = SERVER / 'Dockerfile'
 DEPLOY = SERVER / 'DEPLOY_ENERGY_WORKER_ONLY_R69.ps1'
@@ -125,6 +127,8 @@ assert unresolved['locationResolution']['remainingMissing'] == ['city', 'state',
 
 wrapper_text = WRAPPER.read_text(encoding='utf-8')
 normalizer_text = NORMALIZER.read_text(encoding='utf-8')
+content_agent_text = CONTENT_AGENT.read_text(encoding='utf-8')
+content_qa_text = CONTENT_QA.read_text(encoding='utf-8')
 guard_text = GUARD.read_text(encoding='utf-8')
 docker_text = DOCKER.read_text(encoding='utf-8')
 deploy_text = DEPLOY.read_text(encoding='utf-8')
@@ -144,15 +148,34 @@ assert 'PROJECT_IDENTITY_NORMALIZED' in wrapper_text
 assert 'normalize_verified_evidence' in normalizer_text
 assert 'locality_near_authoritative_address' in normalizer_text
 assert 'PARTY_BOUNDARY' in normalizer_text
+
+# r88 dependency order: content-aware project/party role separation and repeated T/Z
+# consensus first; deterministic r69 normalization/geocode remains the fallback.
+assert 'content-aware-consensus-over-immutable-active-Revit-T-Z-evidence' in content_agent_text
+assert 'MIN_AGENT_CONFIDENCE' in content_agent_text
+assert 'validate_agent_candidate' in content_agent_text
+assert 'excludedPartyEvidence' in content_agent_text
+assert '_structured_identity_complete' in content_agent_text
+assert 'partyAddressRejected' in content_qa_text
+assert 'twoSourceConsensus' in content_qa_text
+assert 'import revex_identity_content_agent as content_identity' in guard_text
+assert '_resolve_content_identity_request(request_path, output_root)' in guard_text
 assert 'import revex_energy_pipeline_r69 as resolver' in guard_text
-assert '_resolve_r69_request(request_path, output_root)' in guard_text
+assert 'effective_request = _resolve_r69_request(effective_request, output_root)' in guard_text
+assert guard_text.index('_resolve_content_identity_request(request_path, output_root)') < guard_text.index('_resolve_r69_request(effective_request, output_root)')
+
 assert 'COPY server/revex-energy-worker/revex_energy_identity_normalizer.py' in docker_text
+assert 'COPY server/revex-energy-worker/revex_identity_content_agent.py' in docker_text
 assert 'COPY server/revex-energy-worker/revex_energy_pipeline_r69.py' in docker_text
+assert 'COPY server/revex-energy-worker/verify_identity_content_agent.py' in docker_text
 assert 'python3 /opt/revex/server/verify_identity_normalizer.py' in docker_text
+assert 'python3 /opt/revex/server/verify_identity_content_agent.py' in docker_text
 assert 'REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py' in docker_text
 assert 'REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py' in docker_text
 assert '250 MIDWOOD' not in normalizer_text.upper()
 assert '79 WINTHROP' not in normalizer_text.upper()
+assert '250 MIDWOOD' not in content_agent_text.upper()
+assert '79 WINTHROP' not in content_agent_text.upper()
 assert '250 MIDWOOD' not in wrapper_text.upper()
 assert '79 WINTHROP' not in wrapper_text.upper()
 
@@ -162,6 +185,8 @@ assert '$script:NativeExitCode = [int]$code' in deploy_text
 assert 'if ($script:NativeExitCode -ne 0 -or @($active).Count -eq 0)' in deploy_text
 assert 'if ($script:NativeExitCode -ne 0 -or -not $CloudBuildSa)' in deploy_text
 assert 'if ($script:NativeExitCode -ne 0) { throw "Energy worker deployed but could not be re-read." }' in deploy_text
+assert 'revex_identity_content_agent.py' in deploy_text
+assert 'verify_identity_content_agent.py' in deploy_text
 
 assert "revexKind:'bim-appearance'" in appearance_text
 assert "Store.saveBimAppearance=save" in appearance_text
@@ -192,11 +217,13 @@ assert "loadScript('docs-pages-r68.js" not in ui_text
 assert "const url = page ? `${base}#page=${page}` : base;" in app_text
 
 print(json.dumps({
-    'schema': 'liber.revex.r87-energy-identity-qa.v1',
+    'schema': 'liber.revex.r88-energy-identity-qa.v1',
     'status': 'PASSED',
     'energyIdentity': {
         'immutableSource': True,
-        'generalNormalizer': True,
+        'contentAwareRoleSeparation': True,
+        'twoSourceConsensus': True,
+        'generalNormalizerFallback': True,
         'rawRevitFieldsWired': True,
         'liveMidwoodRegression': True,
         'consultantAddressRejected': True,
