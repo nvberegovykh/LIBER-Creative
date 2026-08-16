@@ -1,0 +1,90 @@
+name: REVEX r91 GeometryCo + exact result binding
+
+on:
+  pull_request:
+    paths:
+      - 'server/revex-energy-worker/**'
+      - 'src/Liber.Revex.Revit/Engineering/Companion/native-managed-energy-bridge.js'
+      - 'src/Liber.Revex.Revit/Engineering/Energy/**'
+      - '.github/workflows/revex-r91-geometryco-result-binding.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  r91-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Python syntax
+        run: |
+          python -m py_compile \
+            server/revex-energy-worker/revex_geometryco_source_condition.py \
+            server/revex-energy-worker/verify_geometryco_source_condition_r91.py
+      - name: Source-condition resolver regression
+        env:
+          PYTHONPATH: server/revex-energy-worker
+        run: python server/revex-energy-worker/verify_geometryco_source_condition_r91.py
+      - name: Native bridge syntax
+        run: node --check src/Liber.Revex.Revit/Engineering/Companion/native-managed-energy-bridge.js
+      - name: Exact resultRevision binding regression
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const vm = require('vm');
+          const source = fs.readFileSync('src/Liber.Revex.Revit/Engineering/Companion/native-managed-energy-bridge.js','utf8');
+          const events = [];
+          const window = {
+            dispatchEvent: (event) => events.push(event),
+            chrome: { webview: { postMessage(){} } },
+            __revexManagedEnergyActive: new Map()
+          };
+          const document = { querySelector: () => null };
+          class CustomEvent { constructor(type, options){ this.type=type; this.detail=options?.detail; } }
+          vm.runInNewContext(source, { window, document, CustomEvent, console, setInterval, clearInterval, setTimeout, Promise, Date, Map, String, Boolean, Error });
+          const bridge = window.__revexManagedEnergyBridge;
+          if (!bridge || bridge.version !== '20260816r91') throw new Error('r91 bridge not installed');
+          const oldResult = { projectId:'p', revision:'energy_old', manifest:{ projectId:'p', sourceEngineeringRevision:'eng_same', resultRevision:'energy_old', status:'FAILED' } };
+          const newResult = { projectId:'p', revision:'energy_new', manifest:{ projectId:'p', sourceEngineeringRevision:'eng_same', resultRevision:'energy_new', status:'COMPLETE' } };
+          if (bridge.resultMatches(oldResult,'p','eng_same','energy_new')) throw new Error('stale same-source failure was accepted');
+          if (!bridge.resultMatches(newResult,'p','eng_same','energy_new')) throw new Error('exact new result revision was rejected');
+          console.log('REVEX_EXACT_RESULT_REVISION_BINDING=PASSED');
+          NODE
+      - name: Broker publishes exact resultRevision
+        run: |
+          grep -q "return { ok: true, status: resultManifest.status" server/firebase-functions/index.js
+          grep -q "sourceRevision, resultRevision" server/firebase-functions/index.js
+          echo REVEX_BROKER_RESULT_REVISION=PASSED
+      - name: No QA weakening
+        run: |
+          python <<'PY'
+          from pathlib import Path
+          import re
+          core = Path('src/Liber.Revex.Revit/Engineering/Energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py').read_text(encoding='utf-8')
+          wrapper = Path('server/revex-energy-worker/revex_geometryco_source_condition.py').read_text(encoding='utf-8')
+          verify = Path('server/revex-energy-worker/verify_geometryco_source_condition_r91.py').read_text(encoding='utf-8')
+          assert 'MINIMUM_MAPPING_CONFIDENCE = 0.75' in core
+          assert '"allowAmbiguous"] is False' in verify
+          assert not re.search(r'MINIMUM_MAPPING_CONFIDENCE\s*=\s*0\.[0-6]', wrapper)
+          assert 'section.get("allow_ambiguous") is True' in wrapper
+          assert 'refuses allow_ambiguous' in wrapper
+          print('REVEX_QA_FLOOR_UNCHANGED=PASSED')
+          PY
+      - name: Docker wiring contract
+        run: |
+          grep -q 'OpenStudio_Energy_Model_Geometry_Compiler_core.py' server/revex-energy-worker/Dockerfile
+          grep -q 'verify_geometryco_source_condition_r91.py' server/revex-energy-worker/Dockerfile
+          grep -q 'revex_geometryco_source_condition.py' server/revex-energy-worker/Dockerfile
+          echo REVEX_DOCKER_WIRING=PASSED
+
+  r91-worker-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build exact worker image and run all embedded worker/Energy QA
+        run: docker build --progress=plain -f server/revex-energy-worker/Dockerfile -t revex-energy-worker:r91 .
