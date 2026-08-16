@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '20260816r91';
+  const VERSION = '20260816r83';
   const ENDPOINT = 'https://legacy-comcheck.energycode.pnl.gov/CheckWeb/';
 
   // The native host may ensure/inject this bridge more than once while the

@@ -1,0 +1,106 @@
+name: REVEX r94 integrated controls validation
+
+on:
+  pull_request:
+    paths:
+      - 'docs/liber-apps/apps/revex/energy-replay-r94.js'
+      - 'docs/liber-apps/apps/revex/critical-controls-r93.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - '.github/workflows/revex-r94-integrated-controls.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  r94-integrated-controls:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: JavaScript syntax
+        run: |
+          node --check docs/liber-apps/apps/revex/energy-replay-r94.js
+          node --check docs/liber-apps/apps/revex/critical-controls-r93.js
+          node --check docs/liber-apps/apps/revex/ui-integrity.js
+      - name: Exact published-revision and QA contract
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const energy=fs.readFileSync('docs/liber-apps/apps/revex/energy-replay-r94.js','utf8');
+          const controls=fs.readFileSync('docs/liber-apps/apps/revex/critical-controls-r93.js','utf8');
+          const ui=fs.readFileSync('docs/liber-apps/apps/revex/ui-integrity.js','utf8');
+          const energyMarkers=[
+            "const HARD_STOP=0.80",
+            "No published Engineering revision exists",
+            "revexEnergyJobs",
+            "jobStatus==='RUNNING'",
+            "followExistingJob",
+            "Store.runEnergyServer(id,revision)",
+            "CLOUD_UPLOAD_PASSED",
+            "CONSENT_REQUIRED",
+            "dialog.close('approve')",
+            "exactResult(response?.result,id,revision,expected)"
+          ];
+          for(const marker of energyMarkers)if(!energy.includes(marker))throw new Error('missing Energy contract marker: '+marker);
+          if(/HARD_STOP\s*=\s*0\.[0-7]/.test(energy))throw new Error('Energy hard stop weakened');
+          if(/allow_ambiguous|minimum_match_score/i.test(energy+controls))throw new Error('UI repair must not alter GeometryCo QA');
+          for(const marker of ["Store.commitBimOverlay", "listBimOverlays", "visibility:'visible'", "stopImmediatePropagation", "first-capture ownership"]){if(!controls.includes(marker))throw new Error('missing Restore All contract marker: '+marker);}
+          if(!ui.includes("energy-replay-r94.js?v=20260816r94-exact-job1"))throw new Error('r94 Energy owner not loaded');
+          if(!ui.includes("critical-controls-r93.js?v=20260816r93-critical-controls3"))throw new Error('critical controls not loaded');
+          if(/loadScript\('energy-replay-r9[23]\.js/.test(ui))throw new Error('superseded replay owner is still actively loaded');
+          console.log('REVEX_R94_STATIC_CONTRACT=PASSED');
+          NODE
+      - name: Runtime Energy owner harness
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),vm=require('vm');
+          const listeners=new Map();
+          const add=(type,fn)=>{if(!listeners.has(type))listeners.set(type,[]);listeners.get(type).push(fn)};
+          const dispatch=event=>{for(const fn of listeners.get(event.type)||[])fn(event);return true};
+          class CE{constructor(type,init={}){this.type=type;this.detail=init.detail}}
+          const button={disabled:false,textContent:'Retry',dataset:{}};
+          const status={textContent:'',dataset:{}};
+          const nodes={'energy-authorize-backstop':button,'energy-run-status':status};
+          const document={readyState:'loading',getElementById:id=>nodes[id]||null,addEventListener:add};
+          let resolveBroker,brokerCalls=0;
+          const revision='eng_test_revision',project='revex_test_project',resultRevision='energy_test_result';
+          const result={projectId:project,revision:resultRevision,manifest:{schema:'liber.revex.energy-result.v1',status:'COMPLETE',sourceEngineeringRevision:revision,resultRevision}};
+          const Store={
+            isCloud:()=>true,user:{uid:'u1'},db:{},
+            getEngineeringState:async()=>({revision,manifest:{revision,projectBinding:{version:'active-revit-evidence-v1',identityEvidenceDigest:'a'.repeat(64),documentUniqueId:'doc'},publicationIntegrity:{ratios:{spatial:1,physical:.92,openings:.96},lowestRatio:.92}}}),
+            getEnergyConsent:async()=>({approved:true}),getEnergyResult:async()=>result,
+            runEnergyServer:async(id,rev)=>{brokerCalls++;if(id!==project||rev!==revision)throw new Error('wrong broker binding');return new Promise(resolve=>{resolveBroker=resolve})},
+            api:{doc:(...args)=>args.join('/'),getDoc:async()=>({exists:()=>true,data:()=>({status:'RUNNING',stage:'WORKER_REQUEST'})})}
+          };
+          const window={__revexState:{projectId:project},RevexStore:Store,addEventListener:add,dispatchEvent:dispatch,chrome:null,console};
+          const context={window,document,CustomEvent:CE,URLSearchParams,setTimeout,clearTimeout,setInterval,clearInterval,Promise,Date,console};
+          vm.createContext(context);vm.runInContext(fs.readFileSync('docs/liber-apps/apps/revex/energy-replay-r94.js','utf8'),context);
+          (async()=>{
+            const task=window.__revexHostedEnergyReplayR94.runExact({auto:false});
+            for(let i=0;i<40&&!resolveBroker;i++)await new Promise(r=>setTimeout(r,5));
+            if(brokerCalls!==1)throw new Error('broker was not called exactly once');
+            if(button.disabled!==true||button.textContent!=='Energy running…')throw new Error('Energy button was not owned/disabled during run');
+            if(!status.textContent.includes(revision))throw new Error('published revision was not surfaced in progress UI');
+            resolveBroker({ok:true,resultRevision,result});
+            const out=await task;
+            if(!out.ok||out.resultRevision!==resultRevision)throw new Error('exact Energy completion failed');
+            if(button.disabled!==false)throw new Error('Energy button remained disabled after completion');
+            console.log('REVEX_R94_RUNTIME_ENERGY=PASSED');
+          })().catch(e=>{console.error(e);process.exit(1)});
+          NODE
+      - name: Runtime Restore All canonical Store harness
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),vm=require('vm');
+          const listeners=new Map();const add=(t,f)=>{if(!listeners.has(t))listeners.set(t,[]);listeners.get(t).push(f)};const dispatch=e=>{for(const f of listeners.get(e.type)||[])f(e);return true};
+          class CE{constructor(type,init={}){this.type=type;this.detail=init.detail}}
+          const button={disabled:false,textContent:'Restore',dataset:{}};const show={setAttribute(){},classList:{remove(){}},textContent:''};const search={dispatchEvent(){}};
+          const document={readyState:'loading',getElementById:id=>({'restore-all-elements':button,'show-hidden-elements':show,'element-search':search}[id]||null),addEventListener:add};
+          const elements=[{id:'1',uniqueId:'u1',category:'Walls'},{id:'2',uniqueId:'u2',category:'Doors'}];
+          let rows=[{id:'u1',uniqueId:'u1',elementId:'1',hidden:true,deleted:false,visibility:'hidden'},{id:'u2',uniqueId:'u2',elementId:'2',hidden:false,deleted:true,visibility:'deleted'}],commits=0,listCalls=0;
+          const Store={isCloud:()=>true,user:{uid:'u'},listBimOverlays:async()=>{listCalls++;return JSON.parse(JSON.stringify(rows))},commitBimOverlay:async(id,element,patch)=>{commits++;rows=rows.map(r=>r.uniqueId===element.uniqueId?{...r,...patch}:r);return{overlay:rows.find(r=>r.uniqueId===element.uniqueId)}}};
+          let applied=null;const viewer={setOverlays:r=>{applied=r}};
+          const window={__revexState:{projectId:'p',viewerData:{elements},cloudState:{revision:'bim1'}},RevexStore:Store,__revexViewerR26Instance:viewer,__revexBrowserDiagnostics:{emit(){}},addEventListener:add,dispatchEvent:dispatch};
+          const context={window,document,CustomEvent:CE,Event:class{},setTimeout,clearTimeout,Promise,Date,console};vm.createContext(context);vm.runInContext(fs.readFileSync('docs/liber-apps/apps/revex/critical-controls-r93.js','utf8'),context);
+          (async()=>{const out=await window.__revexCriticalControlsR93.restoreAll();await new Promise(r=>setTimeout(r,20));if(out.restored!==2||commits!==2)throw new Error('Restore All did not commit every hidden/deleted overlay');if(rows.some(r=>r.hidden||r.deleted||r.visibility!=='visible'))throw new Error('Restore All did not canonicalize visibility');if(!applied||applied.length!==2)throw new Error('viewer did not receive refreshed overlays');if(listCalls>8)throw new Error('Restore refresh recursion detected');console.log('REVEX_R94_RUNTIME_RESTORE_ALL=PASSED')})().catch(e=>{console.error(e);process.exit(1)});
+          NODE
