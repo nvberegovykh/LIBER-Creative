@@ -1,0 +1,49 @@
+name: REVEX r85 viewer interaction validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/liber-apps/apps/revex/viewer-interaction-r85.js'
+      - 'docs/liber-apps/apps/revex/viewer-interaction-r85-loader.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - 'docs/liber-apps/apps/revex/render-agent.js'
+      - 'docs/liber-apps/apps/revex/styles.css'
+      - '.github/scripts/verify-revex-r85-viewer-interaction.js'
+      - '.github/workflows/revex-r85-viewer-interaction.yml'
+  push:
+    branches:
+      - main
+      - 'agent/revex-r85-*'
+    paths:
+      - 'docs/liber-apps/apps/revex/viewer-interaction-r85.js'
+      - 'docs/liber-apps/apps/revex/viewer-interaction-r85-loader.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - 'docs/liber-apps/apps/revex/render-agent.js'
+      - 'docs/liber-apps/apps/revex/styles.css'
+      - '.github/scripts/verify-revex-r85-viewer-interaction.js'
+      - '.github/workflows/revex-r85-viewer-interaction.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  viewer-interaction-r85:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check r85 bootstrap and successor runtime
+        run: |
+          node --check docs/liber-apps/apps/revex/viewer-interaction-r85-loader.js
+          node --check docs/liber-apps/apps/revex/viewer-interaction-r85.js
+      - name: Verify mobile/selection/section/walk/restore/render contract
+        run: node .github/scripts/verify-revex-r85-viewer-interaction.js
+      - name: Preserve current viewer and Energy contracts
+        run: |
+          node .github/scripts/verify-revex-r71-companion-state.js
+          node .github/scripts/verify-revex-r72-nonblocking-viewer.js
+          python .github/scripts/verify-revex-r69-energy-finish.py
+          node .github/scripts/verify-revex-r54-selfhost-render.js

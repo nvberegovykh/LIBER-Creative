@@ -1,4 +1,4 @@
-name: REVEX r80 consolidated Companion validation
+name: REVEX r85 consolidated Companion validation
 
 on:
   pull_request:
@@ -8,7 +8,8 @@ on:
       - 'docs/liber-apps/apps/revex/viewer-runtime-r75.js'
       - 'docs/liber-apps/apps/revex/appearance-state-r75.js'
       - 'docs/liber-apps/apps/revex/companion-runtime-r75.js'
-      - 'docs/liber-apps/apps/revex/viewer-repair-r79.js'
+      - 'docs/liber-apps/apps/revex/viewer-interaction-r85-loader.js'
+      - 'docs/liber-apps/apps/revex/viewer-interaction-r85.js'
       - 'docs/liber-apps/apps/revex/diagnostics-r29.js'
       - 'docs/liber-apps/apps/revex/energy-diagnostics-r68.js'
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
@@ -20,6 +21,7 @@ on:
       - '.github/scripts/verify-revex-r69-energy-finish.py'
       - '.github/scripts/verify-revex-r71-companion-state.js'
       - '.github/scripts/verify-revex-r72-nonblocking-viewer.js'
+      - '.github/scripts/verify-revex-r85-viewer-interaction.js'
       - '.github/workflows/revex-r72-nonblocking-viewer.yml'
   push:
     branches:
@@ -27,12 +29,14 @@ on:
       - 'agent/revex-r75-*'
       - 'agent/revex-r79-*'
       - 'agent/revex-r80-*'
+      - 'agent/revex-r85-*'
     paths:
       - 'REVEX-DEVELOPMENT-CONTRACT.md'
       - 'docs/liber-apps/apps/revex/viewer-runtime-r75.js'
       - 'docs/liber-apps/apps/revex/appearance-state-r75.js'
       - 'docs/liber-apps/apps/revex/companion-runtime-r75.js'
-      - 'docs/liber-apps/apps/revex/viewer-repair-r79.js'
+      - 'docs/liber-apps/apps/revex/viewer-interaction-r85-loader.js'
+      - 'docs/liber-apps/apps/revex/viewer-interaction-r85.js'
       - 'docs/liber-apps/apps/revex/diagnostics-r29.js'
       - 'docs/liber-apps/apps/revex/energy-diagnostics-r68.js'
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
@@ -44,13 +48,14 @@ on:
       - '.github/scripts/verify-revex-r69-energy-finish.py'
       - '.github/scripts/verify-revex-r71-companion-state.js'
       - '.github/scripts/verify-revex-r72-nonblocking-viewer.js'
+      - '.github/scripts/verify-revex-r85-viewer-interaction.js'
       - '.github/workflows/revex-r72-nonblocking-viewer.yml'
 
 permissions:
   contents: read
 
 jobs:
-  viewer-r80:
+  viewer-r85:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -65,24 +70,14 @@ jobs:
           node --check docs/liber-apps/apps/revex/viewer-runtime-r75.js
           node --check docs/liber-apps/apps/revex/appearance-state-r75.js
           node --check docs/liber-apps/apps/revex/companion-runtime-r75.js
-          node --check docs/liber-apps/apps/revex/viewer-repair-r79.js
+          node --check docs/liber-apps/apps/revex/viewer-interaction-r85-loader.js
+          node --check docs/liber-apps/apps/revex/viewer-interaction-r85.js
           node --check docs/liber-apps/apps/revex/diagnostics-r29.js
           node --check docs/liber-apps/apps/revex/energy-diagnostics-r68.js
           node --check docs/liber-apps/apps/revex/ui-integrity.js
           node --check src/Liber.Revex.Revit/Engineering/Companion/native-managed-energy-bridge.js
-      - name: Verify live viewer repair interfaces
-        shell: bash
-        run: |
-          grep -F "loadScript('viewer-repair-r79.js?v=20260816r79-viewer-repair1'" docs/liber-apps/apps/revex/ui-integrity.js
-          grep -F 'v.selectAndRoute=function(row)' docs/liber-apps/apps/revex/viewer-repair-r79.js
-          grep -F "root.dispatchEvent(new CustomEvent('revex:bim-selection'" docs/liber-apps/apps/revex/viewer-repair-r79.js
-          grep -F 'old.cloneNode(true)' docs/liber-apps/apps/revex/viewer-repair-r79.js
-          grep -F "f.setDoc(f.doc(Store.db,'projects',projectId,'revexBimOverlays',row.id)" docs/liber-apps/apps/revex/viewer-repair-r79.js
-          if grep -F 'writeBatch' docs/liber-apps/apps/revex/viewer-repair-r79.js; then echo 'r79 must not depend on writeBatch'; exit 1; fi
-          grep -F 'f.onAuthStateChanged(auth,user=>' docs/liber-apps/apps/revex/viewer-repair-r79.js
-          grep -F 'await Store.listBimAppearances(pid)' docs/liber-apps/apps/revex/viewer-repair-r79.js
-          grep -F 'if(dt>42)slow++' docs/liber-apps/apps/revex/viewer-repair-r79.js
-          if grep -F 'setInterval(' docs/liber-apps/apps/revex/viewer-repair-r79.js; then echo 'r79 must remain event-driven'; exit 1; fi
+      - name: Verify live viewer interaction successor
+        run: node .github/scripts/verify-revex-r85-viewer-interaction.js
       - name: Verify consolidated state ownership and filter/material contracts
         run: node .github/scripts/verify-revex-r71-companion-state.js
       - name: Verify nonblocking viewer and immutable Energy handoff
