@@ -1,1 +1,0 @@
-r98 repairs the cloud-routing dependency between REVEX application project identity and the Google Cloud project used for Vertex AI. No GeometryCo, COMcheck, Revit, or QA-threshold change.
