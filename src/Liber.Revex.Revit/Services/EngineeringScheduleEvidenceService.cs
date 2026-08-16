@@ -7,8 +7,9 @@ namespace Liber.Revex.Revit.Services;
 /// <summary>
 /// Captures the active document's native Revit schedule state as read-only Engineering evidence.
 /// This is not a Design Book/Spec Book formatter: every non-template ViewSchedule is preserved
-/// independently with its native field order and table cells so managed Energy can consume current
-/// project facts without rediscovering them from PDFs or inheriting values from a reference project.
+/// independently with native field order, table cells, and exact sheet placements. Managed Energy
+/// can therefore consume facts from the same current model without rediscovering them from PDFs or
+/// inheriting values from a reference project.
 /// </summary>
 public sealed class EngineeringScheduleEvidenceService
 {
@@ -33,6 +34,13 @@ public sealed class EngineeringScheduleEvidenceService
             .ThenBy(schedule => schedule.UniqueId, StringComparer.Ordinal)
             .ToList();
 
+        var placements = new FilteredElementCollector(doc)
+            .OfClass(typeof(ScheduleSheetInstance))
+            .Cast<ScheduleSheetInstance>()
+            .Where(instance => instance.ScheduleId != ElementId.InvalidElementId)
+            .GroupBy(instance => instance.ScheduleId.Value)
+            .ToDictionary(group => group.Key, group => group.ToList());
+
         var snapshots = new List<object>();
         var failures = new List<object>();
         foreach (ViewSchedule schedule in schedules)
@@ -45,6 +53,7 @@ public sealed class EngineeringScheduleEvidenceService
                     name = schedule.Name,
                     uniqueId = schedule.UniqueId,
                     isMaterialTakeoff = schedule.Definition.IsMaterialTakeoff,
+                    placedOnSheets = ReadPlacements(doc, schedule, placements),
                     fields = ReadFields(schedule),
                     headerRows = ReadRows(schedule, table.GetSectionData(SectionType.Header), SectionType.Header),
                     bodyRows = ReadRows(schedule, table.GetSectionData(SectionType.Body), SectionType.Body)
@@ -80,6 +89,30 @@ public sealed class EngineeringScheduleEvidenceService
         RevexDiagnostics.Stage("ENERGY-SCHEDULES", "EXPORT", "PASSED",
             $"source=active Revit document; schedules={schedules.Count}; captured={snapshots.Count}; failed={failures.Count}; file={path}");
         return path;
+    }
+
+    private static List<object> ReadPlacements(
+        Document doc,
+        ViewSchedule schedule,
+        IReadOnlyDictionary<long, List<ScheduleSheetInstance>> placements)
+    {
+        if (!placements.TryGetValue(schedule.Id.Value, out List<ScheduleSheetInstance>? instances))
+            return new List<object>();
+
+        var result = new List<object>();
+        foreach (ScheduleSheetInstance instance in instances.OrderBy(row => row.OwnerViewId.Value))
+        {
+            ViewSheet? sheet = doc.GetElement(instance.OwnerViewId) as ViewSheet;
+            if (sheet == null) continue;
+            result.Add(new
+            {
+                sheetNumber = sheet.SheetNumber ?? "",
+                sheetName = sheet.Name ?? "",
+                sheetUniqueId = sheet.UniqueId,
+                instanceUniqueId = instance.UniqueId
+            });
+        }
+        return result;
     }
 
     private static List<object> ReadFields(ViewSchedule schedule)
