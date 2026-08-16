@@ -1,6 +1,7 @@
 import * as THREE from 'three';
+import './design-versions-r52.js';
 
-const BUILD = '20260815r49-workspace1';
+const BUILD = '20260815r49-workspace2';
 const state = window.__revexState;
 const $ = (selector, root = document) => root.querySelector(selector);
 
@@ -177,7 +178,6 @@ if (!window.__revexWorkspaceR51) {
     document.addEventListener('pointerlockchange', () => {
       v.__revexWalkPointerLocked = document.pointerLockElement === canvas;
       if (!v.__revexWalkPointerLocked && v.walk && !document.hidden) {
-        // Keep Walk active after Esc only long enough for the button state to unwind cleanly.
         originalWalkOff();
         $('#walk-toggle')?.classList.remove('active');
         const controls = $('#walk-controls'); if (controls) controls.hidden = true;
@@ -219,7 +219,7 @@ if (!window.__revexWorkspaceR51) {
       };
     }
     applyPresentation(v);
-    diagnostic('INFO', 'WORKSPACE_R51', 'Lightweight material nuance, object outlines, clean render capture, and ACC-like Walk installed.');
+    diagnostic('INFO', 'WORKSPACE_R51', 'Lightweight material nuance, object outlines, clean render capture, ACC-like Walk, and Design Book Property versions installed.');
     return true;
   }
 
@@ -235,6 +235,7 @@ if (!window.__revexWorkspaceR51) {
     lightweightOutlines: true,
     cleanRenderReference: true,
     accLikeWalk: true,
+    designPropertyVersions: true,
     spatialObjectsVisible: false
   });
 }
