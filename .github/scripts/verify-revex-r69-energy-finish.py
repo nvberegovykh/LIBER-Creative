@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WRAPPER = ROOT / 'server/revex-energy-worker/revex_energy_pipeline_r69.py'
+GUARD = ROOT / 'server/revex-energy-worker/revex_energy_pipeline_guard.py'
 DOCKER = ROOT / 'server/revex-energy-worker/Dockerfile'
 FINISH = ROOT / 'docs/liber-apps/apps/revex/finish-type-r69.js'
 UI = ROOT / 'docs/liber-apps/apps/revex/ui-integrity.js'
@@ -65,6 +66,7 @@ assert not unresolved_identity['city'] and not unresolved_identity['state'] and 
 assert unresolved['locationResolution']['remainingMissing'] == ['city', 'state', 'zip']
 
 wrapper_text = WRAPPER.read_text(encoding='utf-8')
+guard_text = GUARD.read_text(encoding='utf-8')
 docker_text = DOCKER.read_text(encoding='utf-8')
 finish_text = FINISH.read_text(encoding='utf-8')
 ui_text = UI.read_text(encoding='utf-8')
@@ -73,8 +75,11 @@ docs_text = DOCS.read_text(encoding='utf-8')
 assert 'geocoding.geo.census.gov/geocoder/locations/onelineaddress' in wrapper_text
 assert 'derived-only-from-immutable-active-Revit-address' in wrapper_text
 assert '00_PAGE_FACTS_RESOLVED_R69.json' in wrapper_text
+assert 'import revex_energy_pipeline_r69 as resolver' in guard_text
+assert '_resolve_r69_request(request_path, output_root)' in guard_text
 assert 'COPY server/revex-energy-worker/revex_energy_pipeline_r69.py' in docker_text
-assert 'REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_r69.py' in docker_text
+assert 'REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py' in docker_text
+assert 'REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py' in docker_text
 
 assert "operation:'finish-type'" in finish_text
 assert "delete next.material.color" in finish_text
@@ -88,7 +93,7 @@ assert "library/revex/printing-pages/" in docs_text
 print(json.dumps({
     'schema': 'liber.revex.r69-energy-finish-qa.v1',
     'status': 'PASSED',
-    'energyIdentity': {'immutableSource': True, 'derivedLocation': True, 'fabricationBlocked': True},
+    'energyIdentity': {'immutableSource': True, 'derivedLocation': True, 'fabricationBlocked': True, 'r55GuardPreserved': True},
     'docs': {'oldSetSplitWithoutResync': True, 'onePagePdf': True},
     'finish': {'separateCommit': True, 'sameType': True, 'genericOverlayExcludesColor': True},
 }, indent=2))
