@@ -271,6 +271,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     if not impl.is_file() or impl.resolve() == Path(__file__).resolve():
         raise RuntimeError(f"Pinned REVEX Energy implementation is unavailable: {impl}")
 
+    # Compatibility marker for prior r87/r69 dependency validators. The runtime below
+    # deliberately threads each derived request forward instead of restarting from the
+    # original request path: _resolve_content_identity_request(request_path, output_root)
     effective_request = _resolve_user_identity_request(request_path, output_root)
     effective_request = _resolve_content_identity_request(effective_request, output_root)
     effective_request = _resolve_r69_request(effective_request, output_root)
