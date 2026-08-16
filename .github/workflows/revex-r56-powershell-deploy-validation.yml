@@ -5,8 +5,10 @@ on:
     branches:
       - main
       - 'agent/revex-deploy-powershell-parse-fix-r56-*'
+      - 'agent/revex-auto-firebase-auth-r59-*'
     paths:
       - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
+      - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
       - 'server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1'
       - 'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
       - '.github/workflows/revex-r56-powershell-deploy-validation.yml'
@@ -14,6 +16,7 @@ on:
     branches: [main]
     paths:
       - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
+      - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
       - 'server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1'
       - 'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
       - '.github/workflows/revex-r56-powershell-deploy-validation.yml'
@@ -29,6 +32,7 @@ jobs:
         run: |
           $files = @(
             'DEPLOY_REVEX_CURRENT_SERVICES.ps1',
+            'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1',
             'server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1',
             'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
           )
@@ -36,20 +40,31 @@ jobs:
             $tokens = $null
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors)
-            if ($errors.Count -gt 0) {
+            if (@($errors).Count -gt 0) {
               $errors | ForEach-Object { Write-Error "${file}: $($_.Message)" }
               throw "PowerShell parser rejected $file"
             }
           }
-      - name: Reject unquoted gcloud value projections
+      - name: Reject unsafe gcloud value projections
         shell: powershell
         run: |
-          $files = @(
-            'DEPLOY_REVEX_CURRENT_SERVICES.ps1',
+          $launcher = Get-Content -Raw 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
+          if ($launcher -match '(?m)&\s+\$GCloud\s+auth\s+list\b') {
+            throw 'Root launcher contains direct gcloud auth-list syntax instead of safe argv splatting.'
+          }
+          if (-not ($launcher.Contains('"--format","value(account)"') -or $launcher.Contains('"--format", "value(account)"'))) {
+            throw 'Root launcher is missing the Windows-safe split account projection.'
+          }
+
+          $bootstrap = Get-Content -Raw 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
+          if (-not ($bootstrap.Contains('"--format", "value(account)"') -or $bootstrap.Contains('"--format","value(account)"'))) {
+            throw 'Bootstrap is missing the Windows-safe split account projection.'
+          }
+
+          foreach ($file in @(
             'server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1',
             'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
-          )
-          foreach ($file in $files) {
+          )) {
             $text = Get-Content -Raw $file
             if ($text -match '(?m)&\s+\$GCloud\s+auth\s+list\b' -or
                 $text -match '(?m)&\s+\$GCloud\s+builds\s+get-default-service-account\b' -or
@@ -57,6 +72,6 @@ jobs:
               throw "$file contains direct gcloud invocation syntax that lets PowerShell reinterpret parenthesized --format=value(...) arguments."
             }
             if ($text -notmatch '--format=value\(account\)') {
-              throw "$file is missing the explicit account projection used by the deployment auth gate."
+              throw "$file is missing the account projection that the bootstrap safely wraps before execution."
             }
           }
