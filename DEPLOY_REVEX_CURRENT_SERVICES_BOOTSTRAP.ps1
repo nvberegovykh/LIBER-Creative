@@ -42,7 +42,7 @@ function Assert-PowerShellParse([string]$Path) {
   [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path -LiteralPath $Path), [ref]$tokens, [ref]$errors)
   if ($errors.Count -gt 0) {
     $messages = @($errors | ForEach-Object { $_.Message }) -join '; '
-    throw "PowerShell parser rejected $Path: $messages"
+    throw "PowerShell parser rejected ${Path}: $messages"
   }
 }
 
