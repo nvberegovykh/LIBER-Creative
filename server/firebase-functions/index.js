@@ -125,10 +125,9 @@ exports.runRevexEnergy = onCall({ timeoutSeconds: 3600, memory: '1GiB', concurre
   const existing = await libraryDoc(projectId, ENERGY_CURRENT_ID).get();
   if (existing.exists) {
     const state = existing.data() || {};
-    if (SOURCE_CANDIDATE &&
-        String(state?.manifest?.sourceEngineeringRevision || '') === sourceRevision &&
+    if (String(state?.manifest?.sourceEngineeringRevision || '') === sourceRevision &&
         String(state?.manifest?.pipelineVersion || '') === '0.8.19-r49' &&
-        String(state?.manifest?.sourceCandidate || '') === SOURCE_CANDIDATE &&
+        /^[a-f0-9]{40}$/i.test(String(state?.manifest?.sourceCandidate || '')) &&
         String(state?.manifest?.status || '').toUpperCase() === 'COMPLETE') {
       return { ok: true, reused: true, status: 'COMPLETE', sourceRevision, resultRevision: state.revision || state?.manifest?.resultRevision || '' };
     }
@@ -215,11 +214,17 @@ exports.runRevexEnergy = onCall({ timeoutSeconds: 3600, memory: '1GiB', concurre
     if (body.schema !== 'liber.revex.energy-server-response.v1' || String(body.projectId || '') !== projectId || String(body.sourceRevision || '') !== sourceRevision)
       throw new Error('Managed worker returned an incompatible project/revision response.');
     const resultManifest = body.manifest || {};
+    const workerSourceCandidate = String(resultManifest.sourceCandidate || '').trim();
     if (resultManifest.schema !== 'liber.revex.energy-result.v1' ||
         String(resultManifest.pipelineVersion || '') !== '0.8.19-r49' ||
-        !SOURCE_CANDIDATE || String(resultManifest.sourceCandidate || '') !== SOURCE_CANDIDATE ||
+        !/^[a-f0-9]{40}$/i.test(workerSourceCandidate) ||
         resultManifest.revitWriteBack !== false || resultManifest.pdfInsertion !== false)
       throw new Error('Managed worker returned an invalid Energy authority boundary.');
+    brokerLog('WORKER_AUTHORITY_VERIFIED', {
+      correlationId, projectId, sourceRevision, workerSourceCandidate,
+      brokerSourceCandidate: SOURCE_CANDIDATE || null,
+      pipelineVersion: resultManifest.pipelineVersion
+    });
     if (String(resultManifest.status || '').toUpperCase() === 'COMPLETE') {
       const resultArtifacts = Array.isArray(body.artifacts) ? body.artifacts : [];
       const names = new Set(resultArtifacts.map((row) => String(row.name || '')));
@@ -246,7 +251,8 @@ exports.runRevexEnergy = onCall({ timeoutSeconds: 3600, memory: '1GiB', concurre
       sourceEngineeringRevision: sourceRevision, publishedAt: new Date().toISOString(),
       manifest: resultManifest, artifacts: Array.isArray(body.artifacts) ? body.artifacts : [],
       manifestUrl: body.manifestUrl || null, manifestPath: body.manifestPath || null,
-      cloud: true, execution: 'managed-server', worker: 'OpenStudio-3.10/EnergyPlus + official COMcheck Backstop', requestedBy: uid
+      cloud: true, execution: 'managed-server', worker: 'OpenStudio-3.10/EnergyPlus + official COMcheck Backstop',
+      workerSourceCandidate, brokerSourceCandidate: SOURCE_CANDIDATE || null, requestedBy: uid
     };
     const resultRecord = {
       ...resultState,
@@ -267,7 +273,7 @@ exports.runRevexEnergy = onCall({ timeoutSeconds: 3600, memory: '1GiB', concurre
       stage: 'COMPLETE', correlationId
     }, { merge: true });
     await batch.commit();
-    brokerLog('RESULT_PUBLISHED', { correlationId, projectId, sourceRevision, resultRevision, status: resultManifest.status || body.status || 'UNKNOWN' });
+    brokerLog('RESULT_PUBLISHED', { correlationId, projectId, sourceRevision, resultRevision, status: resultManifest.status || body.status || 'UNKNOWN', workerSourceCandidate });
     return { ok: true, status: resultManifest.status || body.status || 'UNKNOWN', sourceRevision, resultRevision, error: resultManifest.error || body.error || null };
   } catch (error) {
     const detail = workerErrorDetail(error);
