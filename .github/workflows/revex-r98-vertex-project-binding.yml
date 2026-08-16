@@ -11,6 +11,7 @@ on:
       - 'server/revex-energy-worker/Dockerfile'
       - 'REPAIR_REVEX_ENERGY_VERTEX_BINDING_CURRENT.ps1'
       - 'REPAIR_REVEX_ENERGY_VERTEX_BINDING_CURRENT.cmd'
+      - '.github/scripts/verify-revex-r98-source-contract.js'
       - '.github/workflows/revex-r98-vertex-project-binding.yml'
   workflow_dispatch:
 
@@ -25,6 +26,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Install project-resolution test dependency
         run: python -m pip install --disable-pip-version-check google-auth
       - name: Python syntax
@@ -53,14 +57,8 @@ jobs:
               throw "$path parse failed: $((@($errors) | ForEach-Object Message) -join '; ')"
             }
           }
-      - name: Fast live repair is environment-only
-        run: |
-          grep -q -- '--update-env-vars' REPAIR_REVEX_ENERGY_VERTEX_BINDING_CURRENT.ps1
-          ! grep -qE 'builds["'"', ]+submit|run["'"', ]+deploy|firebase["'"', ]+deploy' REPAIR_REVEX_ENERGY_VERTEX_BINDING_CURRENT.ps1
-          grep -q 'REVEX_VERTEX_PROJECT=$ProjectId' server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1
-          grep -q 'REVEX_VERTEX_PROJECT=$ProjectId' server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1
-          grep -q 'REVEX_VERTEX_LOCATION=global' server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1
-          grep -q 'REVEX_VERTEX_LOCATION=global' server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1
+      - name: Deployment/source dependency contract
+        run: node .github/scripts/verify-revex-r98-source-contract.js
       - name: No GeometryCo or QA-floor change
         run: |
           git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD | tee /tmp/r98-files.txt
