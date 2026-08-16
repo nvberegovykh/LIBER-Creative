@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '20260816r83';
+  const VERSION = '20260816r91';
   const ENDPOINT = 'https://legacy-comcheck.energycode.pnl.gov/CheckWeb/';
 
   // The native host may ensure/inject this bridge more than once while the
@@ -68,12 +68,14 @@
     }));
   }
 
-  function resultMatches(result, projectId, revision) {
+  function resultMatches(result, projectId, revision, expectedResultRevision = '') {
     if (!result?.manifest) return false;
     const manifest = result.manifest;
     const resultProject = clean(result.projectId || manifest.projectId);
     const sourceRevision = clean(manifest.sourceEngineeringRevision || manifest.sourceRevision || manifest.engineeringRevision);
-    return resultProject === projectId && sourceRevision === revision;
+    const actualResultRevision = clean(result.revision || manifest.resultRevision);
+    const expected = clean(expectedResultRevision);
+    return resultProject === projectId && sourceRevision === revision && (!expected || actualResultRevision === expected);
   }
 
   async function waitForCloudStore(Store, projectId, revision, startedAt, timeoutMs = 30000) {
@@ -104,15 +106,17 @@
     });
   }
 
-  async function waitForExactResult(Store, projectId, revision, startedAt) {
+  async function waitForExactResult(Store, projectId, revision, startedAt, expectedResultRevision) {
+    const expected = clean(expectedResultRevision);
+    if (!expected) throw new Error('The managed Energy broker returned no exact result revision for this execution.');
     for (let attempt = 1; attempt <= 240; attempt += 1) {
       const result = await Store.getEnergyResult(projectId);
-      if (resultMatches(result, projectId, revision)) return result;
+      if (resultMatches(result, projectId, revision, expected)) return result;
       if (attempt === 1 || attempt % 8 === 0)
-        post('RESULT_WAIT', `Managed worker completed; waiting for this revision's immutable result (${attempt}/240)…`, false, { projectId, revision, startedAt, attempt });
+        post('RESULT_WAIT', `Managed worker completed; waiting for exact result ${expected} (${attempt}/240)…`, false, { projectId, revision, startedAt, attempt, resultRevision: expected });
       await delay(2000);
     }
-    throw new Error('The broker completed, but this exact Engineering revision did not publish an Energy result within 8 minutes.');
+    throw new Error(`The broker completed, but exact Energy result ${expected} did not become current within 8 minutes.`);
   }
 
   async function runApproved(Store, projectId, revision, startedAt) {
@@ -124,15 +128,17 @@
     }, 15000);
     try {
       const response = await Store.runEnergyServer(projectId, revision);
-      post('BROKER_PASSED', response?.message || 'Managed Energy worker completed; verifying immutable result artifacts…', true, { projectId, revision, startedAt });
-      const result = resultMatches(response?.result, projectId, revision)
+      const expectedResultRevision = clean(response?.resultRevision);
+      if (!expectedResultRevision) throw new Error('Managed Energy broker completed without publishing an exact resultRevision.');
+      post('BROKER_PASSED', response?.message || `Managed Energy worker completed as ${expectedResultRevision}; verifying that exact immutable result…`, true, { projectId, revision, startedAt, resultRevision: expectedResultRevision });
+      const result = resultMatches(response?.result, projectId, revision, expectedResultRevision)
         ? response.result
-        : await waitForExactResult(Store, projectId, revision, startedAt);
+        : await waitForExactResult(Store, projectId, revision, startedAt, expectedResultRevision);
       const status = clean(result?.manifest?.status).toUpperCase();
-      if (status !== 'COMPLETE') throw new Error(result?.manifest?.error || `Energy result status is ${status || 'UNKNOWN'}.`);
-      window.dispatchEvent(new CustomEvent('revex:managed-energy-result', { detail: { projectId, revision, result, response } }));
-      post('COMPLETE', `Energy chain complete for ${revision}. Current-project CXL, COMcheck PDF, both OSMs, simulations, PRM review, and EN-1 are available.`, true, { projectId, revision, startedAt });
-      return { ok: true, projectId, revision, result, response };
+      if (status !== 'COMPLETE') throw new Error(result?.manifest?.error || `Energy result ${expectedResultRevision} status is ${status || 'UNKNOWN'}.`);
+      window.dispatchEvent(new CustomEvent('revex:managed-energy-result', { detail: { projectId, revision, resultRevision: expectedResultRevision, result, response } }));
+      post('COMPLETE', `Energy chain complete for ${revision} as ${expectedResultRevision}. Current-project CXL, COMcheck PDF, both OSMs, simulations, PRM review, and EN-1 are available.`, true, { projectId, revision, startedAt, resultRevision: expectedResultRevision });
+      return { ok: true, projectId, revision, resultRevision: expectedResultRevision, result, response };
     } finally {
       clearInterval(timer);
     }
