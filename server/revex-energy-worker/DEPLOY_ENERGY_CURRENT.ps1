@@ -103,7 +103,7 @@ try {
     (Join-Path $Root ".github\scripts\verify-revex-current-generation-r53.js")
   )
 
-  $active = @(& $GCloud auth list --filter=status:ACTIVE --format=value(account)) | Where-Object { $_ }
+  $active = @(& $GCloud @("auth","list","--filter=status:ACTIVE","--format=value(account)")) | Where-Object { $_ }
   if ($LASTEXITCODE -ne 0 -or $active.Count -eq 0) {
     throw "Google Cloud administrator authentication is required once. Run 'gcloud auth login', then rerun the unified REVEX deployment. No cloud change was started."
   }
@@ -135,7 +135,7 @@ try {
     ) -Quiet
   }
 
-  $CloudBuildSa = (& $GCloud builds get-default-service-account --project=$ProjectId --format=value(serviceAccountEmail)).Trim()
+  $CloudBuildSa = (& $GCloud @("builds","get-default-service-account","--project=$ProjectId","--format=value(serviceAccountEmail)")).Trim()
   if ($LASTEXITCODE -ne 0 -or -not $CloudBuildSa) { throw "Cloud Build default service account was not returned." }
   Add-ProjectRole $GCloud "serviceAccount:$CloudBuildSa" "roles/cloudbuild.builds.builder" "Grant Cloud Build builder role"
   Add-ProjectRole $GCloud "serviceAccount:$CloudBuildSa" "roles/artifactregistry.writer" "Grant Cloud Build image-push access"
@@ -154,7 +154,7 @@ try {
     "--quiet"
   )
 
-  $WorkerUrl = (& $GCloud run services describe $Service --project=$ProjectId --region=$Region --format=value(status.url)).Trim()
+  $WorkerUrl = (& $GCloud @("run","services","describe",$Service,"--project=$ProjectId","--region=$Region","--format=value(status.url)")).Trim()
   if ($LASTEXITCODE -ne 0 -or -not $WorkerUrl) { throw "Current Energy worker deployed but no ready service URL was returned." }
   Invoke-Checked "Allow only REVEX Energy broker to invoke worker" $GCloud @(
     "run","services","add-iam-policy-binding",$Service,"--project=$ProjectId","--region=$Region",
@@ -183,11 +183,11 @@ try {
     Pop-Location
   }
 
-  $FunctionState = (& $GCloud functions describe runRevexEnergy --gen2 --project=$ProjectId --region=$Region --format=json) | ConvertFrom-Json
+  $FunctionState = (& $GCloud @("functions","describe","runRevexEnergy","--gen2","--project=$ProjectId","--region=$Region","--format=json")) | ConvertFrom-Json
   if ($LASTEXITCODE -ne 0 -or [string]$FunctionState.state -ne "ACTIVE") {
     throw "Current Energy broker did not report ACTIVE after deployment."
   }
-  $RunState = (& $GCloud run services describe $Service --project=$ProjectId --region=$Region --format=json) | ConvertFrom-Json
+  $RunState = (& $GCloud @("run","services","describe",$Service,"--project=$ProjectId","--region=$Region","--format=json")) | ConvertFrom-Json
   $Ready = @($RunState.status.conditions | Where-Object { $_.type -eq 'Ready' } | Select-Object -First 1)
   if ($Ready.Count -eq 0 -or [string]$Ready[0].status -ne 'True') {
     throw "Current Energy worker did not report Ready after deployment."
