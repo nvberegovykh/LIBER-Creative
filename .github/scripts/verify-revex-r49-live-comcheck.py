@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Live, non-production clean-project COMcheck acceptance for REVEX r49.
+"""Live, non-production clean-project COMcheck acceptance for REVEX.
 
-Uses synthetic NYC project identity/facts only. It proves the official service can
-translate current EN facts into a fresh project, calculate the envelope backstop,
-export clean CheckXML, and return a genuine PDF before production work begins.
+Uses synthetic project identity/facts only. It proves BOTH sides of the boundary:
+1) REVEX emits COMcheck's exact separate project fields (title, street address, city,
+   state, ZIP) without concatenating locality into the street-address field; and
+2) the official legacy COMcheck-Web service accepts that fresh-project model, calculates
+   the envelope backstop, exports clean CheckXML, and returns a genuine PDF.
 """
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ ENERGY = ROOT / "src" / "Liber.Revex.Revit" / "Engineering" / "Energy"
 PIPELINE_PATH = ENERGY / "revex_energy_pipeline.py"
 sys.path.insert(0, str(ENERGY))
 
-spec = importlib.util.spec_from_file_location("revex_r49_live_comcheck_pipeline", PIPELINE_PATH)
+spec = importlib.util.spec_from_file_location("revex_live_comcheck_pipeline", PIPELINE_PATH)
 if spec is None or spec.loader is None:
     raise RuntimeError(f"Cannot load {PIPELINE_PATH}")
 pipeline = importlib.util.module_from_spec(spec)
@@ -26,7 +28,32 @@ sys.modules[spec.name] = pipeline
 spec.loader.exec_module(pipeline)
 
 
+def child_text(root: ET.Element, name: str) -> str:
+    for node in root.iter():
+        if node.tag.rsplit("}", 1)[-1] == name:
+            return str(node.text or "").strip()
+    return ""
+
+
+def assert_project_fields(cxl: Path, project: dict, stage: str) -> None:
+    root = ET.parse(cxl).getroot()
+    expected = {
+        "projectTitle": project["title"],
+        "projectAddress": project["address"],
+        "projectCity": project["city"],
+        "projectState": project["state"],
+        "projectZipCode": project["zip"],
+    }
+    actual = {key: child_text(root, key) for key in expected}
+    if actual != expected:
+        raise RuntimeError(f"{stage}: COMcheck project-field contract mismatch: expected={expected!r}, actual={actual!r}")
+    if project["city"].casefold() in actual["projectAddress"].casefold() or project["zip"] in actual["projectAddress"]:
+        raise RuntimeError(f"{stage}: projectAddress incorrectly contains city/ZIP instead of street-only identity")
+
+
 def main() -> int:
+    # Synthetic identity deliberately keeps the street address separate from locality.
+    # This is the exact shape expected from the generalized active-Revit normalizer.
     project = {
         "title": "REVEX COMCHECK LIVE QA",
         "address": "999 TEST AVENUE",
@@ -112,15 +139,33 @@ def main() -> int:
     identity = pipeline.current_project_identity(facts)
     if identity.get("missing"):
         raise RuntimeError(f"Synthetic identity unexpectedly incomplete: {identity['missing']}")
+    for key in ("title", "address", "city", "state", "zip"):
+        if identity.get(key) != project[key]:
+            raise RuntimeError(f"Identity normalization changed {key}: {identity.get(key)!r} != {project[key]!r}")
 
-    with tempfile.TemporaryDirectory(prefix="revex-r49-live-comcheck-") as temp:
+    with tempfile.TemporaryDirectory(prefix="revex-live-comcheck-") as temp:
         folder = Path(temp)
-        log = pipeline.RunLog(folder, "r49-live-comcheck", "REVEX live clean COMcheck transport QA")
+        log = pipeline.RunLog(folder, "live-comcheck", "REVEX live clean COMcheck consumer-contract QA")
         cxl, _audit_pdf, audit = pipeline.prepare_project_comcheck(facts, identity, folder, log)
         if cxl is None or not cxl.is_file() or audit.get("status") != "INPUT_READY":
             raise RuntimeError(f"Synthetic COMcheck input was not ready: {audit}")
 
-        from comcheck_backstop import run_official_backstop, BACKSTOP_CODE
+        # Prove the generated CheckXML contract before touching the external service.
+        assert_project_fields(cxl, project, "REVEX generated CXL")
+
+        from comcheck_backstop import run_official_backstop, BACKSTOP_CODE, _fresh_project_spec
+
+        browser_spec = _fresh_project_spec(cxl)
+        expected_spec = {
+            "title": project["title"],
+            "address": project["address"],
+            "projectCity": project["city"],
+            "projectState": project["state"],
+            "projectZip": project["zip"],
+        }
+        actual_spec = {key: browser_spec.get(key) for key in expected_spec}
+        if actual_spec != expected_spec:
+            raise RuntimeError(f"Fresh COMcheck browser model contract mismatch: expected={expected_spec!r}, actual={actual_spec!r}")
 
         report, response, summary = run_official_backstop(
             cxl,
@@ -141,6 +186,10 @@ def main() -> int:
         if summary.get("transport") != "FRESH_PROJECT_BROWSER_MODEL":
             raise RuntimeError(f"Legacy CXL upload path was not eliminated: {summary}")
 
+        # COMcheck itself exports the clean project back over cxl. Verify the service preserved
+        # exactly the same separated identity fields rather than silently concatenating them.
+        assert_project_fields(cxl, project, "Official COMcheck clean export")
+
         root = ET.parse(cxl).getroot()
         names = [item.tag.rsplit("}", 1)[-1] for item in root.iter()]
         for name, expected in (("agWall", 1), ("window", 1), ("roof", 1), ("floor", 1)):
@@ -148,10 +197,13 @@ def main() -> int:
             if actual != expected:
                 raise RuntimeError(f"Clean COMcheck export lost {name}: {actual} != {expected}")
         clean_text = cxl.read_text(encoding="utf-8", errors="replace")
-        for token in (project["title"], "W1_Ext. Wall", "G1.1_Window", "R1_Roof", "F1_Floor"):
+        for token in (project["title"], project["address"], project["city"], project["state"], project["zip"],
+                      "W1_Ext. Wall", "G1.1_Window", "R1_Roof", "F1_Floor"):
             if token not in clean_text:
                 raise RuntimeError(f"Clean COMcheck export lost current evidence token: {token}")
 
+        print("REVEX_COMCHECK_PROJECT_FIELDS_SEPARATE=PASSED")
+        print("REVEX_COMCHECK_LIVE_ENDPOINT=PASSED")
         print("REVEX_COMCHECK_FULL_LIVE_SYNTHETIC=PASSED")
         print("REVEX_COMCHECK_UPLOAD_DWR_ELIMINATED=PASSED")
         print("REVEX_COMCHECK_CLEAN_EXPORT=PASSED")
