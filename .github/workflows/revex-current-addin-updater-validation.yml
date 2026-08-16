@@ -6,7 +6,10 @@ on:
     paths:
       - 'UPDATE_REVEX_ADDIN_CURRENT.ps1'
       - 'UPDATE_REVEX_ADDIN_CURRENT.cmd'
+      - 'RECOVER_REVEX_ENERGY_CURRENT.ps1'
+      - 'RECOVER_REVEX_ENERGY_CURRENT.cmd'
       - 'src/Liber.Revex.Revit/**'
+      - '.github/scripts/verify-revex-r83-energy-single-shot.js'
       - '.github/workflows/revex-current-addin-updater-validation.yml'
   push:
     branches:
@@ -14,6 +17,7 @@ on:
       - 'agent/revex-current-addin-updater'
       - 'agent/revex-r74-*'
       - 'agent/revex-r81-*'
+      - 'agent/revex-r83-*'
 
 permissions:
   contents: read
@@ -32,13 +36,15 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-      - name: Parse Windows PowerShell updater
+      - name: Parse Windows PowerShell updater and recovery launcher
         shell: powershell
         run: |
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path '.\UPDATE_REVEX_ADDIN_CURRENT.ps1'), [ref]$tokens, [ref]$errors) | Out-Null
-          if ($errors.Count -gt 0) { $errors | Format-List | Out-String | Write-Error; exit 1 }
+          foreach ($path in @('.\UPDATE_REVEX_ADDIN_CURRENT.ps1', '.\RECOVER_REVEX_ENERGY_CURRENT.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) { $errors | Format-List | Out-String | Write-Error; exit 1 }
+          }
       - name: Verify updater source policy
         shell: powershell
         run: |
@@ -73,6 +79,20 @@ jobs:
           if ($ps.Contains('PUBLISH_REVEX_R49')) { throw 'Historical publisher invocation is forbidden in the current updater.' }
           if (-not $cmd.Contains('raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/UPDATE_REVEX_ADDIN_CURRENT.ps1')) { throw 'Launcher does not self-refresh from current main.' }
           if (-not $cmd.Contains('pause >nul')) { throw 'Launcher must remain open so success/failure can be read.' }
+      - name: Verify Energy recovery launcher scope
+        shell: powershell
+        run: |
+          $ps = Get-Content '.\RECOVER_REVEX_ENERGY_CURRENT.ps1' -Raw
+          $cmd = Get-Content '.\RECOVER_REVEX_ENERGY_CURRENT.cmd' -Raw
+          foreach ($needle in @(
+            '-SkipRender',
+            'REVEX_ENERGY_WORKER_URL',
+            'REVEX_SOURCE_CANDIDATE',
+            'roles/run.invoker',
+            'serviceAccount:$BrokerSa',
+            'UPDATE_REVEX_ADDIN_CURRENT.ps1'
+          )) { if (-not $ps.Contains($needle)) { throw "Energy recovery launcher missing: $needle" } }
+          if (-not $cmd.Contains('raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/RECOVER_REVEX_ENERGY_CURRENT.ps1')) { throw 'Energy recovery launcher does not self-refresh from main.' }
       - name: Compile complete Revit 2026 add-in
         shell: pwsh
         run: |
@@ -86,3 +106,4 @@ jobs:
           python .github/scripts/verify-revex-r69-energy-finish.py
           node .github/scripts/verify-revex-r54-selfhost-render.js
           python .github/scripts/verify-revex-r73-energy-topology-fallback.py
+          node .github/scripts/verify-revex-r83-energy-single-shot.js
