@@ -1,0 +1,1 @@
+The default REVEX renderer must not require HF_TOKEN, HUGGING_FACE_HUB_TOKEN, a Hugging Face login, or an end-user model download. The worker uses the exact public revision recorded in model-manifest.json.
