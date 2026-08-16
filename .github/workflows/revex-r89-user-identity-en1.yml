@@ -1,0 +1,80 @@
+name: REVEX r89 user identity + EN-1 + nine-file validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/revex-energy-worker/revex_user_identity_en1.py'
+      - 'server/revex-energy-worker/revex_energy_pipeline_guard.py'
+      - 'server/revex-energy-worker/verify_user_identity_en1_r89.py'
+      - 'server/revex-energy-worker/Dockerfile'
+      - 'server/firebase-functions/index.js'
+      - 'docs/liber-apps/apps/revex/energy-diagnostics-r68.js'
+      - 'docs/liber-apps/apps/revex/energy-identity-en1-r89.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - '.github/workflows/revex-r89-user-identity-en1.yml'
+  push:
+    branches: ['agent/revex-r89-*']
+    paths:
+      - 'server/revex-energy-worker/revex_user_identity_en1.py'
+      - 'server/revex-energy-worker/revex_energy_pipeline_guard.py'
+      - 'server/revex-energy-worker/verify_user_identity_en1_r89.py'
+      - 'server/revex-energy-worker/Dockerfile'
+      - 'server/firebase-functions/index.js'
+      - 'docs/liber-apps/apps/revex/energy-diagnostics-r68.js'
+      - 'docs/liber-apps/apps/revex/energy-identity-en1-r89.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - '.github/workflows/revex-r89-user-identity-en1.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  identity-en1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install EN-1 print QA runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libreoffice-core libreoffice-calc fonts-liberation >/dev/null
+          python -m pip install --disable-pip-version-check openpyxl pypdf >/dev/null
+          soffice --version
+      - name: Compile r89 worker and browser runtime
+        run: |
+          python -m py_compile server/revex-energy-worker/revex_user_identity_en1.py server/revex-energy-worker/revex_energy_pipeline_guard.py server/revex-energy-worker/verify_user_identity_en1_r89.py
+          node --check docs/liber-apps/apps/revex/energy-diagnostics-r68.js
+          node --check docs/liber-apps/apps/revex/energy-identity-en1-r89.js
+          node --check docs/liber-apps/apps/revex/ui-integrity.js
+          node --check server/firebase-functions/index.js
+      - name: Run missing-only identity + EN-1 16-page print + nine-file QA
+        working-directory: server/revex-energy-worker
+        run: python verify_user_identity_en1_r89.py
+      - name: Verify transport and immutable-boundary markers
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          guard=Path('server/revex-energy-worker/revex_energy_pipeline_guard.py').read_text(encoding='utf-8')
+          helper=Path('server/revex-energy-worker/revex_user_identity_en1.py').read_text(encoding='utf-8')
+          broker=Path('server/firebase-functions/index.js').read_text(encoding='utf-8')
+          ui=Path('docs/liber-apps/apps/revex/ui-integrity.js').read_text(encoding='utf-8')
+          en1=Path('docs/liber-apps/apps/revex/energy-identity-en1-r89.js').read_text(encoding='utf-8')
+          assert '_resolve_user_identity_request(request_path, output_root)' in guard
+          assert 'effective_request = _resolve_user_identity_request(request_path, output_root)' in guard
+          assert guard.index('effective_request = _resolve_user_identity_request') < guard.index('effective_request = _resolve_content_identity_request') < guard.index('effective_request = _resolve_r69_request')
+          assert 'ignoredAlreadyEstablishedFields' in helper and 'sourceEvidenceMutated' in helper
+          assert 'PUBLIC_REVIEW_NAMES' in helper and 'entryCount": 9' in helper
+          assert 'fitToWidth = 1' in helper and 'fitToHeight = 1' in helper and 'expected exactly' in helper
+          for marker in ('identityOverride: comcheckConsent.projectIdentityOverride','en1Applicant: comcheckConsent.en1Applicant','en1Modeler: comcheckConsent.en1Modeler'):
+              assert marker in broker, marker
+          assert 'energy-identity-en1-r89.js?v=20260816r89-en1-identity1' in ui
+          assert 'These fields are not transmitted to COMcheck.' in en1
+          print('REVEX_R89_DEPENDENCY_GRAPH=PASSED')
+          PY
