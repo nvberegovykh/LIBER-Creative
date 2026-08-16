@@ -21,9 +21,10 @@ import re
 from typing import Callable
 
 import revex_energy_identity_normalizer as normalizer
+from revex_cloud_project import resolve_vertex_project
 
 SCHEMA = "liber.revex.project-identity-resolution.v1"
-AGENT_VERSION = "20260816r96-content-identity2"
+AGENT_VERSION = "20260816r98-content-identity3"
 REQUIRED_IDENTITY = ("title", "address", "city", "state", "zip")
 LOCATION_KEYS = ("city", "state", "zip")
 MIN_AGENT_CONFIDENCE = 0.90
@@ -305,9 +306,7 @@ def _run_content_agent(
     from google import genai
     from google.genai import types
 
-    project = os.environ.get("REVEX_VERTEX_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT") or ""
-    if not project:
-        return {}
+    project = resolve_vertex_project()
     location = os.environ.get("REVEX_VERTEX_LOCATION", "global")
     model = os.environ.get("REVEX_PAGE_SCAN_MODEL", "gemini-2.5-flash")
     access_token = _text(os.environ.get("REVEX_VERTEX_ACCESS_TOKEN"))
