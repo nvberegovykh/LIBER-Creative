@@ -1,16 +1,19 @@
 (function(root){
   'use strict';
-  const BUILD='20260816r89-energy-replay3';
+  const BUILD='20260816r95-manual-identity1';
   const failureName=/02_GEOMETRYCO\.log|FAILURE_(?:REPORT\.json|SUMMARY\.txt)|REVEX-ENERGY-PIPELINE\.jsonl|NATIVE_CHECK_|eplusout\.err|REVEX_OPENSTUDIO_RUN\.log/i;
   const clean=v=>String(v??'').trim();
   const esc=v=>String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const state=()=>root.__revexState||{};
   const projectId=()=>clean(state().projectId||new URLSearchParams(location.search).get('projectId'));
   let running=false,lastStaleSig='',lastHistoricalSig='',managedStage='',managedRevision='';
+  const requiredIdentityFallback=new Set();
+  let identitySubmitGuardInstalled=false;
+  const identityFieldIds={title:'energy-identity-title',address:'energy-identity-address',city:'energy-identity-city',state:'energy-identity-state',zip:'energy-identity-zip'};
 
   function Store(){return root.RevexStore;}
   function diagnostic(level,stage,message,detail={}){
-    try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'energy diagnostics r89',...detail});}catch(_){}
+    try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'energy diagnostics r95',...detail});}catch(_){}
   }
   async function artifactUrl(row){
     if(row?.url)return row.url;
@@ -40,31 +43,65 @@
   function ensureIdentityOverrideFields(){
     const dialog=document.getElementById('energy-consent-dialog');
     const form=dialog?.querySelector('form');
-    if(!dialog||!form||document.getElementById('energy-identity-override'))return;
-    const block=document.createElement('fieldset');
-    block.id='energy-identity-override';
-    block.style.cssText='margin:14px 0 10px;padding:12px;border:1px solid rgba(255,255,255,.14);border-radius:9px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 10px';
-    block.innerHTML=`<legend style="padding:0 6px">Project identity fallback</legend>
-      <div style="grid-column:1/-1;font-size:12px;opacity:.72">Only fill what REVEX failed to resolve. These values are revision-scoped and may fill missing project identity fields only; they cannot overwrite identity already established by active-Revit evidence.</div>
-      <label style="display:grid;gap:4px"><span>Project title</span><input id="energy-identity-title" autocomplete="off" placeholder="leave blank if already correct"></label>
-      <label style="display:grid;gap:4px"><span>Street address</span><input id="energy-identity-address" autocomplete="street-address" placeholder="leave blank if already correct"></label>
-      <label style="display:grid;gap:4px"><span>City / borough</span><input id="energy-identity-city" autocomplete="address-level2" placeholder="e.g. Brooklyn"></label>
-      <label style="display:grid;gap:4px"><span>State</span><input id="energy-identity-state" autocomplete="address-level1" maxlength="32" placeholder="NY"></label>
-      <label style="display:grid;gap:4px"><span>ZIP</span><input id="energy-identity-zip" inputmode="numeric" autocomplete="postal-code" maxlength="10" placeholder="11225"></label>`;
-    const note=form.querySelector('.energy-consent-note');
-    if(note)note.insertAdjacentElement('beforebegin',block);else form.appendChild(block);
-    diagnostic('INFO','ENERGY_IDENTITY_FALLBACK_READY','Revision-scoped manual project identity fallback is available in the COMcheck authorization dialog.');
+    if(!dialog||!form)return;
+    if(!document.getElementById('energy-identity-override')){
+      const block=document.createElement('fieldset');
+      block.id='energy-identity-override';
+      block.style.cssText='margin:14px 0 10px;padding:12px;border:1px solid rgba(255,255,255,.14);border-radius:9px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 10px';
+      block.innerHTML=`<legend style="padding:0 6px">Project identity fallback</legend>
+        <div style="grid-column:1/-1;font-size:12px;opacity:.72">Only fill what REVEX failed to resolve. These values are revision-scoped and may fill missing project identity fields only; they cannot overwrite identity already established by active-Revit evidence.</div>
+        <label style="display:grid;gap:4px"><span>Project title</span><input id="energy-identity-title" autocomplete="off" placeholder="leave blank if already correct"></label>
+        <label style="display:grid;gap:4px"><span>Street address</span><input id="energy-identity-address" autocomplete="street-address" placeholder="leave blank if already correct"></label>
+        <label style="display:grid;gap:4px"><span>City / borough</span><input id="energy-identity-city" autocomplete="address-level2" placeholder="e.g. Brooklyn"></label>
+        <label style="display:grid;gap:4px"><span>State</span><input id="energy-identity-state" autocomplete="address-level1" maxlength="32" placeholder="NY"></label>
+        <label style="display:grid;gap:4px"><span>ZIP</span><input id="energy-identity-zip" inputmode="numeric" autocomplete="postal-code" maxlength="10" placeholder="11225"></label>`;
+      const note=form.querySelector('.energy-consent-note');
+      if(note)note.insertAdjacentElement('beforebegin',block);else form.appendChild(block);
+      diagnostic('INFO','ENERGY_IDENTITY_FALLBACK_READY','Revision-scoped manual project identity fallback is available in the COMcheck authorization dialog.');
+    }
+    renderRequiredIdentityNote();
   }
   function collectIdentityOverride(){
-    const ids={title:'energy-identity-title',address:'energy-identity-address',city:'energy-identity-city',state:'energy-identity-state',zip:'energy-identity-zip'};
     const out={};
-    for(const [key,id] of Object.entries(ids)){
+    for(const [key,id] of Object.entries(identityFieldIds)){
       let value=clean(document.getElementById(id)?.value).replace(/\s+/g,' ');
       if(!value)continue;
       if(key==='state')value=value.toUpperCase();
       out[key]=value.slice(0,key==='zip'?10:200);
     }
     return out;
+  }
+  function renderRequiredIdentityNote(){
+    const block=document.getElementById('energy-identity-override');
+    if(!block)return;
+    let note=document.getElementById('energy-identity-required-note');
+    if(!requiredIdentityFallback.size){if(note)note.remove();return;}
+    if(!note){note=document.createElement('div');note.id='energy-identity-required-note';note.style.cssText='grid-column:1/-1;padding:8px 10px;border-radius:7px;background:rgba(255,71,119,.12);font-size:12px';block.appendChild(note);}
+    note.textContent=`Required to recover this published revision: ${[...requiredIdentityFallback].join(', ')}. The authorization form will not close until these fields are entered.`;
+  }
+  function updateRequiredIdentityFallback(message){
+    const match=clean(message).match(/project identity is incomplete[^:]*:\s*([^\n]+)/i);
+    if(!match)return;
+    const allowed=new Set(Object.keys(identityFieldIds));
+    const next=match[1].split(',').map(value=>clean(value).toLowerCase()).filter(value=>allowed.has(value));
+    if(!next.length)return;
+    requiredIdentityFallback.clear();next.forEach(value=>requiredIdentityFallback.add(value));
+    ensureIdentityOverrideFields();renderRequiredIdentityNote();
+  }
+  function ensureIdentitySubmitGuard(){
+    if(identitySubmitGuardInstalled)return;
+    const form=document.getElementById('energy-consent-dialog')?.querySelector('form');
+    if(!form)return;
+    identitySubmitGuardInstalled=true;
+    form.addEventListener('submit',event=>{
+      if(event.submitter?.value!=='approve'||!requiredIdentityFallback.size)return;
+      const missing=[...requiredIdentityFallback].filter(key=>!clean(document.getElementById(identityFieldIds[key])?.value));
+      if(!missing.length)return;
+      event.preventDefault();
+      document.getElementById(identityFieldIds[missing[0]])?.focus?.();
+      renderRequiredIdentityNote();
+      diagnostic('WARN','ENERGY_IDENTITY_FALLBACK_REQUIRED',`Authorization remains open until required project identity is supplied: ${missing.join(', ')}`,{missing});
+    },true);
   }
   function consentRevisionId(value){return clean(value).replace(/[^a-zA-Z0-9._-]+/g,'_').slice(0,120).replace(/\./g,'_');}
   function installConsentIdentityPersistence(){
@@ -117,7 +154,7 @@
     }
   }
   function clearStaleFailureUi(current,failedRevision,box){
-    box.hidden=true;box.innerHTML='';
+    box.hidden=true;box.innerHTML='';requiredIdentityFallback.clear();renderRequiredIdentityNote();
     const run=document.getElementById('energy-run-status');
     if(run&&run.dataset.tone==='bad'){
       run.textContent=current?`Current Engineering revision ${current} is ready for managed processing.`:'Current Engineering revision is ready for managed processing.';
@@ -131,7 +168,7 @@
   }
   function replayOwnsRevision(current){
     if(!current||managedRevision!==current)return false;
-    return ['CONSENT_REQUIRED','CONSENT_RECORDED','BROKER_RUNNING','BROKER_PASSED','RESULT_WAIT','CLOUD_UPLOAD_PASSED'].includes(managedStage);
+    return ['CONSENT_REQUIRED','CONSENT_RECORDED','BROKER_RUNNING','BROKER_STARTING','BROKER_PASSED','RESULT_WAIT','CLOUD_UPLOAD_PASSED','BROKER_JOB'].includes(managedStage);
   }
   function hidePreviousFailureDuringReplay(current,box){
     box.hidden=true;box.innerHTML='';
@@ -155,17 +192,9 @@
       const status=clean(result?.manifest?.status).toUpperCase();
       const box=ensureBox();
       if(!box)return;
-      if(status==='FAILED'&&current&&failedRevision&&failedRevision!==current){
-        clearStaleFailureUi(current,failedRevision,box);
-        return;
-      }
-      if(status!=='FAILED'){
-        box.hidden=true;box.innerHTML='';return;
-      }
-      if(replayOwnsRevision(current)&&mode!=='current-failure'){
-        hidePreviousFailureDuringReplay(current,box);
-        return;
-      }
+      if(status==='FAILED'&&current&&failedRevision&&failedRevision!==current){clearStaleFailureUi(current,failedRevision,box);return;}
+      if(status!=='FAILED'){box.hidden=true;box.innerHTML='';requiredIdentityFallback.clear();renderRequiredIdentityNote();return;}
+      if(replayOwnsRevision(current)&&mode!=='current-failure'){hidePreviousFailureDuringReplay(current,box);return;}
       const rows=(Array.isArray(result?.artifacts)?result.artifacts:[]).filter(row=>failureName.test(clean(row?.name))||clean(row?.kind).toLowerCase()==='diagnostic');
       const geometry=rows.find(row=>/02_GEOMETRYCO\.log/i.test(clean(row?.name)))||null;
       const links=[];
@@ -177,26 +206,21 @@
       if(geometry){
         try{
           const url=await artifactUrl(geometry);
-          if(url){
-            const response=await fetch(url,{cache:'no-store'});
-            if(response.ok){const text=await response.text();const parsed=exactErrorFromText(text);if(parsed)exact=parsed;}
-          }
+          if(url){const response=await fetch(url,{cache:'no-store'});if(response.ok){const text=await response.text();const parsed=exactErrorFromText(text);if(parsed)exact=parsed;}}
         }catch(error){diagnostic('WARN','ENERGY_FAILURE_LOG_READ',error?.message||String(error));}
       }
       const currentFailure=mode==='current-failure';
+      if(currentFailure||sameCurrentFailure(source,result))updateRequiredIdentityFallback(exact);
+      ensureIdentitySubmitGuard();
       box.hidden=false;
       box.innerHTML=`<div class="eyebrow">${currentFailure?'EXACT WORKER FAILURE':'PREVIOUS ATTEMPT FAILURE'}</div><strong>${esc(result?.manifest?.failureContext?.failedStage||'Energy pipeline')}</strong><p>${esc(exact)}</p>${links.length?`<div class="energy-exact-failure-links">${links.join('')}</div>`:''}<small>${currentFailure?'This failure was returned by the current replay.':'This is preserved evidence from the previous attempt; it is not a new failure on page load.'} Immutable Engineering revision ${esc(failedRevision||'—')} can be replayed without regenerating Revit evidence.</small>`;
       const run=document.getElementById('energy-run-status');
       if(run&&exact){
         if(currentFailure){run.textContent=`${result?.manifest?.failureContext?.failedStage||'Energy'}: ${exact}`;run.dataset.tone='bad';}
-        else if(run.dataset.tone==='bad'){run.textContent=`Previous attempt failed. Retry published revision to run the repaired server chain.`;run.dataset.tone='quiet';}
+        else if(run.dataset.tone==='bad'){run.textContent='Previous attempt failed. Retry published revision to run the repaired server chain.';run.dataset.tone='quiet';}
       }
-      if(currentFailure){
-        diagnostic('ERROR','ENERGY_EXACT_FAILURE',exact,{projectId:id,revision:failedRevision,artifactCount:rows.length,replayable:sameCurrentFailure(source,result)});
-      }else{
-        const sig=`${failedRevision}|${exact}`;
-        if(sig!==lastHistoricalSig){lastHistoricalSig=sig;diagnostic('INFO','ENERGY_PREVIOUS_FAILURE_AVAILABLE','Preserved failure evidence from the previous attempt is available; no new worker failure occurred on page load.',{projectId:id,revision:failedRevision,artifactCount:rows.length});}
-      }
+      if(currentFailure){diagnostic('ERROR','ENERGY_EXACT_FAILURE',exact,{projectId:id,revision:failedRevision,artifactCount:rows.length,replayable:sameCurrentFailure(source,result)});}
+      else{const sig=`${failedRevision}|${exact}`;if(sig!==lastHistoricalSig){lastHistoricalSig=sig;diagnostic('INFO','ENERGY_PREVIOUS_FAILURE_AVAILABLE','Preserved failure evidence from the previous attempt is available; no new worker failure occurred on page load.',{projectId:id,revision:failedRevision,artifactCount:rows.length});}}
     }catch(error){diagnostic('WARN','ENERGY_DIAGNOSTICS',error?.message||String(error));}
     finally{running=false;}
   }
@@ -206,18 +230,15 @@
   }
   function install(){
     if(root.__revexEnergyDiagnosticsR68)return;
-    ensureIdentityOverrideFields();
-    installConsentIdentityPersistence();
-    root.__revexEnergyDiagnosticsR68={build:BUILD,inspect};
+    ensureIdentityOverrideFields();installConsentIdentityPersistence();ensureIdentitySubmitGuard();
+    root.__revexEnergyDiagnosticsR68={build:BUILD,inspect,requiredIdentityFallback};
     root.addEventListener('revex:energy-open',()=>setTimeout(()=>inspect('historical'),0));
     root.addEventListener('revex:managed-energy-status',event=>{
-      const stage=clean(event.detail?.stage).toUpperCase();
-      const revision=clean(event.detail?.revision);
-      if(stage)managedStage=stage;
-      if(revision)managedRevision=revision;
-      if(stage==='CONSENT_REQUIRED'){ensureIdentityOverrideFields();installConsentIdentityPersistence();}
-      if(stage==='BROKER_FAILED')setTimeout(()=>inspect('current-failure'),250);
-      else if(['BROKER_RUNNING','BROKER_PASSED','RESULT_WAIT','CLOUD_UPLOAD_PASSED','CONSENT_REQUIRED','CONSENT_RECORDED'].includes(stage))setTimeout(()=>inspect('historical'),150);
+      const stage=clean(event.detail?.stage).toUpperCase(),revision=clean(event.detail?.revision);
+      if(stage)managedStage=stage;if(revision)managedRevision=revision;
+      if(stage==='CONSENT_REQUIRED'){ensureIdentityOverrideFields();installConsentIdentityPersistence();ensureIdentitySubmitGuard();}
+      if(stage==='BROKER_FAILED'){updateRequiredIdentityFallback(event.detail?.message||'');setTimeout(()=>inspect('current-failure'),250);}
+      else if(['BROKER_RUNNING','BROKER_STARTING','BROKER_JOB','BROKER_PASSED','RESULT_WAIT','CLOUD_UPLOAD_PASSED','CONSENT_REQUIRED','CONSENT_RECORDED'].includes(stage))setTimeout(()=>inspect('historical'),150);
     });
     root.addEventListener('revex:managed-energy-result',()=>setTimeout(()=>inspect(managedStage==='BROKER_FAILED'?'current-failure':'historical'),0));
     root.addEventListener('revex:source-revision-loaded',()=>setTimeout(()=>inspect('historical'),0));
