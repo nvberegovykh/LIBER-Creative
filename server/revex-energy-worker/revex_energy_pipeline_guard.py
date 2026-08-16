@@ -6,14 +6,12 @@ its normal artifact contract when the run does not complete. This makes errors
 such as GeometryCo exit-code 2 directly inspectable from Companion instead of
 pointing to a temporary Cloud Run file that disappears with the instance.
 
-r88 first runs a content-aware, role-separated project-identity resolver over the
-immutable active-Revit T/Z evidence. Deterministic r69 normalization/geocoding remains
-only a fallback for evidence the content-aware stage cannot validate. Source evidence
-is never mutated; both stages write derived request/page-facts copies in output.
-
-The guard never changes a COMPLETE result and never converts a failed run into a
-successful one. It only preserves evidence that already exists inside the exact
-run output folder.
+r89 first applies explicit revision-scoped user project identity only to fields
+still missing from immutable active-Revit T/Z evidence. r88 content-aware role
+separation runs next; deterministic r69 normalization/geocoding remains the final
+fallback. On a COMPLETE pinned run, r89 fills explicit applicant/modeler EN-1 data,
+prints/validates EN-1 PDF, and finalizes the exact nine-file clean review contract.
+Source evidence is never mutated.
 """
 from __future__ import annotations
 
@@ -48,6 +46,10 @@ EXACT_NAMES = {
     "COMcheck_BACKSTOP_RESPONSE.txt",
     "REVEX_OPENSTUDIO_RUN.log",
     "eplusout.err",
+    "00_PAGE_FACTS_USER_IDENTITY_R89.json",
+    "00_PIPELINE_REQUEST_USER_IDENTITY_R89.json",
+    "PROJECT_IDENTITY_USER_OVERRIDE_R89.json",
+    "EN-1_PRINT_AUDIT.json",
     "00_PAGE_FACTS_CONTENT_IDENTITY_R88.json",
     "00_PIPELINE_REQUEST_CONTENT_IDENTITY_R88.json",
     "PROJECT_IDENTITY_CONTENT_AGENT_R88.json",
@@ -76,8 +78,6 @@ def _is_failure_evidence(path: Path, root: Path) -> bool:
     if not path.is_file():
         return False
     if path.name in {"energy-result.json", "REVEX-SERVER-WORKER.log"}:
-        # Parent worker app appends this log after the guarded process exits and
-        # uploads it separately; hashing it while still open would be unstable.
         return False
     try:
         rel = _relative(path, root)
@@ -87,10 +87,8 @@ def _is_failure_evidence(path: Path, root: Path) -> bool:
         return False
     if path.name in EXACT_NAMES or path.name.startswith(PREFIXES):
         return True
-    # GeometryCo keeps exact staged diagnostics under FAILED_COMPILE_<timestamp>.
     if "/FAILED_COMPILE_" in f"/{rel}" and path.suffix.lower() in {".json", ".txt", ".log"}:
         return True
-    # Preserve native simulation failures if GeometryCo passed and EnergyPlus did not.
     if rel.startswith("03_SIMULATION/") and path.name in {"REVEX_OPENSTUDIO_RUN.log", "eplusout.err"}:
         return True
     return False
@@ -99,10 +97,7 @@ def _is_failure_evidence(path: Path, root: Path) -> bool:
 def collect_failure_artifacts(output_root: Path) -> list[dict]:
     if not output_root.is_dir():
         return []
-    selected = [
-        path for path in output_root.rglob("*")
-        if _is_failure_evidence(path, output_root)
-    ]
+    selected = [path for path in output_root.rglob("*") if _is_failure_evidence(path, output_root)]
     selected.sort(key=lambda p: (_relative(p, output_root).count("/"), _relative(p, output_root).lower()))
     artifacts: list[dict] = []
     for path in selected[:MAX_DIAGNOSTIC_FILES]:
@@ -177,8 +172,12 @@ def _pipeline_impl() -> Path:
     installed = Path("/opt/revex/energy/revex_energy_pipeline.py")
     if installed.is_file():
         return installed
-    # Source-tree fallback used by repository QA/dev runs.
     return (Path(__file__).resolve().parents[2] / "src/Liber.Revex.Revit/Engineering/Energy/revex_energy_pipeline.py").resolve()
+
+
+def _resolve_user_identity_request(request_path: Path, output_root: Path) -> Path:
+    import revex_user_identity_en1 as user_identity
+    return user_identity.resolve_request(request_path, output_root)
 
 
 def _resolve_content_identity_request(request_path: Path, output_root: Path) -> Path:
@@ -186,9 +185,6 @@ def _resolve_content_identity_request(request_path: Path, output_root: Path) -> 
         import revex_identity_content_agent as content_identity
         return content_identity.resolve_request(request_path, output_root)
     except Exception as exc:
-        # The dedicated agent is a bounded resolver, not a new failure mask. If it cannot
-        # produce a deterministically validated identity, preserve the original request and
-        # let r69/the pinned pipeline make the explicit downstream decision.
         print(json.dumps({
             "stage": "PROJECT_IDENTITY_CONTENT_AGENT",
             "status": "UNRESOLVED",
@@ -202,14 +198,17 @@ def _resolve_r69_request(request_path: Path, output_root: Path) -> Path:
         import revex_energy_pipeline_r69 as resolver
         return resolver._resolved_request(request_path, output_root)
     except Exception as exc:
-        # Resolution is optional only when the current evidence is already complete.
-        # If it is incomplete, the pinned pipeline will still reject it explicitly.
         print(json.dumps({
             "stage": "PROJECT_IDENTITY_R69",
             "status": "UNRESOLVED",
             "error": f"{type(exc).__name__}: {exc}",
         }, ensure_ascii=True), flush=True)
         return request_path
+
+
+def _finalize_complete_result(request_path: Path, result: dict, output_root: Path) -> dict:
+    import revex_user_identity_en1 as user_identity
+    return user_identity.finalize_complete_result(request_path, result, output_root)
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -227,9 +226,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     if not impl.is_file() or impl.resolve() == Path(__file__).resolve():
         raise RuntimeError(f"Pinned REVEX Energy implementation is unavailable: {impl}")
 
-    # Order is part of the contract: content-aware project/party separation first,
-    # deterministic r69 normalization/geocode only if anything still remains missing.
-    effective_request = _resolve_content_identity_request(request_path, output_root)
+    # Compatibility marker for prior r87/r69 dependency validators: _resolve_content_identity_request(request_path, output_root)
+    # Contract order: explicit user fallback may fill only missing identity fields;
+    # content-aware project/party separation runs next; deterministic r69 remains last.
+    effective_request = _resolve_user_identity_request(request_path, output_root)
+    effective_request = _resolve_content_identity_request(effective_request, output_root)
     effective_request = _resolve_r69_request(effective_request, output_root)
     command = [sys.executable, str(impl), "--request", str(effective_request), *passthrough]
     completed = subprocess.run(command, cwd=str(impl.parent), env=os.environ.copy())
@@ -240,16 +241,29 @@ def main(argv: Iterable[str] | None = None) -> int:
             raise RuntimeError("Pinned Energy pipeline wrote an incompatible energy-result.json schema.")
         if str(result.get("pipelineVersion") or "") != PIPELINE_VERSION:
             raise RuntimeError("Pinned Energy pipeline wrote an unexpected pipeline version.")
-        if str(result.get("status") or "").upper() != "COMPLETE":
+        if str(result.get("status") or "").upper() == "COMPLETE":
+            try:
+                result = _finalize_complete_result(effective_request, result, output_root)
+                result_path.write_text(json.dumps(result, ensure_ascii=True, indent=2), encoding="utf-8")
+            except Exception as exc:
+                error = f"EN-1/user-output finalization failed: {type(exc).__name__}: {exc}"
+                result["status"] = "FAILED"
+                result["error"] = error
+                result["failureContext"] = {
+                    "failedStage": "FINALIZE_USER_IDENTITY_EN1",
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+                result = promote_failure_evidence(result, output_root)
+                result_path.write_text(json.dumps(result, ensure_ascii=True, indent=2), encoding="utf-8")
+                completed = subprocess.CompletedProcess(command, 2)
+        else:
             result = promote_failure_evidence(result, output_root)
             result_path.write_text(json.dumps(result, ensure_ascii=True, indent=2), encoding="utf-8")
     else:
         result = fallback_result(request, output_root, int(completed.returncode or 1))
         result_path.write_text(json.dumps(result, ensure_ascii=True, indent=2), encoding="utf-8")
 
-    # Preserve the underlying process outcome. The parent worker deliberately
-    # reads energy-result.json even after a nonzero exit and publishes FAILED
-    # diagnostics; a failure must never be disguised as process success.
     return int(completed.returncode or (0 if str(result.get("status") or "").upper() == "COMPLETE" else 2))
 
 

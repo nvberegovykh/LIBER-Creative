@@ -201,7 +201,13 @@ exports.runRevexEnergy = onCall({ timeoutSeconds: 3600, memory: '1GiB', concurre
         projectName: String(project.name || manifest?.sourceModel?.title || projectId),
         bucket: bucketName, outputPrefix,
         artifacts: artifacts.map((row) => ({ name: String(row.name || ''), path: String(row.path || ''), bytes: Number(row.bytes || 0), sha256: String(row.sha256 || '') })),
-        projectSource: { name: String(project.name || ''), code: String(project.code || ''), filingPath: 'NYCECC_APPENDIX_CA_PRM' },
+        projectSource: {
+          name: String(project.name || ''), code: String(project.code || ''), filingPath: 'NYCECC_APPENDIX_CA_PRM',
+          identityOverride: comcheckConsent.projectIdentityOverride || {},
+          en1Applicant: comcheckConsent.en1Applicant || {},
+          en1Modeler: comcheckConsent.en1Modeler || {},
+          identityOverridePolicy: 'USER_PROJECT_IDENTITY_ONLY_FILLS_MISSING_REVIT_FIELDS'
+        },
         comcheckConsent: {
           schema: comcheckConsent.schema, approved: true, projectId, sourceEngineeringRevision: sourceRevision,
           approvedByUid: uid, approvedAt: comcheckConsent.approvedAt, service: comcheckConsent.service,

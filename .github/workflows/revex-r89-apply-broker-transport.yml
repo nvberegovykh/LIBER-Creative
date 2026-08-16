@@ -1,0 +1,41 @@
+name: REVEX r89 apply broker identity transport
+
+on:
+  push:
+    branches: ['agent/revex-r89-*']
+    paths:
+      - '.github/scripts/apply-revex-r89-broker-transport.py'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply exact r89 transport/dependency patch
+        run: python .github/scripts/apply-revex-r89-broker-transport.py
+      - name: Verify syntax and r89 dependency markers
+        shell: pwsh
+        run: |
+          node --check server/firebase-functions/index.js
+          python -m py_compile server/revex-energy-worker/revex_energy_pipeline_guard.py server/revex-energy-worker/revex_user_identity_en1.py
+          $tokens=$null; $errors=$null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1'),[ref]$tokens,[ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
+          python -c "from pathlib import Path; b=Path('server/firebase-functions/index.js').read_text(); g=Path('server/revex-energy-worker/revex_energy_pipeline_guard.py').read_text(); d=Path('server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1').read_text(); i=Path('docs/liber-apps/apps/revex/index.html').read_text(); assert all(x in b for x in ('projectIdentityOverride','en1Applicant','en1Modeler','USER_PROJECT_IDENTITY_ONLY_FILLS_MISSING_REVIT_FIELDS')); assert '_resolve_user_identity_request(request_path, output_root)' in g; assert '_resolve_content_identity_request(request_path, output_root)' in g; assert 'revex_user_identity_en1.py' in d; assert 'verify_user_identity_en1_r89.py' in d; assert 'ui-integrity.js?v=20260816r89-identity-en1' in i; assert 'energy-r27.js?v=20260816r89-nine-output1' in i"
+      - name: Commit r89 dependency patch
+        shell: bash
+        run: |
+          if git diff --quiet; then echo 'No patch needed'; exit 0; fi
+          git config user.name 'REVEX r89 system patch'
+          git config user.email 'actions@users.noreply.github.com'
+          git add server/firebase-functions/index.js server/revex-energy-worker/revex_energy_pipeline_guard.py server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1 docs/liber-apps/apps/revex/index.html
+          git commit -m 'REVEX r89: wire identity transport and cache-busted Companion runtime'
+          git push origin HEAD:${{ github.ref_name }}

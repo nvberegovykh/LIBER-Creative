@@ -82,11 +82,13 @@ function Assert-R69Source {
   $resolver = Join-Path $Root "server\revex-energy-worker\revex_energy_pipeline_r69.py"
   $normalizer = Join-Path $Root "server\revex-energy-worker\revex_energy_identity_normalizer.py"
   $contentAgent = Join-Path $Root "server\revex-energy-worker\revex_identity_content_agent.py"
+  $userIdentity = Join-Path $Root "server\revex-energy-worker\revex_user_identity_en1.py"
   $identityQa = Join-Path $Root "server\revex-energy-worker\verify_identity_normalizer.py"
+  $userIdentityQa = Join-Path $Root "server\revex-energy-worker\verify_user_identity_en1_r89.py"
   $contentQa = Join-Path $Root "server\revex-energy-worker\verify_identity_content_agent.py"
   $guard = Join-Path $Root "server\revex-energy-worker\revex_energy_pipeline_guard.py"
   $docker = Join-Path $Root "server\revex-energy-worker\Dockerfile"
-  foreach ($path in @($resolver,$normalizer,$contentAgent,$identityQa,$contentQa,$guard,$docker,$CloudBuild)) {
+  foreach ($path in @($resolver,$normalizer,$contentAgent,$userIdentity,$identityQa,$contentQa,$userIdentityQa,$guard,$docker,$CloudBuild)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Current Energy source is incomplete: $path" }
   }
   $resolverText = Get-Content -Raw -LiteralPath $resolver
@@ -108,19 +110,25 @@ function Assert-R69Source {
       throw "Project-specific identity branch is forbidden in worker runtime: $forbidden"
     }
   }
-  if (-not $guardText.Contains('import revex_identity_content_agent as content_identity') `
+  if (-not $guardText.Contains('import revex_user_identity_en1 as user_identity') `
+      -or -not $guardText.Contains('_resolve_user_identity_request(request_path, output_root)') `
+      -or -not $guardText.Contains('import revex_identity_content_agent as content_identity') `
       -or -not $guardText.Contains('_resolve_content_identity_request(request_path, output_root)') `
       -or -not $guardText.Contains('import revex_energy_pipeline_r69 as resolver') `
-      -or -not $guardText.Contains('effective_request = _resolve_r69_request(effective_request, output_root)')) {
-    throw "The content-aware identity stage and deterministic fallback are not wired in order behind the preserved Energy failure guard."
+      -or -not $guardText.Contains('effective_request = _resolve_r69_request(effective_request, output_root)') `
+      -or -not $guardText.Contains('finalize_complete_result(request_path, result, output_root)')) {
+    throw "The user fallback, content-aware identity stage, deterministic fallback, and EN-1 finalizer are not wired behind the preserved Energy failure guard."
   }
   foreach ($marker in @(
     'COPY server/revex-energy-worker/revex_energy_identity_normalizer.py',
     'COPY server/revex-energy-worker/revex_identity_content_agent.py',
+    'COPY server/revex-energy-worker/revex_user_identity_en1.py',
+    'COPY server/revex-energy-worker/verify_user_identity_en1_r89.py',
     'COPY server/revex-energy-worker/verify_identity_normalizer.py',
     'COPY server/revex-energy-worker/verify_identity_content_agent.py',
     'python3 /opt/revex/server/verify_identity_normalizer.py',
     'python3 /opt/revex/server/verify_identity_content_agent.py',
+    'python3 /opt/revex/server/verify_user_identity_en1_r89.py',
     'REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py',
     'REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py'
   )) {
