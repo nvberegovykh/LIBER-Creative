@@ -1,0 +1,14 @@
+'use strict';
+const fs=require('fs');
+const index=fs.readFileSync('docs/liber-apps/apps/revex/index.html','utf8');
+const ui=fs.readFileSync('docs/liber-apps/apps/revex/ui-integrity.js','utf8');
+const loader=fs.readFileSync('docs/liber-apps/apps/revex/viewer-interaction-r85-loader.js','utf8');
+const edge=fs.readFileSync('docs/liber-apps/apps/revex/live-worker-edge-r97.js','utf8');
+const requireText=(text,needle,label)=>{if(!text.includes(needle))throw new Error(`${label}: missing ${needle}`)};
+requireText(index,'ui-integrity.js?v=20260816r99-root-cache1','index root cache break');
+requireText(ui,"viewer-interaction-r85-loader.js?v=20260816r98-live-edge2",'ui loader cache break');
+requireText(loader,"import('./live-worker-edge-r97.js?v=20260816r97-live-worker-edge2')",'independent exact-job recovery import');
+requireText(edge,"status==='RUNNING'||status==='COMPLETE'",'running/complete recovery');
+requireText(edge,"status==='FAILED'||status==='INFRASTRUCTURE_FAILED'",'terminal exact failure recovery');
+requireText(edge,'event.stopImmediatePropagation','malformed WebView keyboard guard');
+console.log('REVEX_R99_WEBVIEW_ROOT_CACHE_CHAIN=PASSED');
