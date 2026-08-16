@@ -1,0 +1,33 @@
+name: REVEX r73 Energy topology fallback validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/Liber.Revex.Revit/Revit/RevitRequestHandler.cs'
+      - 'src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.py'
+      - '.github/scripts/verify-revex-r73-energy-topology-fallback.py'
+      - '.github/workflows/revex-r73-energy-topology-fallback.yml'
+  push:
+    branches:
+      - main
+      - 'agent/revex-r73-energy-topology-fallback'
+
+permissions:
+  contents: read
+
+jobs:
+  r73-topology-fallback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify bounded source-topology recovery
+        run: python .github/scripts/verify-revex-r73-energy-topology-fallback.py
+      - name: Preserve Energy and current-generation contracts
+        run: |
+          python .github/scripts/verify-revex-r69-energy-finish.py
+          node .github/scripts/verify-revex-current-generation-r53.js
+          node .github/scripts/verify-revex-r54-selfhost-render.js
