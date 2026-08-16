@@ -1,65 +1,22 @@
 {
-  "schema": "liber.revex.render-model.v2",
-  "engine": "stable-diffusion.cpp",
-  "engineRevision": "de298c225bed97c3f9026b73cd7b71e7879bd41b",
-  "engineLicense": "MIT",
-  "model": "Qwen-Image-Edit-2511-Q4_K_M",
-  "baseModel": "Qwen/Qwen-Image-Edit-2511",
+  "schema": "liber.revex.render-model.v1",
+  "engine": "revex-qwen-image-edit",
+  "model": "Qwen/Qwen-Image-Edit-2511",
+  "revision": "6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9",
   "license": "Apache-2.0",
-  "authentication": "none-public-repositories",
+  "upstream": "https://huggingface.co/Qwen/Qwen-Image-Edit-2511",
+  "authentication": "none-public-repository",
   "runtime": {
+    "pipeline": "QwenImageEditPlusPipeline",
+    "dtype": "bfloat16",
     "gpu": "nvidia-rtx-pro-6000",
     "vramGiB": 96,
-    "concurrency": 1,
-    "downloadedModelBytes": 19034756614,
-    "cloudRunWritableFilesystemLimitGiB": 32,
-    "inference": "GGUF CUDA",
-    "qwenImageZeroCondT": true
+    "concurrency": 1
   },
-  "files": [
-    {
-      "role": "diffusion",
-      "repo": "unsloth/Qwen-Image-Edit-2511-GGUF",
-      "revision": "0d33d9692b4b26212297240d87b0d4719aa4fd06",
-      "path": "qwen-image-edit-2511-Q4_K_M.gguf",
-      "bytes": 13244758624,
-      "sha256": "8677bac90627adbbc11efab87b1870e701c4eb3689ee865a3de8ab81b705a723",
-      "license": "Apache-2.0"
-    },
-    {
-      "role": "llm",
-      "repo": "ggml-org/Qwen2.5-VL-7B-Instruct-GGUF",
-      "revision": "508edd0afaa66bb9e9f40587acc2184f02daf1f6",
-      "path": "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf",
-      "bytes": 4683072032,
-      "sha256": "9258bf05b12686d097ff3b6b18d968ab393649780aa2b3cd67fec43d50554392",
-      "license": "Apache-2.0"
-    },
-    {
-      "role": "llm_vision",
-      "repo": "ggml-org/Qwen2.5-VL-7B-Instruct-GGUF",
-      "revision": "508edd0afaa66bb9e9f40587acc2184f02daf1f6",
-      "path": "mmproj-Qwen2.5-VL-7B-Instruct-Q8_0.gguf",
-      "bytes": 853119712,
-      "sha256": "2ddb555391bae966e412deab9e07b58afa18bcc06930ba0f1c78a3695ab9e506",
-      "license": "Apache-2.0"
-    },
-    {
-      "role": "vae",
-      "repo": "Comfy-Org/Qwen-Image_ComfyUI",
-      "revision": "dfe60a0d63f0b946628080f070978594983b8b6e",
-      "path": "split_files/vae/qwen_image_vae.safetensors",
-      "bytes": 253806246,
-      "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
-      "license": "Apache-2.0"
-    }
-  ],
   "integrity": {
-    "allFilesSha256Pinned": true,
-    "allRepositoriesRevisionPinned": true,
+    "revisionPinned": true,
     "allowMovingMain": false,
     "allowUserModelOverride": false,
-    "allowHuggingFaceTokenRequirement": false,
-    "allowUnverifiedDownload": false
+    "allowHuggingFaceTokenRequirement": false
   }
 }
