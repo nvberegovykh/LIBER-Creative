@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260816r68';
+  const BUILD='20260816r69';
   if(root.__revexUiIntegrityR20) return;
   root.__revexUiIntegrityR20=true;
 
@@ -26,7 +26,7 @@
     if(document.querySelector(`script[data-revex-runtime="${key}"]`))return;
     const script=document.createElement('script');
     script.dataset.revexRuntime=key;script.src=src;script.type=type;
-    script.onerror=()=>root.__revexBrowserDiagnostics?.emit?.('ERROR','R68_RUNTIME',`Could not load ${src}.`,{initiator:'ui integrity loader'});
+    script.onerror=()=>root.__revexBrowserDiagnostics?.emit?.('ERROR','R69_RUNTIME',`Could not load ${src}.`,{initiator:'ui integrity loader'});
     document.head.appendChild(script);
   }
 
@@ -40,19 +40,20 @@
     document.head.appendChild(script);
   }
 
-  function loadR68Repairs(){
+  function loadCurrentRepairs(){
     loadScript('docs-pages-r68.js?v=20260816r68-doc-pages1','docs-pages-r68');
     loadScript('energy-diagnostics-r68.js?v=20260816r68-energy-diagnostics1','energy-diagnostics-r68');
     loadScript('viewer-polish-r68.js?v=20260816r68-viewer-polish1','viewer-polish-r68','module');
+    loadScript('finish-type-r69.js?v=20260816r69-finish-type1','finish-type-r69');
   }
 
   function bind(){
     const select=document.getElementById('project-select');
     if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}
-    updateProjectId();enforceLabels();loadReviewIntegrity();loadR68Repairs();
+    updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();
   }
 
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
   setTimeout(bind,250);setTimeout(bind,1000);
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',labels:'source-text',reviewRuntime:'r49-review2',docsPages:'real-single-page-pdf',viewerPolish:'r68',energyFailureEvidence:'exact',spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',labels:'source-text',reviewRuntime:'r49-review2',docsPages:'real-single-page-pdf',viewerPolish:'r68',energyFailureEvidence:'exact',finishColor:'same-type-separate-commit',spatialObjects:'invisible'});
 })(window);
