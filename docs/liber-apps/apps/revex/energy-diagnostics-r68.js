@@ -1,16 +1,16 @@
 (function(root){
   'use strict';
-  const BUILD='20260816r87-energy-replay1';
+  const BUILD='20260816r89-energy-replay2';
   const failureName=/02_GEOMETRYCO\.log|FAILURE_(?:REPORT\.json|SUMMARY\.txt)|REVEX-ENERGY-PIPELINE\.jsonl|NATIVE_CHECK_|eplusout\.err|REVEX_OPENSTUDIO_RUN\.log/i;
   const clean=v=>String(v??'').trim();
   const esc=v=>String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const state=()=>root.__revexState||{};
   const projectId=()=>clean(state().projectId||new URLSearchParams(location.search).get('projectId'));
-  let running=false,lastStaleSig='';
+  let running=false,lastStaleSig='',lastHistoricalSig='',managedStage='',managedRevision='';
 
   function Store(){return root.RevexStore;}
   function diagnostic(level,stage,message,detail={}){
-    try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'energy diagnostics r87',...detail});}catch(_){}
+    try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'energy diagnostics r89',...detail});}catch(_){}
   }
   async function artifactUrl(row){
     if(row?.url)return row.url;
@@ -66,7 +66,21 @@
       diagnostic('INFO','ENERGY_STALE_FAILURE_IGNORED','An older Energy failure was not shown as the status of the current Engineering revision.',{currentRevision:current,failedRevision});
     }
   }
-  async function inspect(){
+  function replayOwnsRevision(current){
+    if(!current||managedRevision!==current)return false;
+    return ['CONSENT_REQUIRED','CONSENT_RECORDED','BROKER_RUNNING','BROKER_PASSED','RESULT_WAIT','CLOUD_UPLOAD_PASSED'].includes(managedStage);
+  }
+  function hidePreviousFailureDuringReplay(current,box){
+    box.hidden=true;box.innerHTML='';
+    const run=document.getElementById('energy-run-status');
+    if(run&&run.dataset.tone==='bad')run.dataset.tone='quiet';
+    const sig=`${current}|${managedStage}`;
+    if(sig!==lastHistoricalSig){
+      lastHistoricalSig=sig;
+      diagnostic('INFO','ENERGY_PREVIOUS_FAILURE_SUPPRESSED','The previous failed attempt is suppressed while this published revision is being replayed.',{currentRevision:current,managedStage});
+    }
+  }
+  async function inspect(mode='historical'){
     if(running)return;
     const id=projectId(),store=Store();
     if(!id||!store?.getEnergyResult||!store?.getEngineeringState)return;
@@ -85,6 +99,10 @@
       if(status!=='FAILED'){
         box.hidden=true;box.innerHTML='';return;
       }
+      if(replayOwnsRevision(current)&&mode!=='current-failure'){
+        hidePreviousFailureDuringReplay(current,box);
+        return;
+      }
       const rows=(Array.isArray(result?.artifacts)?result.artifacts:[]).filter(row=>failureName.test(clean(row?.name))||clean(row?.kind).toLowerCase()==='diagnostic');
       const geometry=rows.find(row=>/02_GEOMETRYCO\.log/i.test(clean(row?.name)))||null;
       const links=[];
@@ -102,11 +120,20 @@
           }
         }catch(error){diagnostic('WARN','ENERGY_FAILURE_LOG_READ',error?.message||String(error));}
       }
+      const currentFailure=mode==='current-failure';
       box.hidden=false;
-      box.innerHTML=`<div class="eyebrow">EXACT WORKER FAILURE</div><strong>${esc(result?.manifest?.failureContext?.failedStage||'Energy pipeline')}</strong><p>${esc(exact)}</p>${links.length?`<div class="energy-exact-failure-links">${links.join('')}</div>`:''}<small>Failure evidence belongs to immutable Engineering revision ${esc(failedRevision||'—')}. A server-side repair can replay this published revision without regenerating Revit evidence.</small>`;
+      box.innerHTML=`<div class="eyebrow">${currentFailure?'EXACT WORKER FAILURE':'PREVIOUS ATTEMPT FAILURE'}</div><strong>${esc(result?.manifest?.failureContext?.failedStage||'Energy pipeline')}</strong><p>${esc(exact)}</p>${links.length?`<div class="energy-exact-failure-links">${links.join('')}</div>`:''}<small>${currentFailure?'This failure was returned by the current replay.':'This is preserved evidence from the previous attempt; it is not a new failure on page load.'} Immutable Engineering revision ${esc(failedRevision||'—')} can be replayed without regenerating Revit evidence.</small>`;
       const run=document.getElementById('energy-run-status');
-      if(run&&exact&&!run.textContent.includes(exact)){run.textContent=`${result?.manifest?.failureContext?.failedStage||'Energy'}: ${exact}`;run.dataset.tone='bad';}
-      diagnostic('ERROR','ENERGY_EXACT_FAILURE',exact,{projectId:id,revision:failedRevision,artifactCount:rows.length,replayable:sameCurrentFailure(source,result)});
+      if(run&&exact){
+        if(currentFailure){run.textContent=`${result?.manifest?.failureContext?.failedStage||'Energy'}: ${exact}`;run.dataset.tone='bad';}
+        else if(run.dataset.tone==='bad'){run.textContent=`Previous attempt failed. Retry published revision to run the repaired server chain.`;run.dataset.tone='quiet';}
+      }
+      if(currentFailure){
+        diagnostic('ERROR','ENERGY_EXACT_FAILURE',exact,{projectId:id,revision:failedRevision,artifactCount:rows.length,replayable:sameCurrentFailure(source,result)});
+      }else{
+        const sig=`${failedRevision}|${exact}`;
+        if(sig!==lastHistoricalSig){lastHistoricalSig=sig;diagnostic('INFO','ENERGY_PREVIOUS_FAILURE_AVAILABLE','Preserved failure evidence from the previous attempt is available; no new worker failure occurred on page load.',{projectId:id,revision:failedRevision,artifactCount:rows.length});}
+      }
     }catch(error){diagnostic('WARN','ENERGY_DIAGNOSTICS',error?.message||String(error));}
     finally{running=false;}
   }
@@ -117,13 +144,18 @@
   function install(){
     if(root.__revexEnergyDiagnosticsR68)return;
     root.__revexEnergyDiagnosticsR68={build:BUILD,inspect};
-    root.addEventListener('revex:energy-open',()=>setTimeout(inspect,0));
+    root.addEventListener('revex:energy-open',()=>setTimeout(()=>inspect('historical'),0));
     root.addEventListener('revex:managed-energy-status',event=>{
-      if(['BROKER_FAILED','BROKER_PASSED','CLOUD_UPLOAD_PASSED','CONSENT_REQUIRED'].includes(event.detail?.stage))setTimeout(inspect,250);
+      const stage=clean(event.detail?.stage).toUpperCase();
+      const revision=clean(event.detail?.revision);
+      if(stage)managedStage=stage;
+      if(revision)managedRevision=revision;
+      if(stage==='BROKER_FAILED')setTimeout(()=>inspect('current-failure'),250);
+      else if(['BROKER_RUNNING','BROKER_PASSED','RESULT_WAIT','CLOUD_UPLOAD_PASSED','CONSENT_REQUIRED','CONSENT_RECORDED'].includes(stage))setTimeout(()=>inspect('historical'),150);
     });
-    root.addEventListener('revex:managed-energy-result',()=>setTimeout(inspect,0));
-    root.addEventListener('revex:source-revision-loaded',()=>setTimeout(inspect,0));
-    if(!document.getElementById('view-energy')?.hidden)setTimeout(inspect,0);
+    root.addEventListener('revex:managed-energy-result',()=>setTimeout(()=>inspect(managedStage==='BROKER_FAILED'?'current-failure':'historical'),0));
+    root.addEventListener('revex:source-revision-loaded',()=>setTimeout(()=>inspect('historical'),0));
+    if(!document.getElementById('view-energy')?.hidden)setTimeout(()=>inspect('historical'),0);
   }
   const wait=()=>{if(Store()&&root.__revexState){install();return;}setTimeout(wait,50);};
   wait();
