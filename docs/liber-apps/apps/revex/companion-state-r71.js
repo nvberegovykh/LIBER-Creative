@@ -22,6 +22,23 @@
     try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'companion state r71',...detail});}catch(_){}
   }
 
+  function formatWhen(value){
+    if(!value)return'';
+    const date=value?.toDate?value.toDate():new Date(value);
+    return Number.isNaN(date?.getTime?.())?'':date.toLocaleString();
+  }
+
+  function architexturesSourceUrl(value){
+    const url=text(value);
+    return /^https:\/\/(www\.)?architextures\.org\//i.test(url)?url:'';
+  }
+
+  function architexturesEditUrl(value){
+    const url=architexturesSourceUrl(value);
+    const match=url.match(/^https:\/\/(?:www\.)?architextures\.org\/(?:textures|create)\/(\d+)/i);
+    return match?`https://architextures.org/create/${match[1]}`:'';
+  }
+
   async function listAppearances(projectId){
     if(!projectId)return[];
     if(typeof Store.listBimAppearances==='function')return Store.listBimAppearances(projectId);
@@ -53,7 +70,9 @@
     if(preview){preview.hidden=!row.texture?.assetUrl;if(row.texture?.assetUrl)preview.src=row.texture.assetUrl;else preview.removeAttribute('src');}
     let live=box.querySelector('[data-r71-live-state]');
     if(!live){live=document.createElement('small');live.dataset.r71LiveState='1';live.className='muted';box.appendChild(live);}
-    live.textContent=row.updatedAt?`Live project appearance · ${new Date(row.updatedAt).toLocaleString()}`:'No committed appearance at this scope.';
+    const when=formatWhen(row.updatedAt);
+    live.textContent=when?`Live project appearance · ${when}`:'No committed appearance at this scope.';
+    syncSourceButtons(box);
   }
 
   function publishAppearanceRows(projectId,rows,source){
@@ -97,15 +116,37 @@
     }catch(error){diagnostic('ERROR','BIM_APPEARANCE_HYDRATE',error?.message||String(error),{projectId});}
   }
 
-  function bindSourceOpen(){
-    const box=document.querySelector('#bim-inspector [data-r70-box]');
-    if(!box||box.querySelector('[data-r71-open-source]'))return;
+  function syncSourceButtons(box){
+    if(!box)return;
     const source=box.querySelector('[data-r70-source]');
     if(!source)return;
-    const button=document.createElement('button');
-    button.type='button';button.className='button ghost compact';button.dataset.r71OpenSource='1';button.textContent='Open selected source';
-    button.addEventListener('click',()=>{const url=text(source.value);if(/^https:\/\/(www\.)?architextures\.org\//i.test(url))root.open(url,'_blank','noopener');});
-    source.insertAdjacentElement('afterend',button);
+    const sourceUrl=architexturesSourceUrl(source.value);
+    const editUrl=architexturesEditUrl(source.value);
+    const open=box.querySelector('[data-r71-open-source]');
+    const edit=box.querySelector('[data-r71-edit-source]');
+    if(open)open.disabled=!sourceUrl;
+    if(edit)edit.disabled=!editUrl;
+  }
+
+  function bindSourceOpen(){
+    const box=document.querySelector('#bim-inspector [data-r70-box]');
+    if(!box)return;
+    const source=box.querySelector('[data-r70-source]');
+    if(!source)return;
+    if(!box.querySelector('[data-r71-open-source]')){
+      const button=document.createElement('button');
+      button.type='button';button.className='button ghost compact';button.dataset.r71OpenSource='1';button.textContent='Open selected source';
+      button.addEventListener('click',()=>{const url=architexturesSourceUrl(source.value);if(url)root.open(url,'_blank','noopener');});
+      source.insertAdjacentElement('afterend',button);
+    }
+    if(!box.querySelector('[data-r71-edit-source]')){
+      const button=document.createElement('button');
+      button.type='button';button.className='button ghost compact';button.dataset.r71EditSource='1';button.textContent='Edit in Architextures';
+      button.addEventListener('click',()=>{const url=architexturesEditUrl(source.value);if(url)root.open(url,'_blank','noopener');});
+      box.querySelector('[data-r71-open-source]')?.insertAdjacentElement('afterend',button);
+    }
+    if(!source.dataset.r71SourceBound){source.dataset.r71SourceBound='1';source.addEventListener('input',()=>syncSourceButtons(box));}
+    syncSourceButtons(box);
   }
 
   function currentProject(){return text(state()?.projectId||document.getElementById('project-select')?.value);}
