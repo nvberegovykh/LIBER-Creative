@@ -136,7 +136,9 @@ new = r'''    @staticmethod
 
 patched = text[:start] + new + text[end:]
 assert patched.count("def _set_clean_project_header") == 1
-assert patched.count("ProjectView.updateProjectInfo") == 3  # availability check + call + failure label
+# Exact occurrences in the replacement: availability check, unavailable error text,
+# actual DWR call, and failure error text.
+assert patched.count("ProjectView.updateProjectInfo") == 4
 assert "ProjectService.getCurrentProject" in patched
 assert "250 MIDWOOD" not in patched.upper()
 assert "79 WINTHROP" not in patched.upper()
