@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import './design-versions-r52.js';
+import './render-selfhost-r54.js';
 
-const BUILD = '20260815r49-workspace2';
+const BUILD = '20260816r54-workspace3';
 const state = window.__revexState;
 const $ = (selector, root = document) => root.querySelector(selector);
 
@@ -219,7 +220,7 @@ if (!window.__revexWorkspaceR51) {
       };
     }
     applyPresentation(v);
-    diagnostic('INFO', 'WORKSPACE_R51', 'Lightweight material nuance, object outlines, clean render capture, ACC-like Walk, and Design Book Property versions installed.');
+    diagnostic('INFO', 'WORKSPACE_R51', 'Viewer function preserved: source geometry, lightweight presentation, clean render capture, ACC-like Walk, Design Book Property versions, and off-device rendering are installed.');
     return true;
   }
 
@@ -236,6 +237,8 @@ if (!window.__revexWorkspaceR51) {
     cleanRenderReference: true,
     accLikeWalk: true,
     designPropertyVersions: true,
+    selfHostedRender: true,
+    browserInference: false,
     spatialObjectsVisible: false
   });
 }
