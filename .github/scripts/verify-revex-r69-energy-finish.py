@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 WRAPPER = ROOT / 'server/revex-energy-worker/revex_energy_pipeline_r69.py'
@@ -53,9 +54,6 @@ resolved_local, identity_local = r69._resolve_identity(local_only, lambda _: {})
 assert identity_local['city'] == 'Queens' and identity_local['state'] == 'NY' and identity_local['zip'] == '11375'
 assert resolved_local['locationResolution']['provider'] is None
 
-# Exact current-project titleblock / Project Address form observed on 250 Midwood:
-# the street and locality may be separated by a newline. This must resolve solely
-# from immutable Revit evidence and must never require a template or outside lookup.
 midwood_address = '250 MIDWOOD STREET,\nBROOKLYN, NY 11225'
 midwood_calls = []
 resolved_midwood, identity_midwood = r69._resolve_identity({
@@ -69,6 +67,52 @@ assert identity_midwood['zip'] == '11225'
 assert resolved_midwood['locationResolution']['provider'] is None
 assert resolved_midwood['locationResolution']['remainingMissing'] == []
 assert midwood_calls == [], 'current Midwood address already contains location; Census must not be called'
+
+# Exact live failure topology: reduced page facts have only the street, while the raw
+# active-Revit evidence graph carries 765 Project Information/titleblock fields.  The
+# resolver must consume that verified raw artifact instead of pretending those fields do
+# not exist.  Consultant addresses on the same titleblock must not win.
+with tempfile.TemporaryDirectory(prefix='revex-r82-identity-') as temp:
+    folder = Path(temp)
+    digest = 'a' * 64
+    raw_identity_path = folder / 'revit-project-identity.json'
+    manifest_path = folder / 'engineering-sync.json'
+    raw_identity_path.write_text(json.dumps({
+        'schema': 'liber.revex.revit-project-identity.v1',
+        'authority': 'active-revit-document-t-z-title-evidence',
+        'digest': digest,
+        'displayName': '250 Midwood Street',
+        'fields': {
+            'project.Project Name': '250 Midwood Street',
+            'project.Address': '250 MIDWOOD STREET',
+            'sheet.T001.titleBlock.Project Address': '250 MIDWOOD STREET,\nBROOKLYN, NY 11225',
+            'sheet.T001.titleBlock.Consultant Address': '2259 BEDFORD AVENUE, BROOKLYN, NY 11219',
+            'sheet.T001.titleBlock.Engineer Address': '7407 13TH AVE, BROOKLYN, NY 11228',
+        },
+    }), encoding='utf-8')
+    manifest_path.write_text(json.dumps({
+        'schema': 'liber.revex.engineering-sync.v1',
+        'projectBinding': {'identityEvidenceDigest': digest},
+    }), encoding='utf-8')
+    request = {
+        'engineeringManifestPath': str(manifest_path),
+        'sourceArtifacts': [str(raw_identity_path)],
+    }
+    raw_calls = []
+    resolved_raw, identity_raw = r69._resolve_identity({
+        'schema': 'liber.revex.revit-page-facts.v1',
+        'structuredIdentity': {'title': '250 Midwood Street', 'address': '250 MIDWOOD STREET'},
+        'pages': [],
+    }, lambda identity: raw_calls.append(dict(identity)) or {}, request=request)
+    assert identity_raw['address'].upper().startswith('250 MIDWOOD STREET')
+    assert identity_raw['city'].upper() == 'BROOKLYN'
+    assert identity_raw['state'] == 'NY'
+    assert identity_raw['zip'] == '11225'
+    assert resolved_raw['locationResolution']['remainingMissing'] == []
+    assert resolved_raw['locationResolution']['provider'] is None
+    assert raw_calls == [], 'verified raw Revit/titleblock evidence must resolve before Census'
+    assert '11219' not in json.dumps(resolved_raw['structuredIdentity'])
+    assert '11228' not in json.dumps(resolved_raw['structuredIdentity'])
 
 unresolved_facts = {'structuredIdentity': {'title': 'Unknown project'}, 'pages': []}
 unresolved, unresolved_identity = r69._resolve_identity(unresolved_facts, lambda _: {})
@@ -89,6 +133,9 @@ energy_diag_text = ENERGY_DIAGNOSTICS.read_text(encoding='utf-8')
 assert 'geocoding.geo.census.gov/geocoder/locations/onelineaddress' in wrapper_text
 assert 'derived-only-from-immutable-active-Revit-address' in wrapper_text
 assert '00_PAGE_FACTS_RESOLVED_R69.json' in wrapper_text
+assert '_verified_raw_revit_identity' in wrapper_text
+assert '_location_from_raw_fields' in wrapper_text
+assert '_location_from_revit_pdfs' in wrapper_text
 assert 'import revex_energy_pipeline_r69 as resolver' in guard_text
 assert '_resolve_r69_request(request_path, output_root)' in guard_text
 assert 'COPY server/revex-energy-worker/revex_energy_pipeline_r69.py' in docker_text
@@ -102,7 +149,6 @@ assert 'if ($script:NativeExitCode -ne 0 -or @($active).Count -eq 0)' in deploy_
 assert 'if ($script:NativeExitCode -ne 0 -or -not $CloudBuildSa)' in deploy_text
 assert 'if ($script:NativeExitCode -ne 0) { throw "Energy worker deployed but could not be re-read." }' in deploy_text
 
-# r75/r79 successor: one persistent appearance state owner and incremental renderer.
 assert "revexKind:'bim-appearance'" in appearance_text
 assert "Store.saveBimAppearance=save" in appearance_text
 assert "Store.subscribeKind(projectId,'bim-appearance'" in appearance_text
@@ -127,13 +173,21 @@ assert 'ENERGY_STALE_FAILURE_IGNORED' in energy_diag_text
 assert "failedRevision!==current" in energy_diag_text
 assert "loadScript('appearance-r70.js" not in ui_text
 assert "loadScript('docs-pages-r68.js" not in ui_text
-# Core Docs page navigation remains lightweight: one source PDF, native #page positioning.
 assert "const url = page ? `${base}#page=${page}` : base;" in app_text
 
 print(json.dumps({
-    'schema': 'liber.revex.r80-energy-appearance-qa.v1',
+    'schema': 'liber.revex.r82-energy-identity-qa.v1',
     'status': 'PASSED',
-    'energyIdentity': {'immutableSource': True, 'derivedLocation': True, 'midwoodCombinedAddress': True, 'fabricationBlocked': True, 'r55GuardPreserved': True},
+    'energyIdentity': {
+        'immutableSource': True,
+        'rawRevitFieldsWired': True,
+        'midwoodCombinedAddress': True,
+        'consultantAddressRejected': True,
+        'revitPdfFallbackWired': True,
+        'censusLastResortOnly': True,
+        'fabricationBlocked': True,
+        'r55GuardPreserved': True,
+    },
     'energyDiagnostics': {'revisionScoped': True, 'staleFailureHidden': True},
     'deployment': {'nativeExitCodeAuthoritative': True, 'stderrCannotFalseFail': True, 'workerOnlyPreserved': True},
     'docs': {'nativePdfPagePositioning': True, 'mainThreadPdfSplitterDisabled': True},
