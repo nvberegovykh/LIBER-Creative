@@ -1,0 +1,40 @@
+name: REVEX r87 one-shot COMcheck project-details source patch
+
+on:
+  push:
+    branches: ['agent/revex-r87-energy-identity-retry']
+    paths:
+      - '.github/scripts/apply-revex-r87-comcheck-project-details.py'
+      - '.github/workflows/revex-r87-apply-comcheck-project-details.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-once:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/revex-r87-energy-identity-retry
+          fetch-depth: 2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply exact isolated method replacement
+        run: python .github/scripts/apply-revex-r87-comcheck-project-details.py
+      - name: Compile complete COMcheck source after patch
+        run: python -m py_compile src/Liber.Revex.Revit/Engineering/Energy/comcheck_backstop.py
+      - name: Prove patch scope
+        run: |
+          git diff --check
+          git diff --stat
+          test "$(git diff --name-only | wc -l)" -eq 1
+          test "$(git diff --name-only)" = "src/Liber.Revex.Revit/Engineering/Energy/comcheck_backstop.py"
+      - name: Commit exact source repair to this branch
+        run: |
+          git config user.name 'REVEX r87 QA'
+          git config user.email '116811305+nvberegovykh@users.noreply.github.com'
+          git add src/Liber.Revex.Revit/Engineering/Energy/comcheck_backstop.py
+          git commit -m 'REVEX r87: persist COMcheck project details through official DWR model'
+          git push origin HEAD:agent/revex-r87-energy-identity-retry
