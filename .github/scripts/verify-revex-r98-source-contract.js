@@ -8,6 +8,8 @@ const docker = read('server/revex-energy-worker/Dockerfile');
 const helper = read('server/revex-energy-worker/revex_cloud_project.py');
 const agent = read('server/revex-energy-worker/revex_identity_content_agent.py');
 const repair = read('REPAIR_REVEX_ENERGY_VERTEX_BINDING_CURRENT.ps1');
+const ui = read('docs/liber-apps/apps/revex/ui-integrity.js');
+const loader = read('docs/liber-apps/apps/revex/viewer-interaction-r85-loader.js');
 
 for (const [name,text] of [['worker-only',workerOnly],['full',full]]) {
   if (!text.includes('REVEX_VERTEX_PROJECT=$VertexProject')) throw new Error(`${name}: Vertex project not passed to Cloud Run`);
@@ -24,8 +26,11 @@ for (const marker of [
 for (const marker of ['REVEX_VERTEX_PROJECT','GOOGLE_CLOUD_PROJECT','GCLOUD_PROJECT','google.auth.default','not a valid substitute'])
   if (!helper.includes(marker)) throw new Error(`cloud resolver missing ${marker}`);
 if (!agent.includes('project = resolve_vertex_project()')) throw new Error('content identity agent is not using the authoritative cloud project resolver');
-if (!repair.includes("'--update-env-vars'")) throw new Error('fast repair is not env-only');
+for (const marker of ['aiplatform.googleapis.com','roles/aiplatform.user','roles/storage.objectAdmin',"'--update-env-vars'",'roles/run.invoker'])
+  if (!repair.includes(marker)) throw new Error(`fast repair dependency proof missing ${marker}`);
 if (/builds["', ]+submit|run["', ]+deploy|firebase["', ]+deploy/.test(repair)) throw new Error('fast repair unexpectedly rebuilds or deploys code');
+if (!ui.includes('viewer-interaction-r85-loader.js?v=20260816r98-live-edge2')) throw new Error('Revit WebView can retain a pre-r97 viewer loader');
+if (!loader.includes("import('./live-worker-edge-r97.js?v=20260816r97-live-worker-edge2')")) throw new Error('r97 exact-job recovery is not independently loaded');
 for (const forbidden of ['250 MIDWOOD','79 WINTHROP']) {
   if ((helper+'\n'+agent).toUpperCase().includes(forbidden)) throw new Error(`project-specific runtime branch found: ${forbidden}`);
 }
