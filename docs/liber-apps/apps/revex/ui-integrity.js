@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260816r85';
+  const BUILD='20260816r85.1';
   if(root.__revexUiIntegrityR20) return;
   root.__revexUiIntegrityR20=true;
 
@@ -47,15 +47,15 @@
   function loadReviewIntegrity(){if(document.querySelector('script[data-revex-review-integrity]'))return;const script=document.createElement('script');script.type='module';script.dataset.revexReviewIntegrity='1';script.src='review-integrity-r50.js?v=20260813r49-review2';script.onerror=()=>root.__revexBrowserDiagnostics?.emit?.('ERROR','REVIEW_RUNTIME','Could not load review-integrity-r50.js.',{initiator:'ui integrity loader'});document.head.appendChild(script);}
   function loadCurrentRepairs(){
     // r75 remains the persistent BIM appearance/filter/material owner. r85 is the
-    // single successor for the interaction seams formerly repaired by r79 and now
-    // also owns mobile BIM panels, deterministic deselection, Section-box selection,
-    // world-space Walk level placement and the Restore All click endpoint.
+    // single successor for the interaction seams formerly repaired by r79. The
+    // tiny r85 loader is not a state owner; it waits until DOM parsing/import-map
+    // registration completes, then imports the one interaction runtime.
     loadScript('energy-diagnostics-r68.js?v=20260816r80-energy-diagnostics1','energy-diagnostics-r68');
     loadScript('viewer-polish-r68.js?v=20260816r68-viewer-polish1','viewer-polish-r68','module');
     loadScript('appearance-state-r75.js?v=20260816r75-appearance1','appearance-state-r75');
     loadScript('viewer-runtime-r75.js?v=20260816r75-viewer1','viewer-runtime-r75');
     loadScript('companion-runtime-r75.js?v=20260816r75-companion1','companion-runtime-r75');
-    loadScript('viewer-interaction-r85.js?v=20260816r85-viewer-interaction1','viewer-interaction-r85','module');
+    loadScript('viewer-interaction-r85-loader.js?v=20260816r85-viewer-loader1','viewer-interaction-r85-loader');
   }
   function bind(){installCanonicalOverlayStore();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
   loadReviewIntegrity();loadCurrentRepairs();if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
