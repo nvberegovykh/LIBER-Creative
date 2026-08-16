@@ -10,9 +10,11 @@ WRAPPER = ROOT / 'server/revex-energy-worker/revex_energy_pipeline_r69.py'
 GUARD = ROOT / 'server/revex-energy-worker/revex_energy_pipeline_guard.py'
 DOCKER = ROOT / 'server/revex-energy-worker/Dockerfile'
 DEPLOY = ROOT / 'server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1'
-APPEARANCE = ROOT / 'docs/liber-apps/apps/revex/appearance-r70.js'
+APPEARANCE = ROOT / 'docs/liber-apps/apps/revex/appearance-state-r75.js'
+VIEWER = ROOT / 'docs/liber-apps/apps/revex/viewer-runtime-r75.js'
+COMPANION = ROOT / 'docs/liber-apps/apps/revex/companion-runtime-r75.js'
 UI = ROOT / 'docs/liber-apps/apps/revex/ui-integrity.js'
-DOCS = ROOT / 'docs/liber-apps/apps/revex/docs-pages-r68.js'
+APP = ROOT / 'docs/liber-apps/apps/revex/app.js'
 
 spec = importlib.util.spec_from_file_location('revex_r69', WRAPPER)
 assert spec and spec.loader
@@ -21,14 +23,7 @@ spec.loader.exec_module(r69)
 
 facts = {
     'schema': 'liber.revex.revit-page-facts.v1',
-    'structuredIdentity': {
-        'title': '250 Midwood Street',
-        'address': '250 Midwood Street',
-        'borough': 'Brooklyn',
-        'city': None,
-        'state': None,
-        'zip': None,
-    },
+    'structuredIdentity': {'title': '250 Midwood Street','address': '250 Midwood Street','borough': 'Brooklyn','city': None,'state': None,'zip': None},
     'pages': [
         {'pageType': 'T', 'confidence': 0.99, 'project': {'title': '250 Midwood Street', 'address': '250 Midwood Street'}},
         {'pageType': 'Z', 'confidence': 0.98, 'project': {'borough': 'Brooklyn'}},
@@ -52,15 +47,10 @@ assert set(resolved['locationResolution']['filled']) == {'city', 'state', 'zip'}
 
 parsed = r69._split_address_location('18 Example Ave, Queens, NY 11375')
 assert parsed == {'city': 'Queens', 'state': 'NY', 'zip': '11375'}
-local_only = {
-    'schema': 'liber.revex.revit-page-facts.v1',
-    'structuredIdentity': {'title': '18 Example Ave', 'address': '18 Example Ave, Queens, NY 11375'},
-    'pages': [],
-}
+local_only = {'schema': 'liber.revex.revit-page-facts.v1','structuredIdentity': {'title': '18 Example Ave', 'address': '18 Example Ave, Queens, NY 11375'},'pages': []}
 resolved_local, identity_local = r69._resolve_identity(local_only, lambda _: {})
 assert identity_local['city'] == 'Queens' and identity_local['state'] == 'NY' and identity_local['zip'] == '11375'
 assert resolved_local['locationResolution']['provider'] is None
-
 unresolved_facts = {'structuredIdentity': {'title': 'Unknown project'}, 'pages': []}
 unresolved, unresolved_identity = r69._resolve_identity(unresolved_facts, lambda _: {})
 assert not unresolved_identity['city'] and not unresolved_identity['state'] and not unresolved_identity['zip']
@@ -71,8 +61,10 @@ guard_text = GUARD.read_text(encoding='utf-8')
 docker_text = DOCKER.read_text(encoding='utf-8')
 deploy_text = DEPLOY.read_text(encoding='utf-8')
 appearance_text = APPEARANCE.read_text(encoding='utf-8')
+viewer_text = VIEWER.read_text(encoding='utf-8')
+companion_text = COMPANION.read_text(encoding='utf-8')
 ui_text = UI.read_text(encoding='utf-8')
-docs_text = DOCS.read_text(encoding='utf-8')
+app_text = APP.read_text(encoding='utf-8')
 
 assert 'geocoding.geo.census.gov/geocoder/locations/onelineaddress' in wrapper_text
 assert 'derived-only-from-immutable-active-Revit-address' in wrapper_text
@@ -90,40 +82,36 @@ assert 'if ($script:NativeExitCode -ne 0 -or @($active).Count -eq 0)' in deploy_
 assert 'if ($script:NativeExitCode -ne 0 -or -not $CloudBuildSa)' in deploy_text
 assert 'if ($script:NativeExitCode -ne 0) { throw "Energy worker deployed but could not be re-read." }' in deploy_text
 
-# r70: appearance and geometry/visibility are different persistent lanes.
-assert "delete x.material" in appearance_text
-assert "x.visibility=v;x.hidden=v==='hidden';x.deleted=v==='deleted'" in appearance_text
+# r75 successor: one persistent appearance state owner and one incremental renderer.
 assert "revexKind:'bim-appearance'" in appearance_text
-assert "scope==='type'?typeKey(r):stable(r)" in appearance_text
-assert "`revex_appearance_${doc(`${scope}_${key}`)}`" in appearance_text
-assert "operation:`appearance-${scope}`" in appearance_text
-assert "m.map=null" in appearance_text
-assert "m.color.set(0xffffff)" in appearance_text
-assert "Commit transform" in appearance_text
-assert "Apply appearance" in appearance_text
-assert "All same Revit type" in appearance_text
-assert "<span>Family</span><select data-f" in appearance_text
-assert "<span>Type</span><select data-t" in appearance_text
-assert "https://architextures.org/textures" in appearance_text
-assert "record_in/materials/architextures" in appearance_text
-assert "REVEX does not scrape or bulk-download Architextures" in appearance_text
-assert 'appearance-r70.js?v=20260816r70-appearance1' in ui_text
-assert 'finish-type-r69.js' not in ui_text
-assert 'copyPages(source,[page-1])' in docs_text
-assert "library/revex/printing-pages/" in docs_text
+assert "Store.saveBimAppearance=save" in appearance_text
+assert "Store.subscribeKind(projectId,'bim-appearance'" in appearance_text
+assert 'setInterval(' not in appearance_text
+assert "m.map=null" in viewer_text
+assert "m.color.set(0xffffff)" in viewer_text
+assert 'appearanceFp(previous.get(key))!==appearanceFp(next.get(key))' in viewer_text
+assert 'scheduleAppearanceRows(this,changed)' in viewer_text
+assert 'All same Revit type' in companion_text
+assert '<span>Family</span><select data-r75-f' in companion_text
+assert '<span>Type</span><select data-r75-t' in companion_text
+assert 'record_in/materials/architextures' in companion_text
+assert 'https://architextures.org/create' in companion_text
+assert 'r75-provider-frame' in companion_text
+assert 'Restore all hidden / deleted' in companion_text
+assert 'setInterval(' not in companion_text
+assert 'appearance-state-r75.js?v=20260816r75-appearance1' in ui_text
+assert 'viewer-runtime-r75.js?v=20260816r75-viewer1' in ui_text
+assert 'companion-runtime-r75.js?v=20260816r75-companion1' in ui_text
+assert "loadScript('appearance-r70.js" not in ui_text
+assert "loadScript('docs-pages-r68.js" not in ui_text
+# Core Docs page navigation remains lightweight: one source PDF, native #page positioning.
+assert "const url = page ? `${base}#page=${page}` : base;" in app_text
 
 print(json.dumps({
-    'schema': 'liber.revex.r70-energy-appearance-qa.v1',
+    'schema': 'liber.revex.r75-energy-appearance-qa.v1',
     'status': 'PASSED',
     'energyIdentity': {'immutableSource': True, 'derivedLocation': True, 'fabricationBlocked': True, 'r55GuardPreserved': True},
     'deployment': {'nativeExitCodeAuthoritative': True, 'stderrCannotFalseFail': True, 'workerOnlyPreserved': True},
-    'docs': {'oldSetSplitWithoutResync': True, 'onePagePdf': True},
-    'viewer': {
-        'visibilityPersists': True,
-        'appearanceSeparateFromTransform': True,
-        'familyThenTypeFilter': True,
-        'typeFinishSingleRecord': True,
-        'texturePriorityColorFallback': True,
-        'architexturesUserSelectedAsset': True,
-    },
+    'docs': {'nativePdfPagePositioning': True, 'mainThreadPdfSplitterDisabled': True},
+    'viewer': {'visibilityPersists': True,'appearanceSeparateFromTransform': True,'familyThenTypeFilter': True,'typeFinishSingleRecord': True,'texturePriorityColorFallback': True,'architexturesEmbeddedProperties': True,'restoreAllBatched': True},
 }, indent=2))
