@@ -11,11 +11,12 @@ const source = fs.readFileSync(sourcePath, 'utf8');
 const loader = fs.readFileSync(loaderPath, 'utf8');
 new vm.Script(source, { filename: sourcePath });
 new vm.Script(loader, { filename: loaderPath });
-assert(source.includes("status==='RUNNING'"));
+assert(source.includes("status==='RUNNING'||status==='COMPLETE'"));
 assert(source.includes("status==='FAILED'||status==='INFRASTRUCTURE_FAILED'"));
-assert(source.includes('followExistingJob'));
+assert(source.includes('followAuthoritativeJob'));
+assert(source.includes('readJobAfterCallable'));
 assert(source.includes('event.stopImmediatePropagation'));
-assert(loader.includes('live-worker-edge-r97.js?v=20260816r97-live-worker-edge1'));
+assert(loader.includes('live-worker-edge-r97.js?v=20260816r97-live-worker-edge2'));
 
 function makeHarness(job) {
   const listeners = new Map();
@@ -25,6 +26,10 @@ function makeHarness(job) {
     isCloud: () => true,
     user: { uid: 'user-1' },
     getEngineeringState: async () => ({ revision: 'eng_test', manifest: { revision: 'eng_test' } }),
+    getEnergyResult: async () => ({
+      projectId: 'revex_test', revision: job.resultRevision || 'energy_test',
+      manifest: { projectId: 'revex_test', sourceEngineeringRevision: 'eng_test', resultRevision: job.resultRevision || 'energy_test', status: 'COMPLETE' }
+    }),
     api: {
       doc: (...parts) => parts.join('/'),
       getDoc: async () => ({ exists: () => true, data: () => job })
@@ -83,16 +88,23 @@ function makeHarness(job) {
     assert.strictEqual(h.getFollowCount(), 1, 'dropped callable must reattach to exact running job');
   }
   {
+    const h = makeHarness({ status: 'COMPLETE', stage: 'COMPLETE', resultRevision: 'energy_exact' });
+    await new Promise(resolve => setTimeout(resolve, 30));
+    const result = await h.window.__revexManagedEnergyBridge.authorizeCurrentRevision();
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(result)), { ok: true, followed: true });
+    assert.strictEqual(h.getFollowCount(), 1, 'dropped callable after server completion must bind the exact completed job instead of surfacing a false functions/internal failure');
+  }
+  {
     const h = makeHarness({ status: 'INFRASTRUCTURE_FAILED', stage: 'WORKER_REQUEST', error: 'upstream reset', workerHttpStatus: 503 });
     await new Promise(resolve => setTimeout(resolve, 30));
     await assert.rejects(
       () => h.window.__revexManagedEnergyBridge.authorizeCurrentRevision(),
-      error => /WORKER_REQUEST: upstream reset/.test(String(error?.message || error))
+      error => /WORKER_REQUEST \[HTTP 503\]: upstream reset/.test(String(error?.message || error))
     );
     assert.strictEqual(h.getFollowCount(), 0, 'terminal infrastructure failure must not launch another execution');
   }
   {
-    const h = makeHarness({ status: 'COMPLETE' });
+    const h = makeHarness({ status: 'COMPLETE', resultRevision: 'energy_exact' });
     const keydown = (h.listeners.get('keydown') || []).find(row => row.capture)?.handler;
     assert.strictEqual(typeof keydown, 'function');
     let stopped = false;
@@ -106,6 +118,7 @@ function makeHarness(job) {
     schema: 'liber.revex.r97-live-worker-edge-qa.v1',
     status: 'PASSED',
     callableDropRunningJob: 'reattach-same-job',
+    callableDropCompletedJob: 'bind-exact-complete-result',
     infrastructureFailure: 'exact-firestore-job-error',
     malformedViewerKey: 'ignored-before-legacy-toLowerCase',
     duplicateLaunch: 'not-created',
