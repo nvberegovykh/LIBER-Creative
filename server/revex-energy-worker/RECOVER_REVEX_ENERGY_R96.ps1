@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-$SourceCandidate = '0b46a09a625e890ab2963f350c5e598b212817ae'
+$SourceCandidate = '6ffbbb9b36966f7e68d61969f54e06b498600f3a'
 $RepositoryUrl = 'https://github.com/nvberegovykh/LIBER-Creative.git'
 $ProjectId = 'liber-apps-cca20'
 $Region = 'us-central1'
