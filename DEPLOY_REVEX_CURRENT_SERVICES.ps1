@@ -4,6 +4,7 @@ param(
   [switch]$SkipEnergy,
   [switch]$SkipRender,
   [switch]$RenderBrokerOnly,
+  [switch]$EnergyWorkerOnly,
   [switch]$NoPause
 )
 
@@ -39,9 +40,6 @@ function Invoke-NativeExitCode([string]$Command, [string[]]$Arguments, [switch]$
     if ($Quiet) {
       & $Command @Arguments *> $null
     } else {
-      # Display native output without returning it from this helper. Otherwise
-      # PowerShell captures every child-process line together with the integer
-      # exit code and a successful deployment is falsely reported as failed.
       & $Command @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
     }
     $code = $LASTEXITCODE
@@ -65,6 +63,7 @@ try {
   Write-Host "REVEX current managed-services launcher" -ForegroundColor Cyan
   Write-Host "Persistent log: $LogPath"
   if ($SkipRender -and $RenderBrokerOnly) { throw "-SkipRender and -RenderBrokerOnly cannot be used together." }
+  if ($SkipEnergy -and $EnergyWorkerOnly) { throw "-SkipEnergy and -EnergyWorkerOnly cannot be used together." }
 
   $GCloud = Require-Command "gcloud"
   if (-not (Test-GCloudAuth $GCloud)) {
@@ -76,10 +75,10 @@ try {
     Write-Host "Google Cloud authorization confirmed." -ForegroundColor Green
   }
 
-  # Firebase CLI is required only by the Energy deployment. The render broker is
-  # deployed through gcloud Cloud Functions v2, so touching firebase-tools during
-  # broker-only resume is unnecessary and can trigger the Windows libuv crash.
-  if (-not $SkipEnergy) {
+  # Firebase CLI is required only when the Energy broker itself is deployed.
+  # r69 EnergyWorkerOnly updates the existing private Cloud Run worker through
+  # gcloud and deliberately leaves the already-active broker untouched.
+  if (-not $SkipEnergy -and -not $EnergyWorkerOnly) {
     $Firebase = Require-Command "firebase"
     if (-not (Test-FirebaseAuth $Firebase)) {
       Write-Host ""
@@ -89,7 +88,10 @@ try {
       }
     }
     $env:REVEX_FIREBASE_AUTH_VERIFIED = "1"
-    Write-Host "Firebase authorization confirmed for the Energy deployment chain." -ForegroundColor Green
+    Write-Host "Firebase authorization confirmed for the Energy broker deployment chain." -ForegroundColor Green
+  } elseif ($EnergyWorkerOnly) {
+    Remove-Item Env:REVEX_FIREBASE_AUTH_VERIFIED -ErrorAction SilentlyContinue
+    Write-Host "Firebase CLI skipped: r69 Energy worker-only deployment uses gcloud and preserves the active broker." -ForegroundColor Green
   } else {
     Remove-Item Env:REVEX_FIREBASE_AUTH_VERIFIED -ErrorAction SilentlyContinue
     Write-Host "Firebase CLI skipped: Energy is not being deployed." -ForegroundColor Green
@@ -120,6 +122,7 @@ try {
   if ($SkipEnergy) { $args += "-SkipEnergy" }
   if ($SkipRender) { $args += "-SkipRender" }
   if ($RenderBrokerOnly) { $args += "-RenderBrokerOnly" }
+  if ($EnergyWorkerOnly) { $args += "-EnergyWorkerOnly" }
   if ($NoPause) { $args += "-NoPause" }
 
   $ExitCode = Invoke-NativeExitCode "powershell.exe" $args
