@@ -88,6 +88,14 @@ internal static class RevexWebIntegrationBridge
                 return;
             }
 
+            if (string.Equals(type, "liber:revex-integration-close", StringComparison.Ordinal))
+            {
+                if (state.ProviderWindow is { IsVisible: true } providerWindow)
+                    providerWindow.Dispatcher.BeginInvoke(new Action(providerWindow.Close));
+                state.ProviderWindow = null;
+                return;
+            }
+
             if (!string.Equals(type, "liber:revex-integration-open", StringComparison.Ordinal))
                 return;
 
