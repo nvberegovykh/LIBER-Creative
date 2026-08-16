@@ -29,11 +29,12 @@ RUN curl -fL --retry 4 "https://github.com/NatLabRockies/OpenStudio/releases/dow
 WORKDIR /opt/revex
 COPY src/Liber.Revex.Revit/Engineering/Energy /opt/revex/energy
 COPY server/revex-energy-worker/app.py /opt/revex/server/app.py
+COPY server/revex-energy-worker/revex_energy_pipeline_guard.py /opt/revex/server/revex_energy_pipeline_guard.py
 COPY server/revex-energy-worker/run_revex_r49_release_acceptance.py /opt/revex/server/run_revex_r49_release_acceptance.py
 COPY server/revex-energy-worker/verify_revex_r49_worker.py /opt/revex/server/verify_revex_r49_worker.py
 COPY server/revex-energy-worker/requirements-server.txt /opt/revex/server/requirements-server.txt
 RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
- && python3 -m py_compile /opt/revex/server/app.py /opt/revex/server/run_revex_r49_release_acceptance.py /opt/revex/server/verify_revex_r49_worker.py
+ && python3 -m py_compile /opt/revex/server/app.py /opt/revex/server/revex_energy_pipeline_guard.py /opt/revex/server/run_revex_r49_release_acceptance.py /opt/revex/server/verify_revex_r49_worker.py
 RUN python3 -m pip install --no-cache-dir \
     -r /opt/revex/energy/requirements.txt \
     -r /opt/revex/energy/GeometryCo/requirements.txt \
@@ -44,7 +45,8 @@ RUN python3 /opt/revex/energy/verify_revex_r49_energy.py \
 
 ENV REVEX_HEADLESS=1 \
     REVEX_CHROME_BINARY=/usr/bin/google-chrome \
-    REVEX_PIPELINE=/opt/revex/energy/revex_energy_pipeline.py \
+    REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py \
+    REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py \
     REVEX_ENERGY_TIMEOUT_SECONDS=3500 \
     PORT=8080
 CMD ["gunicorn","--bind","0.0.0.0:8080","--workers","1","--threads","4","--timeout","3600","app:APP","--chdir","/opt/revex/server"]
