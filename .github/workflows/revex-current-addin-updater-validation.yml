@@ -1,0 +1,65 @@
+name: REVEX current add-in updater validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'UPDATE_REVEX_ADDIN_CURRENT.ps1'
+      - 'UPDATE_REVEX_ADDIN_CURRENT.cmd'
+      - '.github/workflows/revex-current-addin-updater-validation.yml'
+  push:
+    branches:
+      - main
+      - 'agent/revex-current-addin-updater'
+
+permissions:
+  contents: read
+
+jobs:
+  current-addin-updater:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Parse Windows PowerShell updater
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path '.\UPDATE_REVEX_ADDIN_CURRENT.ps1'), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { $errors | Format-List | Out-String | Write-Error; exit 1 }
+      - name: Verify updater source policy
+        shell: powershell
+        run: |
+          $ps = Get-Content '.\UPDATE_REVEX_ADDIN_CURRENT.ps1' -Raw
+          $cmd = Get-Content '.\UPDATE_REVEX_ADDIN_CURRENT.cmd' -Raw
+          $required = @(
+            'Get-Process -Name "Revit"',
+            '"--branch", "main"',
+            'verify-revex-current-generation-r53.js',
+            'verify-revex-r72-nonblocking-viewer.js',
+            'verify-revex-r73-energy-topology-fallback.py',
+            '$InstalledRoot = Join-Path $RevexRoot "App"',
+            'App.before-current.',
+            'Atomic install failed; restoring the prior add-in payload.',
+            'REVEX-CURRENT-SOURCE.json',
+            'staleR49CanonicalSourceUsed = $false',
+            'cloudServicesChanged = $false'
+          )
+          foreach ($needle in $required) { if (-not $ps.Contains($needle)) { throw "Missing updater safety marker: $needle" } }
+          if ($ps.Contains('CanonicalSourceCommit')) { throw 'Historical canonical source pin is forbidden in the current updater.' }
+          if ($ps.Contains('PUBLISH_REVEX_R49')) { throw 'Historical publisher invocation is forbidden in the current updater.' }
+          if (-not $cmd.Contains('raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/UPDATE_REVEX_ADDIN_CURRENT.ps1')) { throw 'Launcher does not self-refresh from current main.' }
+          if (-not $cmd.Contains('pause >nul')) { throw 'Launcher must remain open so success/failure can be read.' }
+      - name: Preserve current viewer and Energy contracts
+        shell: pwsh
+        run: |
+          node .github/scripts/verify-revex-current-generation-r53.js
+          node .github/scripts/verify-revex-r72-nonblocking-viewer.js
+          node .github/scripts/verify-revex-r54-selfhost-render.js
+          python .github/scripts/verify-revex-r73-energy-topology-fallback.py
