@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-$SourceCandidate = 'd541e88142645d22462f11638ecd1d0c2c04d336'
+$SourceCandidate = '858dca8223755c0e92099b1310f026dba59e0919'
 $RepositoryUrl = 'https://github.com/nvberegovykh/LIBER-Creative.git'
 $ProjectId = 'liber-apps-cca20'
 $Region = 'us-central1'
@@ -34,7 +34,6 @@ try {
   Stage 'Checking local deployment dependencies'
   $Git = Require 'git'
   $GCloud = Require 'gcloud'
-  $Node = Require 'node'
   $active = @(& $GCloud auth list --filter='status:ACTIVE' --format='value(account)') | Where-Object { $_ }
   if ($LASTEXITCODE -ne 0 -or $active.Count -eq 0) { throw "Google Cloud authentication is missing. Run 'gcloud auth login' once, then rerun this same file." }
   Write-Host "   gcloud account = $($active[0])"
