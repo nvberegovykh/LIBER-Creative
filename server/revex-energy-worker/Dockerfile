@@ -32,20 +32,18 @@ COPY src/Liber.Revex.Revit/Engineering/Energy /opt/revex/energy
 # Keep both the .py and .dyn in the worker image so the identity regression test runs in Cloud Build.
 COPY src/Liber.Revex.Revit/Engineering/Gbxml /opt/revex/Gbxml
 COPY server/revex-energy-worker/app.py /opt/revex/server/app.py
-# Preserve the proven failure guard as an importable base. r87 only strengthens the
-# active-Revit locality seam before handing control to this unchanged guard.
-COPY server/revex-energy-worker/revex_energy_pipeline_guard.py /opt/revex/server/revex_energy_pipeline_guard_base.py
-COPY server/revex-energy-worker/revex_energy_pipeline_guard_r87.py /opt/revex/server/revex_energy_pipeline_guard.py
+COPY server/revex-energy-worker/revex_energy_pipeline_guard.py /opt/revex/server/revex_energy_pipeline_guard.py
+COPY server/revex-energy-worker/revex_energy_identity_normalizer.py /opt/revex/server/revex_energy_identity_normalizer.py
 COPY server/revex-energy-worker/revex_energy_pipeline_r69.py /opt/revex/server/revex_energy_pipeline_r69.py
 COPY server/revex-energy-worker/verify_failure_evidence_r55.py /opt/revex/server/verify_failure_evidence_r55.py
-COPY server/revex-energy-worker/verify_identity_r87.py /opt/revex/server/verify_identity_r87.py
+COPY server/revex-energy-worker/verify_identity_normalizer.py /opt/revex/server/verify_identity_normalizer.py
 COPY server/revex-energy-worker/run_revex_r49_release_acceptance.py /opt/revex/server/run_revex_r49_release_acceptance.py
 COPY server/revex-energy-worker/verify_revex_r49_worker.py /opt/revex/server/verify_revex_r49_worker.py
 COPY server/revex-energy-worker/requirements-server.txt /opt/revex/server/requirements-server.txt
 RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
  && test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.py \
  && test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn \
- && python3 -m py_compile /opt/revex/server/app.py /opt/revex/server/revex_energy_pipeline_guard.py /opt/revex/server/revex_energy_pipeline_guard_base.py /opt/revex/server/revex_energy_pipeline_r69.py /opt/revex/server/verify_failure_evidence_r55.py /opt/revex/server/verify_identity_r87.py /opt/revex/server/run_revex_r49_release_acceptance.py /opt/revex/server/verify_revex_r49_worker.py
+ && python3 -m py_compile /opt/revex/server/app.py /opt/revex/server/revex_energy_pipeline_guard.py /opt/revex/server/revex_energy_identity_normalizer.py /opt/revex/server/revex_energy_pipeline_r69.py /opt/revex/server/verify_failure_evidence_r55.py /opt/revex/server/verify_identity_normalizer.py /opt/revex/server/run_revex_r49_release_acceptance.py /opt/revex/server/verify_revex_r49_worker.py
 RUN python3 -m pip install --no-cache-dir \
     -r /opt/revex/energy/requirements.txt \
     -r /opt/revex/energy/GeometryCo/requirements.txt \
@@ -54,7 +52,7 @@ RUN python3 -c "from selenium import webdriver; o=webdriver.ChromeOptions(); o.b
 RUN python3 /opt/revex/energy/verify_revex_r49_energy.py \
  && python3 /opt/revex/server/verify_revex_r49_worker.py \
  && python3 /opt/revex/server/verify_failure_evidence_r55.py \
- && python3 /opt/revex/server/verify_identity_r87.py
+ && python3 /opt/revex/server/verify_identity_normalizer.py
 
 ENV REVEX_HEADLESS=1 \
     REVEX_CHROME_BINARY=/usr/bin/google-chrome \
