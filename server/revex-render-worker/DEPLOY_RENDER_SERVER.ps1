@@ -114,17 +114,9 @@ try {
       "--substitutions=_REGION=$Region,_REPOSITORY=$Repository,_IMAGE=revex-render-worker,_TAG=$ImageTag"
     )
 
-    # Autodesk/REVEX rendering stays off the browser thread. Cloud Run RTX PRO
-    # 6000 requires the large-memory instance shape and scales to zero between jobs.
+    # Rendering stays entirely off the browser/Revit UI thread. The documented
+    # RTX PRO 6000 instance shape is preserved and the service scales to zero.
     Invoke-Checked "Deploy private REVEX RTX PRO 6000 worker" $GCloud @(
-      "run","deploy",$Service,"--project=$ProjectId","--region=$Region," + "--platform=managed"
-    )
-  }
-
-  if (-not $BrokerOnly) {
-    # Keep the full worker deployment argument list outside the previous short
-    # expression so PowerShell cannot accidentally concatenate native argv.
-    Invoke-Checked "Apply REVEX RTX PRO 6000 worker configuration" $GCloud @(
       "run","deploy",$Service,"--project=$ProjectId","--region=$Region","--platform=managed",
       "--image=$Image","--service-account=$WorkerSa","--no-allow-unauthenticated",
       "--cpu=20","--memory=80Gi","--no-cpu-throttling","--gpu=1","--gpu-type=nvidia-rtx-pro-6000",
@@ -156,9 +148,8 @@ try {
       "REVEX_RENDER_BROKER_SERVICE_ACCOUNT=$BrokerSa"
     ) | Set-Content -LiteralPath $EnvPath -Encoding UTF8
 
-    # Firebase documents this environment variable for source discovery that can
-    # legitimately exceed the CLI's 10-second default. The broker additionally
-    # uses onInit() so Admin/Google clients are not loaded during discovery.
+    # Firebase's documented escape hatch for function discovery is retained even
+    # after moving expensive Admin/Google initialization behind onInit().
     $env:FUNCTIONS_DISCOVERY_TIMEOUT = "120"
     $env:REVEX_RENDER_WORKER_URL = $WorkerUrl
     $env:REVEX_RENDER_BROKER_SERVICE_ACCOUNT = $BrokerSa
