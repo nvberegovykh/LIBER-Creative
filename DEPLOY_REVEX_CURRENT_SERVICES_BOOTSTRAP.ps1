@@ -106,7 +106,7 @@ try {
   $Npm = Require-Command "npm"
   $Node = Require-Command "node"
 
-  $authArgs = @("auth", "list", "--filter=status:ACTIVE", "--format=value(account)")
+  $authArgs = @("auth", "list", "--filter", "status:ACTIVE", "--format", "value(account)")
   $active = @(Invoke-NativeCapture $GCloud $authArgs) | Where-Object { $_ }
   if ($script:NativeExitCode -ne 0 -or $active.Count -eq 0) {
     throw "Google Cloud administrator authentication is required once. Run 'gcloud auth login', then rerun this file. Nothing was deployed."
