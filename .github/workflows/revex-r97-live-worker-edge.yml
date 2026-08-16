@@ -1,0 +1,33 @@
+name: REVEX r97 live worker edge
+
+on:
+  pull_request:
+    paths:
+      - 'docs/liber-apps/apps/revex/live-worker-edge-r97.js'
+      - 'docs/liber-apps/apps/revex/viewer-interaction-r85-loader.js'
+      - '.github/scripts/verify-revex-r97-live-worker-edge.js'
+      - '.github/workflows/revex-r97-live-worker-edge.yml'
+  workflow_dispatch:
+
+jobs:
+  live-edge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: JavaScript syntax
+        run: |
+          node --check docs/liber-apps/apps/revex/live-worker-edge-r97.js
+          node --check docs/liber-apps/apps/revex/viewer-interaction-r85-loader.js
+          node --check .github/scripts/verify-revex-r97-live-worker-edge.js
+      - name: Live job + malformed WebView event regression
+        run: node .github/scripts/verify-revex-r97-live-worker-edge.js
+      - name: No Energy QA or worker mutation
+        run: |
+          git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD | tee /tmp/r97-files.txt
+          if grep -E '(^|/)(OpenStudio_Energy_Model_Geometry_Compiler\.py|revex_energy_pipeline.*\.py|server/revex-energy-worker/|server/firebase-functions/)' /tmp/r97-files.txt; then
+            echo 'r97 live-edge PR must not alter Energy QA, GeometryCo, worker, or broker runtime.' >&2
+            exit 1
+          fi
