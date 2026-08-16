@@ -1,0 +1,42 @@
+name: REVEX current-generation regression guard
+
+on:
+  push:
+    paths:
+      - 'docs/liber-apps/apps/revex/**'
+      - 'src/Liber.Revex.Revit/Engineering/Gbxml/**'
+      - 'src/Liber.Revex.Revit/Engineering/Energy/**'
+      - '.github/scripts/verify-revex-current-generation-r53.js'
+      - '.github/workflows/revex-current-generation-regression-r53.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/liber-apps/apps/revex/**'
+      - 'src/Liber.Revex.Revit/Engineering/Gbxml/**'
+      - 'src/Liber.Revex.Revit/Engineering/Energy/**'
+      - '.github/scripts/verify-revex-current-generation-r53.js'
+      - '.github/workflows/revex-current-generation-regression-r53.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: revex-current-generation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  no-regression:
+    name: REVEX current generation preserved
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Reject Design Book, renderer, viewer or Energy regressions
+        run: node .github/scripts/verify-revex-current-generation-r53.js
