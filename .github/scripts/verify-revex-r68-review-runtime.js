@@ -12,9 +12,9 @@ const app=read('docs/liber-apps/apps/revex/app.js');
 const viewer=read('docs/liber-apps/apps/revex/viewer-polish-r68.js');
 const energy=read('docs/liber-apps/apps/revex/energy-diagnostics-r68.js');
 
-must(ui,'energy-diagnostics-r68.js?v=20260816r68-energy-diagnostics1');
+must(ui,'energy-diagnostics-r68.js?v=20260816r80-energy-diagnostics1');
 must(ui,'viewer-polish-r68.js?v=20260816r68-viewer-polish1');
-mustNot(ui,"loadScript('docs-pages-r68.js",'r75 must not load the main-thread full-PDF splitter');
+mustNot(ui,"loadScript('docs-pages-r68.js",'r75+ must not load the main-thread full-PDF splitter');
 must(app,"const url = page ? `${base}#page=${page}` : base;",'Docs sheet position must use the already-loaded source PDF page anchor');
 must(app,"frame.src = url; frame.hidden = false",'Docs page selection must navigate the PDF surface directly');
 
@@ -26,8 +26,10 @@ must(viewer,"typeof v.buildOutlineOverlay==='function'",'Viewer must reuse physi
 mustNot(viewer,'scene.clear(','Presentation must never clear authoritative BIM geometry');
 
 must(energy,'02_GEOMETRYCO\\.log','Exact GeometryCo failure log must be recognized');
-must(energy,'await fetch(url,{cache:\'no-store\'})','Failure evidence must be read from the immutable result artifact');
+must(energy,'await fetch(url,{cache:\'no-store\'})','Failure evidence must be read from immutable cloud result artifacts');
 must(energy,"button.disabled=true",'Same failed immutable revision must not be blindly re-authorized');
-must(energy,'ENERGY_EXACT_FAILURE','Exact worker failure must enter REVEX diagnostics');
+must(energy,'ENERGY_EXACT_FAILURE','Exact current-revision worker failure must enter REVEX diagnostics');
+must(energy,'ENERGY_STALE_FAILURE_IGNORED','Old failed revisions must never masquerade as the current Engineering state');
+must(energy,'failedRevision!==current','Energy failure display must be revision-scoped');
 
-console.log(JSON.stringify({schema:'liber.revex.r75-review-runtime-qa.v1',status:'PASSED',docs:{sourcePdfOnce:true,nativePageAnchor:true,mainThreadSplit:false},viewer:{presentation:true,walkWebViewSafe:true,sixFaceClipPersistent:true},energy:{exactFailureEvidence:true,repeatFailedRevisionBlocked:true}},null,2));
+console.log(JSON.stringify({schema:'liber.revex.r80-review-runtime-qa.v1',status:'PASSED',docs:{sourcePdfOnce:true,nativePageAnchor:true,mainThreadSplit:false},viewer:{presentation:true,walkWebViewSafe:true,sixFaceClipPersistent:true},energy:{exactFailureEvidence:true,repeatFailedRevisionBlocked:true,staleFailureHidden:true}},null,2));
