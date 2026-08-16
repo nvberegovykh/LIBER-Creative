@@ -30,7 +30,7 @@ must(modal,'[data-r70-box]{display:none!important}','legacy finish button block 
 must(modal,"document.createElement('dialog')",'finish integration must keep one Companion modal endpoint');
 must(modal,'https://architextures.org/create','Architextures Create must be the material provider endpoint');
 must(modal,"type:'liber:revex-integration-open'",'Material click must invoke the native provider browser endpoint');
-must(modal,"m.type==='liber:revex-integration-file'",'Companion must receive the user-downloaded material image');
+must(modal,"m.type!=='liber:revex-integration-file'",'Companion must accept only the expected user-downloaded material image message');
 must(modal,"await persist(activeElement,activeScope,{enabled:true,texture})",'downloaded texture must auto-apply without a second Apply button');
 must(modal,'Object.defineProperty(img,\'src\'','legacy preview IMG requests must be neutralized');
 must(modal,'Repeat X','texture mapping controls must remain available');
