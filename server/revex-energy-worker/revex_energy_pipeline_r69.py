@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""REVEX r69 managed-Energy request resolver.
+"""REVEX managed-Energy current-project identity resolver.
 
-The immutable Revit T/Z evidence remains authoritative. When that evidence carries a
-street address but omits city/state/ZIP, this wrapper may derive only those missing
-location fields from that exact address using the public US Census geocoder. The
-source evidence is never edited; a derived page-facts copy and request copy are
-written inside the immutable run output and then passed to the existing r55 failure
-guard / pinned Energy pipeline.
+The immutable active-Revit evidence graph is authoritative.  This resolver consumes
+both the reduced page-facts object and the already-verified raw Revit project identity
+artifact carried in sourceArtifacts.  Combined/multiline titleblock address values are
+normalized deterministically before the preserved Energy failure guard runs.
+
+No reference-project identity is accepted.  The public Census geocoder remains only a
+last-resort derivation for missing city/state/ZIP from an already-authoritative street
+address; source evidence is never edited in place.
 """
 from __future__ import annotations
 
@@ -42,9 +44,17 @@ def _first(*values) -> str:
     return next((_text(value) for value in values if _text(value)), "")
 
 
+def _flat(value: str) -> str:
+    return re.sub(r"\s+", " ", _text(value)).strip()
+
+
+def _norm_key(value: str) -> str:
+    return "".join(ch.lower() for ch in str(value or "") if ch.isalnum())
+
+
 def _split_address_location(value: str) -> dict[str, str]:
     """Read an already-present city/state/ZIP suffix without inventing anything."""
-    text = _text(value)
+    text = _flat(value)
     if not text:
         return {}
     match = re.search(
@@ -54,6 +64,35 @@ def _split_address_location(value: str) -> dict[str, str]:
     if not match:
         return {}
     return {"city": match.group(1).strip(), "state": match.group(2).upper(), "zip": match.group(3)}
+
+
+def _location_anywhere(value: str) -> dict[str, str]:
+    text = _flat(value)
+    if not text:
+        return {}
+    matches = list(re.finditer(
+        r"\b([A-Za-z][A-Za-z .'-]{1,60}?)\s*,\s*([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)\b",
+        text,
+    ))
+    if not matches:
+        return {}
+    match = matches[-1]
+    return {"city": match.group(1).strip(), "state": match.group(2).upper(), "zip": match.group(3)}
+
+
+def _field_value(fields: dict, aliases: tuple[str, ...], *, reject: tuple[str, ...] = ()) -> str:
+    candidates = []
+    for key, raw in fields.items():
+        value = _text(raw)
+        normalized = _norm_key(key)
+        if not value or any(token in normalized for token in reject):
+            continue
+        strength = max((len(alias) for alias in aliases if alias in normalized), default=0)
+        if not strength:
+            continue
+        authority = 4 if normalized.startswith("project") else 3 if "project" in normalized and "titleblock" in normalized else 2 if "titleblock" in normalized else 1
+        candidates.append((authority, strength, -len(normalized), value))
+    return sorted(candidates, reverse=True)[0][3] if candidates else ""
 
 
 def _street_tokens(identity: dict) -> tuple[str, str]:
@@ -70,6 +109,127 @@ def _street_tokens(identity: dict) -> tuple[str, str]:
     return house, street
 
 
+def _same_street(authoritative_address: str, candidate_text: str) -> bool:
+    address = _flat(authoritative_address).lower()
+    candidate = _flat(candidate_text).lower()
+    if not address or not candidate:
+        return False
+    house_match = re.match(r"^(\d+(?:-\d+)?)\b", address)
+    house = house_match.group(1) if house_match else ""
+    words = [w for w in re.findall(r"[a-z0-9]+", address) if len(w) >= 3 and not w.isdigit()]
+    if house and house not in candidate:
+        return False
+    if words and not any(word in candidate for word in words):
+        return False
+    return bool(house or words)
+
+
+def _verified_raw_revit_identity(request: dict) -> tuple[dict, dict]:
+    """Load the exact raw active-Revit identity artifact and recheck its binding digest."""
+    manifest_path = Path(_text(request.get("engineeringManifestPath")))
+    if not manifest_path.is_file():
+        return {}, {}
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}, {}
+    expected = _text((manifest.get("projectBinding") or {}).get("identityEvidenceDigest")).lower()
+    for value in list(request.get("sourceArtifacts") or []):
+        path = Path(_text(value))
+        if not path.is_file() or path.name.lower() != "revit-project-identity.json":
+            continue
+        try:
+            identity = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        digest = _text(identity.get("digest") or identity.get("Digest")).lower()
+        if identity.get("schema") != "liber.revex.revit-project-identity.v1":
+            continue
+        if identity.get("authority") != "active-revit-document-t-z-title-evidence":
+            continue
+        if not digest or not expected or digest != expected:
+            continue
+        return identity, dict(identity.get("fields") or identity.get("Fields") or {})
+    return {}, {}
+
+
+def _raw_identity_values(raw_identity: dict, fields: dict) -> dict[str, str]:
+    values = {
+        "title": _field_value(fields, ("projectname", "buildingname", "projecttitle"), reject=("uniqu",)),
+        "address": _field_value(fields, ("projectaddress", "siteaddress", "propertyaddress", "buildingaddress", "address"), reject=("business", "email")),
+        "houseNumber": _field_value(fields, ("housenumber", "houseno", "streetnumber")),
+        "streetName": _field_value(fields, ("streetname",)),
+        "borough": _field_value(fields, ("borough",)),
+        "city": _field_value(fields, ("projectcity", "city"), reject=("business",)),
+        "state": _field_value(fields, ("projectstate", "stateprovince", "state"), reject=("status",)),
+        "zip": _field_value(fields, ("zipcode", "postalcode", "projectzip", "zip")),
+    }
+    values["title"] = values["title"] or _text(raw_identity.get("displayName") or raw_identity.get("DisplayName"))
+    if not values["address"] and values["houseNumber"] and values["streetName"]:
+        values["address"] = f"{values['houseNumber']} {values['streetName']}".strip()
+    return values
+
+
+def _location_from_raw_fields(fields: dict, authoritative_address: str) -> tuple[dict[str, str], str]:
+    """Find locality in authoritative Project Information/titleblock values only."""
+    ranked = []
+    for key, raw in fields.items():
+        value = _text(raw)
+        if not value:
+            continue
+        parsed = _split_address_location(value) or _location_anywhere(value)
+        if not parsed:
+            continue
+        normalized = _norm_key(key)
+        projectish = normalized.startswith("project") or any(token in normalized for token in ("projectaddress", "siteaddress", "propertyaddress", "buildingaddress"))
+        street_match = _same_street(authoritative_address, value)
+        if not projectish and not street_match:
+            continue
+        authority = 5 if normalized.startswith("project") else 4 if "projectaddress" in normalized else 3 if street_match and "titleblock" in normalized else 2 if street_match else 1
+        ranked.append((authority, parsed, f"raw Revit field {key}"))
+    if not ranked:
+        return {}, ""
+    ranked.sort(key=lambda row: row[0], reverse=True)
+    return ranked[0][1], ranked[0][2]
+
+
+def _location_from_revit_pdfs(request: dict, authoritative_address: str) -> tuple[dict[str, str], str]:
+    """Read immutable native-Revit PDFs and accept locality only adjacent to the authoritative street."""
+    address = _flat(authoritative_address)
+    if not address:
+        return {}, ""
+    tokens = re.findall(r"[A-Za-z0-9]+", address)
+    if not tokens:
+        return {}, ""
+    address_pattern = r"\s*[,\-]?\s*".join(re.escape(token) for token in tokens)
+    pattern = re.compile(
+        address_pattern + r"\s*[,]?\s+([A-Za-z][A-Za-z .'-]{1,60}?)\s*,\s*([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)\b",
+        re.I,
+    )
+    try:
+        from pypdf import PdfReader
+    except Exception:
+        return {}, ""
+    for value in list(request.get("sourceArtifacts") or []):
+        path = Path(_text(value))
+        if not path.is_file() or path.suffix.lower() != ".pdf":
+            continue
+        try:
+            text = "\n".join((page.extract_text() or "") for page in PdfReader(str(path)).pages)
+        except Exception:
+            continue
+        flat = _flat(text)
+        match = pattern.search(flat)
+        if not match:
+            continue
+        return {
+            "city": match.group(1).strip(),
+            "state": match.group(2).upper(),
+            "zip": match.group(3),
+        }, f"immutable Revit sheet PDF {path.name}"
+    return {}, ""
+
+
 def _census_lookup(identity: dict) -> dict[str, str]:
     address = _first(identity.get("address"), identity.get("title"))
     if not address:
@@ -79,12 +239,10 @@ def _census_lookup(identity: dict) -> dict[str, str]:
     state = _text(identity.get("state"))
     if not city and borough.lower() in NYC_BOROUGHS:
         city = NYC_BOROUGHS[borough.lower()]
-    # NYC borough evidence is enough to constrain the query to New York State,
-    # but the returned state/ZIP still come from Census, not from this hint.
     state_hint = state or ("NY" if borough.lower() in NYC_BOROUGHS else "")
     query_address = ", ".join(part for part in (address, city or borough, state_hint) if part)
     params = urlencode({"address": query_address, "benchmark": CENSUS_BENCHMARK, "format": "json"})
-    request = Request(f"{CENSUS_ENDPOINT}?{params}", headers={"User-Agent": "LIBER-REVEX/0.8.19 r69"})
+    request = Request(f"{CENSUS_ENDPOINT}?{params}", headers={"User-Agent": "LIBER-REVEX/0.8.19 r82"})
     with urlopen(request, timeout=12) as response:
         payload = json.loads(response.read().decode("utf-8"))
     matches = (((payload or {}).get("result") or {}).get("addressMatches") or [])
@@ -139,7 +297,12 @@ def _best_page_project(facts: dict, key: str) -> str:
     return rows[0][1] if rows else ""
 
 
-def _resolve_identity(facts: dict, geocode: Callable[[dict], dict[str, str]] | None = None) -> tuple[dict, dict]:
+def _resolve_identity(
+    facts: dict,
+    geocode: Callable[[dict], dict[str, str]] | None = None,
+    *,
+    request: dict | None = None,
+) -> tuple[dict, dict]:
     resolved = json.loads(json.dumps(facts))
     structured = dict(resolved.get("structuredIdentity") or {})
     project = dict(resolved.get("project") or {})
@@ -147,21 +310,47 @@ def _resolve_identity(facts: dict, geocode: Callable[[dict], dict[str, str]] | N
         key: _first(_best_page_project(resolved, key), structured.get(key), project.get(key))
         for key in ("title", "address", "houseNumber", "streetName", "borough", "city", "state", "zip")
     }
+    filled: dict[str, dict[str, str]] = {}
+
+    if request:
+        raw_identity, fields = _verified_raw_revit_identity(request)
+        raw = _raw_identity_values(raw_identity, fields) if raw_identity else {}
+        for key in ("title", "address", "houseNumber", "streetName", "borough", "city", "state", "zip"):
+            if not identity[key] and _text(raw.get(key)):
+                identity[key] = _text(raw[key])
+                if key in REQUIRED_LOCATION:
+                    filled[key] = {"value": identity[key], "source": "verified raw active-Revit identity field"}
+
     if not identity["address"] and identity["houseNumber"] and identity["streetName"]:
         identity["address"] = f"{identity['houseNumber']} {identity['streetName']}".strip()
     if not identity["address"]:
         title = identity["title"]
         if re.match(r"^\s*\d+(?:-\d+)?\s+\S+", title):
             identity["address"] = title
+
     parsed = _split_address_location(identity["address"])
-    filled = {}
     for key in REQUIRED_LOCATION:
         if not identity[key] and parsed.get(key):
             identity[key] = parsed[key]
-            filled[key] = {"value": parsed[key], "source": "active-Revit address text"}
+            filled[key] = {"value": parsed[key], "source": "active-Revit combined address text"}
+
+    if request and any(not identity[key] for key in REQUIRED_LOCATION):
+        raw_identity, fields = _verified_raw_revit_identity(request)
+        raw_location, raw_source = _location_from_raw_fields(fields, identity["address"]) if raw_identity else ({}, "")
+        for key in REQUIRED_LOCATION:
+            if not identity[key] and raw_location.get(key):
+                identity[key] = raw_location[key]
+                filled[key] = {"value": raw_location[key], "source": raw_source}
+
+    if request and any(not identity[key] for key in REQUIRED_LOCATION):
+        pdf_location, pdf_source = _location_from_revit_pdfs(request, identity["address"])
+        for key in REQUIRED_LOCATION:
+            if not identity[key] and pdf_location.get(key):
+                identity[key] = pdf_location[key]
+                filled[key] = {"value": pdf_location[key], "source": pdf_source}
 
     missing = [key for key in REQUIRED_LOCATION if not identity[key]]
-    geocode_result = {}
+    geocode_result: dict[str, str] = {}
     if missing and identity["address"]:
         try:
             geocode_result = (geocode or _census_lookup)(identity) or {}
@@ -174,11 +363,11 @@ def _resolve_identity(facts: dict, geocode: Callable[[dict], dict[str, str]] | N
                 filled[key] = {"value": value, "source": "US Census address match"}
 
     for key in ("title", "address", "houseNumber", "streetName", "borough", "city", "state", "zip"):
-        if identity[key] and not _text(structured.get(key)):
+        if identity[key]:
             structured[key] = identity[key]
     resolved["structuredIdentity"] = structured
     resolved["locationResolution"] = {
-        "schema": "liber.revex.location-resolution.v1",
+        "schema": "liber.revex.location-resolution.v2",
         "authority": "derived-only-from-immutable-active-Revit-address",
         "provider": "US_CENSUS_GEOCODER_PUBLIC_AR_CURRENT" if any(row["source"].startswith("US Census") for row in filled.values()) else None,
         "filled": filled,
@@ -195,7 +384,7 @@ def _resolved_request(request_path: Path, output_root: Path) -> Path:
     if not page_path.is_file():
         return request_path
     facts = json.loads(page_path.read_text(encoding="utf-8"))
-    resolved, identity = _resolve_identity(facts)
+    resolved, identity = _resolve_identity(facts, request=request)
     if not resolved.get("locationResolution", {}).get("filled"):
         return request_path
     facts_path = output_root / "00_PAGE_FACTS_RESOLVED_R69.json"
@@ -206,10 +395,11 @@ def _resolved_request(request_path: Path, output_root: Path) -> Path:
     request_copy = output_root / "00_PIPELINE_REQUEST_RESOLVED_R69.json"
     request_copy.write_text(json.dumps(derived_request, ensure_ascii=True, indent=2), encoding="utf-8")
     print(json.dumps({
-        "stage": "PROJECT_IDENTITY_R69", "status": "RESOLVED",
+        "stage": "PROJECT_IDENTITY_R82", "status": "RESOLVED",
         "filled": resolved["locationResolution"]["filled"],
         "remainingMissing": resolved["locationResolution"]["remainingMissing"],
         "address": identity.get("address"),
+        "city": identity.get("city"), "state": identity.get("state"), "zip": identity.get("zip"),
     }, ensure_ascii=True), flush=True)
     return request_copy
 
