@@ -1,0 +1,34 @@
+name: REVEX r68 review runtime validation
+
+on:
+  pull_request:
+    paths:
+      - 'docs/liber-apps/apps/revex/**'
+      - '.github/scripts/verify-revex-r68-review-runtime.js'
+      - '.github/workflows/revex-r68-review-runtime.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'docs/liber-apps/apps/revex/**'
+      - '.github/scripts/verify-revex-r68-review-runtime.js'
+      - '.github/workflows/revex-r68-review-runtime.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  review-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check r68 runtime
+        run: |
+          node --check docs/liber-apps/apps/revex/docs-pages-r68.js
+          node --check docs/liber-apps/apps/revex/energy-diagnostics-r68.js
+          node --check docs/liber-apps/apps/revex/viewer-polish-r68.js
+          node --check docs/liber-apps/apps/revex/ui-integrity.js
+      - name: Verify Docs viewer and Energy contracts
+        run: node .github/scripts/verify-revex-r68-review-runtime.js

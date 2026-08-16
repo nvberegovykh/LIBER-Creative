@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260813r49';
+  const BUILD='20260816r68';
   if(root.__revexUiIntegrityR20) return;
   root.__revexUiIntegrityR20=true;
 
@@ -22,23 +22,37 @@
     if(render&&render.textContent!=='Render')render.textContent='Render';
   }
 
+  function loadScript(src,key,type='text/javascript'){
+    if(document.querySelector(`script[data-revex-runtime="${key}"]`))return;
+    const script=document.createElement('script');
+    script.dataset.revexRuntime=key;script.src=src;script.type=type;
+    script.onerror=()=>root.__revexBrowserDiagnostics?.emit?.('ERROR','R68_RUNTIME',`Could not load ${src}.`,{initiator:'ui integrity loader'});
+    document.head.appendChild(script);
+  }
+
   function loadReviewIntegrity(){
     if(document.querySelector('script[data-revex-review-integrity]')) return;
     const script=document.createElement('script');
     script.type='module';
     script.dataset.revexReviewIntegrity='1';
-    script.src='review-integrity-r50.js?v=20260813r49-review1';
+    script.src='review-integrity-r50.js?v=20260813r49-review2';
     script.onerror=()=>root.__revexBrowserDiagnostics?.emit?.('ERROR','REVIEW_RUNTIME','Could not load review-integrity-r50.js.',{initiator:'ui integrity loader'});
     document.head.appendChild(script);
+  }
+
+  function loadR68Repairs(){
+    loadScript('docs-pages-r68.js?v=20260816r68-doc-pages1','docs-pages-r68');
+    loadScript('energy-diagnostics-r68.js?v=20260816r68-energy-diagnostics1','energy-diagnostics-r68');
+    loadScript('viewer-polish-r68.js?v=20260816r68-viewer-polish1','viewer-polish-r68','module');
   }
 
   function bind(){
     const select=document.getElementById('project-select');
     if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}
-    updateProjectId();enforceLabels();loadReviewIntegrity();
+    updateProjectId();enforceLabels();loadReviewIntegrity();loadR68Repairs();
   }
 
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
   setTimeout(bind,250);setTimeout(bind,1000);
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',labels:'source-text',reviewRuntime:'r49-review1',spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',labels:'source-text',reviewRuntime:'r49-review2',docsPages:'real-single-page-pdf',viewerPolish:'r68',energyFailureEvidence:'exact',spatialObjects:'invisible'});
 })(window);

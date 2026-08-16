@@ -1,0 +1,104 @@
+(function(root){
+  'use strict';
+  const BUILD='20260816r68-energy-diagnostics1';
+  const failureName=/02_GEOMETRYCO\.log|FAILURE_(?:REPORT\.json|SUMMARY\.txt)|REVEX-ENERGY-PIPELINE\.jsonl|NATIVE_CHECK_|eplusout\.err|REVEX_OPENSTUDIO_RUN\.log/i;
+  const clean=v=>String(v??'').trim();
+  const esc=v=>String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const state=()=>root.__revexState||{};
+  const projectId=()=>clean(state().projectId||new URLSearchParams(location.search).get('projectId'));
+  let running=false;
+
+  function Store(){return root.RevexStore;}
+  function diagnostic(level,stage,message,detail={}){
+    try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'energy diagnostics r68',...detail});}catch(_){}
+  }
+  async function artifactUrl(row){
+    if(row?.url)return row.url;
+    const store=Store();
+    if(row?.storagePath&&store?.fileUrl)return store.fileUrl(row.storagePath);
+    if(row?.path&&store?.fileUrl)return store.fileUrl(row.path);
+    return null;
+  }
+  function sourceRevisionOf(result){
+    const m=result?.manifest||{};
+    return clean(m.sourceEngineeringRevision||m.sourceRevision||m.engineeringRevision||result?.sourceRevision);
+  }
+  function exactErrorFromText(text){
+    const lines=String(text||'').split(/\r?\n/).map(v=>v.trim()).filter(Boolean);
+    const preferred=[...lines].reverse().find(line=>/^ERROR\s*:/i.test(line)||/CompileError|PipelineError|ValidationError|native check failed|ambiguous|could not|cannot|missing|mismatch/i.test(line));
+    return (preferred||lines.at(-1)||'').replace(/^ERROR\s*:\s*/i,'').slice(0,900);
+  }
+  function ensureBox(){
+    const host=document.getElementById('energy-artifacts');
+    if(!host)return null;
+    let box=document.getElementById('energy-exact-failure');
+    if(!box){box=document.createElement('section');box.id='energy-exact-failure';box.className='energy-exact-failure';host.insertAdjacentElement('beforebegin',box);}
+    return box;
+  }
+  function setRetryPolicy(source,result){
+    const button=document.getElementById('energy-authorize-backstop');
+    if(!button)return;
+    const failed=clean(result?.manifest?.status).toUpperCase()==='FAILED';
+    const same=failed&&sourceRevisionOf(result)&&sourceRevisionOf(result)===clean(source?.revision||source?.manifest?.revision);
+    if(same){
+      button.disabled=true;
+      button.textContent='This revision already failed · sync a new revision';
+      button.title='Repeating the same immutable revision reproduces the same deterministic worker failure. Create a new Engineering Sync revision or deploy a server fix first.';
+    }else{
+      button.disabled=false;
+      button.textContent='Authorize this revision';
+      button.removeAttribute('title');
+    }
+  }
+  async function inspect(){
+    if(running)return;
+    const id=projectId(),store=Store();
+    if(!id||!store?.getEnergyResult||!store?.getEngineeringState)return;
+    running=true;
+    try{
+      const [source,result]=await Promise.all([store.getEngineeringState(id),store.getEnergyResult(id)]);
+      setRetryPolicy(source,result);
+      const status=clean(result?.manifest?.status).toUpperCase();
+      const box=ensureBox();
+      if(!box)return;
+      if(status!=='FAILED'){
+        box.hidden=true;box.innerHTML='';return;
+      }
+      const rows=(Array.isArray(result?.artifacts)?result.artifacts:[]).filter(row=>failureName.test(clean(row?.name))||clean(row?.kind).toLowerCase()==='diagnostic');
+      const geometry=rows.find(row=>/02_GEOMETRYCO\.log/i.test(clean(row?.name)))||null;
+      const links=[];
+      for(const row of rows.slice(0,10)){
+        const url=await artifactUrl(row).catch(()=>null);
+        if(url)links.push(`<a href="${esc(url)}" target="_blank" rel="noopener">${esc(row.name||'failure evidence')}</a>`);
+      }
+      let exact=clean(result?.manifest?.error||'Energy worker failed.');
+      if(geometry){
+        try{
+          const url=await artifactUrl(geometry);
+          if(url){
+            const response=await fetch(url,{cache:'no-store'});
+            if(response.ok){const text=await response.text();const parsed=exactErrorFromText(text);if(parsed)exact=parsed;}
+          }
+        }catch(error){diagnostic('WARN','ENERGY_FAILURE_LOG_READ',error?.message||String(error));}
+      }
+      box.hidden=false;
+      box.innerHTML=`<div class="eyebrow">EXACT WORKER FAILURE</div><strong>${esc(result?.manifest?.failureContext?.failedStage||'Energy pipeline')}</strong><p>${esc(exact)}</p>${links.length?`<div class="energy-exact-failure-links">${links.join('')}</div>`:''}<small>Failure evidence belongs to immutable Engineering revision ${esc(sourceRevisionOf(result)||'—')}. Re-authorizing the same revision does not change its inputs.</small>`;
+      const run=document.getElementById('energy-run-status');
+      if(run&&exact&&!run.textContent.includes(exact)){run.textContent=`${result?.manifest?.failureContext?.failedStage||'Energy'}: ${exact}`;run.dataset.tone='bad';}
+      diagnostic('ERROR','ENERGY_EXACT_FAILURE',exact,{projectId:id,revision:sourceRevisionOf(result),artifactCount:rows.length});
+    }catch(error){diagnostic('WARN','ENERGY_DIAGNOSTICS',error?.message||String(error));}
+    finally{running=false;}
+  }
+  function install(){
+    if(root.__revexEnergyDiagnosticsR68)return;
+    root.__revexEnergyDiagnosticsR68={build:BUILD,inspect};
+    root.addEventListener('revex:energy-open',()=>setTimeout(inspect,0));
+    root.addEventListener('revex:managed-energy-status',event=>{
+      if(['BROKER_FAILED','BROKER_PASSED','CLOUD_UPLOAD_PASSED'].includes(event.detail?.stage))setTimeout(inspect,250);
+    });
+    root.addEventListener('revex:managed-energy-result',()=>setTimeout(inspect,0));
+    if(!document.getElementById('view-energy')?.hidden)setTimeout(inspect,0);
+  }
+  const wait=()=>{if(Store()&&root.__revexState){install();return;}setTimeout(wait,50);};
+  wait();
+})(window);
