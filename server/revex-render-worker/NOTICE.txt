@@ -1,0 +1,1 @@
+REVEX uses the public Qwen/Qwen-Image-Edit-2511 model at immutable revision 6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9. The upstream repository declares Apache-2.0 licensing. REVEX does not redistribute the upstream weights in this repository; the private worker retrieves that exact public revision without an end-user Hugging Face login or token.
