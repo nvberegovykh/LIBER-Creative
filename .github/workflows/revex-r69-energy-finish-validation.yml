@@ -1,0 +1,42 @@
+name: REVEX r69 Energy identity + finish-type validation
+
+on:
+  push:
+    branches:
+      - main
+      - 'agent/revex-r69-energy-identity-finish-type-*'
+    paths:
+      - 'server/revex-energy-worker/revex_energy_pipeline_r69.py'
+      - 'server/revex-energy-worker/Dockerfile'
+      - 'docs/liber-apps/apps/revex/finish-type-r69.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - 'docs/liber-apps/apps/revex/docs-pages-r68.js'
+      - '.github/scripts/verify-revex-r69-energy-finish.py'
+      - '.github/workflows/revex-r69-energy-finish-validation.yml'
+  pull_request:
+    branches: [main]
+
+jobs:
+  r69-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax-check new runtimes
+        run: |
+          python -m py_compile server/revex-energy-worker/revex_energy_pipeline_r69.py
+          node --check docs/liber-apps/apps/revex/finish-type-r69.js
+          node --check docs/liber-apps/apps/revex/ui-integrity.js
+          node --check docs/liber-apps/apps/revex/docs-pages-r68.js
+      - name: Prove identity derivation, old Docs repair, and same-type finish contract
+        run: python .github/scripts/verify-revex-r69-energy-finish.py
+      - name: Preserve current REVEX contracts
+        run: |
+          node .github/scripts/verify-revex-current-generation-r53.js
+          node .github/scripts/verify-revex-r54-selfhost-render.js
+          node .github/scripts/verify-revex-r68-review-runtime.js
