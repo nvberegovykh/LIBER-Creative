@@ -76,7 +76,7 @@ function Invoke-Captured([string]$Command, [string[]]$Arguments, [string]$Workin
       $lines = @(& $Command @Arguments 2>&1 | ForEach-Object { [string]$_ })
       $code = $LASTEXITCODE
       if ($null -eq $code) { $code = 0 }
-      if ([int]$code -ne 0) { throw "Command failed with exit code $code: $Command $($Arguments -join ' ')" }
+      if ([int]$code -ne 0) { throw "Command failed with exit code ${code}: $Command $($Arguments -join ' ')" }
       return ($lines -join [Environment]::NewLine).Trim()
     } finally {
       if ($WorkingDirectory) { Pop-Location }
@@ -229,7 +229,7 @@ try {
   $Git = Require-Command @("git.exe", "git") "Git"
   $Dotnet = Require-Command @("dotnet.exe", "dotnet") ".NET 8 SDK"
   $Node = Require-Command @("node.exe", "node") "Node.js"
-  $Python = Require-Command @("py.exe", "python.exe", "py", "python") "Python 3"
+  $Python = Require-Command @("python.exe", "python", "py.exe", "py") "Python 3"
 
   Write-Step "Clone exact current GitHub main into an isolated clean folder"
   $cloneUrl = "https://github.com/$Repository.git"
@@ -242,12 +242,7 @@ try {
   Invoke-Checked "Reject stale REVEX generation" $Node @(".github\scripts\verify-revex-current-generation-r53.js") $RepoRoot
   Invoke-Checked "Verify r72 nonblocking viewer + owned material integration" $Node @(".github\scripts\verify-revex-r72-nonblocking-viewer.js") $RepoRoot
   Invoke-Checked "Verify r54 renderer/Energy/viewer integration remains preserved" $Node @(".github\scripts\verify-revex-r54-selfhost-render.js") $RepoRoot
-  $pythonArgs = if ([IO.Path]::GetFileName($Python).StartsWith("py", [StringComparison]::OrdinalIgnoreCase)) {
-    @("-3", ".github\scripts\verify-revex-r73-energy-topology-fallback.py")
-  } else {
-    @(".github\scripts\verify-revex-r73-energy-topology-fallback.py")
-  }
-  Invoke-Checked "Verify r73 Revit analytical-topology fallback" $Python $pythonArgs $RepoRoot
+  Invoke-Checked "Verify r73 Revit analytical-topology fallback" $Python @(".github\scripts\verify-revex-r73-energy-topology-fallback.py") $RepoRoot
 
   $projectFullPath = Join-Path $RepoRoot $ProjectPath
   Invoke-Checked "Restore current add-in dependencies" $Dotnet @("restore", $projectFullPath, "-p:Platform=x64", "-p:RevitInstallDir=$RevitDir") $RepoRoot
