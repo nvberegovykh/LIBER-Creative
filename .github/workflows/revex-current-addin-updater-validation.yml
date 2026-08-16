@@ -13,6 +13,7 @@ on:
       - main
       - 'agent/revex-current-addin-updater'
       - 'agent/revex-r74-*'
+      - 'agent/revex-r76-*'
 
 permissions:
   contents: read
@@ -44,11 +45,17 @@ jobs:
           $ps = Get-Content '.\UPDATE_REVEX_ADDIN_CURRENT.ps1' -Raw
           $cmd = Get-Content '.\UPDATE_REVEX_ADDIN_CURRENT.cmd' -Raw
           $required = @(
+            'function Wait-RevitClosed',
             'Get-Process -Name "Revit"',
+            'This updater will wait here and continue automatically; do not rerun it.',
+            'Wait-RevitClosed',
             '"--branch", "main"',
             'verify-revex-current-generation-r53.js',
             'verify-revex-r72-nonblocking-viewer.js',
             'verify-revex-r73-energy-topology-fallback.py',
+            'viewer-runtime-r75.js',
+            'appearance-state-r75.js',
+            'companion-runtime-r75.js',
             '$InstalledRoot = Join-Path $RevexRoot "App"',
             'App.before-current.',
             'Atomic install failed; restoring the prior add-in payload.',
@@ -57,6 +64,7 @@ jobs:
             'cloudServicesChanged = $false'
           )
           foreach ($needle in $required) { if (-not $ps.Contains($needle)) { throw "Missing updater safety marker: $needle" } }
+          if ($ps.Contains('Save/close Revit completely, then rerun this updater')) { throw 'Startup Revit guard must wait instead of failing/rerun.' }
           if ($ps.Contains('CanonicalSourceCommit')) { throw 'Historical canonical source pin is forbidden in the current updater.' }
           if ($ps.Contains('PUBLISH_REVEX_R49')) { throw 'Historical publisher invocation is forbidden in the current updater.' }
           if (-not $cmd.Contains('raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/UPDATE_REVEX_ADDIN_CURRENT.ps1')) { throw 'Launcher does not self-refresh from current main.' }
