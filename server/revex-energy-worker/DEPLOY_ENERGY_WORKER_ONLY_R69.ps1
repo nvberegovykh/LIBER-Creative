@@ -81,14 +81,17 @@ function Native-Ok([string]$Command, [string[]]$Arguments) {
 function Assert-R69Source {
   $resolver = Join-Path $Root "server\revex-energy-worker\revex_energy_pipeline_r69.py"
   $normalizer = Join-Path $Root "server\revex-energy-worker\revex_energy_identity_normalizer.py"
+  $contentAgent = Join-Path $Root "server\revex-energy-worker\revex_identity_content_agent.py"
   $identityQa = Join-Path $Root "server\revex-energy-worker\verify_identity_normalizer.py"
+  $contentQa = Join-Path $Root "server\revex-energy-worker\verify_identity_content_agent.py"
   $guard = Join-Path $Root "server\revex-energy-worker\revex_energy_pipeline_guard.py"
   $docker = Join-Path $Root "server\revex-energy-worker\Dockerfile"
-  foreach ($path in @($resolver,$normalizer,$identityQa,$guard,$docker,$CloudBuild)) {
+  foreach ($path in @($resolver,$normalizer,$contentAgent,$identityQa,$contentQa,$guard,$docker,$CloudBuild)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Current Energy source is incomplete: $path" }
   }
   $resolverText = Get-Content -Raw -LiteralPath $resolver
   $normalizerText = Get-Content -Raw -LiteralPath $normalizer
+  $contentText = Get-Content -Raw -LiteralPath $contentAgent
   $guardText = Get-Content -Raw -LiteralPath $guard
   $dockerText = Get-Content -Raw -LiteralPath $docker
   foreach ($marker in @('US_CENSUS_GEOCODER_PUBLIC_AR_CURRENT','00_PAGE_FACTS_RESOLVED_R69.json','derived-only-from-immutable-active-Revit-address','import revex_energy_identity_normalizer as identity_normalizer','PROJECT_IDENTITY_NORMALIZED')) {
@@ -97,18 +100,27 @@ function Assert-R69Source {
   foreach ($marker in @('normalize_verified_evidence','locality_near_authoritative_address','PARTY_BOUNDARY','project-specific address mapping')) {
     if (-not $normalizerText.Contains($marker)) { throw "General identity normalizer marker is missing: $marker" }
   }
+  foreach ($marker in @('content-aware-consensus-over-immutable-active-Revit-T-Z-evidence','MIN_AGENT_CONFIDENCE','validate_agent_candidate','excludedPartyEvidence','_structured_identity_complete')) {
+    if (-not $contentText.Contains($marker)) { throw "Content-aware identity agent marker is missing: $marker" }
+  }
   foreach ($forbidden in @('250 MIDWOOD','79 WINTHROP')) {
-    if ($resolverText.ToUpperInvariant().Contains($forbidden) -or $normalizerText.ToUpperInvariant().Contains($forbidden)) {
+    if ($resolverText.ToUpperInvariant().Contains($forbidden) -or $normalizerText.ToUpperInvariant().Contains($forbidden) -or $contentText.ToUpperInvariant().Contains($forbidden)) {
       throw "Project-specific identity branch is forbidden in worker runtime: $forbidden"
     }
   }
-  if (-not $guardText.Contains('import revex_energy_pipeline_r69 as resolver') -or -not $guardText.Contains('_resolve_r69_request(request_path, output_root)')) {
-    throw "The generalized identity resolver is not wired behind the preserved Energy failure guard."
+  if (-not $guardText.Contains('import revex_identity_content_agent as content_identity') `
+      -or -not $guardText.Contains('_resolve_content_identity_request(request_path, output_root)') `
+      -or -not $guardText.Contains('import revex_energy_pipeline_r69 as resolver') `
+      -or -not $guardText.Contains('effective_request = _resolve_r69_request(effective_request, output_root)')) {
+    throw "The content-aware identity stage and deterministic fallback are not wired in order behind the preserved Energy failure guard."
   }
   foreach ($marker in @(
     'COPY server/revex-energy-worker/revex_energy_identity_normalizer.py',
+    'COPY server/revex-energy-worker/revex_identity_content_agent.py',
     'COPY server/revex-energy-worker/verify_identity_normalizer.py',
+    'COPY server/revex-energy-worker/verify_identity_content_agent.py',
     'python3 /opt/revex/server/verify_identity_normalizer.py',
+    'python3 /opt/revex/server/verify_identity_content_agent.py',
     'REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py',
     'REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py'
   )) {
