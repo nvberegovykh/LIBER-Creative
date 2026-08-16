@@ -9,6 +9,7 @@ on:
       - 'server/revex-energy-worker/verify_user_identity_en1_r89.py'
       - 'server/revex-energy-worker/Dockerfile'
       - 'server/firebase-functions/index.js'
+      - 'docs/liber-apps/apps/revex/energy-r27.js'
       - 'docs/liber-apps/apps/revex/energy-diagnostics-r68.js'
       - 'docs/liber-apps/apps/revex/energy-identity-en1-r89.js'
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
@@ -21,6 +22,7 @@ on:
       - 'server/revex-energy-worker/verify_user_identity_en1_r89.py'
       - 'server/revex-energy-worker/Dockerfile'
       - 'server/firebase-functions/index.js'
+      - 'docs/liber-apps/apps/revex/energy-r27.js'
       - 'docs/liber-apps/apps/revex/energy-diagnostics-r68.js'
       - 'docs/liber-apps/apps/revex/energy-identity-en1-r89.js'
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
@@ -50,6 +52,7 @@ jobs:
       - name: Compile r89 worker and browser runtime
         run: |
           python -m py_compile server/revex-energy-worker/revex_user_identity_en1.py server/revex-energy-worker/revex_energy_pipeline_guard.py server/revex-energy-worker/verify_user_identity_en1_r89.py
+          node --check docs/liber-apps/apps/revex/energy-r27.js
           node --check docs/liber-apps/apps/revex/energy-diagnostics-r68.js
           node --check docs/liber-apps/apps/revex/energy-identity-en1-r89.js
           node --check docs/liber-apps/apps/revex/ui-integrity.js
@@ -64,6 +67,7 @@ jobs:
           guard=Path('server/revex-energy-worker/revex_energy_pipeline_guard.py').read_text(encoding='utf-8')
           helper=Path('server/revex-energy-worker/revex_user_identity_en1.py').read_text(encoding='utf-8')
           broker=Path('server/firebase-functions/index.js').read_text(encoding='utf-8')
+          energy=Path('docs/liber-apps/apps/revex/energy-r27.js').read_text(encoding='utf-8')
           ui=Path('docs/liber-apps/apps/revex/ui-integrity.js').read_text(encoding='utf-8')
           en1=Path('docs/liber-apps/apps/revex/energy-identity-en1-r89.js').read_text(encoding='utf-8')
           assert '_resolve_user_identity_request(request_path, output_root)' in guard
@@ -74,6 +78,8 @@ jobs:
           assert 'fitToWidth = 1' in helper and 'fitToHeight = 1' in helper and 'expected exactly' in helper
           for marker in ('identityOverride: comcheckConsent.projectIdentityOverride','en1Applicant: comcheckConsent.en1Applicant','en1Modeler: comcheckConsent.en1Modeler'):
               assert marker in broker, marker
+          assert 'allRows.filter((row) => row?.userVisible !== false)' in energy
+          assert "completeUserOutput: 'exact-nine-visible'" in energy
           assert 'energy-identity-en1-r89.js?v=20260816r89-en1-identity1' in ui
           assert 'These fields are not transmitted to COMcheck.' in en1
           print('REVEX_R89_DEPENDENCY_GRAPH=PASSED')
