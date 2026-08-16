@@ -13,6 +13,27 @@ public sealed class RevitRequestHandler : IExternalEventHandler
 
     public void Enqueue(RevitRequest request)
     {
+        if (request.Kind == RevitRequestKind.ResolveActiveProjectBinding)
+        {
+            // r86: project-binding discovery is never an implicit Revit action.
+            // Older window code may still issue this request on entry/document switch;
+            // satisfy its callback immediately without putting anything in Revit's
+            // ExternalEvent queue. Explicit SYNC actions resolve/verify binding inside
+            // their own user-triggered request.
+            RevexDiagnostics.Stage("REVIT", "IMPLICIT_ACTION_BLOCKED", "PASSED",
+                $"kind={request.Kind}; initiator={request.Initiator}; queueDepth={_queue.Count}; no ExternalEvent work queued");
+            try
+            {
+                request.Callback(RevitRequestResult.Fail(
+                    "Automatic project-binding probes are disabled. Choose the REVEX project explicitly; no Revit work was started."));
+            }
+            catch (Exception ex)
+            {
+                RevexDiagnostics.Error("REVIT", "Implicit-action rejection callback failed.", ex);
+            }
+            return;
+        }
+
         _queue.Enqueue(request);
         RevexDiagnostics.Info("REVIT", $"ExternalEvent queued: kind={request.Kind}; correlationId={request.CorrelationId}; initiator={request.Initiator}; queueDepth={_queue.Count}");
     }
@@ -37,13 +58,7 @@ public sealed class RevitRequestHandler : IExternalEventHandler
             }
             else if (request.Kind == RevitRequestKind.ResolveActiveProjectBinding)
             {
-                // r86 explicit-action contract: opening REVEX or switching documents must
-                // never start a Revit document scan, project-binding resolution, publish,
-                // export, Energy handoff, or any other hidden work. The historic window
-                // startup probe still may exist in an older host binary long enough to
-                // reach this handler, so make that edge an immediate no-op. Project
-                // selection is now explicit in Companion; explicit SYNC actions still
-                // resolve and verify the active-document binding as part of that action.
+                // Defense in depth for any stale binary/request that bypasses Enqueue().
                 RevexDiagnostics.Stage("REVIT", "IMPLICIT_ACTION_BLOCKED", "PASSED",
                     $"kind={request.Kind}; initiator={request.Initiator}; no document traversal performed");
                 result = RevitRequestResult.Fail(
