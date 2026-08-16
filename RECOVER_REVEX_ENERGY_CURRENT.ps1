@@ -46,7 +46,7 @@ function Invoke-Capture([string]$Command, [string[]]$Arguments) {
     $lines = @(& $Command @Arguments 2>&1 | ForEach-Object { [string]$_ })
     $code = $LASTEXITCODE
     if ($null -eq $code) { $code = 0 }
-    if ([int]$code -ne 0) { throw "Command failed with exit code $code: $Command $($Arguments -join ' ')" }
+    if ([int]$code -ne 0) { throw "Command failed with exit code ${code}: $Command $($Arguments -join ' ')" }
     return ($lines -join [Environment]::NewLine).Trim()
   } finally {
     $ErrorActionPreference = $previous
