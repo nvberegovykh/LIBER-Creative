@@ -9,17 +9,24 @@ using System.Windows;
 namespace Liber.Revex.Revit.UI;
 
 /// <summary>
-/// Lightweight provider bridge shared by every REVEX WebView2 surface.
-/// It never automates a provider website. A Companion modal explicitly arms a
-/// provider, the user performs the download, and WebView2 hands that downloaded
-/// file back to Companion as one local integration result.
+/// Shared REVEX WebView2 integration endpoint.
+///
+/// Provider websites are never scripted or scraped. Companion requests an owned
+/// provider browser, the user interacts with the provider normally, and only a
+/// user-triggered supported image download is returned to the originating
+/// Companion WebView as a lightweight integration result.
 /// </summary>
 internal static class RevexWebIntegrationBridge
 {
+    private const long MaxMaterialBytes = 12L * 1024L * 1024L;
+    private static readonly Uri ArchitexturesCreate = new("https://architextures.org/create");
+
     private sealed class BridgeState
     {
         public string ArmedProvider { get; set; } = "";
         public bool CoreAttached { get; set; }
+        public WebView2? ReturnTarget { get; set; }
+        public Window? ProviderWindow { get; set; }
     }
 
     private static readonly ConditionalWeakTable<WebView2, BridgeState> States = new();
@@ -37,7 +44,6 @@ internal static class RevexWebIntegrationBridge
     {
         if (sender is not WebView2 web) return;
         BridgeState state = States.GetValue(web, _ => new BridgeState());
-
         web.CoreWebView2InitializationCompleted -= OnCoreInitialized;
         web.CoreWebView2InitializationCompleted += OnCoreInitialized;
         if (web.CoreWebView2 is not null)
@@ -57,10 +63,10 @@ internal static class RevexWebIntegrationBridge
         state.CoreAttached = true;
         web.CoreWebView2.WebMessageReceived += (_, e) => HandleWebMessage(web, state, e);
         web.CoreWebView2.DownloadStarting += (_, e) => HandleDownload(web, state, e);
-        RevexDiagnostics.Info("INTEGRATION", "WebView2 user-download bridge attached.");
+        RevexDiagnostics.Info("INTEGRATION", "REVEX WebView2 integration endpoint attached.");
     }
 
-    private static void HandleWebMessage(WebView2 web, BridgeState state, CoreWebView2WebMessageReceivedEventArgs e)
+    private static async void HandleWebMessage(WebView2 web, BridgeState state, CoreWebView2WebMessageReceivedEventArgs e)
     {
         try
         {
@@ -68,22 +74,141 @@ internal static class RevexWebIntegrationBridge
             if (string.IsNullOrWhiteSpace(json)) return;
             using JsonDocument doc = JsonDocument.Parse(json);
             JsonElement root = doc.RootElement;
-            if (!root.TryGetProperty("type", out JsonElement typeEl) ||
-                !string.Equals(typeEl.GetString(), "liber:revex-integration-arm", StringComparison.Ordinal))
+            if (!root.TryGetProperty("type", out JsonElement typeEl)) return;
+            string type = typeEl.GetString() ?? "";
+
+            if (string.Equals(type, "liber:revex-integration-arm", StringComparison.Ordinal))
+            {
+                string provider = ReadProvider(root);
+                bool active = !root.TryGetProperty("active", out JsonElement activeEl) || activeEl.ValueKind != JsonValueKind.False;
+                state.ArmedProvider = active ? provider : "";
+                RevexDiagnostics.Info("INTEGRATION", active
+                    ? $"Provider download handoff armed: {provider}."
+                    : "Provider download handoff disarmed.");
+                return;
+            }
+
+            if (!string.Equals(type, "liber:revex-integration-open", StringComparison.Ordinal))
                 return;
 
-            string provider = root.TryGetProperty("provider", out JsonElement providerEl)
-                ? (providerEl.GetString() ?? "").Trim().ToLowerInvariant()
+            string requestedProvider = ReadProvider(root);
+            string requestedUrl = root.TryGetProperty("url", out JsonElement urlEl)
+                ? (urlEl.GetString() ?? "").Trim()
                 : "";
-            bool active = !root.TryGetProperty("active", out JsonElement activeEl) || activeEl.ValueKind != JsonValueKind.False;
-            state.ArmedProvider = active ? provider : "";
-            RevexDiagnostics.Info("INTEGRATION", active
-                ? $"Provider download handoff armed: {provider}."
-                : "Provider download handoff disarmed.");
+            Uri providerUri = ResolveProviderUri(requestedProvider, requestedUrl);
+            await OpenProviderAsync(web, state, requestedProvider, providerUri);
         }
         catch (Exception ex)
         {
-            RevexDiagnostics.Warn("INTEGRATION", "Could not parse integration-arm message: " + ex.Message);
+            RevexDiagnostics.Error("INTEGRATION", "Could not open REVEX provider browser.", ex);
+            await PostAsync(web, new
+            {
+                type = "liber:revex-integration-error",
+                provider = "architextures",
+                message = ex.Message
+            });
+        }
+    }
+
+    private static string ReadProvider(JsonElement root) =>
+        root.TryGetProperty("provider", out JsonElement providerEl)
+            ? (providerEl.GetString() ?? "").Trim().ToLowerInvariant()
+            : "";
+
+    private static Uri ResolveProviderUri(string provider, string requestedUrl)
+    {
+        if (!string.Equals(provider, "architextures", StringComparison.Ordinal))
+            throw new InvalidOperationException("Unsupported REVEX material provider.");
+
+        Uri candidate = ArchitexturesCreate;
+        if (!string.IsNullOrWhiteSpace(requestedUrl) &&
+            Uri.TryCreate(requestedUrl, UriKind.Absolute, out Uri? parsed) &&
+            IsArchitexturesUri(parsed))
+            candidate = parsed;
+        return candidate;
+    }
+
+    private static bool IsArchitexturesUri(Uri uri)
+    {
+        if (!string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) return false;
+        string host = uri.Host.Trim().TrimEnd('.').ToLowerInvariant();
+        return host == "architextures.org" || host.EndsWith(".architextures.org", StringComparison.Ordinal);
+    }
+
+    private static async Task OpenProviderAsync(WebView2 origin, BridgeState originState, string provider, Uri uri)
+    {
+        if (origin.CoreWebView2 is null)
+            throw new InvalidOperationException("REVEX Companion browser is not ready yet.");
+
+        if (originState.ProviderWindow is { IsVisible: true } existing)
+        {
+            existing.Activate();
+            return;
+        }
+
+        var providerWeb = new WebView2();
+        var window = new Window
+        {
+            Title = "REVEX · Architextures Material",
+            Width = 1320,
+            Height = 860,
+            MinWidth = 980,
+            MinHeight = 680,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = providerWeb,
+            ShowInTaskbar = false
+        };
+        Window? owner = Window.GetWindow(origin);
+        if (owner is not null && owner.IsVisible)
+            window.Owner = owner;
+
+        BridgeState providerState = States.GetValue(providerWeb, _ => new BridgeState());
+        providerState.ArmedProvider = provider;
+        providerState.ReturnTarget = origin;
+        providerState.ProviderWindow = window;
+        originState.ProviderWindow = window;
+
+        window.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(originState.ProviderWindow, window))
+                originState.ProviderWindow = null;
+            providerState.ArmedProvider = "";
+            providerState.ReturnTarget = null;
+            providerState.ProviderWindow = null;
+            try { providerWeb.Dispose(); } catch { }
+        };
+
+        window.Show();
+        try
+        {
+            // Same environment/profile as Companion: login/cookies/cache are shared,
+            // but the provider receives its own owned browser surface and cannot block
+            // the BIM renderer or replace the Companion route.
+            await providerWeb.EnsureCoreWebView2Async(origin.CoreWebView2.Environment);
+            AttachCore(providerWeb, providerState);
+            providerWeb.CoreWebView2.Settings.AreDevToolsEnabled = false;
+            providerWeb.CoreWebView2.Settings.IsStatusBarEnabled = false;
+            providerWeb.CoreWebView2.NewWindowRequested += (_, args) =>
+            {
+                if (Uri.TryCreate(args.Uri, UriKind.Absolute, out Uri? target) && IsArchitexturesUri(target))
+                {
+                    args.Handled = true;
+                    providerWeb.Source = target;
+                }
+            };
+            providerWeb.Source = uri;
+            await PostAsync(origin, new
+            {
+                type = "liber:revex-integration-opened",
+                provider,
+                url = uri.ToString()
+            });
+            RevexDiagnostics.Info("INTEGRATION", $"Owned provider browser opened: provider={provider}; url={uri}.");
+        }
+        catch
+        {
+            try { window.Close(); } catch { }
+            throw;
         }
     }
 
@@ -110,24 +235,25 @@ internal static class RevexWebIntegrationBridge
         {
             if (operation.State == CoreWebView2DownloadState.InProgress) return;
             operation.StateChanged -= StateChanged;
+            WebView2 target = state.ReturnTarget ?? web;
             try
             {
                 if (operation.State != CoreWebView2DownloadState.Completed)
                 {
-                    await PostAsync(web, new
+                    await PostAsync(target, new
                     {
                         type = "liber:revex-integration-error",
                         provider,
-                        message = "The provider download did not complete."
+                        message = "The material download did not complete."
                     });
                     return;
                 }
 
                 FileInfo info = new(path);
                 if (!info.Exists || info.Length <= 0)
-                    throw new InvalidOperationException("Downloaded provider image is empty.");
-                if (info.Length > 16 * 1024 * 1024)
-                    throw new InvalidOperationException("Downloaded provider image exceeds the 16 MB REVEX material limit.");
+                    throw new InvalidOperationException("Downloaded material image is empty.");
+                if (info.Length > MaxMaterialBytes)
+                    throw new InvalidOperationException($"Downloaded material image exceeds the {MaxMaterialBytes / 1024 / 1024} MB REVEX material limit.");
 
                 byte[] bytes = await File.ReadAllBytesAsync(path);
                 string mime = extension switch
@@ -137,19 +263,22 @@ internal static class RevexWebIntegrationBridge
                     _ => "image/png"
                 };
                 string dataUrl = $"data:{mime};base64,{Convert.ToBase64String(bytes)}";
-                await PostAsync(web, new
+                await PostAsync(target, new
                 {
                     type = "liber:revex-integration-file",
                     provider,
                     name = suggested,
                     dataUrl
                 });
-                RevexDiagnostics.Info("INTEGRATION", $"User download returned to Companion: provider={provider}; file={suggested}; bytes={bytes.Length}.");
+                RevexDiagnostics.Info("INTEGRATION", $"User material download returned to Companion: provider={provider}; file={suggested}; bytes={bytes.Length}.");
+
+                if (state.ProviderWindow is { IsVisible: true } providerWindow)
+                    providerWindow.Dispatcher.BeginInvoke(new Action(providerWindow.Close));
             }
             catch (Exception ex)
             {
                 RevexDiagnostics.Error("INTEGRATION", "Could not return provider download to Companion.", ex);
-                await PostAsync(web, new
+                await PostAsync(target, new
                 {
                     type = "liber:revex-integration-error",
                     provider,
