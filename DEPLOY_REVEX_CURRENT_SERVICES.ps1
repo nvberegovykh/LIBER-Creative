@@ -37,7 +37,9 @@ function Invoke-NativeExitCode([string]$Command, [string[]]$Arguments, [switch]$
   try {
     $ErrorActionPreference = "Continue"
     if ($Quiet) { & $Command @Arguments *> $null } else { & $Command @Arguments }
-    return $LASTEXITCODE
+    $code = $LASTEXITCODE
+    if ($null -eq $code) { $code = 0 }
+    return [int]$code
   } catch { return 1 } finally { $ErrorActionPreference = $previous }
 }
 
@@ -58,8 +60,6 @@ try {
   if ($SkipRender -and $RenderBrokerOnly) { throw "-SkipRender and -RenderBrokerOnly cannot be used together." }
 
   $GCloud = Require-Command "gcloud"
-  $Firebase = Require-Command "firebase"
-
   if (-not (Test-GCloudAuth $GCloud)) {
     Write-Host ""
     Write-Host "Google Cloud authorization is required once. Opening Google sign-in..." -ForegroundColor Yellow
@@ -69,24 +69,38 @@ try {
     Write-Host "Google Cloud authorization confirmed." -ForegroundColor Green
   }
 
-  if (-not (Test-FirebaseAuth $Firebase)) {
-    Write-Host ""
-    Write-Host "Firebase authorization is required once. Opening Google sign-in; deployment will resume automatically after approval..." -ForegroundColor Yellow
-    if ((Invoke-NativeExitCode $Firebase @("login","--reauth")) -ne 0 -or -not (Test-FirebaseAuth $Firebase)) {
-      throw "Firebase authentication did not complete successfully."
+  # Firebase CLI is required only by the Energy deployment. The render broker is
+  # deployed through gcloud Cloud Functions v2, so touching firebase-tools during
+  # broker-only resume is unnecessary and can trigger the Windows libuv crash.
+  if (-not $SkipEnergy) {
+    $Firebase = Require-Command "firebase"
+    if (-not (Test-FirebaseAuth $Firebase)) {
+      Write-Host ""
+      Write-Host "Firebase authorization is required once. Opening Google sign-in; deployment will resume automatically after approval..." -ForegroundColor Yellow
+      if ((Invoke-NativeExitCode $Firebase @("login","--reauth")) -ne 0 -or -not (Test-FirebaseAuth $Firebase)) {
+        throw "Firebase authentication did not complete successfully."
+      }
     }
+    $env:REVEX_FIREBASE_AUTH_VERIFIED = "1"
+    Write-Host "Firebase authorization confirmed for the Energy deployment chain." -ForegroundColor Green
+  } else {
+    Remove-Item Env:REVEX_FIREBASE_AUTH_VERIFIED -ErrorAction SilentlyContinue
+    Write-Host "Firebase CLI skipped: Energy is not being deployed." -ForegroundColor Green
   }
 
-  $env:REVEX_FIREBASE_AUTH_VERIFIED = "1"
   $env:CI = "1"
-  Write-Host "Firebase authorization confirmed for this deployment chain." -ForegroundColor Green
 
-  $artifactArgs = @("artifacts","repositories","describe","revex","--location",$Region,"--project",$ProjectId)
-  if ((Invoke-NativeExitCode $GCloud $artifactArgs -Quiet) -eq 0) {
-    $env:REVEX_ARTIFACT_REPOSITORY_VERIFIED = "1"
-    Write-Host "Existing REVEX Artifact Registry repository confirmed; creation will be skipped." -ForegroundColor Green
+  if (-not $RenderBrokerOnly) {
+    $artifactArgs = @("artifacts","repositories","describe","revex","--location",$Region,"--project",$ProjectId)
+    if ((Invoke-NativeExitCode $GCloud $artifactArgs -Quiet) -eq 0) {
+      $env:REVEX_ARTIFACT_REPOSITORY_VERIFIED = "1"
+      Write-Host "Existing REVEX Artifact Registry repository confirmed; creation will be skipped." -ForegroundColor Green
+    } else {
+      $env:REVEX_ARTIFACT_REPOSITORY_VERIFIED = "0"
+    }
   } else {
-    $env:REVEX_ARTIFACT_REPOSITORY_VERIFIED = "0"
+    Remove-Item Env:REVEX_ARTIFACT_REPOSITORY_VERIFIED -ErrorAction SilentlyContinue
+    Write-Host "Artifact Registry probe skipped: broker-only resume does not build an image." -ForegroundColor Green
   }
 
   Write-Host "Refreshing Windows-safe REVEX deployment bootstrap from GitHub main..." -ForegroundColor Cyan
@@ -102,9 +116,7 @@ try {
   if ($NoPause) { $args += "-NoPause" }
 
   $ExitCode = Invoke-NativeExitCode "powershell.exe" $args
-  if ($ExitCode -ne 0) {
-    throw "Current REVEX bootstrap exited with code $ExitCode."
-  }
+  if ($ExitCode -ne 0) { throw "Current REVEX bootstrap exited with code $ExitCode." }
 
   Write-Host ""
   Write-Host "PASS: REVEX current managed-services launcher completed." -ForegroundColor Green
@@ -119,9 +131,7 @@ catch {
 }
 finally {
   Remove-Item -LiteralPath $TempScript -Force -ErrorAction SilentlyContinue
-  if ($TranscriptStarted) {
-    try { Stop-Transcript | Out-Null } catch {}
-  }
+  if ($TranscriptStarted) { try { Stop-Transcript | Out-Null } catch {} }
   if (Test-Path -LiteralPath $LogPath -PathType Leaf) {
     try { Copy-Item -LiteralPath $LogPath -Destination $LatestLogPath -Force } catch {}
   }
