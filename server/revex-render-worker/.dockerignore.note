@@ -1,1 +1,0 @@
-REVEX r54 does not vendor Qwen model weights into this source directory or Docker context. The Dockerfile copies only worker code, requirements, and the exact model manifest.
