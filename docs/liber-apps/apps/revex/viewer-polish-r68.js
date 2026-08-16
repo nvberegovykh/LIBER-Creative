@@ -184,7 +184,7 @@ if(!window.__revexViewerPolishR68){
 
   function patch(v){
     if(!v||v.__revexR68Polished)return Boolean(v);
-    if(!window.__revexWorkspaceR51||!window.__revexReviewIntegrityR50)return false;
+    if(!v.__revexWorkspaceR51Patched||!v.__reviewIntegrityR50)return false;
     v.__revexR68Polished=true;
     patchSection(v);patchWalk(v);applyPresentation(v);
     const priorLoad=typeof v.load==='function'?v.load.bind(v):null;
