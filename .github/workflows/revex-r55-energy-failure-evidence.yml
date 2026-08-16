@@ -1,0 +1,54 @@
+name: REVEX r55 Energy failure evidence
+
+on:
+  push:
+    branches:
+      - main
+      - 'agent/revex-energy-failure-evidence-r55-*'
+    paths:
+      - 'server/revex-energy-worker/**'
+      - 'docs/liber-apps/apps/revex/energy-r27.js'
+      - '.github/workflows/revex-r55-energy-failure-evidence.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/revex-energy-worker/**'
+      - 'docs/liber-apps/apps/revex/energy-r27.js'
+      - '.github/workflows/revex-r55-energy-failure-evidence.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Failure evidence survives managed worker cleanup
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax
+        run: |
+          python -m py_compile server/revex-energy-worker/revex_energy_pipeline_guard.py
+          python -m py_compile server/revex-energy-worker/verify_failure_evidence_r55.py
+          node --check docs/liber-apps/apps/revex/energy-r27.js
+      - name: Exercise GeometryCo/downstream failure preservation
+        run: python server/revex-energy-worker/verify_failure_evidence_r55.py
+      - name: Verify worker image uses guard without changing pinned implementation
+        shell: pwsh
+        run: |
+          $docker = Get-Content -Raw server/revex-energy-worker/Dockerfile
+          foreach ($marker in @(
+            'REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py',
+            'REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py',
+            'verify_failure_evidence_r55.py'
+          )) {
+            if (-not $docker.Contains($marker)) { throw "Missing r55 worker marker: $marker" }
+          }
+      - name: Preserve current REVEX generation contracts
+        run: node .github/scripts/verify-revex-current-generation-r53.js
