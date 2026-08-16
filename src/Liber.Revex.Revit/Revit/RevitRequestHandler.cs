@@ -13,6 +13,27 @@ public sealed class RevitRequestHandler : IExternalEventHandler
 
     public void Enqueue(RevitRequest request)
     {
+        if (request.Kind == RevitRequestKind.ResolveActiveProjectBinding)
+        {
+            // r86: project-binding discovery is never an implicit Revit action.
+            // Older window code may still issue this request on entry/document switch;
+            // satisfy its callback immediately without putting anything in Revit's
+            // ExternalEvent queue. Explicit SYNC actions resolve/verify binding inside
+            // their own user-triggered request.
+            RevexDiagnostics.Stage("REVIT", "IMPLICIT_ACTION_BLOCKED", "PASSED",
+                $"kind={request.Kind}; initiator={request.Initiator}; queueDepth={_queue.Count}; no ExternalEvent work queued");
+            try
+            {
+                request.Callback(RevitRequestResult.Fail(
+                    "Automatic project-binding probes are disabled. Choose the REVEX project explicitly; no Revit work was started."));
+            }
+            catch (Exception ex)
+            {
+                RevexDiagnostics.Error("REVIT", "Implicit-action rejection callback failed.", ex);
+            }
+            return;
+        }
+
         _queue.Enqueue(request);
         RevexDiagnostics.Info("REVIT", $"ExternalEvent queued: kind={request.Kind}; correlationId={request.CorrelationId}; initiator={request.Initiator}; queueDepth={_queue.Count}");
     }
@@ -35,11 +56,18 @@ public sealed class RevitRequestHandler : IExternalEventHandler
             {
                 result = RevitRequestResult.Fail("No active Revit document.");
             }
+            else if (request.Kind == RevitRequestKind.ResolveActiveProjectBinding)
+            {
+                // Defense in depth for any stale binary/request that bypasses Enqueue().
+                RevexDiagnostics.Stage("REVIT", "IMPLICIT_ACTION_BLOCKED", "PASSED",
+                    $"kind={request.Kind}; initiator={request.Initiator}; no document traversal performed");
+                result = RevitRequestResult.Fail(
+                    "Automatic project-binding probes are disabled. Choose the REVEX project explicitly; no Revit work was started.");
+            }
             else
             {
                 RevexDiagnostics.Info("REVIT", $"Document={uidoc.Document.Title}; ActiveView={uidoc.ActiveView?.Name ?? "<none>"}");
-                bool requiresProjectBinding = request.Kind == RevitRequestKind.ResolveActiveProjectBinding ||
-                                              request.Kind == RevitRequestKind.SyncRevexProject ||
+                bool requiresProjectBinding = request.Kind == RevitRequestKind.SyncRevexProject ||
                                               (request.Kind == RevitRequestKind.GbxmlEngineering &&
                                                request.EngineeringSettings?.AuditOnly == false);
                 RevexProjectBinding? resolvedBinding = requiresProjectBinding
@@ -47,8 +75,6 @@ public sealed class RevitRequestHandler : IExternalEventHandler
                     : null;
                 result = request.Kind switch
                 {
-                    RevitRequestKind.ResolveActiveProjectBinding =>
-                        RevitRequestResult.Bound("Active Revit document project binding resolved.", resolvedBinding!),
                     RevitRequestKind.CaptureCurrentView =>
                         CaptureCurrent(uidoc, request.Settings),
                     RevitRequestKind.CaptureBatch =>
