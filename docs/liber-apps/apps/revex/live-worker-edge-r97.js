@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260816r97-live-worker-edge1';
+  const BUILD='20260816r97-live-worker-edge2';
   if(root.__revexLiveWorkerEdgeR97)return;
   root.__revexLiveWorkerEdgeR97={build:BUILD};
 
@@ -34,10 +34,33 @@
     const snap=await Store.api.getDoc(Store.api.doc(Store.db,'projects',id,'revexEnergyJobs',revision));
     return snap?.exists?.()?snap.data():null;
   }
+  async function readJobAfterCallable(Store,id,revision,error){
+    const generic=/functions\/internal|\binternal\b/i.test(clean(error?.message||error));
+    const attempts=generic?12:1;
+    let job=null;
+    for(let attempt=0;attempt<attempts;attempt+=1){
+      try{job=await readJob(Store,id,revision);}catch(readError){
+        diagnostic('WARN','ENERGY_JOB_READ_AFTER_CALLABLE',readError?.message||String(readError));
+        return null;
+      }
+      if(job&&clean(job.status))return job;
+      if(attempt+1<attempts)await sleep(500);
+    }
+    return job;
+  }
   function exactJobError(job,status){
     const stage=clean(job?.stage)||'WORKER_REQUEST';
     const detail=clean(job?.error)||`Energy broker job status is ${status||'UNKNOWN'}.`;
-    return `${stage}: ${detail}`;
+    const http=job?.workerHttpStatus?` [HTTP ${job.workerHttpStatus}]`:'';
+    return `${stage}${http}: ${detail}`;
+  }
+  function exactResult(result,id,revision,resultRevision=''){
+    if(!result?.manifest)return false;
+    const manifest=result.manifest;
+    const resultProject=clean(result.projectId||manifest.projectId);
+    const sourceRevision=clean(manifest.sourceEngineeringRevision||manifest.sourceRevision||manifest.engineeringRevision||result.sourceRevision);
+    const actual=clean(result.revision||manifest.resultRevision);
+    return resultProject===id&&sourceRevision===revision&&(!clean(resultRevision)||actual===clean(resultRevision));
   }
 
   // WebView2 can produce synthetic keyboard events without a key. The legacy viewer
@@ -56,20 +79,45 @@
     root.addEventListener('keyup',guard,true);
   }
 
+  async function followAuthoritativeJob(Store,ctx,job,reason='reattach'){
+    const status=clean(job?.status).toUpperCase();
+    const stage=clean(job?.stage);
+    const resultRevision=clean(job?.resultRevision);
+    const follow=root.__revexHostedEnergyReplayR95?.followExistingJob;
+    if(typeof follow==='function')return follow(Store,ctx.id,ctx.revision);
+
+    // Fallback only if the hosted follower is unavailable. COMPLETE is still accepted
+    // only when the exact immutable result is already current and bound to this source.
+    if(status==='COMPLETE'){
+      const result=await Store.getEnergyResult(ctx.id);
+      if(!exactResult(result,ctx.id,ctx.revision,resultRevision)||clean(result?.manifest?.status).toUpperCase()!=='COMPLETE')
+        throw new Error(`Broker job completed as ${resultRevision||'<missing result revision>'}, but its exact immutable Energy result is not current.`);
+      root.dispatchEvent(new CustomEvent('revex:managed-energy-result',{detail:{projectId:ctx.id,revision:ctx.revision,resultRevision:clean(result.revision||result.manifest?.resultRevision),result}}));
+      post('COMPLETE',`Energy chain complete for ${ctx.revision} as ${clean(result.revision||result.manifest?.resultRevision)}.`,true,{projectId:ctx.id,revision:ctx.revision,resultRevision:clean(result.revision||result.manifest?.resultRevision),recoveredFrom:reason});
+      return {ok:true,recovered:true,result};
+    }
+    return {ok:false,reattached:true,projectId:ctx.id,revision:ctx.revision};
+  }
+
   async function recoverCallableFailure(error){
     let Store,ctx;
     try{Store=await StoreReady(5000);ctx=await context(Store);}catch(_){return null;}
     if(!ctx)return null;
-    let job=null;
-    try{job=await readJob(Store,ctx.id,ctx.revision);}catch(readError){diagnostic('WARN','ENERGY_JOB_READ_AFTER_CALLABLE',readError?.message||String(readError));return null;}
+    const job=await readJobAfterCallable(Store,ctx.id,ctx.revision,error);
+    if(!job)return null;
     const status=clean(job?.status).toUpperCase();
     const stage=clean(job?.stage);
-    if(status==='RUNNING'){
-      diagnostic('WARN','ENERGY_CALLABLE_EDGE_DROPPED','The callable edge ended while the exact server job is still RUNNING; reattaching instead of launching another execution.',{projectId:ctx.id,revision:ctx.revision,jobStage:stage,originalError:error?.message||String(error)});
-      post('BROKER_REATTACH',`Server job for ${ctx.revision} is still RUNNING${stage?` / ${stage}`:''}; reattached without restarting it.`,false,{projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage});
-      const follow=root.__revexHostedEnergyReplayR95?.followExistingJob;
-      if(typeof follow==='function')return follow(Store,ctx.id,ctx.revision);
-      return {ok:false,reattached:true};
+    if(status==='RUNNING'||status==='COMPLETE'){
+      const completed=status==='COMPLETE';
+      diagnostic(completed?'INFO':'WARN',completed?'ENERGY_CALLABLE_EDGE_COMPLETED':'ENERGY_CALLABLE_EDGE_DROPPED',completed
+        ?'The callable edge ended after the exact server job already completed; recovering the published result instead of reporting a false failure.'
+        :'The callable edge ended while the exact server job is still RUNNING; reattaching instead of launching another execution.',
+        {projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,resultRevision:clean(job.resultRevision),originalError:error?.message||String(error)});
+      post(completed?'BROKER_RECOVERED_COMPLETE':'BROKER_REATTACH',completed
+        ?`Server job for ${ctx.revision} already completed as ${clean(job.resultRevision)||'an exact result'}; recovering that result.`
+        :`Server job for ${ctx.revision} is still RUNNING${stage?` / ${stage}`:''}; reattached without restarting it.`,completed,
+        {projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,resultRevision:clean(job.resultRevision)});
+      return followAuthoritativeJob(Store,ctx,job,'callable-edge');
     }
     if(status==='FAILED'||status==='INFRASTRUCTURE_FAILED'){
       const exact=exactJobError(job,status);
@@ -111,10 +159,12 @@
       const Store=await StoreReady(5000),ctx=await context(Store);if(!ctx)return;
       const job=await readJob(Store,ctx.id,ctx.revision);if(!job)return;
       const status=clean(job.status).toUpperCase(),stage=clean(job.stage);
-      if(status==='RUNNING'){
-        diagnostic('INFO','ENERGY_JOB_REATTACH_R97',`Found RUNNING job for ${ctx.revision}; attaching to it without a duplicate launch.`,{projectId:ctx.id,revision:ctx.revision,jobStage:stage});
-        const follow=root.__revexHostedEnergyReplayR95?.followExistingJob;
-        if(typeof follow==='function')void follow(Store,ctx.id,ctx.revision).catch(error=>recoverCallableFailure(error).catch(()=>{}));
+      if(status==='RUNNING'||status==='COMPLETE'){
+        diagnostic('INFO',status==='COMPLETE'?'ENERGY_JOB_COMPLETE_R97':'ENERGY_JOB_REATTACH_R97',status==='COMPLETE'
+          ?`Found COMPLETE job for ${ctx.revision}; binding its exact immutable result.`
+          :`Found RUNNING job for ${ctx.revision}; attaching to it without a duplicate launch.`,
+          {projectId:ctx.id,revision:ctx.revision,jobStage:stage,resultRevision:clean(job.resultRevision)});
+        void followAuthoritativeJob(Store,ctx,job,'page-load').catch(error=>diagnostic('ERROR','ENERGY_JOB_FOLLOW_R97',error?.message||String(error)));
         return;
       }
       if(status==='FAILED'||status==='INFRASTRUCTURE_FAILED'){
@@ -130,5 +180,5 @@
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install,{once:true});else install();
   root.addEventListener('revex:energy-open',()=>{void wrapNativeBridge();setTimeout(()=>void surfaceExistingJob(),150);});
   root.addEventListener('revex:source-revision-loaded',()=>{void wrapNativeBridge();setTimeout(()=>void surfaceExistingJob(),150);});
-  console.info('[REVEX] live worker edge r97',{callableFailure:'read-exact-job-and-reattach',duplicateLaunch:'blocked',malformedViewerKey:'ignored-only',qaHardStop:'unchanged'});
+  console.info('[REVEX] live worker edge r97',{callableFailure:'read-exact-job-and-reattach-or-complete',duplicateLaunch:'blocked',malformedViewerKey:'ignored-only',qaHardStop:'unchanged'});
 })(window);
