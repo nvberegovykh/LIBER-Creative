@@ -1,0 +1,114 @@
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+const assert = require('assert');
+
+const root = path.resolve(__dirname, '..', '..');
+const sourcePath = path.join(root, 'docs/liber-apps/apps/revex/live-worker-edge-r97.js');
+const loaderPath = path.join(root, 'docs/liber-apps/apps/revex/viewer-interaction-r85-loader.js');
+const source = fs.readFileSync(sourcePath, 'utf8');
+const loader = fs.readFileSync(loaderPath, 'utf8');
+new vm.Script(source, { filename: sourcePath });
+new vm.Script(loader, { filename: loaderPath });
+assert(source.includes("status==='RUNNING'"));
+assert(source.includes("status==='FAILED'||status==='INFRASTRUCTURE_FAILED'"));
+assert(source.includes('followExistingJob'));
+assert(source.includes('event.stopImmediatePropagation'));
+assert(loader.includes('live-worker-edge-r97.js?v=20260816r97-live-worker-edge1'));
+
+function makeHarness(job) {
+  const listeners = new Map();
+  const diagnostics = [];
+  let followCount = 0;
+  const Store = {
+    isCloud: () => true,
+    user: { uid: 'user-1' },
+    getEngineeringState: async () => ({ revision: 'eng_test', manifest: { revision: 'eng_test' } }),
+    api: {
+      doc: (...parts) => parts.join('/'),
+      getDoc: async () => ({ exists: () => true, data: () => job })
+    },
+    db: {}
+  };
+  const document = {
+    readyState: 'complete',
+    getElementById: () => null,
+  };
+  const window = {
+    document,
+    location: { search: '?projectId=revex_test' },
+    URLSearchParams,
+    console: { info() {}, error() {}, warn() {}, log() {} },
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+    CustomEvent: function(type, options){ this.type=type; this.detail=options?.detail; },
+    __revexState: { projectId: 'revex_test' },
+    __revexBrowserDiagnostics: { emit: (...args) => diagnostics.push(args) },
+    RevexStore: Store,
+    __revexManagedEnergyBridge: {
+      version: '20260816r83',
+      authorizeCurrentRevision: async () => { throw new Error('internal · Code: functions/internal'); }
+    },
+    __revexHostedEnergyReplayR95: {
+      followExistingJob: async (store, id, revision) => {
+        followCount += 1;
+        assert.strictEqual(store, Store);
+        assert.strictEqual(id, 'revex_test');
+        assert.strictEqual(revision, 'eng_test');
+        return { ok: true, followed: true };
+      }
+    },
+    addEventListener(type, handler, capture) {
+      const rows = listeners.get(type) || [];
+      rows.push({ handler, capture });
+      listeners.set(type, rows);
+    },
+    dispatchEvent() { return true; }
+  };
+  window.window = window;
+  const context = vm.createContext({ window, document, location: window.location, URLSearchParams, console: window.console, setTimeout, clearTimeout, setInterval, clearInterval, CustomEvent: window.CustomEvent });
+  new vm.Script(source, { filename: sourcePath }).runInContext(context);
+  return { window, listeners, diagnostics, getFollowCount: () => followCount };
+}
+
+(async () => {
+  {
+    const h = makeHarness({ status: 'RUNNING', stage: 'OPENSTUDIO' });
+    await new Promise(resolve => setTimeout(resolve, 30));
+    const result = await h.window.__revexManagedEnergyBridge.authorizeCurrentRevision();
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(result)), { ok: true, followed: true });
+    assert.strictEqual(h.getFollowCount(), 1, 'dropped callable must reattach to exact running job');
+  }
+  {
+    const h = makeHarness({ status: 'INFRASTRUCTURE_FAILED', stage: 'WORKER_REQUEST', error: 'upstream reset', workerHttpStatus: 503 });
+    await new Promise(resolve => setTimeout(resolve, 30));
+    await assert.rejects(
+      () => h.window.__revexManagedEnergyBridge.authorizeCurrentRevision(),
+      error => /WORKER_REQUEST: upstream reset/.test(String(error?.message || error))
+    );
+    assert.strictEqual(h.getFollowCount(), 0, 'terminal infrastructure failure must not launch another execution');
+  }
+  {
+    const h = makeHarness({ status: 'COMPLETE' });
+    const keydown = (h.listeners.get('keydown') || []).find(row => row.capture)?.handler;
+    assert.strictEqual(typeof keydown, 'function');
+    let stopped = false;
+    keydown({ key: undefined, stopImmediatePropagation: () => { stopped = true; } });
+    assert.strictEqual(stopped, true, 'malformed key-less WebView event must be stopped before legacy viewer handler');
+    stopped = false;
+    keydown({ key: 'W', stopImmediatePropagation: () => { stopped = true; } });
+    assert.strictEqual(stopped, false, 'normal keyboard event must remain untouched');
+  }
+  console.log(JSON.stringify({
+    schema: 'liber.revex.r97-live-worker-edge-qa.v1',
+    status: 'PASSED',
+    callableDropRunningJob: 'reattach-same-job',
+    infrastructureFailure: 'exact-firestore-job-error',
+    malformedViewerKey: 'ignored-before-legacy-toLowerCase',
+    duplicateLaunch: 'not-created',
+    qaHardStop: 'unchanged'
+  }, null, 2));
+})().catch(error => { console.error(error); process.exit(1); });
