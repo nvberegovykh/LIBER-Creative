@@ -26,7 +26,7 @@ must(viewer,'scheduleAppearanceRows(this,changed)','appearance changes must touc
 must(viewer,'if(!node.isMesh)return','hidden meshes must remain indexed so Restore cannot lose them');
 
 must(modal,'[data-r70-box]{display:none!important}','legacy five-button finish block must be removed from the visible inspector');
-must(modal,'<dialog','finish integration must use one modal surface');
+must(modal,"document.createElement('dialog')",'finish integration must use one modal surface');
 must(modal,'https://architextures.org/create','Architextures Create must be the integrated material endpoint');
 must(modal,'Drop the downloaded texture here','browser sandbox fallback must stay inside the same material modal');
 must(modal,"m.type!=='liber:revex-integration-file'",'modal must expose the native download handoff endpoint');
