@@ -1,0 +1,22 @@
+{
+  "schema": "liber.revex.render-model.v1",
+  "engine": "revex-qwen-image-edit",
+  "model": "Qwen/Qwen-Image-Edit-2511",
+  "revision": "6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9",
+  "license": "Apache-2.0",
+  "upstream": "https://huggingface.co/Qwen/Qwen-Image-Edit-2511",
+  "authentication": "none-public-repository",
+  "runtime": {
+    "pipeline": "QwenImageEditPlusPipeline",
+    "dtype": "bfloat16",
+    "gpu": "nvidia-rtx-pro-6000",
+    "vramGiB": 96,
+    "concurrency": 1
+  },
+  "integrity": {
+    "revisionPinned": true,
+    "allowMovingMain": false,
+    "allowUserModelOverride": false,
+    "allowHuggingFaceTokenRequirement": false
+  }
+}
