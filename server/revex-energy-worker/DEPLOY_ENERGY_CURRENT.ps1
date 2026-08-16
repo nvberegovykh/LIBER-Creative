@@ -27,12 +27,37 @@ function Require-Command([string]$Name) {
 
 function Invoke-Checked([string]$Label, [string]$Command, [string[]]$Arguments, [switch]$Quiet) {
   Write-Host ">> $Label" -ForegroundColor DarkCyan
-  if ($Quiet) { & $Command @Arguments | Out-Null } else { & $Command @Arguments }
-  if ($LASTEXITCODE -ne 0) { throw "$Label failed with exit code $LASTEXITCODE." }
+  $previous = $ErrorActionPreference
+  $code = 1
+  try {
+    # Native CLIs (especially Firebase) legitimately write progress to stderr.
+    # PowerShell must judge them by LASTEXITCODE, not by stderr text.
+    $ErrorActionPreference = "Continue"
+    if ($Quiet) { & $Command @Arguments *> $null } else { & $Command @Arguments 2>&1 | ForEach-Object { Write-Host ([string]$_) } }
+    $code = $LASTEXITCODE
+    if ($null -eq $code) { $code = 0 }
+  } catch {
+    $code = 1
+  } finally {
+    $ErrorActionPreference = $previous
+  }
+  if ([int]$code -ne 0) { throw "$Label failed with exit code $code." }
 }
 
 function Native-Ok([string]$Command, [string[]]$Arguments) {
-  try { & $Command @Arguments *> $null; return ($LASTEXITCODE -eq 0) } catch { return $false }
+  $previous = $ErrorActionPreference
+  try {
+    # REVEX_NATIVE_EXITCODE_AUTHORITATIVE: benign native stderr is not failure.
+    $ErrorActionPreference = "Continue"
+    & $Command @Arguments *> $null
+    $code = $LASTEXITCODE
+    if ($null -eq $code) { $code = 0 }
+    return ([int]$code -eq 0)
+  } catch {
+    return $false
+  } finally {
+    $ErrorActionPreference = $previous
+  }
 }
 
 function Ensure-ServiceAccount([string]$GCloud, [string]$Name, [string]$DisplayName) {
@@ -108,9 +133,14 @@ try {
     throw "Google Cloud administrator authentication is required once. Run 'gcloud auth login', then rerun the unified REVEX deployment. No cloud change was started."
   }
   $Deployer = [string]$active[0]
-  if (-not (Native-Ok $Firebase @("projects:list","--json"))) {
+
+  # The root launcher performs the interactive Firebase authentication once and
+  # exports REVEX_FIREBASE_AUTH_VERIFIED=1 for this exact child process. Do not
+  # reinterpret the same successful CLI session through another fragile probe.
+  if ($env:REVEX_FIREBASE_AUTH_VERIFIED -ne "1" -and -not (Native-Ok $Firebase @("projects:list","--json"))) {
     throw "Firebase administrator authentication is required once. Run 'firebase login', then rerun the unified REVEX deployment. No Energy deployment was started."
   }
+  Write-Host "Firebase administrator session accepted for managed Energy deployment." -ForegroundColor Green
 
   Invoke-Checked "Verify Google Cloud project" $GCloud @("projects","describe",$ProjectId,"--format=value(projectId)") -Quiet
   Invoke-Checked "Select Google Cloud project" $GCloud @("config","set","project",$ProjectId) -Quiet
