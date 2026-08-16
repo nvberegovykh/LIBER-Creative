@@ -260,6 +260,8 @@ async function verifyManagedEnergyClient() {
   const state={projectId:'revex_old'};
   const result={projectId:'revex_current',manifest:{schema:'liber.revex.energy-result.v1',status:'COMPLETE',sourceEngineeringRevision:'eng_current'}};
   const Store={
+    isCloud:()=>true,
+    user:{uid:'qa-user'},
     syncEngineeringPackage:async()=>({projectId:'revex_current',revision:'eng_current'}),
     getEnergyConsent:async()=>({approved:true}),
     runEnergyServer:async()=>({ok:true,status:'COMPLETE'}),
