@@ -4,6 +4,7 @@ param(
   [switch]$SkipEnergy,
   [switch]$SkipRender,
   [switch]$RenderBrokerOnly,
+  [switch]$EnergyWorkerOnly,
   [switch]$ValidateOnly,
   [switch]$NoPause
 )
@@ -68,10 +69,6 @@ function Invoke-GCloudCapture([string]$Command, [string[]]$Arguments) {
   $text = $text.Replace('[string]$active[0]', '[string](@($active)[0])')
   $text = $text.Replace('[string]$accounts[0]', '[string](@($accounts)[0])')
 
-  # r65 broker-resume hardening. The production broker is Node 22, but the user's
-  # workstation currently resolves `node` to Node 24. A cold local require can take
-  # >10 seconds even though CI proves Node 22 discovery is fast, so local preflight
-  # validates syntax/export only and never becomes a false deployment gate.
   $text = $text.Replace(
     'Preflight callable broker source under Node 22 contract',
     'Preflight callable broker source syntax/export'
@@ -80,16 +77,12 @@ function Invoke-GCloudCapture([string]$Command, [string[]]$Arguments) {
     "const t=Date.now();const m=require('./index.js');if(typeof m.runRevexRender!=='function')throw new Error('runRevexRender export missing');const ms=Date.now()-t;if(ms>10000)throw new Error('broker module discovery exceeded 10s: '+ms);console.log('REVEX broker module OK in '+ms+' ms');",
     "const t=Date.now();const m=require('./index.js');if(typeof m.runRevexRender!=='function')throw new Error('runRevexRender export missing');const ms=Date.now()-t;console.log('REVEX broker module OK in '+ms+' ms');"
   )
-
-  # Cloud Functions v2/Cloud Run rejects concurrency >1 when the function has less
-  # than one vCPU. The broker intentionally uses concurrency 4, so pin one full CPU.
   $text = $text.Replace(
     '"--memory","1GiB","--timeout","3600s","--concurrency","4","--max-instances","4","--quiet"',
     '"--memory","1GiB","--cpu","1","--timeout","3600s","--concurrency","4","--max-instances","4","--quiet"'
   )
 
   Set-Content -LiteralPath $Path -Value $text -Encoding UTF8
-
   Assert-PowerShellParse $Path
   $verified = Get-Content -Raw -LiteralPath $Path
   if ($verified.Contains('& $GCloud @(')) {
@@ -110,29 +103,33 @@ function Invoke-GCloudCapture([string]$Command, [string[]]$Arguments) {
 
 function Prepare-ManagedScripts([string]$Root) {
   $energy = Join-Path $Root "server\revex-energy-worker\DEPLOY_ENERGY_CURRENT.ps1"
+  $energyWorkerOnly = Join-Path $Root "server\revex-energy-worker\DEPLOY_ENERGY_WORKER_ONLY_R69.ps1"
   $render = Join-Path $Root "server\revex-render-worker\DEPLOY_RENDER_SERVER.ps1"
-  foreach ($path in @($energy, $render)) {
+  foreach ($path in @($energy, $energyWorkerOnly, $render)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
       throw "Current REVEX source is missing managed deployment script: $path"
     }
     Patch-DirectGCloudArrayInvocations $path
   }
-  return @{ Energy = $energy; Render = $render }
+  return @{ Energy = $energy; EnergyWorkerOnly = $energyWorkerOnly; Render = $render }
 }
 
 try {
   Write-Host "REVEX current managed-services bootstrap" -ForegroundColor Cyan
   Write-Host "Windows-safe native argv handling; stale r49 Drive source restoration is never used."
   if ($SkipRender -and $RenderBrokerOnly) { throw "-SkipRender and -RenderBrokerOnly cannot be used together." }
+  if ($SkipEnergy -and $EnergyWorkerOnly) { throw "-SkipEnergy and -EnergyWorkerOnly cannot be used together." }
 
   if ($ValidateOnly) {
     $validationRoot = Join-Path $TempRoot "validation"
     New-Item -ItemType Directory -Path $validationRoot -Force | Out-Null
     $energySource = Join-Path $PSScriptRoot "server\revex-energy-worker\DEPLOY_ENERGY_CURRENT.ps1"
+    $energyWorkerOnlySource = Join-Path $PSScriptRoot "server\revex-energy-worker\DEPLOY_ENERGY_WORKER_ONLY_R69.ps1"
     $renderSource = Join-Path $PSScriptRoot "server\revex-render-worker\DEPLOY_RENDER_SERVER.ps1"
     New-Item -ItemType Directory -Path (Join-Path $validationRoot "server\revex-energy-worker") -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $validationRoot "server\revex-render-worker") -Force | Out-Null
     Copy-Item -LiteralPath $energySource -Destination (Join-Path $validationRoot "server\revex-energy-worker\DEPLOY_ENERGY_CURRENT.ps1") -Force
+    Copy-Item -LiteralPath $energyWorkerOnlySource -Destination (Join-Path $validationRoot "server\revex-energy-worker\DEPLOY_ENERGY_WORKER_ONLY_R69.ps1") -Force
     Copy-Item -LiteralPath $renderSource -Destination (Join-Path $validationRoot "server\revex-render-worker\DEPLOY_RENDER_SERVER.ps1") -Force
     $null = Prepare-ManagedScripts $validationRoot
     Assert-PowerShellParse $PSCommandPath
@@ -142,7 +139,6 @@ try {
 
   $Git = Require-Command "git"
   $GCloud = Require-Command "gcloud"
-  $Npm = Require-Command "npm"
   $Node = Require-Command "node"
 
   $authArgs = @("auth", "list", "--filter", "status:ACTIVE", "--format", "value(account)")
@@ -151,15 +147,15 @@ try {
     throw "Google Cloud administrator authentication is required once. Run 'gcloud auth login', then rerun this file. Nothing was deployed."
   }
 
-  # firebase-tools is an Energy deployment dependency only. Render-only/broker-only
-  # paths are gcloud based and must not touch firebase projects:list on Windows.
-  if (-not $SkipEnergy) {
+  if (-not $SkipEnergy -and -not $EnergyWorkerOnly) {
     $Firebase = Require-Command "firebase"
     $firebaseArgs = @("projects:list", "--json")
     $null = Invoke-NativeCapture $Firebase $firebaseArgs
     if ($script:NativeExitCode -ne 0) {
       throw "Firebase administrator authentication is required once. Run 'firebase login', then rerun this file. Nothing was deployed."
     }
+  } elseif ($EnergyWorkerOnly) {
+    Write-Host "Firebase CLI skipped in bootstrap: r69 Energy worker-only deployment preserves the active broker." -ForegroundColor Green
   } else {
     Write-Host "Firebase CLI skipped in bootstrap: Energy deployment is disabled." -ForegroundColor Green
   }
@@ -182,11 +178,21 @@ try {
   if (Test-Path -LiteralPath $R54Guard -PathType Leaf) {
     Invoke-Checked "Verify renderer + Energy + BIM viewer integration" $Node @($R54Guard) $TempRoot
   }
+  if (-not $EnergyWorkerOnly) {
+    $R69Guard = Join-Path $TempRoot ".github\scripts\verify-revex-r69-energy-finish.py"
+    if (Test-Path -LiteralPath $R69Guard -PathType Leaf) {
+      $Python = Require-Command "python"
+      Invoke-Checked "Verify r69 Energy identity + same-type finish contract" $Python @($R69Guard) $TempRoot
+    }
+  } else {
+    Write-Host "r69 Python contract already passed CI; workstation Python is not a deployment dependency." -ForegroundColor Green
+  }
 
   $scripts = Prepare-ManagedScripts $TempRoot
 
   if (-not $SkipEnergy) {
-    $energyArgs = @("-NoProfile","-ExecutionPolicy","Bypass","-File",$scripts.Energy,"-ProjectId",$ProjectId,"-Region",$Region,"-SourceCandidate",$SourceCandidate,"-NoPause")
+    $energyScript = if ($EnergyWorkerOnly) { $scripts.EnergyWorkerOnly } else { $scripts.Energy }
+    $energyArgs = @("-NoProfile","-ExecutionPolicy","Bypass","-File",$energyScript,"-ProjectId",$ProjectId,"-Region",$Region,"-SourceCandidate",$SourceCandidate,"-NoPause")
     & powershell.exe @energyArgs
     if ($LASTEXITCODE -ne 0) {
       throw "Current managed Energy deployment failed with exit code $LASTEXITCODE."
@@ -204,6 +210,7 @@ try {
 
   Write-Host ""
   Write-Host "PASS: current REVEX managed services deployed from exact main $SourceCandidate." -ForegroundColor Green
+  if ($EnergyWorkerOnly) { Write-Host "r69 Energy worker-only mode left the active Energy broker and renderer untouched." }
   Write-Host "End users keep the normal LIBER sign-in; the public Qwen model requires no Hugging Face login/token."
 } catch {
   Write-Host ""

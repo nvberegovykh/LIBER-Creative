@@ -6,6 +6,10 @@ its normal artifact contract when the run does not complete. This makes errors
 such as GeometryCo exit-code 2 directly inspectable from Companion instead of
 pointing to a temporary Cloud Run file that disappears with the instance.
 
+r69 additionally derives missing city/state/ZIP only from the immutable active-
+Revit street address before entering the pinned pipeline. The source evidence is
+never mutated; the resolver writes a derived request/page-facts copy in output.
+
 The guard never changes a COMPLETE result and never converts a failed run into a
 successful one. It only preserves evidence that already exists inside the exact
 run output folder.
@@ -43,6 +47,8 @@ EXACT_NAMES = {
     "COMcheck_BACKSTOP_RESPONSE.txt",
     "REVEX_OPENSTUDIO_RUN.log",
     "eplusout.err",
+    "00_PAGE_FACTS_RESOLVED_R69.json",
+    "00_PIPELINE_REQUEST_RESOLVED_R69.json",
 }
 PREFIXES = (
     "NATIVE_CHECK_",
@@ -171,6 +177,21 @@ def _pipeline_impl() -> Path:
     return (Path(__file__).resolve().parents[2] / "src/Liber.Revex.Revit/Engineering/Energy/revex_energy_pipeline.py").resolve()
 
 
+def _resolve_r69_request(request_path: Path, output_root: Path) -> Path:
+    try:
+        import revex_energy_pipeline_r69 as resolver
+        return resolver._resolved_request(request_path, output_root)
+    except Exception as exc:
+        # Resolution is optional only when the current evidence is already complete.
+        # If it is incomplete, the pinned pipeline will still reject it explicitly.
+        print(json.dumps({
+            "stage": "PROJECT_IDENTITY_R69",
+            "status": "UNRESOLVED",
+            "error": f"{type(exc).__name__}: {exc}",
+        }, ensure_ascii=True), flush=True)
+        return request_path
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--request", type=Path, required=True)
@@ -186,7 +207,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     if not impl.is_file() or impl.resolve() == Path(__file__).resolve():
         raise RuntimeError(f"Pinned REVEX Energy implementation is unavailable: {impl}")
 
-    command = [sys.executable, str(impl), "--request", str(request_path), *passthrough]
+    effective_request = _resolve_r69_request(request_path, output_root)
+    command = [sys.executable, str(impl), "--request", str(effective_request), *passthrough]
     completed = subprocess.run(command, cwd=str(impl.parent), env=os.environ.copy())
     result_path = output_root / "energy-result.json"
     if result_path.is_file():
