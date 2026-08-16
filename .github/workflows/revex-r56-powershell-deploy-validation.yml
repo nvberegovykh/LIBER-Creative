@@ -1,0 +1,62 @@
+name: REVEX r56 PowerShell deployment validation
+
+on:
+  push:
+    branches:
+      - main
+      - 'agent/revex-deploy-powershell-parse-fix-r56-*'
+    paths:
+      - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
+      - 'server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1'
+      - 'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
+      - '.github/workflows/revex-r56-powershell-deploy-validation.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
+      - 'server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1'
+      - 'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
+      - '.github/workflows/revex-r56-powershell-deploy-validation.yml'
+
+jobs:
+  parse-and-contract:
+    name: PowerShell deployment scripts parse safely
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse deployment scripts with Windows PowerShell
+        shell: powershell
+        run: |
+          $files = @(
+            'DEPLOY_REVEX_CURRENT_SERVICES.ps1',
+            'server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1',
+            'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "${file}: $($_.Message)" }
+              throw "PowerShell parser rejected $file"
+            }
+          }
+      - name: Reject unquoted gcloud value projections
+        shell: powershell
+        run: |
+          $files = @(
+            'DEPLOY_REVEX_CURRENT_SERVICES.ps1',
+            'server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1',
+            'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
+          )
+          foreach ($file in $files) {
+            $text = Get-Content -Raw $file
+            if ($text -match '(?m)&\s+\$GCloud\s+auth\s+list\b' -or
+                $text -match '(?m)&\s+\$GCloud\s+builds\s+get-default-service-account\b' -or
+                $text -match '(?m)&\s+\$GCloud\s+run\s+services\s+describe\b') {
+              throw "$file contains direct gcloud invocation syntax that lets PowerShell reinterpret parenthesized --format=value(...) arguments."
+            }
+            if ($text -notmatch '--format=value\(account\)') {
+              throw "$file is missing the explicit account projection used by the deployment auth gate."
+            }
+          }

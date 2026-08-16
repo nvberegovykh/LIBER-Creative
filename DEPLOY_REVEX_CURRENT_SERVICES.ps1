@@ -39,7 +39,7 @@ try {
   $Npm = Require-Command "npm"
   $Node = Require-Command "node"
 
-  $active = @(& $GCloud auth list --filter=status:ACTIVE --format=value(account)) | Where-Object { $_ }
+  $active = @(& $GCloud @("auth","list","--filter=status:ACTIVE","--format=value(account)")) | Where-Object { $_ }
   if ($LASTEXITCODE -ne 0 -or $active.Count -eq 0) {
     throw "Google Cloud administrator authentication is the only required admin action. Run 'gcloud auth login' once, then rerun this file. Nothing was deployed."
   }
