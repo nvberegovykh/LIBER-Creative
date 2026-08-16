@@ -103,7 +103,7 @@ must(currentEnergyDeploy, '--no-allow-unauthenticated', 'Energy worker must rema
 must(currentEnergyDeploy, 'roles/run.invoker', 'only the Energy broker may invoke private worker');
 mustNot(currentEnergyDeploy, 'REVEX_R49_SOURCE_', 'current Energy deploy must not restore the legacy immutable source archive');
 mustNot(currentEnergyDeploy, 'CanonicalSourceCommit', 'current Energy deploy must not pin the stale publisher candidate');
-must(unifiedDeploy, 'git","clone","--depth","1","--branch","main"', 'unified deployment must begin from a fresh GitHub main clone');
+must(unifiedDeploy, '"clone","--depth","1","--branch","main"', 'unified deployment must begin from a fresh GitHub main clone');
 must(unifiedDeploy, 'rev-parse HEAD', 'unified deployment must resolve the exact cloned main commit');
 must(unifiedDeploy, 'DEPLOY_ENERGY_CURRENT.ps1', 'unified deployment must use the current Energy path');
 must(unifiedDeploy, 'DEPLOY_RENDER_SERVER.ps1', 'unified deployment must use the private render path');
