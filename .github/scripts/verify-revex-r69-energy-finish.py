@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WRAPPER = ROOT / 'server/revex-energy-worker/revex_energy_pipeline_r69.py'
 GUARD = ROOT / 'server/revex-energy-worker/revex_energy_pipeline_guard.py'
 DOCKER = ROOT / 'server/revex-energy-worker/Dockerfile'
+DEPLOY = ROOT / 'server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1'
 FINISH = ROOT / 'docs/liber-apps/apps/revex/finish-type-r69.js'
 UI = ROOT / 'docs/liber-apps/apps/revex/ui-integrity.js'
 DOCS = ROOT / 'docs/liber-apps/apps/revex/docs-pages-r68.js'
@@ -68,6 +69,7 @@ assert unresolved['locationResolution']['remainingMissing'] == ['city', 'state',
 wrapper_text = WRAPPER.read_text(encoding='utf-8')
 guard_text = GUARD.read_text(encoding='utf-8')
 docker_text = DOCKER.read_text(encoding='utf-8')
+deploy_text = DEPLOY.read_text(encoding='utf-8')
 finish_text = FINISH.read_text(encoding='utf-8')
 ui_text = UI.read_text(encoding='utf-8')
 docs_text = DOCS.read_text(encoding='utf-8')
@@ -80,6 +82,13 @@ assert '_resolve_r69_request(request_path, output_root)' in guard_text
 assert 'COPY server/revex-energy-worker/revex_energy_pipeline_r69.py' in docker_text
 assert 'REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py' in docker_text
 assert 'REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py' in docker_text
+
+assert 'REVEX_NATIVE_EXITCODE_AUTHORITATIVE' in deploy_text
+assert deploy_text.count('$ErrorActionPreference = "Continue"') >= 3
+assert '$script:NativeExitCode = [int]$code' in deploy_text
+assert 'if ($script:NativeExitCode -ne 0 -or @($active).Count -eq 0)' in deploy_text
+assert 'if ($script:NativeExitCode -ne 0 -or -not $CloudBuildSa)' in deploy_text
+assert 'if ($script:NativeExitCode -ne 0) { throw "Energy worker deployed but could not be re-read." }' in deploy_text
 
 assert "operation:'finish-type'" in finish_text
 assert "delete next.material.color" in finish_text
@@ -94,6 +103,7 @@ print(json.dumps({
     'schema': 'liber.revex.r69-energy-finish-qa.v1',
     'status': 'PASSED',
     'energyIdentity': {'immutableSource': True, 'derivedLocation': True, 'fabricationBlocked': True, 'r55GuardPreserved': True},
+    'deployment': {'nativeExitCodeAuthoritative': True, 'stderrCannotFalseFail': True, 'workerOnlyPreserved': True},
     'docs': {'oldSetSplitWithoutResync': True, 'onePagePdf': True},
     'finish': {'separateCommit': True, 'sameType': True, 'genericOverlayExcludesColor': True},
 }, indent=2))
