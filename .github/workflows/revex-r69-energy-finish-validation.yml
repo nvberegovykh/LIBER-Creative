@@ -7,7 +7,11 @@ on:
       - 'agent/revex-r69-energy-identity-finish-type-*'
     paths:
       - 'server/revex-energy-worker/revex_energy_pipeline_r69.py'
+      - 'server/revex-energy-worker/revex_energy_pipeline_guard.py'
       - 'server/revex-energy-worker/Dockerfile'
+      - 'server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1'
+      - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
+      - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
       - 'docs/liber-apps/apps/revex/finish-type-r69.js'
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/docs-pages-r68.js'
@@ -28,13 +32,36 @@ jobs:
         with:
           node-version: '22'
       - name: Syntax-check new runtimes
+        shell: pwsh
         run: |
+          $files = @(
+            'server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1',
+            'DEPLOY_REVEX_CURRENT_SERVICES.ps1',
+            'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
+          )
+          foreach ($path in $files) {
+            $tokens=$null; $errors=$null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path),[ref]$tokens,[ref]$errors)
+            if (@($errors).Count) { throw "$path parser errors: $(@($errors).Message -join '; ')" }
+          }
           python -m py_compile server/revex-energy-worker/revex_energy_pipeline_r69.py
+          python -m py_compile server/revex-energy-worker/revex_energy_pipeline_guard.py
           node --check docs/liber-apps/apps/revex/finish-type-r69.js
           node --check docs/liber-apps/apps/revex/ui-integrity.js
           node --check docs/liber-apps/apps/revex/docs-pages-r68.js
       - name: Prove identity derivation, old Docs repair, and same-type finish contract
         run: python .github/scripts/verify-revex-r69-energy-finish.py
+      - name: Prove worker-only path bypasses Firebase and renderer
+        shell: pwsh
+        run: |
+          $launcher = Get-Content -Raw DEPLOY_REVEX_CURRENT_SERVICES.ps1
+          $bootstrap = Get-Content -Raw DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1
+          $worker = Get-Content -Raw server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1
+          foreach($marker in @('-EnergyWorkerOnly','Firebase CLI skipped: r69 Energy worker-only deployment uses gcloud')) { if(-not $launcher.Contains($marker)){throw "launcher missing $marker"} }
+          foreach($marker in @('EnergyWorkerOnly = $energyWorkerOnly','r69 Energy worker-only deployment preserves the active broker')) { if(-not $bootstrap.Contains($marker)){throw "bootstrap missing $marker"} }
+          if($worker -match '\bfirebase\b'){throw 'worker-only deployment must not invoke or require firebase-tools'}
+          if($worker -match 'revex-render|gpu'){throw 'worker-only deployment must not touch renderer/GPU'}
+          foreach($marker in @('Build exact r69 Energy worker image','Deploy private r69 Energy worker','Preserve Energy broker invocation access')) { if(-not $worker.Contains($marker)){throw "worker-only deploy missing $marker"} }
       - name: Preserve current REVEX contracts
         run: |
           node .github/scripts/verify-revex-current-generation-r53.js
