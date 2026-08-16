@@ -64,4 +64,6 @@ jobs:
           catch { $failed = $_.Exception.Message -match 'exit code 7' }
           if (-not $failed) { throw 'Invoke-Checked did not propagate the real nonzero exit code.' }
 
+          $global:LASTEXITCODE = 0
           Write-Host 'PASS: Firebase/native progress on stderr cannot false-fail; real nonzero exit codes still fail.' -ForegroundColor Green
+          exit 0
