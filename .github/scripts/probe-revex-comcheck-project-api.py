@@ -32,15 +32,29 @@ def main() -> int:
               value:v&&typeof v==='object'&&'value' in v?v.value:v,
               json:(()=>{try{return JSON.stringify(v)}catch(_){return ''}})()
             }}catch(_){return {type:'error'}}};
+            const eventHandlers=(e)=>{
+              if(!e||!window.jQuery||!jQuery._data)return {};
+              try{
+                const events=jQuery._data(e,'events')||{},out={};
+                for(const [kind,rows] of Object.entries(events)){
+                  out[kind]=(rows||[]).map(row=>String(row&&row.handler||'').slice(0,1800));
+                }
+                return out;
+              }catch(_){return {error:String(_)}};
+            };
             const field=(id)=>{const e=document.getElementById(id);return e?{
               id:e.id,name:e.name||'',value:e.value||'',
-              onchange:e.getAttribute('onchange')||'',onblur:e.getAttribute('onblur')||''
+              onchange:e.getAttribute('onchange')||'',onblur:e.getAttribute('onblur')||'',
+              events:eventHandlers(e)
             }:null};
             const project=USER_PROJECT&&USER_PROJECT.project;
             const details=project&&project.projectDetails;
             const building=project&&project.buildingDetails;
             const detailSnapshot={};
             for(const key of safeKeys(details))detailSnapshot[key]=describe(details[key]);
+            const globals=safeKeys(window).filter(k=>/project|detail/i.test(k)).filter(k=>typeof window[k]==='function').slice(0,100);
+            const globalSources={};
+            for(const key of globals){try{globalSources[key]=String(window[key]).slice(0,1200)}catch(_){}}
             return {
               location:String(location.href),
               ProjectActionType:typeof ProjectAction,
@@ -54,15 +68,13 @@ def main() -> int:
               buildingDetailsKeys:safeKeys(building),
               projectName:describe(USER_PROJECT&&USER_PROJECT.projectName),
               fields:['projectTitle','projectAddress','projectCity','projectState','projectZipCode'].map(field),
-              saveProjectType:typeof ProjectService!=='undefined'&&ProjectService.saveProject?typeof ProjectService.saveProject:'undefined',
               saveProjectLength:typeof ProjectService!=='undefined'&&ProjectService.saveProject?ProjectService.saveProject.length:null,
               saveProjectSource:typeof ProjectService!=='undefined'&&ProjectService.saveProject?String(ProjectService.saveProject).slice(0,1800):'',
               getCurrentProjectLength:typeof ProjectService!=='undefined'&&ProjectService.getCurrentProject?ProjectService.getCurrentProject.length:null,
               getCurrentProjectSource:typeof ProjectService!=='undefined'&&ProjectService.getCurrentProject?String(ProjectService.getCurrentProject).slice(0,1800):'',
-              globalSaveProjectType:typeof saveProject,
-              globalSaveProjectSource:typeof saveProject==='function'?String(saveProject).slice(0,1800):'',
-              globalSaveType:typeof save,
-              globalSaveSource:typeof save==='function'?String(save).slice(0,1800):''
+              globalSaveProjectSource:typeof saveProject==='function'?String(saveProject).slice(0,2200):'',
+              globalProjectFunctions:globalSources,
+              scripts:Array.from(document.scripts).map(s=>s.src).filter(Boolean)
             };
             """
         )
