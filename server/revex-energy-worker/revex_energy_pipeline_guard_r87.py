@@ -13,7 +13,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import revex_energy_pipeline_guard_base as base_guard
+try:
+    import revex_energy_pipeline_guard_base as base_guard
+except ImportError:  # source-tree QA; Docker installs the preserved guard under *_base
+    import revex_energy_pipeline_guard as base_guard
 import revex_energy_pipeline_r69 as identity
 
 BUILD = "20260816r87"
