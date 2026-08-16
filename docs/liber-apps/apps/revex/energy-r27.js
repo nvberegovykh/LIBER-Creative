@@ -1,6 +1,6 @@
 const Store = window.RevexStore;
 const $ = (selector) => document.querySelector(selector);
-const BUILD = '20260813r49';
+const BUILD = '20260816r55-failure-evidence1';
 let sourceState = null;
 let resultState = null;
 let unsubscribeSource = () => {};
@@ -81,6 +81,12 @@ function renderSource() {
   authorize.hidden = false;
 }
 
+function isFailureEvidence(row) {
+  const name = clean(row?.name);
+  return clean(row?.kind).toLowerCase() === 'diagnostic' ||
+    /02_GEOMETRYCO\.log|FAILURE_(?:REPORT\.json|SUMMARY\.txt)|REVEX-ENERGY-PIPELINE\.jsonl|NATIVE_CHECK_|eplusout\.err|REVEX_OPENSTUDIO_RUN\.log/i.test(name);
+}
+
 function renderResult() {
   const summary = $('#energy-result-summary');
   const artifacts = $('#energy-artifacts');
@@ -91,14 +97,23 @@ function renderResult() {
     return;
   }
   const complete = clean(manifest.status).toUpperCase() === 'COMPLETE';
+  const failedStage = clean(manifest.failureContext?.failedStage);
   summary.textContent = complete
     ? `${manifest.resultRevision || resultState.revision} completed from Engineering revision ${manifest.sourceEngineeringRevision || manifest.sourceRevision || '—'}.`
-    : `${manifest.status || 'BLOCKED'}: ${manifest.error || 'Review the managed worker diagnostics.'}`;
+    : `${manifest.status || 'BLOCKED'}${failedStage ? ` at ${failedStage}` : ''}: ${manifest.error || 'Failure evidence is preserved below.'}`;
   const rows = Array.isArray(resultState.artifacts) ? resultState.artifacts : [];
-  const rank = (row) => /EN-1_READY_TO_INSERT\.pdf|COMcheck_READY_TO_INSERT\.pdf/i.test(row.name||'') ? 0 : /\.pdf$/i.test(row.name||'') ? 1 : /\.osm$/i.test(row.name||'') ? 2 : 3;
+  const rank = (row) => {
+    if (!complete && isFailureEvidence(row)) return 0;
+    if (/EN-1_READY_TO_INSERT\.pdf|COMcheck_READY_TO_INSERT\.pdf/i.test(row.name||'')) return 1;
+    if (/\.pdf$/i.test(row.name||'')) return 2;
+    if (/\.osm$/i.test(row.name||'')) return 3;
+    return 4;
+  };
   artifacts.innerHTML = [...rows].sort((a,b)=>rank(a)-rank(b)||clean(a.name).localeCompare(clean(b.name))).map((row) => {
-    const filing = rank(row) === 0;
-    const body = `<span>${esc(row.name || 'Artifact')}</span><small>${esc(filing ? 'Ready to insert later' : row.kind || 'Energy evidence')}${row.bytes ? ` · ${size(row.bytes)}` : ''}</small>`;
+    const filing = complete && rank(row) === 1;
+    const failureEvidence = !complete && isFailureEvidence(row);
+    const label = failureEvidence ? 'Failure evidence' : filing ? 'Ready to insert later' : row.kind || 'Energy evidence';
+    const body = `<span>${esc(row.name || 'Artifact')}</span><small>${esc(label)}${row.bytes ? ` · ${size(row.bytes)}` : ''}</small>`;
     return row.url ? `<a class="energy-artifact${filing?' is-filing':''}" href="${esc(row.url)}" target="_blank" rel="noopener">${body}</a>` : `<div class="energy-artifact${filing?' is-filing':''}">${body}</div>`;
   }).join('') || '<div class="energy-empty">The result manifest contains no downloadable artifact index.</div>';
 }
@@ -130,7 +145,7 @@ window.addEventListener('revex:managed-energy-status', (event) => {
   const detail = event.detail || {};
   if (detail.projectId && detail.projectId !== projectId()) return;
   setRun(detail.message || detail.stage || 'Managed Energy update', detail.ok ? 'good' : (detail.stage === 'BROKER_FAILED' ? 'bad' : 'busy'));
-  if (detail.stage === 'CLOUD_UPLOAD_PASSED') hydrate();
+  if (detail.stage === 'CLOUD_UPLOAD_PASSED' || detail.stage === 'BROKER_FAILED') hydrate();
 });
 window.addEventListener('revex:managed-energy-result', (event) => {
   if (event.detail?.projectId !== projectId()) return;
@@ -142,4 +157,4 @@ $('#project-select')?.addEventListener('change', () => { boundProject=''; setTim
 renderSource();
 renderResult();
 if (!$('#view-energy')?.hidden) subscribe();
-console.info('[REVEX] Energy UI', { build: BUILD, execution: 'private-worker-authenticated-broker', consent: 'per-immutable-revision', staleEvidenceRuns: 'blocked' });
+console.info('[REVEX] Energy UI', { build: BUILD, execution: 'private-worker-authenticated-broker', consent: 'per-immutable-revision', staleEvidenceRuns: 'blocked', failureEvidence: 'preserved-and-ranked' });
