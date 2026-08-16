@@ -3,6 +3,7 @@ param(
   [string]$Region = "us-central1",
   [switch]$SkipEnergy,
   [switch]$SkipRender,
+  [switch]$RenderBrokerOnly,
   [switch]$ValidateOnly,
   [switch]$NoPause
 )
@@ -62,10 +63,6 @@ function Invoke-GCloudCapture([string]$Command, [string[]]$Arguments) {
     $text = $mainTry.Replace($text, ($helper + "`r`ntry {"), 1)
   }
 
-  # Windows PowerShell + StrictMode unwraps a one-item pipeline assignment to a scalar.
-  # Normalize scalar count/index access in the disposable clone before deployment so one
-  # active administrator account is treated as one account, not as an object with no Count
-  # property (or a string indexed down to its first character).
   $text = $text.Replace('$active.Count', '@($active).Count')
   $text = $text.Replace('$accounts.Count', '@($accounts).Count')
   $text = $text.Replace('[string]$active[0]', '[string](@($active)[0])')
@@ -97,6 +94,7 @@ function Prepare-ManagedScripts([string]$Root) {
 try {
   Write-Host "REVEX current managed-services bootstrap" -ForegroundColor Cyan
   Write-Host "Windows-safe native argv handling; stale r49 Drive source restoration is never used."
+  if ($SkipRender -and $RenderBrokerOnly) { throw "-SkipRender and -RenderBrokerOnly cannot be used together." }
 
   if ($ValidateOnly) {
     $validationRoot = Join-Path $TempRoot "validation"
@@ -153,18 +151,19 @@ try {
   $scripts = Prepare-ManagedScripts $TempRoot
 
   if (-not $SkipEnergy) {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scripts.Energy `
-      -ProjectId $ProjectId -Region $Region -SourceCandidate $SourceCandidate -NoPause
+    $energyArgs = @("-NoProfile","-ExecutionPolicy","Bypass","-File",$scripts.Energy,"-ProjectId",$ProjectId,"-Region",$Region,"-SourceCandidate",$SourceCandidate,"-NoPause")
+    & powershell.exe @energyArgs
     if ($LASTEXITCODE -ne 0) {
       throw "Current managed Energy deployment failed with exit code $LASTEXITCODE."
     }
   }
 
   if (-not $SkipRender) {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scripts.Render `
-      -ProjectId $ProjectId -Region $Region -NoPause
+    $renderArgs = @("-NoProfile","-ExecutionPolicy","Bypass","-File",$scripts.Render,"-ProjectId",$ProjectId,"-Region",$Region,"-NoPause")
+    if ($RenderBrokerOnly) { $renderArgs += "-BrokerOnly" }
+    & powershell.exe @renderArgs
     if ($LASTEXITCODE -ne 0) {
-      throw "Energy may already be current, but the private GPU renderer deployment failed with exit code $LASTEXITCODE. Read the immediately preceding GPU/quota error."
+      throw "Energy may already be current, but the private GPU renderer deployment failed with exit code $LASTEXITCODE. Read the immediately preceding render deployment error."
     }
   }
 
