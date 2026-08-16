@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'REVEX-ENERGY-R87-DECISION.md'
+      - 'server/revex-energy-worker/README_R87_GENERALIZATION.md'
       - 'server/revex-energy-worker/revex_energy_identity_normalizer.py'
       - 'server/revex-energy-worker/revex_energy_pipeline_r69.py'
       - 'server/revex-energy-worker/revex_energy_pipeline_guard.py'
@@ -16,6 +17,7 @@ on:
       - 'src/Liber.Revex.Revit/Engineering/Companion/native-managed-energy-bridge.js'
       - '.github/scripts/verify-revex-r87-energy-generalization.py'
       - '.github/scripts/verify-revex-r87-decision-doc.py'
+      - '.github/scripts/verify-revex-r87-worker-contract.py'
       - '.github/workflows/revex-r87-energy-generalization.yml'
   push:
     branches:
@@ -23,6 +25,7 @@ on:
       - 'agent/revex-r87-*'
     paths:
       - 'REVEX-ENERGY-R87-DECISION.md'
+      - 'server/revex-energy-worker/README_R87_GENERALIZATION.md'
       - 'server/revex-energy-worker/revex_energy_identity_normalizer.py'
       - 'server/revex-energy-worker/revex_energy_pipeline_r69.py'
       - 'server/revex-energy-worker/revex_energy_pipeline_guard.py'
@@ -34,6 +37,7 @@ on:
       - 'src/Liber.Revex.Revit/Engineering/Companion/native-managed-energy-bridge.js'
       - '.github/scripts/verify-revex-r87-energy-generalization.py'
       - '.github/scripts/verify-revex-r87-decision-doc.py'
+      - '.github/scripts/verify-revex-r87-worker-contract.py'
       - '.github/workflows/revex-r87-energy-generalization.yml'
 
 permissions:
@@ -58,7 +62,9 @@ jobs:
             server/revex-energy-worker/revex_energy_pipeline_guard.py \
             server/revex-energy-worker/verify_identity_normalizer.py
       - name: Verify generalized action boundary before wiring
-        run: python .github/scripts/verify-revex-r87-decision-doc.py
+        run: |
+          python .github/scripts/verify-revex-r87-decision-doc.py
+          python .github/scripts/verify-revex-r87-worker-contract.py
       - name: Execute generalized cross-project identity + immutable replay contract
         run: python .github/scripts/verify-revex-r87-energy-generalization.py
       - name: Syntax-check replay diagnostics
