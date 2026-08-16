@@ -9,9 +9,11 @@ pointing to a temporary Cloud Run file that disappears with the instance.
 r89 first applies explicit revision-scoped user project identity only to fields
 still missing from immutable active-Revit T/Z evidence. r88 content-aware role
 separation runs next; deterministic r69 normalization/geocoding remains the final
-fallback. On a COMPLETE pinned run, r89 fills explicit applicant/modeler EN-1 data,
-prints/validates EN-1 PDF, and finalizes the exact nine-file clean review contract.
-Source evidence is never mutated.
+automatic fallback. r95 then reapplies the same missing-only explicit user projection
+at the exact consumer boundary so no intermediate resolver can detach it from the
+pinned r49 current_project_identity() consumer. On a COMPLETE pinned run, r89 fills
+explicit applicant/modeler EN-1 data, prints/validates EN-1 PDF, and finalizes the
+exact nine-file clean review contract. Source evidence is never mutated.
 """
 from __future__ import annotations
 
@@ -30,8 +32,6 @@ SCHEMA = "liber.revex.energy-result.v1"
 MAX_DIAGNOSTIC_FILES = 64
 MAX_DIAGNOSTIC_BYTES = 24 * 1024 * 1024
 
-# Explicit allow-list. Do not publish arbitrary temporary/source files on a
-# failure path; only logs/audits that explain a managed Energy stage are exposed.
 EXACT_NAMES = {
     "REVEX-ENERGY-PIPELINE.jsonl",
     "01_GBXML_TO_OSM.log",
@@ -227,11 +227,14 @@ def main(argv: Iterable[str] | None = None) -> int:
         raise RuntimeError(f"Pinned REVEX Energy implementation is unavailable: {impl}")
 
     # Compatibility marker for prior r87/r69 dependency validators: _resolve_content_identity_request(request_path, output_root)
-    # Contract order: explicit user fallback may fill only missing identity fields;
-    # content-aware project/party separation runs next; deterministic r69 remains last.
+    # Contract order: explicit user fallback fills only missing identity; content-aware
+    # separation and deterministic normalization may enrich authoritative source evidence;
+    # then the same missing-only explicit fallback is projected once more directly at
+    # the pinned consumer boundary. This final projection is intentionally idempotent.
     effective_request = _resolve_user_identity_request(request_path, output_root)
     effective_request = _resolve_content_identity_request(effective_request, output_root)
     effective_request = _resolve_r69_request(effective_request, output_root)
+    effective_request = _resolve_user_identity_request(effective_request, output_root)
     command = [sys.executable, str(impl), "--request", str(effective_request), *passthrough]
     completed = subprocess.run(command, cwd=str(impl.parent), env=os.environ.copy())
     result_path = output_root / "energy-result.json"
