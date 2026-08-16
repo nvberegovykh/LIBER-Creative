@@ -1,8 +1,7 @@
 (function(root){
   'use strict';
-  const BUILD='20260816r92';
+  const BUILD='20260816r93';
   // Prior replay contract markers retained for compatibility with existing validation scripts.
-  // Runtime loading below is intentionally cache-busted to r92.
   const REVEX_R87_REPLAY_CONTRACT='energy-diagnostics-r68.js?v=20260816r87-energy-replay1';
   const REVEX_R87_REPLAY_LABEL="energyDiagnostics:'revision-scoped-replay-r87'";
   void REVEX_R87_REPLAY_CONTRACT; void REVEX_R87_REPLAY_LABEL;
@@ -51,13 +50,9 @@
   function loadScript(src,key,type='text/javascript'){if(document.querySelector(`script[data-revex-runtime="${key}"]`))return;const script=document.createElement('script');script.dataset.revexRuntime=key;script.src=src;script.type=type;script.async=false;script.onerror=()=>root.__revexBrowserDiagnostics?.emit?.('ERROR','R85_RUNTIME',`Could not load ${src}.`,{initiator:'ui integrity loader'});document.head.appendChild(script);}
   function loadReviewIntegrity(){if(document.querySelector('script[data-revex-review-integrity]'))return;const script=document.createElement('script');script.type='module';script.dataset.revexReviewIntegrity='1';script.src='review-integrity-r50.js?v=20260813r49-review2';script.onerror=()=>root.__revexBrowserDiagnostics?.emit?.('ERROR','REVIEW_RUNTIME','Could not load review-integrity-r50.js.',{initiator:'ui integrity loader'});document.head.appendChild(script);}
   function loadCurrentRepairs(){
-    // r75 remains the persistent BIM appearance/filter/material owner. r85 is the
-    // single successor for the interaction seams formerly repaired by r79. The
-    // tiny r85 loader is not a state owner; it waits until DOM parsing/import-map
-    // registration completes, then imports the one interaction runtime.
     loadScript('energy-diagnostics-r68.js?v=20260816r89-energy-replay3','energy-diagnostics-r68');
     loadScript('energy-identity-en1-r89.js?v=20260816r89-en1-identity1','energy-identity-en1-r89');
-    loadScript('energy-replay-r92.js?v=20260816r92-hosted-replay1','energy-replay-r92');
+    loadScript('energy-replay-r93.js?v=20260816r93-live-job1','energy-replay-r93');
     loadScript('viewer-polish-r68.js?v=20260816r68-viewer-polish1','viewer-polish-r68','module');
     loadScript('appearance-state-r75.js?v=20260816r75-appearance1','appearance-state-r75');
     loadScript('viewer-runtime-r75.js?v=20260816r75-viewer1','viewer-runtime-r75');
@@ -66,5 +61,5 @@
   }
   function bind(){installCanonicalOverlayStore();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
   loadReviewIntegrity();loadCurrentRepairs();if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',reviewRuntime:'r49-review2+r85-section-selection',docsPages:'native-pdf-page-navigation-no-main-thread-split',viewerPolish:'r68',appearance:'single-owner-r75+auth-rehydrate-r85',modelFilter:'single-owner-r75',viewerRuntime:'r75-preemptible+r85-adaptive-exact',mobileBim:'single-bottom-drawer-r85',selection:'element-section-empty-r85',walkLevels:'rendered-world-r85',materialIntegration:'embedded-properties-architextures-user-download-auto-apply',restoreAll:'delegated-setDoc-r85',energyDiagnostics:'historical-vs-current-replay-r89+revision-identity+en1-identity+r92-hosted-exact-replay',targetFps:30,spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',reviewRuntime:'r49-review2+r85-section-selection',docsPages:'native-pdf-page-navigation-no-main-thread-split',viewerPolish:'r68',appearance:'single-owner-r75+auth-rehydrate-r85',modelFilter:'single-owner-r75',viewerRuntime:'r75-preemptible+r85-adaptive-exact',mobileBim:'single-bottom-drawer-r85',selection:'element-section-empty-r85',walkLevels:'rendered-world-r85',materialIntegration:'embedded-properties-architextures-user-download-auto-apply',restoreAll:'current-store-commit-path-r93',energyDiagnostics:'r93-hosted-exact-replay+live-job+same-revision-auto',targetFps:30,spatialObjects:'invisible'});
 })(window);
