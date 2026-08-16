@@ -12,12 +12,13 @@ public static class EngineeringCompanionWebBridge
     private const string ManagedEnergyInputMarker = "data-liber-revex-native-managed-energy";
     private static readonly HashSet<string> ResumeAttempted = new(StringComparer.OrdinalIgnoreCase);
 
-    public static async Task<(bool ok, string message)> EnsureManagedEnergyBridgeAsync(WebView2 web)
+    public static Task<(bool ok, string message)> EnsureManagedEnergyBridgeAsync(WebView2 web)
     {
-        var installed = await EnsureManagedEnergyBridgeCoreAsync(web);
-        if (!installed.ok) return installed;
-        _ = TryResumeLatestEngineeringRevisionAsync(web);
-        return installed;
+        // Initialization must be side-effect free. In particular, opening/reloading
+        // Companion must never attach an old Engineering revision or start Energy.
+        // The full downstream chain remains attached to the explicit SYNC ENGINEERING
+        // action through AttachEngineeringSyncAsync below.
+        return EnsureManagedEnergyBridgeCoreAsync(web);
     }
 
     private static async Task<(bool ok, string message)> EnsureManagedEnergyBridgeCoreAsync(WebView2 web)
@@ -114,6 +115,10 @@ public static class EngineeringCompanionWebBridge
         return (true, $"Engineering revision {output.Revision} handed directly to the managed-server bridge from its immutable local revision folder.");
     }
 
+    // Retained only as non-invoked repair/reference code while the Energy chain is under
+    // live stabilization. Startup initialization above is deliberately forbidden from
+    // calling this. Remove it after the first verified clean end-to-end run rather than
+    // changing the active chain again before that evidence exists.
     private static async Task TryResumeLatestEngineeringRevisionAsync(WebView2 web)
     {
         try
