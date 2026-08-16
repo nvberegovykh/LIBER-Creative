@@ -1,0 +1,35 @@
+name: REVEX r62 render Dockerfile parse validation
+
+on:
+  push:
+    branches:
+      - main
+      - 'agent/revex-render-docker-parse-r62-*'
+    paths:
+      - 'server/revex-render-worker/Dockerfile'
+      - '.github/workflows/revex-r62-render-dockerfile-parse.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/revex-render-worker/Dockerfile'
+      - '.github/workflows/revex-r62-render-dockerfile-parse.yml'
+
+jobs:
+  classic-parser-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject heredoc body as legacy Docker instructions
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=server/revex-render-worker/Dockerfile
+          ! grep -Eq "<<['\"]?PY['\"]?" "$file"
+          ! grep -Eq '^[[:space:]]*(import|assert|m=)' "$file"
+          grep -F 'python -c "import json;' "$file"
+          grep -F "Qwen/Qwen-Image-Edit-2511" "$file"
+          grep -F "6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9" "$file"
+      - name: Preserve renderer Energy and viewer contracts
+        run: |
+          node .github/scripts/verify-revex-current-generation-r53.js
+          node .github/scripts/verify-revex-r54-selfhost-render.js
