@@ -83,9 +83,9 @@ jobs:
         run: |
           $launcher = Get-Content -Raw .\DEPLOY_REVEX_CURRENT_SERVICES.ps1
           foreach ($required in @(
-            'firebase login --reauth',
+            '& $Firebase login --reauth',
             'deployment will resume automatically after approval',
-            'gcloud auth login',
+            '& $GCloud auth login',
             'DEPLOY_REVEX_CURRENT_SERVICES.latest.log',
             'Start-Transcript'
           )) {
