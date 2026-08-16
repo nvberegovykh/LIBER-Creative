@@ -1,0 +1,41 @@
+name: REVEX r92 hosted Energy replay validation
+
+on:
+  pull_request:
+    paths:
+      - 'docs/liber-apps/apps/revex/energy-replay-r92.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - '.github/workflows/revex-r92-hosted-energy-replay.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  r92-hosted-replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: JavaScript syntax
+        run: |
+          node --check docs/liber-apps/apps/revex/energy-replay-r92.js
+          node --check docs/liber-apps/apps/revex/ui-integrity.js
+      - name: Exact-revision replay contract
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const replay=fs.readFileSync('docs/liber-apps/apps/revex/energy-replay-r92.js','utf8');
+          const ui=fs.readFileSync('docs/liber-apps/apps/revex/ui-integrity.js','utf8');
+          const required=[
+            "const HARD_STOP=0.80",
+            "resultRevisionOf(result)===clean(expectedResultRevision)",
+            "const consent=await Store.getEnergyConsent(id,revision);if(!consent)return",
+            "sourceRevisionOf(result)!==revision",
+            "Store.runEnergyServer(id,revision)",
+            "sessionStorage.getItem(onceKey)==='1'"
+          ];
+          for(const marker of required) if(!replay.includes(marker)) throw new Error('missing replay contract marker: '+marker);
+          if(!ui.includes("energy-replay-r92.js?v=20260816r92-hosted-replay1")) throw new Error('r92 replay is not loaded by UI integrity');
+          if(/HARD_STOP\s*=\s*0\.[0-7]/.test(replay)) throw new Error('Energy hard stop was weakened');
+          console.log('REVEX_R92_HOSTED_EXACT_REPLAY=PASSED');
+          NODE
