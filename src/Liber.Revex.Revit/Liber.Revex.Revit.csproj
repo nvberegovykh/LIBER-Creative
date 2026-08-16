@@ -12,9 +12,11 @@
     <Version>0.8.19</Version>
     <InformationalVersion>0.8.19-r49</InformationalVersion>
     <RevitInstallDir Condition="'$(RevitInstallDir)' == ''">C:\Program Files\Autodesk\Revit 2026</RevitInstallDir>
+    <RevexCiRevitApi Condition="'$(RevexCiRevitApi)' == ''">false</RevexCiRevitApi>
   </PropertyGroup>
 
-  <ItemGroup>
+  <!-- Production/local builds bind to the exact Revit 2026 installation. -->
+  <ItemGroup Condition="'$(RevexCiRevitApi)' != 'true'">
     <Reference Include="RevitAPI">
       <HintPath>$(RevitInstallDir)\RevitAPI.dll</HintPath>
       <Private>false</Private>
@@ -23,6 +25,12 @@
       <HintPath>$(RevitInstallDir)\RevitAPIUI.dll</HintPath>
       <Private>false</Private>
     </Reference>
+  </ItemGroup>
+
+  <!-- CI-only reference pack: compile the complete DLL before a user ever runs an updater. -->
+  <ItemGroup Condition="'$(RevexCiRevitApi)' == 'true'">
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="2026.4.10" PrivateAssets="all" />
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="2026.4.10" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>

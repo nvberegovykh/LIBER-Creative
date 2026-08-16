@@ -6,11 +6,13 @@ on:
     paths:
       - 'UPDATE_REVEX_ADDIN_CURRENT.ps1'
       - 'UPDATE_REVEX_ADDIN_CURRENT.cmd'
+      - 'src/Liber.Revex.Revit/**'
       - '.github/workflows/revex-current-addin-updater-validation.yml'
   push:
     branches:
       - main
       - 'agent/revex-current-addin-updater'
+      - 'agent/revex-r74-*'
 
 permissions:
   contents: read
@@ -26,6 +28,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
       - name: Parse Windows PowerShell updater
         shell: powershell
         run: |
@@ -56,6 +61,11 @@ jobs:
           if ($ps.Contains('PUBLISH_REVEX_R49')) { throw 'Historical publisher invocation is forbidden in the current updater.' }
           if (-not $cmd.Contains('raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/UPDATE_REVEX_ADDIN_CURRENT.ps1')) { throw 'Launcher does not self-refresh from current main.' }
           if (-not $cmd.Contains('pause >nul')) { throw 'Launcher must remain open so success/failure can be read.' }
+      - name: Compile complete Revit 2026 add-in
+        shell: pwsh
+        run: |
+          dotnet restore src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -p:RevexCiRevitApi=true -p:Platform=x64
+          dotnet build src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -c Release -p:RevexCiRevitApi=true -p:Platform=x64 --no-restore
       - name: Preserve current viewer and Energy contracts
         shell: pwsh
         run: |
