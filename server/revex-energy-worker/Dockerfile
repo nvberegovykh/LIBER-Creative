@@ -53,7 +53,7 @@ RUN python3 /opt/revex/energy/verify_revex_r49_energy.py \
 
 ENV REVEX_HEADLESS=1 \
     REVEX_CHROME_BINARY=/usr/bin/google-chrome \
-    REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_r69.py \
+    REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py \
     REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py \
     REVEX_ENERGY_TIMEOUT_SECONDS=3500 \
     PORT=8080
