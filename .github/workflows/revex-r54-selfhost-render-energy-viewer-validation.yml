@@ -9,7 +9,12 @@ on:
       - 'docs/liber-apps/apps/revex/**'
       - 'server/revex-render-worker/**'
       - 'server/revex-render-functions/**'
+      - 'server/revex-energy-worker/**'
+      - 'server/firebase-functions/**'
       - 'src/Liber.Revex.Revit/Engineering/Energy/**'
+      - 'src/Liber.Revex.Revit/Engineering/Gbxml/**'
+      - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
+      - 'DEPLOY_REVEX_CURRENT_SERVICES.cmd'
       - '.github/scripts/verify-revex-r54-selfhost-render.js'
       - '.github/scripts/verify-revex-current-generation-r53.js'
       - '.github/workflows/revex-r54-selfhost-render-energy-viewer-validation.yml'
@@ -19,7 +24,12 @@ on:
       - 'docs/liber-apps/apps/revex/**'
       - 'server/revex-render-worker/**'
       - 'server/revex-render-functions/**'
+      - 'server/revex-energy-worker/**'
+      - 'server/firebase-functions/**'
       - 'src/Liber.Revex.Revit/Engineering/Energy/**'
+      - 'src/Liber.Revex.Revit/Engineering/Gbxml/**'
+      - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
+      - 'DEPLOY_REVEX_CURRENT_SERVICES.cmd'
       - '.github/scripts/verify-revex-r54-selfhost-render.js'
       - '.github/scripts/verify-revex-current-generation-r53.js'
       - '.github/workflows/revex-r54-selfhost-render-energy-viewer-validation.yml'
@@ -47,7 +57,7 @@ jobs:
           node --check server/revex-render-functions/index.js
           node --check .github/scripts/verify-revex-r54-selfhost-render.js
       - name: Python worker syntax
-        run: python -m py_compile server/revex-render-worker/app.py
+        run: python -m py_compile server/revex-render-worker/app.py server/revex-energy-worker/app.py
       - name: Parse render manifests
         run: |
           python - <<'PY'
@@ -62,12 +72,26 @@ jobs:
         run: node .github/scripts/verify-revex-r54-selfhost-render.js
       - name: Preserve current-generation guard
         run: node .github/scripts/verify-revex-current-generation-r53.js
-      - name: Inspect deployment script contract
+      - name: Inspect managed deployment scripts
         shell: pwsh
         run: |
-          $source = Get-Content -Raw server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1
+          $render = Get-Content -Raw server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1
           foreach ($required in @('--gpu-type=nvidia-rtx-pro-6000','--cpu=20','--memory=80Gi','--no-allow-unauthenticated','--concurrency=1','--min-instances=0','roles/run.invoker')) {
-            if (-not $source.Contains($required)) { throw "Missing deployment contract: $required" }
+            if (-not $render.Contains($required)) { throw "Missing render deployment contract: $required" }
           }
-          [void][scriptblock]::Create($source)
-          Write-Host 'PowerShell deployment contract: PASS'
+          [void][scriptblock]::Create($render)
+
+          $energy = Get-Content -Raw server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1
+          foreach ($required in @('REVEX_SOURCE_CANDIDATE=$SourceCandidate','verify-revex-current-generation-r53.js','--no-allow-unauthenticated','roles/run.invoker')) {
+            if (-not $energy.Contains($required)) { throw "Missing current Energy deployment contract: $required" }
+          }
+          if ($energy.Contains('CanonicalSourceCommit') -or $energy.Contains('REVEX_R49_SOURCE_')) { throw 'Current Energy deploy contains stale publisher source-restoration markers.' }
+          [void][scriptblock]::Create($energy)
+
+          $unified = Get-Content -Raw DEPLOY_REVEX_CURRENT_SERVICES.ps1
+          foreach ($required in @('clone","--depth","1","--branch","main"','rev-parse HEAD','DEPLOY_ENERGY_CURRENT.ps1','DEPLOY_RENDER_SERVER.ps1')) {
+            if (-not $unified.Contains($required)) { throw "Missing unified deployment contract: $required" }
+          }
+          if ($unified.Contains('PUBLISH_REVEX_R49.ps1')) { throw 'Unified deployment invokes stale publisher.' }
+          [void][scriptblock]::Create($unified)
+          Write-Host 'Managed deployment scripts: PASS'
