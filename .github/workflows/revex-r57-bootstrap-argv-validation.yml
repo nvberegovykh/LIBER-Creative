@@ -29,17 +29,17 @@ jobs:
         run: |
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1 -ValidateOnly -NoPause
           if ($LASTEXITCODE -ne 0) { throw 'Bootstrap validation failed.' }
-      - name: Prove variable splatting keeps gcloud-style arguments separate
+      - name: Prove explicit gcloud flag/value arguments stay separate
         shell: powershell
         run: |
           $fake = Join-Path $env:RUNNER_TEMP 'fake-gcloud.cmd'
           @'
           @echo off
-          echo [%1][%2][%3][%4]
+          echo [%1][%2][%3][%4][%5][%6]
           '@ | Set-Content -LiteralPath $fake -Encoding Ascii
-          $arguments = @('auth','list','--filter=status:ACTIVE','--format=value(account)')
+          $arguments = @('auth','list','--filter','status:ACTIVE','--format','value(account)')
           $actual = (& $fake @arguments | Out-String).Trim()
-          $expected = '[auth][list][--filter=status:ACTIVE][--format=value(account)]'
+          $expected = '[auth][list][--filter][status:ACTIVE][--format][value(account)]'
           if ($actual -ne $expected) {
             throw "Native argv collapsed: $actual"
           }
