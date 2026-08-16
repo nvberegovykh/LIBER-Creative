@@ -55,7 +55,8 @@
     // single successor for the interaction seams formerly repaired by r79. The
     // tiny r85 loader is not a state owner; it waits until DOM parsing/import-map
     // registration completes, then imports the one interaction runtime.
-    loadScript('energy-diagnostics-r68.js?v=20260816r89-energy-replay2','energy-diagnostics-r68');
+    loadScript('energy-diagnostics-r68.js?v=20260816r89-energy-replay3','energy-diagnostics-r68');
+    loadScript('energy-identity-en1-r89.js?v=20260816r89-en1-identity1','energy-identity-en1-r89');
     loadScript('viewer-polish-r68.js?v=20260816r68-viewer-polish1','viewer-polish-r68','module');
     loadScript('appearance-state-r75.js?v=20260816r75-appearance1','appearance-state-r75');
     loadScript('viewer-runtime-r75.js?v=20260816r75-viewer1','viewer-runtime-r75');
@@ -64,5 +65,5 @@
   }
   function bind(){installCanonicalOverlayStore();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
   loadReviewIntegrity();loadCurrentRepairs();if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',reviewRuntime:'r49-review2+r85-section-selection',docsPages:'native-pdf-page-navigation-no-main-thread-split',viewerPolish:'r68',appearance:'single-owner-r75+auth-rehydrate-r85',modelFilter:'single-owner-r75',viewerRuntime:'r75-preemptible+r85-adaptive-exact',mobileBim:'single-bottom-drawer-r85',selection:'element-section-empty-r85',walkLevels:'rendered-world-r85',materialIntegration:'embedded-properties-architextures-user-download-auto-apply',restoreAll:'delegated-setDoc-r85',energyDiagnostics:'historical-vs-current-replay-r89',targetFps:30,spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',reviewRuntime:'r49-review2+r85-section-selection',docsPages:'native-pdf-page-navigation-no-main-thread-split',viewerPolish:'r68',appearance:'single-owner-r75+auth-rehydrate-r85',modelFilter:'single-owner-r75',viewerRuntime:'r75-preemptible+r85-adaptive-exact',mobileBim:'single-bottom-drawer-r85',selection:'element-section-empty-r85',walkLevels:'rendered-world-r85',materialIntegration:'embedded-properties-architextures-user-download-auto-apply',restoreAll:'delegated-setDoc-r85',energyDiagnostics:'historical-vs-current-replay-r89+revision-identity+en1-identity',targetFps:30,spatialObjects:'invisible'});
 })(window);
