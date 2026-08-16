@@ -258,13 +258,13 @@ async function verifyManagedEnergyClient() {
   const button={addEventListener(){}};
   const document={querySelector:(selector)=>selector==='#energy-run-status'?statusNode:selector==='#energy-authorize-backstop'?button:null};
   const state={projectId:'revex_old'};
-  const result={projectId:'revex_current',manifest:{schema:'liber.revex.energy-result.v1',status:'COMPLETE',sourceEngineeringRevision:'eng_current'}};
+  const result={projectId:'revex_current',revision:'energy_current',manifest:{schema:'liber.revex.energy-result.v1',status:'COMPLETE',sourceEngineeringRevision:'eng_current',resultRevision:'energy_current'}};
   const Store={
     isCloud:()=>true,
     user:{uid:'qa-user'},
     syncEngineeringPackage:async()=>({projectId:'revex_current',revision:'eng_current'}),
     getEnergyConsent:async()=>({approved:true}),
-    runEnergyServer:async()=>({ok:true,status:'COMPLETE'}),
+    runEnergyServer:async()=>({ok:true,status:'COMPLETE',resultRevision:'energy_current'}),
     getEnergyResult:async()=>result
   };
   const window={
