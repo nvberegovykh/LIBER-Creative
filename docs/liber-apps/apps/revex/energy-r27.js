@@ -1,6 +1,6 @@
 const Store = window.RevexStore;
 const $ = (selector) => document.querySelector(selector);
-const BUILD = '20260816r55-failure-evidence1';
+const BUILD = '20260816r89-nine-output1';
 let sourceState = null;
 let resultState = null;
 let unsubscribeSource = () => {};
@@ -101,7 +101,11 @@ function renderResult() {
   summary.textContent = complete
     ? `${manifest.resultRevision || resultState.revision} completed from Engineering revision ${manifest.sourceEngineeringRevision || manifest.sourceRevision || '—'}.`
     : `${manifest.status || 'BLOCKED'}${failedStage ? ` at ${failedStage}` : ''}: ${manifest.error || 'Failure evidence is preserved below.'}`;
-  const rows = Array.isArray(resultState.artifacts) ? resultState.artifacts : [];
+  const allRows = Array.isArray(resultState.artifacts) ? resultState.artifacts : [];
+  // COMPLETE results expose only the clean user-facing contract. CXL, COMcheck engine JSON,
+  // and other integrity evidence remain in the immutable result but are intentionally hidden.
+  // Failed runs keep diagnostic rows visible regardless of userVisible so exact failures remain inspectable.
+  const rows = complete ? allRows.filter((row) => row?.userVisible !== false) : allRows;
   const rank = (row) => {
     if (!complete && isFailureEvidence(row)) return 0;
     if (/EN-1_READY_TO_INSERT\.pdf|COMcheck_READY_TO_INSERT\.pdf/i.test(row.name||'')) return 1;
@@ -113,7 +117,7 @@ function renderResult() {
     const filing = complete && rank(row) === 1;
     const failureEvidence = !complete && isFailureEvidence(row);
     const label = failureEvidence ? 'Failure evidence' : filing ? 'Ready to insert later' : row.kind || 'Energy evidence';
-    const body = `<span>${esc(row.name || 'Artifact')}</span><small>${esc(label)}${row.bytes ? ` · ${size(row.bytes)}` : ''}</small>`;
+    const body = `<span>${esc(row.reviewName || row.name || 'Artifact')}</span><small>${esc(label)}${row.bytes ? ` · ${size(row.bytes)}` : ''}</small>`;
     return row.url ? `<a class="energy-artifact${filing?' is-filing':''}" href="${esc(row.url)}" target="_blank" rel="noopener">${body}</a>` : `<div class="energy-artifact${filing?' is-filing':''}">${body}</div>`;
   }).join('') || '<div class="energy-empty">The result manifest contains no downloadable artifact index.</div>';
 }
@@ -157,4 +161,4 @@ $('#project-select')?.addEventListener('change', () => { boundProject=''; setTim
 renderSource();
 renderResult();
 if (!$('#view-energy')?.hidden) subscribe();
-console.info('[REVEX] Energy UI', { build: BUILD, execution: 'private-worker-authenticated-broker', consent: 'per-immutable-revision', staleEvidenceRuns: 'blocked', failureEvidence: 'preserved-and-ranked' });
+console.info('[REVEX] Energy UI', { build: BUILD, execution: 'private-worker-authenticated-broker', consent: 'per-immutable-revision', staleEvidenceRuns: 'blocked', failureEvidence: 'preserved-and-ranked', completeUserOutput: 'exact-nine-visible' });
