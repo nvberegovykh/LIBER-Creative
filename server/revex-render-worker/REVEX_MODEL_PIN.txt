@@ -1,0 +1,4 @@
+Qwen/Qwen-Image-Edit-2511
+revision=6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9
+license=Apache-2.0
+authentication=none-public-repository
