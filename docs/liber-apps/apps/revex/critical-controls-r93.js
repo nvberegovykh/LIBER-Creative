@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260816r93-critical-controls2';
+  const BUILD='20260816r93-critical-controls3';
   if(root.__revexCriticalControlsR93)return;
   root.__revexCriticalControlsR93={build:BUILD};
   const clean=v=>String(v??'').trim();
@@ -59,26 +59,26 @@
     catch(error){diag('WARN','BIM_RESTORE_REFRESH',error?.message||String(error));}
     finally{refreshing=false;}
   }
-  function install(){
+  function showFailure(error){
     const button=document.getElementById('restore-all-elements');
-    if(button&&!button.dataset.revexR93Canonical){
-      button.dataset.revexR93Canonical='1';
-      button.addEventListener('click',event=>{
-        event.preventDefault();event.stopImmediatePropagation();
-        void restoreAll().catch(error=>{
-          if(button){button.disabled=false;button.textContent='Restore all hidden / deleted';}
-          diag('ERROR','BIM_RESTORE_ALL_CANONICAL',error?.message||String(error));
-          const node=document.getElementById('viewer-message');if(node){node.textContent=`Restore All failed: ${error?.message||error}`;node.hidden=false;}
-        });
-      },true);
-    }
-    void refreshRestore();
+    if(button){button.disabled=false;button.textContent='Restore all hidden / deleted';}
+    diag('ERROR','BIM_RESTORE_ALL_CANONICAL',error?.message||String(error));
+    const node=document.getElementById('viewer-message');if(node){node.textContent=`Restore All failed: ${error?.message||error}`;node.hidden=false;}
   }
+  function install(){void refreshRestore();}
+  function capture(event){
+    const target=event.target?.closest?.('button');
+    if(target?.id!=='restore-all-elements')return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    void restoreAll().catch(showFailure);
+  }
+  document.addEventListener('click',capture,true);
   root.__revexCriticalControlsR93.restoreAll=restoreAll;
   const start=()=>{install();setTimeout(install,300);setTimeout(install,1200);};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
   root.addEventListener('revex:authoritative-project-bound',()=>setTimeout(install,0));
   root.addEventListener('revex:source-revision-loaded',()=>setTimeout(install,0));
   root.addEventListener('revex:bim-overlays-changed',()=>setTimeout(refreshRestore,0));
-  diag('INFO','CRITICAL_CONTROLS_R93','Canonical Store-backed critical controls installed.');
+  diag('INFO','CRITICAL_CONTROLS_R93','Canonical Store-backed critical controls installed with first-capture ownership.');
 })(window);
