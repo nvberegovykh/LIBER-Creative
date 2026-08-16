@@ -1,0 +1,73 @@
+name: REVEX r98 Vertex project binding
+
+on:
+  pull_request:
+    paths:
+      - 'server/revex-energy-worker/revex_cloud_project.py'
+      - 'server/revex-energy-worker/revex_identity_content_agent.py'
+      - 'server/revex-energy-worker/verify_vertex_project_binding_r98.py'
+      - 'server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1'
+      - 'server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1'
+      - 'server/revex-energy-worker/Dockerfile'
+      - 'REPAIR_REVEX_ENERGY_VERTEX_BINDING_CURRENT.ps1'
+      - 'REPAIR_REVEX_ENERGY_VERTEX_BINDING_CURRENT.cmd'
+      - '.github/workflows/revex-r98-vertex-project-binding.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vertex-binding:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install project-resolution test dependency
+        run: python -m pip install --disable-pip-version-check google-auth
+      - name: Python syntax
+        run: |
+          python -m py_compile \
+            server/revex-energy-worker/revex_cloud_project.py \
+            server/revex-energy-worker/revex_identity_content_agent.py \
+            server/revex-energy-worker/verify_vertex_project_binding_r98.py
+      - name: GCP project/Vertex routing regression
+        env:
+          PYTHONPATH: server/revex-energy-worker
+        run: python server/revex-energy-worker/verify_vertex_project_binding_r98.py
+      - name: PowerShell deployment syntax
+        shell: pwsh
+        run: |
+          $paths = @(
+            'server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1',
+            'server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1',
+            'REPAIR_REVEX_ENERGY_VERTEX_BINDING_CURRENT.ps1'
+          )
+          foreach ($path in $paths) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+            if (@($errors).Count -gt 0) {
+              throw "$path parse failed: $((@($errors) | ForEach-Object Message) -join '; ')"
+            }
+          }
+      - name: Fast live repair is environment-only
+        run: |
+          grep -q -- '--update-env-vars' REPAIR_REVEX_ENERGY_VERTEX_BINDING_CURRENT.ps1
+          ! grep -qE 'builds["'"', ]+submit|run["'"', ]+deploy|firebase["'"', ]+deploy' REPAIR_REVEX_ENERGY_VERTEX_BINDING_CURRENT.ps1
+          grep -q 'REVEX_VERTEX_PROJECT=$ProjectId' server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1
+          grep -q 'REVEX_VERTEX_PROJECT=$ProjectId' server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1
+          grep -q 'REVEX_VERTEX_LOCATION=global' server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1
+          grep -q 'REVEX_VERTEX_LOCATION=global' server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1
+      - name: No GeometryCo or QA-floor change
+        run: |
+          git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD | tee /tmp/r98-files.txt
+          if grep -E '^src/Liber.Revex.Revit/Engineering/Energy/GeometryCo/' /tmp/r98-files.txt; then
+            echo 'r98 must not alter GeometryCo.' >&2
+            exit 1
+          fi
+          grep -q 'MINIMUM_MAPPING_CONFIDENCE = 0.75' src/Liber.Revex.Revit/Engineering/Energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py
+          grep -q 'MIN_INTEGRITY = 0.80' server/revex-energy-worker/app.py
+          grep -q 'QUALITY_TARGET = 0.95' server/revex-energy-worker/app.py
