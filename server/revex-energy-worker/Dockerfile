@@ -35,6 +35,7 @@ COPY server/revex-energy-worker/app.py /opt/revex/server/app.py
 COPY server/revex-energy-worker/revex_energy_pipeline_guard.py /opt/revex/server/revex_energy_pipeline_guard.py
 COPY server/revex-energy-worker/revex_energy_identity_normalizer.py /opt/revex/server/revex_energy_identity_normalizer.py
 COPY server/revex-energy-worker/revex_identity_content_agent.py /opt/revex/server/revex_identity_content_agent.py
+COPY server/revex-energy-worker/revex_cloud_project.py /opt/revex/server/revex_cloud_project.py
 COPY server/revex-energy-worker/revex_user_identity_en1.py /opt/revex/server/revex_user_identity_en1.py
 COPY server/revex-energy-worker/revex_energy_pipeline_r69.py /opt/revex/server/revex_energy_pipeline_r69.py
 COPY server/revex-energy-worker/revex_geometryco_source_condition.py /opt/revex/server/revex_geometryco_source_condition.py
@@ -42,6 +43,7 @@ COPY server/revex-energy-worker/verify_failure_evidence_r55.py /opt/revex/server
 COPY server/revex-energy-worker/verify_identity_normalizer.py /opt/revex/server/verify_identity_normalizer.py
 COPY server/revex-energy-worker/verify_identity_content_agent.py /opt/revex/server/verify_identity_content_agent.py
 COPY server/revex-energy-worker/verify_user_identity_en1_r89.py /opt/revex/server/verify_user_identity_en1_r89.py
+COPY server/revex-energy-worker/verify_vertex_project_binding_r98.py /opt/revex/server/verify_vertex_project_binding_r98.py
 COPY server/revex-energy-worker/verify_geometryco_source_condition_r91.py /opt/revex/server/verify_geometryco_source_condition_r91.py
 COPY server/revex-energy-worker/run_revex_r49_release_acceptance.py /opt/revex/server/run_revex_r49_release_acceptance.py
 COPY server/revex-energy-worker/verify_revex_r49_worker.py /opt/revex/server/verify_revex_r49_worker.py
@@ -64,6 +66,7 @@ RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
       /opt/revex/server/revex_energy_pipeline_guard.py \
       /opt/revex/server/revex_energy_identity_normalizer.py \
       /opt/revex/server/revex_identity_content_agent.py \
+      /opt/revex/server/revex_cloud_project.py \
       /opt/revex/server/revex_user_identity_en1.py \
       /opt/revex/server/revex_energy_pipeline_r69.py \
       /opt/revex/server/revex_geometryco_source_condition.py \
@@ -71,6 +74,7 @@ RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
       /opt/revex/server/verify_identity_normalizer.py \
       /opt/revex/server/verify_identity_content_agent.py \
       /opt/revex/server/verify_user_identity_en1_r89.py \
+      /opt/revex/server/verify_vertex_project_binding_r98.py \
       /opt/revex/server/verify_geometryco_source_condition_r91.py \
       /opt/revex/server/run_revex_r49_release_acceptance.py \
       /opt/revex/server/verify_revex_r49_worker.py \
@@ -87,6 +91,7 @@ RUN python3 /opt/revex/energy/verify_revex_r49_energy.py \
  && python3 /opt/revex/server/verify_identity_normalizer.py \
  && python3 /opt/revex/server/verify_identity_content_agent.py \
  && python3 /opt/revex/server/verify_user_identity_en1_r89.py \
+ && python3 /opt/revex/server/verify_vertex_project_binding_r98.py \
  && python3 /opt/revex/server/verify_geometryco_source_condition_r91.py
 
 ENV REVEX_HEADLESS=1 \
