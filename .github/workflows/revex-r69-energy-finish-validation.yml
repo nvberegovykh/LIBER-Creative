@@ -1,10 +1,10 @@
-name: REVEX r69 Energy identity + finish-type validation
+name: REVEX r70 Energy + BIM appearance validation
 
 on:
   push:
     branches:
       - main
-      - 'agent/revex-r69-energy-identity-finish-type-*'
+      - 'agent/revex-r70-*'
     paths:
       - 'server/revex-energy-worker/revex_energy_pipeline_r69.py'
       - 'server/revex-energy-worker/revex_energy_pipeline_guard.py'
@@ -12,7 +12,7 @@ on:
       - 'server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1'
       - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
       - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
-      - 'docs/liber-apps/apps/revex/finish-type-r69.js'
+      - 'docs/liber-apps/apps/revex/appearance-r70.js'
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/docs-pages-r68.js'
       - '.github/scripts/verify-revex-r69-energy-finish.py'
@@ -21,7 +21,7 @@ on:
     branches: [main]
 
 jobs:
-  r69-contract:
+  r70-contract:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,7 +31,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Syntax-check new runtimes
+      - name: Syntax-check current runtimes
         shell: pwsh
         run: |
           $files = @(
@@ -46,10 +46,10 @@ jobs:
           }
           python -m py_compile server/revex-energy-worker/revex_energy_pipeline_r69.py
           python -m py_compile server/revex-energy-worker/revex_energy_pipeline_guard.py
-          node --check docs/liber-apps/apps/revex/finish-type-r69.js
+          node --check docs/liber-apps/apps/revex/appearance-r70.js
           node --check docs/liber-apps/apps/revex/ui-integrity.js
           node --check docs/liber-apps/apps/revex/docs-pages-r68.js
-      - name: Prove identity derivation, old Docs repair, and same-type finish contract
+      - name: Prove Energy, deployment, Docs and BIM appearance contracts
         run: python .github/scripts/verify-revex-r69-energy-finish.py
       - name: Prove worker-only path bypasses Firebase and renderer
         shell: pwsh
@@ -61,7 +61,7 @@ jobs:
           foreach($marker in @('EnergyWorkerOnly = $energyWorkerOnly','r69 Energy worker-only deployment preserves the active broker')) { if(-not $bootstrap.Contains($marker)){throw "bootstrap missing $marker"} }
           if($worker -match 'Require-Command\s+["'']firebase["'']' -or $worker -match '\$Firebase\b' -or $worker -match 'functions:revex-energy') { throw 'worker-only deployment invokes or requires firebase-tools' }
           if($worker -match 'revex-render-worker' -or $worker -match 'DEPLOY_RENDER' -or $worker -match 'runRevexRender') { throw 'worker-only deployment touches renderer infrastructure' }
-          foreach($marker in @('Build exact r69 Energy worker image','Deploy private r69 Energy worker','Preserve Energy broker invocation access')) { if(-not $worker.Contains($marker)){throw "worker-only deploy missing $marker"} }
+          foreach($marker in @('Build exact r69 Energy worker image','Deploy private r69 Energy worker','Preserve Energy broker invocation access','REVEX_NATIVE_EXITCODE_AUTHORITATIVE')) { if(-not $worker.Contains($marker)){throw "worker-only deploy missing $marker"} }
       - name: Preserve current REVEX contracts
         run: |
           node .github/scripts/verify-revex-current-generation-r53.js
