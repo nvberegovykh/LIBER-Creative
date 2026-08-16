@@ -86,10 +86,31 @@ function Invoke-Captured([string]$Command, [string[]]$Arguments, [string]$Workin
   }
 }
 
+function Wait-RevitClosed([int]$PollMilliseconds = 750) {
+  $announced = $false
+  while ($true) {
+    $running = @(Get-Process -Name "Revit" -ErrorAction SilentlyContinue)
+    if ($running.Count -eq 0) {
+      if ($announced) {
+        Write-Host "Revit is closed. Continuing this same update automatically." -ForegroundColor Green
+      }
+      return
+    }
+
+    if (-not $announced) {
+      $ids = ($running | ForEach-Object { $_.Id }) -join ", "
+      Write-Host "Revit 2026 is still running (PID $ids)." -ForegroundColor Yellow
+      Write-Host "Save and close Revit completely. This updater will wait here and continue automatically; do not rerun it." -ForegroundColor Yellow
+      $announced = $true
+    }
+    Start-Sleep -Milliseconds $PollMilliseconds
+  }
+}
+
 function Assert-RevitClosed {
   $running = @(Get-Process -Name "Revit" -ErrorAction SilentlyContinue)
   if ($running.Count -gt 0) {
-    throw "Revit 2026 is still running. Save/close Revit completely, then rerun this updater. No installed REVEX files were changed."
+    throw "Revit restarted before the atomic install. Close Revit and run the updater again; no installed REVEX files were changed by this install step."
   }
 }
 
@@ -97,10 +118,14 @@ function Assert-SourceContract([string]$Root) {
   $required = @(
     ".github\scripts\verify-revex-current-generation-r53.js",
     ".github\scripts\verify-revex-r72-nonblocking-viewer.js",
+    ".github\scripts\verify-revex-r69-energy-finish.py",
     ".github\scripts\verify-revex-r73-energy-topology-fallback.py",
-    "docs\liber-apps\apps\revex\viewer-runtime-r72.js",
-    "docs\liber-apps\apps\revex\material-modal-r72.js",
-    "src\Liber.Revex.Revit\UI\RevexWebIntegrationBridge.cs",
+    "docs\liber-apps\apps\revex\viewer-runtime-r75.js",
+    "docs\liber-apps\apps\revex\appearance-state-r75.js",
+    "docs\liber-apps\apps\revex\companion-runtime-r75.js",
+    "docs\liber-apps\apps\revex\viewer-repair-r79.js",
+    "docs\liber-apps\apps\revex\energy-diagnostics-r68.js",
+    "src\Liber.Revex.Revit\Services\EngineeringCompanionWebBridge.cs",
     "src\Liber.Revex.Revit\Revit\RevitRequestHandler.cs",
     $ProjectPath
   )
@@ -219,8 +244,8 @@ try {
   Write-Host "No Firebase, Cloud Run, renderer, Energy worker or stale r49 publisher is used."
   Write-Host "Persistent log: $LogPath"
 
-  Write-Step "Verify Revit is closed before any installed-file change"
-  Assert-RevitClosed
+  Write-Step "Wait until Revit is closed before any installed-file change"
+  Wait-RevitClosed
 
   if (-not (Test-Path -LiteralPath (Join-Path $RevitDir "RevitAPI.dll") -PathType Leaf)) {
     throw "Revit 2026 API was not found at $RevitDir."
@@ -240,7 +265,8 @@ try {
 
   Assert-SourceContract $RepoRoot
   Invoke-Checked "Reject stale REVEX generation" $Node @(".github\scripts\verify-revex-current-generation-r53.js") $RepoRoot
-  Invoke-Checked "Verify r72 nonblocking viewer + owned material integration" $Node @(".github\scripts\verify-revex-r72-nonblocking-viewer.js") $RepoRoot
+  Invoke-Checked "Verify current nonblocking viewer + embedded material + private Energy handoff" $Node @(".github\scripts\verify-revex-r72-nonblocking-viewer.js") $RepoRoot
+  Invoke-Checked "Verify current-project Energy identity and revision-scoped diagnostics" $Python @(".github\scripts\verify-revex-r69-energy-finish.py") $RepoRoot
   Invoke-Checked "Verify r54 renderer/Energy/viewer integration remains preserved" $Node @(".github\scripts\verify-revex-r54-selfhost-render.js") $RepoRoot
   Invoke-Checked "Verify r73 Revit analytical-topology fallback" $Python @(".github\scripts\verify-revex-r73-energy-topology-fallback.py") $RepoRoot
 
