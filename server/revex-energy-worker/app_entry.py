@@ -16,5 +16,8 @@ os.environ["REVEX_VERTEX_PROJECT"] = resolve_vertex_project()
 os.environ.setdefault("REVEX_VERTEX_LOCATION", "global")
 
 from app import APP  # noqa: E402  - cloud routing must be bound before app import
+from durable_execution import install_durable_energy_execution  # noqa: E402
+
+install_durable_energy_execution(APP)
 
 __all__ = ["APP"]
