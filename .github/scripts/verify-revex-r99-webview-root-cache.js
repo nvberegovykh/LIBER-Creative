@@ -6,9 +6,11 @@ const loader=fs.readFileSync('docs/liber-apps/apps/revex/viewer-interaction-r85-
 const edge=fs.readFileSync('docs/liber-apps/apps/revex/live-worker-edge-r97.js','utf8');
 const requireText=(text,needle,label)=>{if(!text.includes(needle))throw new Error(`${label}: missing ${needle}`)};
 requireText(index,'ui-integrity.js?v=20260816r99-root-cache1','index root cache break');
-requireText(ui,"viewer-interaction-r85-loader.js?v=20260816r98-live-edge2",'ui loader cache break');
-requireText(loader,"import('./live-worker-edge-r97.js?v=20260816r97-live-worker-edge2')",'independent exact-job recovery import');
-requireText(edge,"status==='RUNNING'||status==='COMPLETE'",'running/complete recovery');
-requireText(edge,"status==='FAILED'||status==='INFRASTRUCTURE_FAILED'",'terminal exact failure recovery');
+requireText(ui,"energy-replay-r95.js?v=20260817r114-durable-energy1",'durable Energy replay cache break');
+requireText(ui,"viewer-interaction-r85-loader.js?v=20260817r114-durable-energy1",'ui loader cache break');
+requireText(loader,"import('./live-worker-edge-r97.js?v=20260817r114-durable-energy1')",'independent durable-job recovery import');
+requireText(edge,"status==='RUNNING'||status==='COMPLETE'||durable",'running/complete/durable recovery');
+requireText(edge,"worker.status==='FAILED'||status==='FAILED'||status==='INFRASTRUCTURE_FAILED'",'terminal exact failure recovery');
+requireText(edge,"worker.status==='RUNNING'&&worker.fresh",'transport loss must preserve fresh worker');
 requireText(edge,'event.stopImmediatePropagation','malformed WebView keyboard guard');
-console.log('REVEX_R99_WEBVIEW_ROOT_CACHE_CHAIN=PASSED');
+console.log('REVEX_R114_WEBVIEW_CACHE_CHAIN=PASSED');
