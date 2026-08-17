@@ -19,23 +19,43 @@ try {
   }
 
   $text = Get-Content -Raw -LiteralPath $Original
-  $pattern = '& \$GCloud @\(([^\r\n\)]*)\)'
-  $matches = [regex]::Matches($text, $pattern)
-  if ($matches.Count -lt 5) {
-    throw "Expected at least five direct gcloud array-expression calls; found $($matches.Count). Refusing an incomplete argv patch."
+  $replacements = @(
+    @(
+      '$active = @(& $GCloud @("auth","list","--filter=status:ACTIVE","--format=value(account)")) | Where-Object { $_ }',
+      '$active = @(& $GCloud "auth" "list" "--filter=status:ACTIVE" "--format=value(account)") | Where-Object { $_ }'
+    ),
+    @(
+      '$CloudBuildSa = (& $GCloud @("builds","get-default-service-account","--project=$ProjectId","--format=value(serviceAccountEmail)")).Trim()',
+      '$CloudBuildSa = (& $GCloud "builds" "get-default-service-account" "--project=$ProjectId" "--format=value(serviceAccountEmail)").Trim()'
+    ),
+    @(
+      '$WorkerUrl = (& $GCloud @("run","services","describe",$Service,"--project=$ProjectId","--region=$Region","--format=value(status.url)")).Trim()',
+      '$WorkerUrl = (& $GCloud "run" "services" "describe" $Service "--project=$ProjectId" "--region=$Region" "--format=value(status.url)").Trim()'
+    ),
+    @(
+      '$FunctionState = (& $GCloud @("functions","describe","runRevexEnergy","--gen2","--project=$ProjectId","--region=$Region","--format=json")) | ConvertFrom-Json',
+      '$FunctionState = (& $GCloud "functions" "describe" "runRevexEnergy" "--gen2" "--project=$ProjectId" "--region=$Region" "--format=json") | ConvertFrom-Json'
+    ),
+    @(
+      '$RunState = (& $GCloud @("run","services","describe",$Service,"--project=$ProjectId","--region=$Region","--format=json")) | ConvertFrom-Json',
+      '$RunState = (& $GCloud "run" "services" "describe" $Service "--project=$ProjectId" "--region=$Region" "--format=json") | ConvertFrom-Json'
+    )
+  )
+
+  $fixed = $text
+  foreach ($pair in $replacements) {
+    $old = [string]$pair[0]
+    $new = [string]$pair[1]
+    if (-not $fixed.Contains($old)) {
+      throw "Expected direct gcloud invocation was not found; refusing partial argv repair: $old"
+    }
+    $fixed = $fixed.Replace($old, $new)
   }
 
-  $fixed = [regex]::Replace($text, $pattern, {
-    param($match)
-    $argvText = [regex]::Replace($match.Groups[1].Value, '\s*,\s*', ' ')
-    return '& $GCloud ' + $argvText
-  })
-
-  if ($fixed -match '& \$GCloud @\(') {
-    throw "Direct gcloud array-expression invocation remains after argv repair."
-  }
-  if ($fixed -match '& \$GCloud\s+"auth"\s*,') {
-    throw "gcloud argv repair still contains comma-array syntax."
+  foreach ($pair in $replacements) {
+    if ($fixed.Contains([string]$pair[0])) {
+      throw "A direct gcloud array-expression invocation remains after argv repair."
+    }
   }
 
   [System.IO.File]::WriteAllText($Runtime, $fixed, (New-Object System.Text.UTF8Encoding($false)))
@@ -46,7 +66,7 @@ try {
     throw "Runtime-fixed Energy deployer did not parse: $($errors[0].Message)"
   }
 
-  Write-Host "REVEX Energy argv repair: PASS" -ForegroundColor Green
+  Write-Host "REVEX Energy argv repair: PASS (5 exact calls)" -ForegroundColor Green
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Runtime `
     -ProjectId $ProjectId `
     -Region $Region `
