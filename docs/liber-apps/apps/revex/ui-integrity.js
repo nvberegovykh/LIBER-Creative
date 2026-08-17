@@ -4,7 +4,9 @@
   const REVEX_R87_REPLAY_CONTRACT='energy-diagnostics-r68.js?v=20260816r87-energy-replay1';
   const REVEX_R87_REPLAY_LABEL="energyDiagnostics:'revision-scoped-replay-r87'";
   const REVEX_R92_REPLAY_COMPAT='energy-replay-r92.js?v=20260816r92-hosted-replay1';
-  void REVEX_R87_REPLAY_CONTRACT; void REVEX_R87_REPLAY_LABEL; void REVEX_R92_REPLAY_COMPAT;
+  const REVEX_R95_REPLAY_COMPAT='energy-replay-r95.js?v=20260816r95-single-owner1';
+  const REVEX_R98_LIVE_EDGE_COMPAT='viewer-interaction-r85-loader.js?v=20260816r98-live-edge2';
+  void REVEX_R87_REPLAY_CONTRACT; void REVEX_R87_REPLAY_LABEL; void REVEX_R92_REPLAY_COMPAT; void REVEX_R95_REPLAY_COMPAT; void REVEX_R98_LIVE_EDGE_COMPAT;
   if(root.__revexUiIntegrityR20) return;
   root.__revexUiIntegrityR20=true;
 
