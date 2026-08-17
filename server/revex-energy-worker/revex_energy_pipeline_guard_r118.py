@@ -46,6 +46,43 @@ import revex_final_touchups_r125 as r125
 
 _ORIGINAL_R116_EVIDENCE_RESOLVER = r116._resolve_comcheck_evidence_request
 
+_ORIGINAL_R116_SUBPROCESS_RUN = r116.subprocess.run
+
+
+def _install_full_pipeline_runner() -> None:
+    """Route only r116's pinned full-pipeline subprocess through the r125 in-process patch runner."""
+    if getattr(r116, "__revex_r125_subprocess_patched__", False):
+        return
+    runner = _energy_root / "revex_pipeline_runner_r125.py"
+    if not runner.is_file():
+        raise RuntimeError(f"REVEX r125 full pipeline runner is unavailable: {runner}")
+
+    def run(command, *args, **kwargs):
+        try:
+            values = list(command)
+        except TypeError:
+            return _ORIGINAL_R116_SUBPROCESS_RUN(command, *args, **kwargs)
+        if len(values) >= 2:
+            try:
+                target = Path(str(values[1])).resolve()
+                pinned = base._pipeline_impl().resolve()
+            except Exception:
+                target = None
+                pinned = None
+            if target is not None and pinned is not None and target == pinned:
+                values = [values[0], str(runner), "--impl", str(pinned), *values[2:]]
+                print(json.dumps({
+                    "stage": "FULL_PIPELINE_R125",
+                    "status": "PATCHED_RUNNER",
+                    "runner": str(runner),
+                    "impl": str(pinned),
+                }, ensure_ascii=True), flush=True)
+                return _ORIGINAL_R116_SUBPROCESS_RUN(values, *args, **kwargs)
+        return _ORIGINAL_R116_SUBPROCESS_RUN(command, *args, **kwargs)
+
+    r116.subprocess.run = run
+    r116.__revex_r125_subprocess_patched__ = True
+
 
 def _osm_fields_without_comments(block: str) -> list[str]:
     fields: list[str] = []
@@ -158,8 +195,10 @@ def main(argv: Iterable[str] | None = None) -> int:
     # r116 looks these functions up from its module globals at execution time.
     r116._resolve_comcheck_evidence_request = _resolve_comcheck_evidence_then_reference
     r116.PREFLIGHT_NAME = "COMCHECK_PREFLIGHT_R118.json"
-    # Patch each dynamically loaded r49 module before the preflight and full worker use it.
+    # Patch each dynamically loaded r49 module before the preflight and route the full
+    # pinned implementation through the same r125 patch layer.
     r125.install_guard_touchups(r116, reference_envelope)
+    _install_full_pipeline_runner()
     base.EXACT_NAMES.update({
         "REFERENCE_ENVELOPE_PROJECTION_R118.json",
         "00_PAGE_FACTS_REFERENCE_ENVELOPE_R118.json",
