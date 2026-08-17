@@ -1,5 +1,6 @@
 name: Apply REVEX r125 gbXML geometry touchups
 
+# r125 synchronized source generator: external Python and Dynamo embedded Python must match.
 on:
   workflow_dispatch:
   push:
