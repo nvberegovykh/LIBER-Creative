@@ -25,10 +25,12 @@ onInit(() => {
 
 const PROJECT_RE = /^[A-Za-z0-9._-]{1,160}$/;
 const JOB_RE = /^[A-Za-z0-9_-]{1,160}$/;
+const BUCKET_RE = /^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/i;
 const RENDER_BROKER_SERVICE_ACCOUNT = process.env.REVEX_RENDER_BROKER_SERVICE_ACCOUNT || 'revex-render-broker@liber-apps-cca20.iam.gserviceaccount.com';
 const RENDER_WORKER_URL = String(process.env.REVEX_RENDER_WORKER_URL || '').replace(/\/+$/, '');
+const STORAGE_BUCKET = String(process.env.REVEX_STORAGE_BUCKET || '').replace(/^gs:\/\//i, '').replace(/\/$/, '').trim();
 const SOURCE_MAX_BYTES = 24 * 1024 * 1024;
-const BUILD = '20260817r110-render-broker3';
+const BUILD = '20260817r113-render-broker1';
 
 function runtimeServices() {
   if (!db || !FieldValue || !storage || !GoogleAuth) {
@@ -74,6 +76,16 @@ async function setJob(projectId, jobId, patch) {
   }, { merge: true });
 }
 
+function renderErrorDetail(error, stage) {
+  const body = error?.response?.data;
+  const detail = typeof body === 'string' ? body : (body?.error || body?.message || error?.message || String(error));
+  return {
+    stage,
+    status: Number(error?.response?.status || 0) || null,
+    message: String(detail || 'Private REVEX render failed.').slice(0, 3000)
+  };
+}
+
 exports.runRevexRender = onCall({
   timeoutSeconds: 3600,
   memory: '1GiB',
@@ -95,12 +107,6 @@ exports.runRevexRender = onCall({
   const jobSnap = await jobRef.get();
   let existing = jobSnap.exists ? (jobSnap.data() || {}) : null;
 
-  // The browser normally creates the project render record first. The callable may
-  // still arrive before that write is visible to this Gen2 runtime (or after an
-  // offline/reconnected client write). Project access has already been verified, so
-  // make the same project-scoped job idempotently here instead of failing a valid
-  // render. This does not broaden access: only an authenticated project member can
-  // reach this point and every later write stays under this exact project/job path.
   if (!existing) {
     existing = {
       createdBy: uid,
@@ -119,19 +125,10 @@ exports.runRevexRender = onCall({
 
   if (existing.createdBy && String(existing.createdBy) !== uid && accessRole !== 'owner' && accessRole !== 'liber-admin')
     throw new HttpsError('permission-denied', 'This render job belongs to another project member.');
-  if (!RENDER_WORKER_URL)
-    throw new HttpsError('failed-precondition', 'The private REVEX GPU renderer has not been deployed yet.');
-
-  const source = decodeImageDataUrl(body.sourceImageDataUrl);
-  const bucket = runtime.storage.bucket();
-  const base = `projects/${projectId}/revex/renders/${jobId}`;
-  const sourcePath = `${base}/source.${source.contentType.endsWith('jpeg') ? 'jpg' : source.contentType.split('/')[1]}`;
-  const resultPath = `${base}/result.jpg`;
-  const sourceFile = bucket.file(sourcePath);
 
   await setJob(projectId, jobId, {
-    status: 'UPLOADING_SOURCE',
-    stage: 'broker',
+    status: 'RUNNING',
+    stage: 'BROKER_PREPARE',
     correlationId,
     requestedBy: uid,
     accessRole,
@@ -139,17 +136,32 @@ exports.runRevexRender = onCall({
     model: 'Qwen/Qwen-Image-Edit-2511',
     modelRevision: '6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9'
   });
-  await sourceFile.save(source.bytes, {
-    resumable: false,
-    contentType: source.contentType,
-    metadata: {
-      cacheControl: 'private,max-age=31536000,immutable',
-      metadata: { revexJobId: jobId, revexSource: 'clean-bim-viewport' }
-    }
-  });
-  await setJob(projectId, jobId, { status: 'DISPATCHED', stage: 'worker', sourcePath });
 
+  let failureStage = 'BROKER_PREPARE';
   try {
+    if (!RENDER_WORKER_URL) throw new Error('REVEX_RENDER_WORKER_URL is not configured.');
+    if (!BUCKET_RE.test(STORAGE_BUCKET)) throw new Error('REVEX_STORAGE_BUCKET is not configured with a valid Firebase Storage bucket.');
+
+    const source = decodeImageDataUrl(body.sourceImageDataUrl);
+    const bucket = runtime.storage.bucket(STORAGE_BUCKET);
+    const base = `projects/${projectId}/revex/renders/${jobId}`;
+    const sourcePath = `${base}/source.${source.contentType.endsWith('jpeg') ? 'jpg' : source.contentType.split('/')[1]}`;
+    const resultPath = `${base}/result.jpg`;
+    const sourceFile = bucket.file(sourcePath);
+
+    failureStage = 'UPLOAD_SOURCE';
+    await setJob(projectId, jobId, { status: 'UPLOADING_SOURCE', stage: failureStage, storageBucket: STORAGE_BUCKET });
+    await sourceFile.save(source.bytes, {
+      resumable: false,
+      contentType: source.contentType,
+      metadata: {
+        cacheControl: 'private,max-age=31536000,immutable',
+        metadata: { revexJobId: jobId, revexSource: 'clean-bim-viewport' }
+      }
+    });
+
+    failureStage = 'WORKER_REQUEST';
+    await setJob(projectId, jobId, { status: 'DISPATCHED', stage: failureStage, sourcePath, workerUrl: RENDER_WORKER_URL });
     const auth = new runtime.GoogleAuth();
     const client = await auth.getIdTokenClient(RENDER_WORKER_URL);
     const response = await client.request({
@@ -160,7 +172,7 @@ exports.runRevexRender = onCall({
         schema: 'liber.revex.render-worker-request.v1',
         projectId,
         jobId,
-        bucket: bucket.name,
+        bucket: STORAGE_BUCKET,
         sourcePath,
         resultPath,
         prompt: String(body.prompt || '').slice(0, 12000),
@@ -173,13 +185,16 @@ exports.runRevexRender = onCall({
         }
       }
     });
+
+    failureStage = 'WORKER_RESPONSE';
     const result = response.data || {};
     if (result.schema !== 'liber.revex.render-worker-response.v1' || result.ok !== true ||
         String(result.projectId || '') !== projectId || String(result.jobId || '') !== jobId)
       throw new Error('Private REVEX render worker returned an incompatible response.');
+
     await setJob(projectId, jobId, {
       status: 'COMPLETE',
-      stage: 'complete',
+      stage: 'COMPLETE',
       resultUrl: result.resultUrl || null,
       resultPath: result.resultPath || resultPath,
       resultBytes: Number(result.resultBytes || 0),
@@ -203,11 +218,15 @@ exports.runRevexRender = onCall({
       inferenceSeconds: result.inferenceSeconds
     };
   } catch (error) {
-    const detail = typeof error?.response?.data === 'string'
-      ? error.response.data
-      : (error?.response?.data?.error || error?.message || String(error));
-    const message = String(detail || 'Private REVEX render worker failed.').slice(0, 3000);
-    await setJob(projectId, jobId, { status: 'FAILED', stage: 'failed', error: message });
-    throw new HttpsError('internal', message, { correlationId, projectId, jobId });
+    const detail = renderErrorDetail(error, failureStage);
+    console.error('[REVEX RENDER BROKER]', JSON.stringify({ correlationId, projectId, jobId, ...detail }), error);
+    await setJob(projectId, jobId, {
+      status: 'FAILED', stage: detail.stage, error: detail.message,
+      workerHttpStatus: detail.status, correlationId
+    }).catch(() => {});
+    const code = error instanceof HttpsError && error.code ? error.code : 'internal';
+    throw new HttpsError(code, `REVEX render failed at ${detail.stage}: ${detail.message}`, {
+      correlationId, projectId, jobId, ...detail
+    });
   }
 });
