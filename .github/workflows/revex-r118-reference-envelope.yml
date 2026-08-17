@@ -17,38 +17,46 @@ permissions:
 jobs:
   reference-envelope:
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: Python syntax
         run: |
           python -m py_compile \
             server/revex-energy-worker/revex_reference_envelope_projection_r118.py \
             server/revex-energy-worker/revex_energy_pipeline_guard_r118.py \
             server/revex-energy-worker/verify_reference_envelope_r118.py
+
       - name: Approved reference envelope regression
         working-directory: server/revex-energy-worker
         run: python verify_reference_envelope_r118.py
+
       - name: Install r116 verifier runtime dependencies
         run: python -m pip install --disable-pip-version-check -r server/revex-energy-worker/requirements-server.txt
-      - name: Preserve r116 terminal/durability contract
+
+      - name: Preserve r116 terminal and durability contract
         working-directory: server/revex-energy-worker
         run: python verify_final_comcheck_recovery_r116.py
-      - name: Docker production path points to r118
+
+      - name: Assert production path contract before full build
         run: |
-          grep -F 'COPY server/revex-energy-worker/revex_reference_envelope_projection_r118.py' server/revex-energy-worker/Dockerfile
-          grep -F 'COPY server/revex-energy-worker/revex_energy_pipeline_guard_r118.py' server/revex-energy-worker/Dockerfile
+          grep -F 'ENV REVEX_APPROVED_ENVELOPE_REFERENCE=/opt/revex/energy/References/79_WINTHROP_APPROVED_PROPOSED.osm' server/revex-energy-worker/Dockerfile
+          grep -F 'REVEX_R118_PACKAGED_REFERENCE_PATH=PASSED' server/revex-energy-worker/Dockerfile
+          grep -F 'reference = ref._reference_path()' server/revex-energy-worker/verify_reference_envelope_r118.py
+          grep -F 'expected_packaged = Path("/opt/revex/energy/References/79_WINTHROP_APPROVED_PROPOSED.osm")' server/revex-energy-worker/verify_reference_envelope_r118.py
           grep -F 'REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard_r118.py' server/revex-energy-worker/Dockerfile
-          grep -F '79_WINTHROP_APPROVED_PROPOSED.osm' server/revex-energy-worker/Dockerfile
+
       - name: Scope guard
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           if [ -z "$BASE_SHA" ]; then
-            echo 'workflow_dispatch: scope guard has no PR base and is not applicable.'
+            echo 'workflow_dispatch scope guard has no PR base and is not applicable.'
             exit 0
           fi
           git fetch origin "$BASE_SHA" --depth=1
@@ -60,3 +68,18 @@ jobs:
             echo "$forbidden"
             exit 1
           fi
+
+      # This is intentionally the complete production worker image, not a mocked
+      # or partial unit image. It installs Chrome, OpenStudio/EnergyPlus,
+      # LibreOffice, Python dependencies, runs the r49 acceptance chain,
+      # official COMcheck QA, r116 durability checks, and r118 reference QA.
+      - name: FULL production Energy worker image build
+        run: |
+          docker build --progress=plain \
+            -f server/revex-energy-worker/Dockerfile \
+            -t revex-r118-production-path:${{ github.sha }} \
+            .
+
+      - name: Full build completed
+        run: |
+          echo 'PASS: exact production Dockerfile and all embedded Energy dependency/QA stages completed.'
