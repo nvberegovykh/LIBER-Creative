@@ -7,6 +7,12 @@ geometry rows that lack thermal properties may inherit performance from the appr
 79 Winthrop proposed envelope reference when current EN thermal facts corroborate the
 same envelope signature.
 
+r125 adds only final filing touch-ups on top of this established guard:
+- native Revit schedule totals outrank arithmetic region re-sums;
+- VT/VLT fallbacks are complete and explicit;
+- compact COMcheck labels;
+- template-preserving EN-1 publication.
+
 No Revit, gbXML, GeometryCo, simulation, project identity or current geometry authority
 is changed by this guard.
 """
@@ -15,12 +21,28 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 import json
+import os
 import sys
 import zipfile
 
 import revex_energy_pipeline_guard as base
 import revex_energy_pipeline_guard_r116 as r116
 import revex_reference_envelope_projection_r118 as reference_envelope
+
+# r125 lives beside the pinned Energy implementation, which is already copied into the
+# production worker image. Make it importable from this server-side guard subprocess.
+_impl_hint = str(os.environ.get("REVEX_PIPELINE_IMPL") or "").strip()
+if _impl_hint:
+    _energy_root = Path(_impl_hint).resolve().parent
+else:
+    _packaged = Path("/opt/revex/energy")
+    _energy_root = _packaged if _packaged.is_dir() else (
+        Path(__file__).resolve().parents[2] / "src/Liber.Revex.Revit/Engineering/Energy"
+    )
+if str(_energy_root) not in sys.path:
+    sys.path.insert(0, str(_energy_root))
+
+import revex_final_touchups_r125 as r125
 
 _ORIGINAL_R116_EVIDENCE_RESOLVER = r116._resolve_comcheck_evidence_request
 
@@ -51,7 +73,11 @@ def _resolve_comcheck_evidence_then_reference(request_path: Path, output_root: P
     # (G11.3 must not be hidden because G11.1 happens to have a thermal row).
     reference_envelope._osm_fields = _osm_fields_without_comments
     reference_envelope._has_existing_match = _exact_thermal_match_only
-    return reference_envelope.resolve_request(current, output_root)
+    projected = reference_envelope.resolve_request(current, output_root)
+    # r125 derives only publication facts. It never edits the immutable Engineering
+    # source: native schedule total is attached as authority metadata and missing VT
+    # receives approved-reference/code fallback in a derived page-facts copy.
+    return r125.apply_request_touchups(projected, output_root, reference_envelope)
 
 
 PACKAGE_NAME = "REVEX_RECOVERY_PACKAGE.zip"
@@ -129,16 +155,20 @@ def _ensure_recovery_package(request_path: Path) -> Path:
 
 
 def main(argv: Iterable[str] | None = None) -> int:
-    # r116 looks this function up from its module globals at execution time. Replace only
-    # that one downstream seam; every other r116 operation stays intact.
+    # r116 looks these functions up from its module globals at execution time.
     r116._resolve_comcheck_evidence_request = _resolve_comcheck_evidence_then_reference
     r116.PREFLIGHT_NAME = "COMCHECK_PREFLIGHT_R118.json"
+    # Patch each dynamically loaded r49 module before the preflight and full worker use it.
+    r125.install_guard_touchups(r116, reference_envelope)
     base.EXACT_NAMES.update({
         "REFERENCE_ENVELOPE_PROJECTION_R118.json",
         "00_PAGE_FACTS_REFERENCE_ENVELOPE_R118.json",
         "00_PIPELINE_REQUEST_REFERENCE_ENVELOPE_R118.json",
         "COMCHECK_PREFLIGHT_R118.json",
         PACKAGE_MANIFEST_NAME,
+        "ENERGY_FINAL_TOUCHUPS_R125.json",
+        "00_PAGE_FACTS_FINAL_TOUCHUPS_R125.json",
+        "00_PIPELINE_REQUEST_FINAL_TOUCHUPS_R125.json",
     })
     request_path = _request_path_from_argv(argv)
     try:
