@@ -37,6 +37,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+
       - name: Parse Windows PowerShell updater and recovery launcher
         shell: powershell
         run: |
@@ -46,6 +47,7 @@ jobs:
             [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors) | Out-Null
             if ($errors.Count -gt 0) { $errors | Format-List | Out-String | Write-Error; exit 1 }
           }
+
       - name: Verify updater source policy
         shell: powershell
         run: |
@@ -84,40 +86,38 @@ jobs:
           if ($ps.Contains('PUBLISH_REVEX_R49')) { throw 'Historical publisher invocation is forbidden in the current updater.' }
           if (-not $cmd.Contains('raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/UPDATE_REVEX_ADDIN_CURRENT.ps1')) { throw 'Launcher does not self-refresh from current main.' }
           if (-not $cmd.Contains('pause >nul')) { throw 'Launcher must remain open so success/failure can be read.' }
-      - name: Verify Energy recovery launcher scope and revision semantics
+
+      - name: Verify r125 Energy recovery launcher scope and semantics
         shell: powershell
         run: |
           $ps = Get-Content '.\RECOVER_REVEX_ENERGY_CURRENT.ps1' -Raw
           $cmd = Get-Content '.\RECOVER_REVEX_ENERGY_CURRENT.cmd' -Raw
           foreach ($needle in @(
-            'Renderer is verified by preserved source regressions but is not redeployed because this command changes no renderer source.',
-            'REVEX_ENERGY_WORKER_URL',
-            'REVEX_SOURCE_CANDIDATE',
-            'roles/run.invoker',
-            'serviceAccount:$BrokerSa',
-            'UPDATE_REVEX_ADDIN_CURRENT.ps1',
-            'function Assert-InstalledSource',
-            'function Get-LatestEngineeringRevisionState',
-            'REVEX_DATA_ROOT',
-            '[System.IO.Path]::IsPathRooted',
-            '$DriveRelative',
-            '$SingleRootSlash',
-            '$RevexDataRoot',
-            '$RevexInstallRoot',
-            'engine-REVIT-SCHEDULE-EVIDENCE.json',
-            'Structured current-Revit schedule regression',
-            'Retry replays one immutable revision. SYNC ENGINEERING publishes a new current Revit state. They are never substitutes for each other.'
-          )) { if (-not $ps.Contains($needle)) { throw "Energy recovery launcher missing: $needle" } }
+            '$SourceCandidate = "b69071c621220cc875fff041bb2082e80e44774b"',
+            'REVEX r125 Energy recovery - final filing touchups',
+            'reuse byte-verified completed simulation outputs',
+            'native Revit schedule totals outrank diagram re-sums',
+            'actual VT wins, then approved same-envelope VT',
+            'original workbook appearance is preserved',
+            'whole glass-door openings, panel-by-panel multi-floor curtain-wall mapping',
+            'Scope of this command: Energy worker + authenticated broker only.',
+            'No Revit sync, no add-in replacement, no BIM/Docs/Render mutation.',
+            'DEPLOY_ENERGY_CURRENT_ARGV_FIX.ps1',
+            'specProjectId=spec_revex_mspgzb7h_729b2936bfaa',
+            'future geometry refresh requires the r125 add-in/exporter and a new Engineering Sync'
+          )) { if (-not $ps.Contains($needle)) { throw "r125 Energy recovery controller missing: $needle" } }
           if ($ps.Contains('IsPathFullyQualified')) { throw 'Recovery must remain compatible with Windows PowerShell 5.1 / .NET Framework.' }
-          if ($ps.Contains('do not rerun the five-minute gbXML export just to retry downstream Energy')) { throw 'Blanket no-resync instruction is forbidden after structured schedule capture was added.' }
-          if ($cmd.Contains('Do NOT rerun gbXML')) { throw 'The user-facing recovery launcher must not override revision-aware Retry vs Sync semantics.' }
-          if (-not $cmd.Contains('Follow the revision-aware Retry vs SYNC ENGINEERING instruction printed above.')) { throw 'The launcher must defer to the revision-aware controller result.' }
           if (-not $cmd.Contains('raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/RECOVER_REVEX_ENERGY_CURRENT.ps1')) { throw 'Energy recovery launcher does not self-refresh from main.' }
+          if (-not $cmd.Contains('PASS: REVEX r125 Energy worker and broker deployment completed.')) { throw 'Launcher scope text is stale.' }
+          if ($cmd.Contains('add-in update completed')) { throw 'Energy launcher must not claim an add-in update.' }
+          if (-not $cmd.Contains('pause >nul')) { throw 'Energy launcher must remain open for readable success/failure.' }
+
       - name: Compile complete Revit 2026 add-in
         shell: pwsh
         run: |
           dotnet restore src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -p:RevexCiRevitApi=true -p:Platform=x64
           dotnet build src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -c Release -p:RevexCiRevitApi=true -p:Platform=x64 --no-restore
+
       - name: Preserve current viewer and Energy contracts
         shell: pwsh
         run: |
