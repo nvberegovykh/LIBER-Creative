@@ -10,7 +10,9 @@ $RevexInstallRoot = Join-Path $env:LOCALAPPDATA "LIBER\REVEX"
 $RequestedDataRoot = ([string]$env:REVEX_DATA_ROOT).Trim()
 if ($RequestedDataRoot) {
   $ExpandedDataRoot = [Environment]::ExpandEnvironmentVariables($RequestedDataRoot)
-  if (-not [System.IO.Path]::IsPathFullyQualified($ExpandedDataRoot)) {
+  $DriveRelative = $ExpandedDataRoot -match '^[A-Za-z]:(?:$|[^\\/])'
+  $SingleRootSlash = $ExpandedDataRoot.StartsWith('\') -and -not $ExpandedDataRoot.StartsWith('\\')
+  if (-not [System.IO.Path]::IsPathRooted($ExpandedDataRoot) -or $DriveRelative -or $SingleRootSlash) {
     throw "REVEX_DATA_ROOT must be an absolute path."
   }
   $RevexDataRoot = [System.IO.Path]::GetFullPath($ExpandedDataRoot)
