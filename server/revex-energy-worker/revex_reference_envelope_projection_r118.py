@@ -20,7 +20,7 @@ import re
 from typing import Any
 
 SCHEMA = "liber.revex.reference-envelope-projection.v1"
-VERSION = "20260817r118-reference-envelope1"
+VERSION = "20260817r118-reference-envelope2"
 REFERENCE_NAME = "79_WINTHROP_APPROVED_PROPOSED.osm"
 MIN_CONFIDENCE = 0.90
 U_TOLERANCE = 0.015
@@ -52,17 +52,38 @@ def _sha256(path: Path) -> str:
 def _reference_path() -> Path:
     configured = _text(os.environ.get("REVEX_APPROVED_ENVELOPE_REFERENCE"))
     if configured:
-        return Path(configured).resolve()
+        path = Path(configured).resolve()
+        if path.is_file():
+            return path
+        raise RuntimeError(f"Configured approved envelope reference is unavailable: {path}")
+
+    # Production worker image layout. Docker copies the Energy tree to
+    # /opt/revex/energy, so the approved reference lives beside the preserved
+    # r49 implementation under /opt/revex/energy/References.
+    packaged = Path(__file__).resolve().parents[1] / "energy" / "References" / REFERENCE_NAME
+    if packaged.is_file():
+        return packaged
+
+    # When REVEX_PIPELINE_IMPL is present, prefer its sibling References folder.
     impl = _text(os.environ.get("REVEX_PIPELINE_IMPL"))
     if impl:
         candidate = Path(impl).resolve().parent / "References" / REFERENCE_NAME
         if candidate.is_file():
             return candidate
-    return (
+
+    # Source checkout layout used by local/CI verification.
+    source = (
         Path(__file__).resolve().parents[2]
         / "src/Liber.Revex.Revit/Engineering/Energy/References"
         / REFERENCE_NAME
     ).resolve()
+    if source.is_file():
+        return source
+
+    raise RuntimeError(
+        "Approved envelope reference is unavailable in all supported layouts: "
+        + ", ".join(str(path) for path in (packaged, source))
+    )
 
 
 def _osm_fields(block: str) -> list[str]:
@@ -86,7 +107,6 @@ def _approved_profiles(path: Path) -> dict[str, dict]:
             continue
         glazing[handle] = {
             "material": fields[1],
-            # Exact approved OSM value 1.7 W/m2-K converts to the 0.30 IP filing value.
             "uFactor": round(u_si * W_M2K_TO_BTU_H_FT2_F, 2),
             "uFactorSI": u_si,
             "shgc": shgc,
@@ -194,8 +214,6 @@ def resolve_request(request_path: Path, output_root: Path) -> Path:
                 continue
             row["_sourceFile"] = page.get("sourceFile")
             rows.append(row)
-    # Freeze the original current-revision thermal set. Reference projections never become
-    # corroboration for another projection and never hide an exact missing tag in the audit.
     current_thermal_rows = [row for row in rows if _number(row.get("uFactor")) is not None]
     geometry_rows = [
         row for row in rows
@@ -221,9 +239,6 @@ def resolve_request(request_path: Path, output_root: Path) -> Path:
     ]
     same_reference_glazing = profiles["window"].get("handle") == profiles["door"].get("handle")
     window_proven = bool(window_corroboration)
-    # The approved reference itself proves WIN_EXT and DOOR_EXT use the same glazing layer.
-    # A current matching window signature may therefore corroborate a missing *glazed* door
-    # subtype, but never an opaque door.
     door_proven = bool(door_corroboration) or (window_proven and same_reference_glazing)
 
     filled: list[dict] = []
@@ -239,8 +254,6 @@ def resolve_request(request_path: Path, output_root: Path) -> Path:
             skipped.append({"code": code, "kind": kind, "reason": "same-envelope signature not corroborated"})
             continue
 
-        # VT lives on the current geometry row so r49 preserves it when it merges the
-        # exact-code reference thermal row. Geometry/area/orientation are untouched.
         if profile.get("vt") is not None and geometry.get("vt") in (None, ""):
             geometry["vt"] = profile["vt"]
 
