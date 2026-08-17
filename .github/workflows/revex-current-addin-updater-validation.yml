@@ -18,6 +18,7 @@ on:
       - 'agent/revex-r74-*'
       - 'agent/revex-r81-*'
       - 'agent/revex-r83-*'
+      - 'agent/revex-design-ux-*'
 
 permissions:
   contents: read
@@ -89,7 +90,7 @@ jobs:
           $ps = Get-Content '.\RECOVER_REVEX_ENERGY_CURRENT.ps1' -Raw
           $cmd = Get-Content '.\RECOVER_REVEX_ENERGY_CURRENT.cmd' -Raw
           foreach ($needle in @(
-            '-SkipRender',
+            'Renderer is verified by preserved source regressions but is not redeployed because this command changes no renderer source.',
             'REVEX_ENERGY_WORKER_URL',
             'REVEX_SOURCE_CANDIDATE',
             'roles/run.invoker',
