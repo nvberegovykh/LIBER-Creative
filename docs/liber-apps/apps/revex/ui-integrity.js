@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260817r101-design-ux1';
+  const BUILD='20260817r107-mainthread1';
   const REVEX_R87_REPLAY_CONTRACT='energy-diagnostics-r68.js?v=20260816r87-energy-replay1';
   const REVEX_R87_REPLAY_LABEL="energyDiagnostics:'revision-scoped-replay-r87'";
   const REVEX_R92_REPLAY_COMPAT='energy-replay-r92.js?v=20260816r92-hosted-replay1';
@@ -57,6 +57,10 @@
     loadScript('viewer-polish-r68.js?v=20260816r68-viewer-polish1','viewer-polish-r68','module');
     loadScript('appearance-state-r75.js?v=20260816r75-appearance1','appearance-state-r75');
     loadScript('viewer-runtime-r75.js?v=20260816r75-viewer1','viewer-runtime-r75');
+    // r107 does not remove exact BIM. It bounds the existing paged parser and delays
+    // automatic detail promotion until the shell has remained responsive through an
+    // idle window. Load it before the interaction/UI layers can trigger viewer work.
+    loadScript('viewer-safety-r107.js?v=20260817r107-viewer-safety1','viewer-safety-r107');
     loadScript('companion-runtime-r75.js?v=20260816r75-companion1','companion-runtime-r75');
     // Revit WebView does not register the PWA service worker, so this query token is
     // the authoritative cache break for the r97 exact-job recovery loader.
@@ -83,5 +87,5 @@
   // module before DOM parsing reaches that import map; doing so produced the bare
   // specifier "three" error seen in the Revit WebView log.
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'single-native-hosted-flight+manual-revision-authorization+live-job-reattach',moduleLoad:'after-import-map',liveWorkerEdge:'r97-exact-job-recovery',responsiveUx:'r100-small-screen+r101-all-screen-design',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'single-native-hosted-flight+manual-revision-authorization+live-job-reattach',moduleLoad:'after-import-map',liveWorkerEdge:'r97-exact-job-recovery',responsiveUx:'r100-small-screen+r101-all-screen-design',viewerSafety:'r107-bounded-main-thread',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
 })(window);
