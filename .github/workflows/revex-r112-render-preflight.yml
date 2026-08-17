@@ -1,0 +1,38 @@
+name: REVEX r112 render broker preflight validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
+      - 'server/revex-render-functions/package.json'
+      - '.github/scripts/verify-revex-r112-render-preflight.js'
+      - '.github/workflows/revex-r112-render-preflight.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
+      - 'server/revex-render-functions/package.json'
+      - '.github/scripts/verify-revex-r112-render-preflight.js'
+      - '.github/workflows/revex-r112-render-preflight.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  render-preflight:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Prove local Node 24 cannot trigger the old false 10-second gate
+        shell: pwsh
+        run: node .github/scripts/verify-revex-r112-render-preflight.js
+      - name: Parse deployment script in Windows PowerShell
+        shell: powershell
+        run: |
+          $tokens=$null; $errors=$null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path '.\server\revex-render-worker\DEPLOY_RENDER_SERVER.ps1'),[ref]$tokens,[ref]$errors)|Out-Null
+          if(@($errors).Count){$errors|Format-List|Out-String|Write-Error;exit 1}
