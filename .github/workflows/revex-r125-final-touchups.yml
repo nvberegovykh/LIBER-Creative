@@ -13,6 +13,7 @@ on:
       - 'server/revex-energy-worker/app_entry.py'
       - 'server/revex-energy-worker/apply_gbxml_geometry_touchups_r125.py'
       - '.github/workflows/revex-r125-final-touchups.yml'
+      - '.github/workflows/revex-r125-addin-compile.yml'
       - '.github/workflows/apply-revex-r125-gbxml-touchups.yml'
   workflow_dispatch:
 
@@ -79,7 +80,7 @@ jobs:
           git fetch origin "$BASE_SHA" --depth=1 || true
           changed="$(git diff --name-only "$BASE_SHA" HEAD)"
           echo "$changed"
-          forbidden="$(printf '%s\n' "$changed" | grep -Ev '^(src/Liber\.Revex\.Revit/(Engineering/Energy/(revex_final_touchups_r125\.py|revex_pipeline_runner_r125\.py|verify_revex_r125_touchups\.py)|Engineering/Gbxml/(LIBER_gbXML_Preflight_and_Export\.py|LIBER_gbXML_Preflight_and_Export\.dyn)|Services/EngineeringScheduleEvidenceService\.cs)|server/revex-energy-worker/(revex_energy_pipeline_guard_r118\.py|app_entry\.py|apply_gbxml_geometry_touchups_r125\.py)|\.github/workflows/(revex-r125-final-touchups\.yml|apply-revex-r125-gbxml-touchups\.yml))$' || true)"
+          forbidden="$(printf '%s\n' "$changed" | grep -Ev '^(src/Liber\.Revex\.Revit/(Engineering/Energy/(revex_final_touchups_r125\.py|revex_pipeline_runner_r125\.py|verify_revex_r125_touchups\.py)|Engineering/Gbxml/(LIBER_gbXML_Preflight_and_Export\.py|LIBER_gbXML_Preflight_and_Export\.dyn)|Services/EngineeringScheduleEvidenceService\.cs)|server/revex-energy-worker/(revex_energy_pipeline_guard_r118\.py|app_entry\.py|apply_gbxml_geometry_touchups_r125\.py)|\.github/workflows/(revex-r125-final-touchups\.yml|revex-r125-addin-compile\.yml|apply-revex-r125-gbxml-touchups\.yml))$' || true)"
           if [ -n "$forbidden" ]; then
             echo 'r125 contains unrelated changes:'
             echo "$forbidden"
