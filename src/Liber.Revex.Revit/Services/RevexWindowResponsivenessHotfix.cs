@@ -1,28 +1,30 @@
 using Liber.Revex.Revit.UI;
+using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Text.Json;
 using System.Windows;
-using System.Windows.Controls;
-using WpfTextBox = System.Windows.Controls.TextBox;
 
 namespace Liber.Revex.Revit.Services;
 
 /// <summary>
-/// Keeps the embedded REVEX surface lightweight without becoming a second owner of
-/// WebView navigation or renderer recovery. RendairWindow remains authoritative for
-/// WebView2 lifetime, ProcessFailed recovery, project binding and Engineering work.
+/// Keeps the embedded REVEX surface deterministic without becoming a second owner of
+/// project/data behavior. RendairWindow remains authoritative for project binding,
+/// Engineering work and normal navigation.
 ///
-/// This adapter only does two UI jobs:
+/// This adapter does only host-level browser resilience:
 /// 1) intercept the obsolete one-time LIBER dashboard boot and replace it with REVEX
-///    Companion after the base WebView has finished initializing; and
-/// 2) map the native DESIGN / ENGINEERING buttons to BIM / Energy while keeping the
-///    visible Companion module and its URL query state synchronized.
+///    Companion after the base WebView has initialized; and
+/// 2) if WebView2 reports a renderer stall/exit, reload the exact current URL once.
+///
+/// Native DESIGN / ENGINEERING buttons intentionally control only the native Revit
+/// control rail. Companion BIM / Energy tabs are independent browser controls. This
+/// prevents overlapping ExecuteScriptAsync tab changes from blocking the WebView render
+/// process while a user switches native modes quickly.
 /// </summary>
 public static class RevexWindowResponsivenessHotfix
 {
-    private const string HostBuild = "20260817r105-host";
+    private const string HostBuild = "20260817r106-host";
     private static readonly BindingFlags PrivateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
     private static readonly ConditionalWeakTable<RendairWindow, RuntimeState> States = new();
 
@@ -30,6 +32,7 @@ public static class RevexWindowResponsivenessHotfix
     {
         public bool CoreBound;
         public bool InitialRouteDone;
+        public bool RecoveryPending;
     }
 
     public static void Attach(RendairWindow window)
@@ -37,13 +40,8 @@ public static class RevexWindowResponsivenessHotfix
         if (States.TryGetValue(window, out _)) return;
         States.Add(window, new RuntimeState());
 
-        Button? design = Field<Button>(window, "_designMode");
-        Button? engineering = Field<Button>(window, "_engineeringMode");
-        design?.AddHandler(Button.ClickEvent, new RoutedEventHandler((_, _) => _ = RouteAsync(window, "bim", false)), true);
-        engineering?.AddHandler(Button.ClickEvent, new RoutedEventHandler((_, _) => _ = RouteAsync(window, "energy", false)), true);
-
         window.Loaded += (_, _) => _ = BindWhenReadyAsync(window);
-        RevexDiagnostics.Info("WEB", "REVEX responsiveness adapter attached: dashboard boot interception + synchronized mode routing; renderer recovery remains owned by RendairWindow.");
+        RevexDiagnostics.Info("WEB", "REVEX responsiveness adapter attached: dashboard interception + same-URL first-stall recovery; native mode rail is decoupled from Companion tabs.");
     }
 
     private static async Task BindWhenReadyAsync(RendairWindow window)
@@ -63,10 +61,9 @@ public static class RevexWindowResponsivenessHotfix
         if (state.CoreBound) return;
         state.CoreBound = true;
 
-        // InitializeBrowserAsync owns creation and ultimately assigns LiberAppsUrl.
-        // The previous adapter navigated before that assignment completed, so the base
-        // assignment could overwrite Companion a few milliseconds later. Intercept the
-        // obsolete dashboard navigation itself instead: one event, one redirect, no race.
+        // InitializeBrowserAsync owns WebView creation and assigns LiberAppsUrl once.
+        // Intercept that obsolete dashboard navigation itself so there is no second
+        // startup navigator racing the base window.
         web.CoreWebView2.NavigationStarting += (_, e) =>
         {
             if (state.InitialRouteDone || !IsGeneralLiberDashboard(e.Uri)) return;
@@ -75,12 +72,45 @@ public static class RevexWindowResponsivenessHotfix
             _ = window.Dispatcher.BeginInvoke(new Action(() =>
             {
                 if (!window.IsVisible) return;
-                string mode = BoolField(window, "_engineeringModeActive") ? "energy" : "bim";
-                Uri target = BuildCompanionUri(window, mode, fresh: true);
-                RevexDiagnostics.Info("WEB", $"Replaced obsolete LIBER dashboard boot with REVEX Companion. mode={mode}; target={target}");
+                Uri target = BuildCompanionUri(window, "bim", fresh: true);
+                RevexDiagnostics.Info("WEB", $"Replaced obsolete LIBER dashboard boot with REVEX Companion. target={target}");
                 web.Source = target;
             }));
         };
+
+        // The base window historically waited for a second RenderProcessUnresponsive
+        // event before recovery. WebView2 can emit only one event for a permanently hung
+        // renderer, which leaves the visible Companion dead forever. Recover the first
+        // event, but never reconstruct a URL or infer a module: reload exactly what the
+        // user was looking at. A pending flag prevents repeated recovery storms.
+        web.CoreWebView2.ProcessFailed += (_, e) =>
+        {
+            if (e.ProcessFailedKind != CoreWebView2ProcessFailedKind.RenderProcessUnresponsive &&
+                e.ProcessFailedKind != CoreWebView2ProcessFailedKind.RenderProcessExited)
+                return;
+            if (state.RecoveryPending || !window.IsVisible) return;
+
+            Uri? current = web.Source;
+            if (current == null) return;
+            state.RecoveryPending = true;
+            string currentUrl = current.AbsoluteUri;
+            RevexDiagnostics.Warn("WEB", $"REVEX renderer recovery requested: kind={e.ProcessFailedKind}; preserving current={currentUrl}");
+            _ = window.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    if (!window.IsVisible) return;
+                    web.Reload();
+                }
+                catch (Exception ex)
+                {
+                    state.RecoveryPending = false;
+                    RevexDiagnostics.Error("WEB", "Same-URL renderer recovery failed.", ex);
+                }
+            }));
+        };
+
+        web.CoreWebView2.NavigationCompleted += (_, _) => state.RecoveryPending = false;
 
         Uri? current = web.Source;
         if (IsCompanion(current))
@@ -89,74 +119,15 @@ public static class RevexWindowResponsivenessHotfix
             return;
         }
 
-        // If the dashboard navigation completed before this adapter attached, recover
-        // once from the already-visible dashboard. Do not navigate from about:blank;
-        // waiting for InitializeBrowserAsync avoids recreating the original race.
+        // If the dashboard completed before the interception handler attached, replace
+        // it once. Never navigate proactively from about:blank.
         if (IsGeneralLiberDashboard(current?.AbsoluteUri))
         {
             state.InitialRouteDone = true;
-            string mode = BoolField(window, "_engineeringModeActive") ? "energy" : "bim";
-            Uri target = BuildCompanionUri(window, mode, fresh: true);
-            RevexDiagnostics.Info("WEB", $"Replacing already-loaded LIBER dashboard with REVEX Companion. mode={mode}; target={target}");
+            Uri target = BuildCompanionUri(window, "bim", fresh: true);
+            RevexDiagnostics.Info("WEB", $"Replacing already-loaded LIBER dashboard with REVEX Companion. target={target}");
             web.Source = target;
         }
-    }
-
-    private static async Task RouteAsync(RendairWindow window, string mode, bool forceReload)
-    {
-        WebView2? web = Field<WebView2>(window, "_web");
-        if (web?.CoreWebView2 == null) return;
-
-        try
-        {
-            if (!forceReload && IsCompanion(web.Source))
-            {
-                string modeJson = JsonSerializer.Serialize(mode);
-                string projectId = Field<WpfTextBox>(window, "_projectId")?.Text.Trim() ?? "";
-                string specProjectId = Field<WpfTextBox>(window, "_specProjectId")?.Text.Trim() ?? "";
-                string projectJson = JsonSerializer.Serialize(projectId);
-                string specJson = JsonSerializer.Serialize(specProjectId);
-                string result = await web.ExecuteScriptAsync($$$"""
-                    (() => {
-                      const mode = {{{modeJson}}};
-                      const projectId = {{{projectJson}}};
-                      const specProjectId = {{{specJson}}};
-                      try {
-                        const url = new URL(location.href);
-                        url.searchParams.set('build', '{{{HostBuild}}}');
-                        url.searchParams.set('host', 'revit');
-                        url.searchParams.set('view', mode);
-                        if (projectId) url.searchParams.set('projectId', projectId);
-                        else url.searchParams.delete('projectId');
-                        if (specProjectId) url.searchParams.set('specProjectId', specProjectId);
-                        else url.searchParams.delete('specProjectId');
-                        history.replaceState(history.state, '', url);
-                      } catch (_) {}
-                      if (projectId) {
-                        window.dispatchEvent(new CustomEvent('revex:native-project-binding', {
-                          detail: { projectId, specProjectId, view: mode }
-                        }));
-                      }
-                      const button = document.querySelector(`[data-view="${mode}"]`);
-                      if (button) { button.click(); return true; }
-                      return false;
-                    })();
-                    """);
-                if (string.Equals(result, "true", StringComparison.OrdinalIgnoreCase))
-                {
-                    RevexDiagnostics.Info("WEB", $"Native mode switch routed in-place to REVEX {mode}; URL view state synchronized.");
-                    return;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            RevexDiagnostics.Warn("WEB", "In-place REVEX mode routing failed; using one clean Companion navigation: " + ex.Message);
-        }
-
-        Uri target = BuildCompanionUri(window, mode, fresh: true);
-        RevexDiagnostics.Info("WEB", $"REVEX mode navigation. mode={mode}; target={target}");
-        web.Source = target;
     }
 
     private static Uri BuildCompanionUri(RendairWindow window, string mode, bool fresh)
@@ -165,8 +136,8 @@ public static class RevexWindowResponsivenessHotfix
         string baseUrl = string.IsNullOrWhiteSpace(settings?.LiberRevexUrl)
             ? "https://liberpict.com/liber-apps/apps/revex/index.html"
             : settings!.LiberRevexUrl;
-        string projectId = Field<WpfTextBox>(window, "_projectId")?.Text.Trim() ?? "";
-        string specProjectId = Field<WpfTextBox>(window, "_specProjectId")?.Text.Trim() ?? "";
+        string projectId = Field<System.Windows.Controls.TextBox>(window, "_projectId")?.Text.Trim() ?? "";
+        string specProjectId = Field<System.Windows.Controls.TextBox>(window, "_specProjectId")?.Text.Trim() ?? "";
 
         string separator = baseUrl.Contains('?') ? "&" : "?";
         string url = baseUrl + separator + "build=" + HostBuild +
@@ -195,10 +166,4 @@ public static class RevexWindowResponsivenessHotfix
 
     private static T? Field<T>(RendairWindow window, string name) where T : class =>
         typeof(RendairWindow).GetField(name, PrivateInstance)?.GetValue(window) as T;
-
-    private static bool BoolField(RendairWindow window, string name)
-    {
-        object? value = typeof(RendairWindow).GetField(name, PrivateInstance)?.GetValue(window);
-        return value is bool flag && flag;
-    }
 }
