@@ -271,12 +271,15 @@ exports.runRevexEnergy = onCall({ timeoutSeconds: 3600, memory: '1GiB', concurre
         !/^[a-f0-9]{40}$/i.test(workerSourceCandidate) ||
         resultManifest.revitWriteBack !== false || resultManifest.pdfInsertion !== false)
       throw new Error('Managed worker returned an invalid Energy authority boundary.');
+    const pipelineStatus = String(resultManifest.status || body.status || 'UNKNOWN').toUpperCase();
+    const pipelineError = String(resultManifest.error || body.error || `Energy pipeline status is ${pipelineStatus}.`).slice(0, 4000);
     brokerLog('WORKER_AUTHORITY_VERIFIED', {
       correlationId, projectId, sourceRevision, workerSourceCandidate,
       brokerSourceCandidate: SOURCE_CANDIDATE || null,
-      pipelineVersion: resultManifest.pipelineVersion
+      pipelineVersion: resultManifest.pipelineVersion,
+      pipelineStatus
     });
-    if (String(resultManifest.status || '').toUpperCase() === 'COMPLETE') {
+    if (pipelineStatus === 'COMPLETE') {
       const resultArtifacts = Array.isArray(body.artifacts) ? body.artifacts : [];
       const names = new Set(resultArtifacts.map((row) => String(row.name || '')));
       const required = [
@@ -318,14 +321,32 @@ exports.runRevexEnergy = onCall({ timeoutSeconds: 3600, memory: '1GiB', concurre
       ...resultRecord, revexKind: 'energy-result', immutable: true
     }, { merge: false });
     batch.set(libraryDoc(projectId, ENERGY_CURRENT_ID), resultRecord, { merge: false });
-    batch.set(jobRef, {
-      status: String(resultManifest.status || body.status || 'UNKNOWN').toUpperCase(), resultRevision,
-      finishedAt: FieldValue.serverTimestamp(), error: resultManifest.error || body.error || null,
-      stage: 'COMPLETE', correlationId
-    }, { merge: true });
+    if (pipelineStatus === 'COMPLETE') {
+      batch.set(jobRef, {
+        status: 'COMPLETE', pipelineStatus, resultRevision,
+        finishedAt: FieldValue.serverTimestamp(), error: null,
+        stage: 'COMPLETE', correlationId
+      }, { merge: true });
+    } else {
+      batch.set(jobRef, {
+        status: 'FAILED', pipelineStatus, resultRevision,
+        finishedAt: FieldValue.serverTimestamp(), error: pipelineError,
+        stage: 'PIPELINE_TERMINAL', correlationId
+      }, { merge: true });
+    }
     await batch.commit();
-    brokerLog('RESULT_PUBLISHED', { correlationId, projectId, sourceRevision, resultRevision, status: resultManifest.status || body.status || 'UNKNOWN', workerSourceCandidate });
-    return { ok: true, status: resultManifest.status || body.status || 'UNKNOWN', sourceRevision, resultRevision, error: resultManifest.error || body.error || null };
+    brokerLog(pipelineStatus === 'COMPLETE' ? 'RESULT_PUBLISHED' : 'PIPELINE_TERMINAL', {
+      correlationId, projectId, sourceRevision, resultRevision, status: pipelineStatus,
+      workerSourceCandidate, error: pipelineStatus === 'COMPLETE' ? null : pipelineError
+    });
+    return {
+      ok: pipelineStatus === 'COMPLETE',
+      status: pipelineStatus,
+      sourceRevision,
+      resultRevision,
+      error: pipelineStatus === 'COMPLETE' ? null : pipelineError,
+      message: pipelineStatus === 'COMPLETE' ? null : pipelineError
+    };
   } catch (error) {
     const detail = workerErrorDetail(error, failureStage);
     console.error('[REVEX ENERGY BROKER]', JSON.stringify({ correlationId, projectId, sourceRevision, ...detail }), error);
