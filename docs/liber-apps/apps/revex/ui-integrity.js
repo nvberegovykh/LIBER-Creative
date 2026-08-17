@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260817r116-final-convergence1';
+  const BUILD='20260817r117-bim-properties1';
   const REVEX_R87_REPLAY_CONTRACT='energy-diagnostics-r68.js?v=20260816r87-energy-replay1';
   const REVEX_R87_REPLAY_LABEL="energyDiagnostics:'revision-scoped-replay-r87'";
   const REVEX_R92_REPLAY_COMPAT='energy-replay-r92.js?v=20260816r92-hosted-replay1';
@@ -61,6 +61,7 @@
     loadScript('appearance-state-r75.js?v=20260816r75-appearance1','appearance-state-r75');
     loadScript('viewer-runtime-r75.js?v=20260816r75-viewer1','viewer-runtime-r75');
     loadScript('companion-runtime-r75.js?v=20260816r75-companion1','companion-runtime-r75');
+    loadScript('bim-properties-r117.js?v=20260817r117-bim-properties1','bim-properties-r117');
     loadScript('viewer-interaction-r85-loader.js?v=20260817r116-final-energy1','viewer-interaction-r85-loader');
     loadScript('ui-polish-r109.js?v=20260817r110-responsive1','ui-polish-r109');
     loadScript('viewer-texture-r115.js?v=20260817r115-texture1','viewer-texture-r115');
@@ -69,5 +70,5 @@
   }
   function bind(){installCanonicalOverlayStore();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r116-preflight+source-bound-cache+terminal-status+durable-worker',moduleLoad:'after-import-map',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r110-responsive+r115-final-touchups',docs:'one-full-set+derived-pages',texture:'generated-uv+base-material-blend',render:'bounded+construction-fast',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r116-preflight+source-bound-cache+terminal-status+durable-worker',moduleLoad:'after-import-map',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r110-responsive+r115-final-touchups+r117-properties',docs:'one-full-set+derived-pages',texture:'generated-uv+base-material-blend',render:'bounded+construction-fast',bimProperties:'instance+type+family+level+host+workset+material+vt-fallback',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
 })(window);
