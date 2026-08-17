@@ -1,12 +1,13 @@
 (function(root){
   'use strict';
-  const BUILD='20260817r115-final-touchups1';
+  const BUILD='20260817r116-final-convergence1';
   const REVEX_R87_REPLAY_CONTRACT='energy-diagnostics-r68.js?v=20260816r87-energy-replay1';
   const REVEX_R87_REPLAY_LABEL="energyDiagnostics:'revision-scoped-replay-r87'";
   const REVEX_R92_REPLAY_COMPAT='energy-replay-r92.js?v=20260816r92-hosted-replay1';
   const REVEX_R95_REPLAY_COMPAT='energy-replay-r95.js?v=20260816r95-single-owner1';
+  const REVEX_R114_REPLAY_COMPAT='energy-replay-r95.js?v=20260817r114-durable-energy1';
   const REVEX_R98_LIVE_EDGE_COMPAT='viewer-interaction-r85-loader.js?v=20260816r98-live-edge2';
-  void REVEX_R87_REPLAY_CONTRACT; void REVEX_R87_REPLAY_LABEL; void REVEX_R92_REPLAY_COMPAT; void REVEX_R95_REPLAY_COMPAT; void REVEX_R98_LIVE_EDGE_COMPAT;
+  void REVEX_R87_REPLAY_CONTRACT; void REVEX_R87_REPLAY_LABEL; void REVEX_R92_REPLAY_COMPAT; void REVEX_R95_REPLAY_COMPAT; void REVEX_R114_REPLAY_COMPAT; void REVEX_R98_LIVE_EDGE_COMPAT;
   if(root.__revexUiIntegrityR20) return;
   root.__revexUiIntegrityR20=true;
 
@@ -54,13 +55,13 @@
   function loadCurrentRepairs(){
     loadScript('energy-diagnostics-r68.js?v=20260816r95-manual-identity1','energy-diagnostics-r68');
     loadScript('energy-identity-en1-r89.js?v=20260816r89-en1-identity1','energy-identity-en1-r89');
-    loadScript('energy-replay-r95.js?v=20260817r114-durable-energy1','energy-replay-r95');
+    loadScript('energy-replay-r95.js?v=20260817r116-final-energy1','energy-replay-r95');
     loadScript('critical-controls-r93.js?v=20260816r93-critical-controls3','critical-controls-r93');
     loadScript('viewer-polish-r68.js?v=20260816r68-viewer-polish1','viewer-polish-r68','module');
     loadScript('appearance-state-r75.js?v=20260816r75-appearance1','appearance-state-r75');
     loadScript('viewer-runtime-r75.js?v=20260816r75-viewer1','viewer-runtime-r75');
     loadScript('companion-runtime-r75.js?v=20260816r75-companion1','companion-runtime-r75');
-    loadScript('viewer-interaction-r85-loader.js?v=20260817r114-durable-energy1','viewer-interaction-r85-loader');
+    loadScript('viewer-interaction-r85-loader.js?v=20260817r116-final-energy1','viewer-interaction-r85-loader');
     loadScript('ui-polish-r109.js?v=20260817r110-responsive1','ui-polish-r109');
     loadScript('viewer-texture-r115.js?v=20260817r115-texture1','viewer-texture-r115');
     loadScript('docs-pages-r115.js?v=20260817r115-docs1','docs-pages-r115');
@@ -68,5 +69,5 @@
   }
   function bind(){installCanonicalOverlayStore();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'durable-worker-lease-heartbeat-cache+revision-scoped-finalization',moduleLoad:'after-import-map',liveWorkerEdge:'r114-heartbeat-aware-recovery',ui:'r110-responsive+r115-final-touchups',docs:'one-full-set+derived-pages',texture:'generated-uv+base-material-blend',render:'bounded+construction-fast',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r116-preflight+source-bound-cache+terminal-status+durable-worker',moduleLoad:'after-import-map',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r110-responsive+r115-final-touchups',docs:'one-full-set+derived-pages',texture:'generated-uv+base-material-blend',render:'bounded+construction-fast',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
 })(window);

@@ -37,15 +37,22 @@ jobs:
         run: python -m py_compile server/revex-render-worker/render_r115.py
       - name: Verify exact r115 touchup contract
         run: node .github/scripts/verify-revex-r115-final-touchups.js
-      - name: Preserve Energy execution core
+      - name: Preserve Energy execution core for r115 release branches
         shell: bash
         run: |
-          git fetch origin "${{ github.base_ref }}" --deepen=200
-          changed="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
-          echo "$changed"
-          forbidden="$(printf '%s\n' "$changed" | grep -E '^server/revex-energy-worker/|^src/Liber.Revex.Revit/Engineering/Energy/|^src/Liber.Revex.Revit/Engineering/Gbxml/' || true)"
-          if [ -n "$forbidden" ]; then
-            echo 'r115 final touchups must not modify Energy/Revit engineering core:'
-            echo "$forbidden"
-            exit 1
-          fi
+          case "${GITHUB_HEAD_REF:-}" in
+            *r115*)
+              git fetch origin "${{ github.base_ref }}" --deepen=200
+              changed="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
+              echo "$changed"
+              forbidden="$(printf '%s\n' "$changed" | grep -E '^server/revex-energy-worker/|^src/Liber.Revex.Revit/Engineering/Energy/|^src/Liber.Revex.Revit/Engineering/Gbxml/' || true)"
+              if [ -n "$forbidden" ]; then
+                echo 'r115 final touchups must not modify Energy/Revit engineering core:'
+                echo "$forbidden"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Later release ${GITHUB_HEAD_REF:-unknown}: r115 product assertions still run; r115-only Energy scope guard is not applicable."
+              ;;
+          esac

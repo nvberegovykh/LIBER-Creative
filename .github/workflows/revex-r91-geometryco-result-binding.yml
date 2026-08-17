@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'server/revex-energy-worker/**'
+      - 'server/firebase-functions/index.js'
       - 'src/Liber.Revex.Revit/Engineering/Companion/native-managed-energy-bridge.js'
       - 'src/Liber.Revex.Revit/Services/EngineeringCompanionWebBridge.cs'
       - 'src/Liber.Revex.Revit/Engineering/Energy/**'
@@ -60,11 +61,17 @@ jobs:
           if (!bridge.resultMatches(newResult,'p','eng_same','energy_new')) throw new Error('exact new result revision was rejected');
           console.log(`REVEX_EXACT_RESULT_REVISION_BINDING=PASSED; BRIDGE_HOST_VERSION=${hostVersion}`);
           NODE
-      - name: Broker publishes exact resultRevision
+      - name: Broker publishes exact resultRevision only for strict success
         run: |
-          grep -q "return { ok: true, status: resultManifest.status" server/firebase-functions/index.js
-          grep -q "sourceRevision, resultRevision" server/firebase-functions/index.js
-          echo REVEX_BROKER_RESULT_REVISION=PASSED
+          node <<'NODE'
+          const fs=require('fs');
+          const source=fs.readFileSync('server/firebase-functions/index.js','utf8');
+          if(!source.includes("ok: pipelineStatus === 'COMPLETE'")) throw new Error('broker must reserve ok=true for strict COMPLETE');
+          if(!source.includes('sourceRevision, resultRevision')) throw new Error('broker response must bind exact resultRevision');
+          if(!source.includes("status: 'FAILED', pipelineStatus, resultRevision")) throw new Error('non-COMPLETE result must preserve exact resultRevision as terminal failure');
+          if(!source.includes("stage: 'PIPELINE_TERMINAL'")) throw new Error('non-COMPLETE result must be explicit terminal pipeline state');
+          console.log('REVEX_BROKER_RESULT_REVISION=PASSED');
+          NODE
       - name: No QA weakening
         run: |
           python <<'PY'

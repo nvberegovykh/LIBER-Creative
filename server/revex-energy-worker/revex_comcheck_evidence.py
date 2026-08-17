@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
-"""REVEX r100 current-project COMcheck evidence recovery.
+"""REVEX current-project COMcheck evidence recovery.
 
-This stage repairs only missing COMcheck inputs in a derived page-facts copy. It consumes
-immutable active-Revit T/Z/EN PDF evidence already published by Engineering Sync.
+Repairs only missing COMcheck inputs in a derived page-facts copy using immutable
+active-Revit T/Z/EN evidence from the same Engineering Sync revision.
 
-Rules:
-- never mutate source artifacts or original page facts;
-- never use template/project-reference identity or quantities;
-- deterministic T/Z text owns stories, building height, current Gross Area total and
-  visible energy-code wording when it can prove them;
-- COMcheck whole-building floor area comes from the Zoning analysis Area Calculation
-  table's *Gross Area* total (not BC Gross, zoning floor area, conditioned/model area);
-- EN envelope rows may be recovered by a bounded multimodal sheet reader, but every row
-  must name an actual EN source PDF and include source-visible evidence; rows below the
-  existing 0.90 filing confidence floor are rejected;
-- the pinned r49 pipeline remains the final semantic/schema validator.
+Authority rules:
+- native structured Revit schedules run before this fallback and remain higher authority;
+- PDF text may fill only still-missing deterministic T/Z facts;
+- building height means the PROVIDED/PROPOSED value in the visible
+  "Building Height/Hight above grade plane" code-analysis row, never a value inferred
+  from a made-up "MAX BUILDING HEIGHT" label;
+- EN envelope rows may be recovered by bounded multimodal reading, with visible numeric
+  evidence and the existing 0.90 filing-confidence floor;
+- source Engineering evidence is never mutated and reference-project quantities are never used.
 """
 from __future__ import annotations
 
@@ -28,7 +26,7 @@ from typing import Any, Callable
 from revex_cloud_project import resolve_vertex_project
 
 SCHEMA = "liber.revex.comcheck-evidence-resolution.v1"
-VERSION = "20260816r100-comcheck-evidence1"
+VERSION = "20260817r116-comcheck-evidence2"
 MIN_CONFIDENCE = 0.90
 MAX_AGENT_PDFS = 8
 
@@ -143,17 +141,31 @@ def _feet_tokens(value: str) -> list[float]:
 
 
 def _extract_height(text: str) -> float | None:
-    lines = [line for line in str(text or "").splitlines() if line.strip()]
-    preferred = []
-    for line in lines:
-        upper = _flat(line).upper()
-        if "MAX BUILDING HEIGHT" in upper or "MAXIMUM BUILDING HEIGHT" in upper:
-            preferred.append(line)
-    source = _flat(text)
-    for match in re.finditer(r"MAX(?:IMUM)?\s+BUILDING\s+HEIGHT", source, re.I):
-        preferred.append(source[match.start():match.start() + 120])
-    for row in preferred:
+    """Return the PROVIDED/PROPOSED building height above grade plane.
+
+    NYC code-analysis schedules commonly present the row as:
+      Building Hight above grade plane | 85' | 65'
+    where the first value is the code/allowable value and the last value is the
+    provided/proposed project value. The visible row semantics own the fact; no
+    fabricated MAX BUILDING HEIGHT row is required.
+    """
+    row_pattern = re.compile(r"\bBUILDING\s+(?:HEIGHT|HIGHT)\s+ABOVE\s+GRADE\s+PLANE\b", re.I)
+
+    # Prefer an intact extracted row. The last feet value in that row is the
+    # provided/proposed column, matching the native structured-schedule rule.
+    for raw in str(text or "").splitlines():
+        row = _flat(raw)
+        if not row_pattern.search(row):
+            continue
         values = _feet_tokens(row)
+        if values:
+            return values[-1]
+
+    # PDF extraction may collapse table cells into one flat stream. Read only a
+    # short window after the exact row label and again take the final visible feet value.
+    source = _flat(text)
+    for match in row_pattern.finditer(source):
+        values = _feet_tokens(source[match.start():match.start() + 180])
         if values:
             return values[-1]
     return None
@@ -173,9 +185,7 @@ def _extract_zoning_gross_area(text: str) -> float | None:
         r"TOTALS?\s*:?\s*([0-9][0-9,]*(?:\.\d+)?)\s*SF\s+([0-9][0-9,]*(?:\.\d+)?)\s*SF",
         section, re.I,
     )
-    if not match:
-        return None
-    return _number(match.group(2))
+    return _number(match.group(2)) if match else None
 
 
 def _extract_multifamily(text: str) -> bool:
@@ -200,7 +210,7 @@ def _missing_core(facts: dict) -> list[str]:
         candidates.sort(reverse=True, key=lambda row: row[0])
         return candidates[0][1] if candidates else None
 
-    missing = []
+    missing: list[str] = []
     if not (semantic.get("energyCode") or best(en, "project", "energyCode")):
         missing.append("energyCode")
     if not best(tz or pages, "bulk", "stories"):
@@ -259,12 +269,13 @@ def _run_envelope_agent(selected: list[dict]) -> dict:
         "For windows/doors return U-factor; windows also SHGC. For wall/roof/floor return cavityR and/or continuousR exactly as shown. "
         "Merge matching geometry and thermal schedule evidence into complete rows when the same current assembly can be proven across the supplied EN sheets. "
         "Keep distinct geometry regions distinct; do not silently total different orientations. "
-        "Every row must name the exact source PDF and include a short visible evidence string containing the row label and the relevant numeric facts. "
-        "If a value is not visible set it null. Confidence must reflect the visible row, not general inference."
+        "Every row must name the exact source PDF and include a short visible evidence string containing the row label and relevant numeric facts. "
+        "If a value is not visible set it null. Confidence must reflect visible evidence, not general inference."
     )
     contents = [types.Part.from_bytes(data=row["path"].read_bytes(), mime_type="application/pdf") for row in selected]
     contents.append(prompt)
-    client = genai.Client(vertexai=True, project=project, location=location, http_options=types.HttpOptions(api_version="v1", timeout=120000))
+    client = genai.Client(vertexai=True, project=project, location=location,
+                          http_options=types.HttpOptions(api_version="v1", timeout=120000))
     response = client.models.generate_content(
         model=model,
         contents=contents,
@@ -402,7 +413,14 @@ def resolve_request(
     if "floorAreaFt2" in before_missing:
         floor_area = None
         floor_source = ""
-        ranked = sorted(tz_rows, key=lambda row: (0 if ("z-001" in _flat(row["page"].get("sheetNumber")).lower() or "zoning analysis" in _flat(row["page"].get("sheetName")).lower()) else 1, row["source"]))
+        ranked = sorted(
+            tz_rows,
+            key=lambda row: (
+                0 if ("z-001" in _flat(row["page"].get("sheetNumber")).lower()
+                      or "zoning analysis" in _flat(row["page"].get("sheetName")).lower()) else 1,
+                row["source"],
+            ),
+        )
         for row in ranked:
             candidate = _extract_zoning_gross_area(text_by_source[row["source"]])
             if candidate is not None:
@@ -410,7 +428,12 @@ def resolve_request(
                 break
         if floor_area is not None:
             semantic["floorAreaFt2"] = round(floor_area, 3)
-            audit["deterministic"]["floorAreaFt2"] = {"value": round(floor_area, 3), "sourceFile": floor_source, "column": "Gross Area", "scope": "Zoning analysis Area Calculation / Totals"}
+            audit["deterministic"]["floorAreaFt2"] = {
+                "value": round(floor_area, 3),
+                "sourceFile": floor_source,
+                "column": "Gross Area",
+                "scope": "Zoning analysis Area Calculation / Totals",
+            }
     if not semantic.get("wholeBuildingType") and _extract_multifamily(tz_text):
         semantic["wholeBuildingType"] = "MULTIFAMILY"
         audit["deterministic"]["wholeBuildingType"] = "MULTIFAMILY"
@@ -419,14 +442,24 @@ def resolve_request(
         derived["comcheckSemanticVersion"] = VERSION
 
     if "envelope" in before_missing and en_rows:
-        ranked_en = sorted(en_rows, key=lambda row: (0 if re.search(r"thermal|fenestr|comcheck|envelope", _flat(row["page"].get("sheetName")), re.I) else 1, row["source"]))[:MAX_AGENT_PDFS]
+        ranked_en = sorted(
+            en_rows,
+            key=lambda row: (
+                0 if re.search(r"thermal|fenestr|comcheck|envelope", _flat(row["page"].get("sheetName")), re.I) else 1,
+                row["source"],
+            ),
+        )[:MAX_AGENT_PDFS]
         agent = envelope_agent or _run_envelope_agent
         try:
             candidate = agent(ranked_en)
             accepted, rejected = _validate_envelope_rows(candidate, ranked_en, text_by_source)
         except Exception as exc:
             accepted, rejected = [], [f"{type(exc).__name__}: {exc}"]
-        audit["envelope"] = {"selectedSources": [row["path"].name for row in ranked_en], "acceptedRows": len(accepted), "rejected": rejected}
+        audit["envelope"] = {
+            "selectedSources": [row["path"].name for row in ranked_en],
+            "acceptedRows": len(accepted),
+            "rejected": rejected,
+        }
         if accepted:
             by_source: dict[str, list[dict]] = {}
             for row in accepted:
@@ -450,8 +483,18 @@ def resolve_request(
     facts_path.write_text(json.dumps(derived, ensure_ascii=True, indent=2), encoding="utf-8")
     derived_request = dict(request)
     derived_request["pageFactsPath"] = str(facts_path)
-    derived_request["comcheckEvidenceResolution"] = {"schema": SCHEMA, "version": VERSION, "auditFile": audit_path.name, "afterMissing": after_missing}
+    derived_request["comcheckEvidenceResolution"] = {
+        "schema": SCHEMA,
+        "version": VERSION,
+        "auditFile": audit_path.name,
+        "afterMissing": after_missing,
+    }
     request_copy = output_root / "00_PIPELINE_REQUEST_COMCHECK_EVIDENCE_R100.json"
     request_copy.write_text(json.dumps(derived_request, ensure_ascii=True, indent=2), encoding="utf-8")
-    print(json.dumps({"stage":"COMCHECK_EVIDENCE_R100","status":audit["status"],"beforeMissing":before_missing,"afterMissing":after_missing}, ensure_ascii=True), flush=True)
+    print(json.dumps({
+        "stage": "COMCHECK_EVIDENCE_R100",
+        "status": audit["status"],
+        "beforeMissing": before_missing,
+        "afterMissing": after_missing,
+    }, ensure_ascii=True), flush=True)
     return request_copy

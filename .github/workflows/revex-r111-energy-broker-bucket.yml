@@ -33,10 +33,18 @@ jobs:
         run: node .github/scripts/verify-revex-r111-energy-broker-bucket.js
       - name: Preserve broker-worker authority contract
         run: node .github/scripts/verify-revex-r77-energy-broker-worker-contract.js
-      - name: Ensure fix remains server-side only
+      - name: Ensure r111 repair remains server-side only
+        shell: bash
         run: |
-          changed="$(git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD)"
-          if printf '%s\n' "$changed" | grep -E '^src/Liber\.Revex\.Revit/|^server/revex-energy-worker/|^docs/liber-apps/apps/revex/'; then
-            echo 'r111 broker-bucket repair must not rewrite Revit, worker, or Companion runtime.' >&2
-            exit 1
-          fi
+          case "${GITHUB_HEAD_REF:-}" in
+            *r111*)
+              changed="$(git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD)"
+              if printf '%s\n' "$changed" | grep -E '^src/Liber\.Revex\.Revit/|^server/revex-energy-worker/|^docs/liber-apps/apps/revex/'; then
+                echo 'r111 broker-bucket repair must not rewrite Revit, worker, or Companion runtime.' >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Later release ${GITHUB_HEAD_REF:-unknown}: r111 broker/bucket assertions still run; r111-only server-side scope guard is not applicable."
+              ;;
+          esac

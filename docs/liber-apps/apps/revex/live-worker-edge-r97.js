@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260817r114-live-worker-edge1';
+  const BUILD='20260817r116-live-worker-edge2';
   const WORKER_FRESH_MS=150000;
   if(root.__revexLiveWorkerEdgeR97)return;
   root.__revexLiveWorkerEdgeR97={build:BUILD};
@@ -26,7 +26,13 @@
     const hosted=root.__revexHostedEnergyReplayR95?.workerState;
     if(typeof hosted==='function')return hosted(job);
     const status=clean(job?.workerStatus).toUpperCase(),stage=clean(job?.workerStage),heartbeatMs=epochMs(job?.workerHeartbeatAt);
-    return {status,stage,heartbeatMs,fresh:status==='RUNNING'&&heartbeatMs>0&&Date.now()-heartbeatMs<=WORKER_FRESH_MS,failure:clean(job?.workerFailure)};
+    return {status,stage,heartbeatMs,fresh:status==='RUNNING'&&heartbeatMs>0&&Date.now()-heartbeatMs<=WORKER_FRESH_MS,failure:clean(job?.workerFailure),pipelineStatus:clean(job?.workerPipelineStatus).toUpperCase()};
+  }
+  function pipelineTerminal(status){
+    const hosted=root.__revexHostedEnergyReplayR95?.pipelineTerminal;
+    if(typeof hosted==='function')return hosted(status);
+    const value=clean(status).toUpperCase();
+    return Boolean(value)&&!['RUNNING','COMPLETE','INFRASTRUCTURE_FAILED'].includes(value);
   }
   async function StoreReady(timeoutMs=30000){
     const started=Date.now();
@@ -60,10 +66,12 @@
     return job;
   }
   function exactJobError(job,status){
+    const hosted=root.__revexHostedEnergyReplayR95?.exactJobError;
+    if(typeof hosted==='function')return hosted(job,status);
     const worker=workerState(job);
     if(worker.status==='FAILED'&&worker.failure)return `${worker.stage||'WORKER_FAILED'}: ${worker.failure}`;
-    const stage=clean(job?.stage)||'WORKER_REQUEST';
-    const detail=clean(job?.error)||`Energy broker job status is ${status||'UNKNOWN'}.`;
+    const stage=clean(job?.stage)||worker.stage||'ENERGY_PIPELINE';
+    const detail=clean(job?.error)||worker.failure||`Energy broker job status is ${status||worker.pipelineStatus||'UNKNOWN'}.`;
     const http=job?.workerHttpStatus?` [HTTP ${job.workerHttpStatus}]`:'';
     return `${stage}${http}: ${detail}`;
   }
@@ -94,6 +102,7 @@
     const resultRevision=clean(job?.resultRevision);
     const follow=root.__revexHostedEnergyReplayR95?.followExistingJob;
     if(typeof follow==='function')return follow(Store,ctx.id,ctx.revision);
+    if(pipelineTerminal(status))throw new Error(exactJobError(job,status));
     if(status==='COMPLETE'){
       const result=await Store.getEnergyResult(ctx.id);
       if(!exactResult(result,ctx.id,ctx.revision,resultRevision)||clean(result?.manifest?.status).toUpperCase()!=='COMPLETE')
@@ -112,20 +121,26 @@
     const job=await readJobAfterCallable(Store,ctx.id,ctx.revision,error);
     if(!job)return null;
     const status=clean(job?.status).toUpperCase(),stage=clean(job?.stage),worker=workerState(job);
+    if(pipelineTerminal(status)||worker.status==='FAILED'){
+      const exact=exactJobError(job,status);
+      diagnostic('ERROR','ENERGY_JOB_EXACT_FAILURE',exact,{projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,workerPipelineStatus:worker.pipelineStatus,workerHttpStatus:job?.workerHttpStatus||null,originalError:error?.message||String(error)});
+      post('BROKER_FAILED',exact,false,{projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,workerPipelineStatus:worker.pipelineStatus,workerHttpStatus:job?.workerHttpStatus||null});
+      const raised=new Error(exact);raised.name='RevexEnergyJobError';raised.job=job;throw raised;
+    }
     const durable=worker.status==='COMPLETE'||(worker.status==='RUNNING'&&worker.fresh);
     if(status==='RUNNING'||status==='COMPLETE'||durable){
       const completed=status==='COMPLETE'||worker.status==='COMPLETE';
       diagnostic(completed?'INFO':'WARN',completed?'ENERGY_CALLABLE_EDGE_COMPLETED':'ENERGY_CALLABLE_EDGE_DROPPED',completed
         ?'The callable edge ended after the exact worker completed; recovering/finalizing the cached result instead of reporting a false failure.'
         :'The callable edge ended while the exact Energy worker is still alive; following its durable heartbeat instead of launching another execution.',
-        {projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,resultRevision:clean(job.resultRevision),originalError:error?.message||String(error)});
+        {projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,workerPipelineStatus:worker.pipelineStatus,resultRevision:clean(job.resultRevision),originalError:error?.message||String(error)});
       post(completed?'WORKER_FINALIZING':'WORKER_RECOVERING',completed
         ?`Energy worker completed ${ctx.revision}; finalizing its cached strict package.`
         :`Energy worker for ${ctx.revision} is still alive${worker.stage?` / ${worker.stage}`:''}; preserving the run despite broker transport loss.`,false,
-        {projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,resultRevision:clean(job.resultRevision)});
+        {projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,workerPipelineStatus:worker.pipelineStatus,resultRevision:clean(job.resultRevision)});
       return followAuthoritativeJob(Store,ctx,job,'callable-edge');
     }
-    if(worker.status==='FAILED'||status==='FAILED'||status==='INFRASTRUCTURE_FAILED'){
+    if(status==='FAILED'||status==='INFRASTRUCTURE_FAILED'){
       const exact=exactJobError(job,status);
       diagnostic('ERROR','ENERGY_JOB_EXACT_FAILURE',exact,{projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,workerHttpStatus:job?.workerHttpStatus||null,originalError:error?.message||String(error)});
       post('BROKER_FAILED',exact,false,{projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,workerHttpStatus:job?.workerHttpStatus||null});
@@ -151,12 +166,12 @@
         wrapped.__revexR97LiveJobRecovery=true;
         wrapped.__revexOriginal=original;
         bridge.authorizeCurrentRevision=wrapped;
-        diagnostic('INFO','ENERGY_NATIVE_EDGE_R114','Native managed-Energy edge now distinguishes broker transport loss from worker failure using the durable worker heartbeat/cache.');
+        diagnostic('INFO','ENERGY_NATIVE_EDGE_R116','Native managed-Energy edge now distinguishes broker transport loss from terminal pipeline status and source-bound cached output.');
         return true;
       }
       await sleep(100);
     }
-    diagnostic('WARN','ENERGY_NATIVE_EDGE_R114','Native managed-Energy bridge was not available for durable live-job wrapping.');
+    diagnostic('WARN','ENERGY_NATIVE_EDGE_R116','Native managed-Energy bridge was not available for durable live-job wrapping.');
     return false;
   }
 
@@ -165,20 +180,26 @@
       const Store=await StoreReady(5000),ctx=await context(Store);if(!ctx)return;
       const job=await readJob(Store,ctx.id,ctx.revision);if(!job)return;
       const status=clean(job.status).toUpperCase(),stage=clean(job.stage),worker=workerState(job);
-      if(status==='RUNNING'||status==='COMPLETE'||worker.status==='COMPLETE'||(worker.status==='RUNNING'&&worker.fresh)){
-        diagnostic('INFO',status==='COMPLETE'?'ENERGY_JOB_COMPLETE_R114':'ENERGY_JOB_REATTACH_R114',status==='COMPLETE'
-          ?`Found COMPLETE job for ${ctx.revision}; binding its exact immutable result.`
-          :`Found recoverable Energy execution for ${ctx.revision}; following it without a duplicate launch.`,
-          {projectId:ctx.id,revision:ctx.revision,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,resultRevision:clean(job.resultRevision)});
-        void followAuthoritativeJob(Store,ctx,job,'page-load').catch(error=>diagnostic('ERROR','ENERGY_JOB_FOLLOW_R114',error?.message||String(error)));
+      if(pipelineTerminal(status)||worker.status==='FAILED'){
+        const exact=exactJobError(job,status);
+        post('RETRY_READY',`${exact} The immutable Engineering revision is preserved; Retry runs it under the current worker source.`,false,{projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,workerPipelineStatus:worker.pipelineStatus,workerHttpStatus:job?.workerHttpStatus||null});
+        diagnostic('WARN','ENERGY_JOB_TERMINAL_R116',exact,{projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,workerPipelineStatus:worker.pipelineStatus});
         return;
       }
-      if(worker.status==='FAILED'||status==='FAILED'||status==='INFRASTRUCTURE_FAILED'){
+      if(status==='RUNNING'||status==='COMPLETE'||worker.status==='COMPLETE'||(worker.status==='RUNNING'&&worker.fresh)){
+        diagnostic('INFO',status==='COMPLETE'?'ENERGY_JOB_COMPLETE_R116':'ENERGY_JOB_REATTACH_R116',status==='COMPLETE'
+          ?`Found COMPLETE job for ${ctx.revision}; binding its exact immutable result.`
+          :`Found recoverable Energy execution for ${ctx.revision}; following it without a duplicate launch.`,
+          {projectId:ctx.id,revision:ctx.revision,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,workerPipelineStatus:worker.pipelineStatus,resultRevision:clean(job.resultRevision)});
+        void followAuthoritativeJob(Store,ctx,job,'page-load').catch(error=>diagnostic('ERROR','ENERGY_JOB_FOLLOW_R116',error?.message||String(error)));
+        return;
+      }
+      if(status==='FAILED'||status==='INFRASTRUCTURE_FAILED'){
         const exact=exactJobError(job,status);
         post('BROKER_FAILED',exact,false,{projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,workerHttpStatus:job?.workerHttpStatus||null});
         diagnostic('ERROR','ENERGY_JOB_EXACT_FAILURE',exact,{projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,workerHttpStatus:job?.workerHttpStatus||null});
       }
-    }catch(error){diagnostic('WARN','ENERGY_JOB_RECOVERY_R114',error?.message||String(error));}
+    }catch(error){diagnostic('WARN','ENERGY_JOB_RECOVERY_R116',error?.message||String(error));}
   }
 
   installKeyboardGuard();
@@ -186,5 +207,5 @@
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install,{once:true});else install();
   root.addEventListener('revex:energy-open',()=>{void wrapNativeBridge();setTimeout(()=>void surfaceExistingJob(),150);});
   root.addEventListener('revex:source-revision-loaded',()=>{void wrapNativeBridge();setTimeout(()=>void surfaceExistingJob(),150);});
-  console.info('[REVEX] live worker edge r114',{callableFailure:'worker-heartbeat-aware',duplicateLaunch:'lease-guarded',cachedCompletion:true,malformedViewerKey:'ignored-only',qaHardStop:'unchanged'});
+  console.info('[REVEX] live worker edge r116',{callableFailure:'worker-heartbeat-aware',pipelineTerminal:'not-recoverable',duplicateLaunch:'lease-guarded',cachedCompletion:'source-bound',malformedViewerKey:'ignored-only',qaHardStop:'unchanged'});
 })(window);

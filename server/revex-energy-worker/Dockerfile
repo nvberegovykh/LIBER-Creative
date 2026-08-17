@@ -35,12 +35,14 @@ COPY server/revex-energy-worker/app.py /opt/revex/server/app.py
 COPY server/revex-energy-worker/app_entry.py /opt/revex/server/app_entry.py
 COPY server/revex-energy-worker/durable_execution.py /opt/revex/server/durable_execution.py
 COPY server/revex-energy-worker/revex_energy_pipeline_guard.py /opt/revex/server/revex_energy_pipeline_guard.py
+COPY server/revex-energy-worker/revex_energy_pipeline_guard_r116.py /opt/revex/server/revex_energy_pipeline_guard_r116.py
 COPY server/revex-energy-worker/revex_energy_identity_normalizer.py /opt/revex/server/revex_energy_identity_normalizer.py
 COPY server/revex-energy-worker/revex_identity_content_agent.py /opt/revex/server/revex_identity_content_agent.py
 COPY server/revex-energy-worker/revex_cloud_project.py /opt/revex/server/revex_cloud_project.py
 COPY server/revex-energy-worker/revex_user_identity_en1.py /opt/revex/server/revex_user_identity_en1.py
 COPY server/revex-energy-worker/revex_energy_pipeline_r69.py /opt/revex/server/revex_energy_pipeline_r69.py
 COPY server/revex-energy-worker/revex_comcheck_evidence.py /opt/revex/server/revex_comcheck_evidence.py
+COPY server/revex-energy-worker/revex_comcheck_evidence_r116.py /opt/revex/server/revex_comcheck_evidence_r116.py
 COPY server/revex-energy-worker/revex_structured_schedule_facts.py /opt/revex/server/revex_structured_schedule_facts.py
 COPY server/revex-energy-worker/revex_structured_schedule_projection.py /opt/revex/server/revex_structured_schedule_projection.py
 COPY server/revex-energy-worker/revex_geometryco_source_condition.py /opt/revex/server/revex_geometryco_source_condition.py
@@ -52,6 +54,10 @@ COPY server/revex-energy-worker/verify_vertex_project_binding_r98.py /opt/revex/
 COPY server/revex-energy-worker/verify_comcheck_evidence_r100.py /opt/revex/server/verify_comcheck_evidence_r100.py
 COPY server/revex-energy-worker/verify_structured_schedule_evidence_r101.py /opt/revex/server/verify_structured_schedule_evidence_r101.py
 COPY server/revex-energy-worker/verify_geometryco_source_condition_r91.py /opt/revex/server/verify_geometryco_source_condition_r91.py
+COPY server/revex-energy-worker/verify_final_comcheck_recovery_r116.py /opt/revex/server/verify_final_comcheck_recovery_r116.py
+# QA-only broker source copy: embedded r116 verification checks the exact broker/worker terminal contract.
+# The runtime worker never imports or executes this file.
+COPY server/firebase-functions/index.js /opt/revex/firebase-functions/index.js
 COPY server/revex-energy-worker/run_revex_r49_release_acceptance.py /opt/revex/server/run_revex_r49_release_acceptance.py
 COPY server/revex-energy-worker/verify_revex_r49_worker.py /opt/revex/server/verify_revex_r49_worker.py
 COPY server/revex-energy-worker/requirements-server.txt /opt/revex/server/requirements-server.txt
@@ -70,17 +76,20 @@ RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
  && test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.py \
  && test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn \
  && test -f /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler_core.py \
+ && test -f /opt/revex/firebase-functions/index.js \
  && python3 -m py_compile \
       /opt/revex/server/app.py \
       /opt/revex/server/app_entry.py \
       /opt/revex/server/durable_execution.py \
       /opt/revex/server/revex_energy_pipeline_guard.py \
+      /opt/revex/server/revex_energy_pipeline_guard_r116.py \
       /opt/revex/server/revex_energy_identity_normalizer.py \
       /opt/revex/server/revex_identity_content_agent.py \
       /opt/revex/server/revex_cloud_project.py \
       /opt/revex/server/revex_user_identity_en1.py \
       /opt/revex/server/revex_energy_pipeline_r69.py \
       /opt/revex/server/revex_comcheck_evidence.py \
+      /opt/revex/server/revex_comcheck_evidence_r116.py \
       /opt/revex/server/revex_structured_schedule_facts.py \
       /opt/revex/server/revex_structured_schedule_projection.py \
       /opt/revex/server/revex_geometryco_source_condition.py \
@@ -92,6 +101,7 @@ RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
       /opt/revex/server/verify_comcheck_evidence_r100.py \
       /opt/revex/server/verify_structured_schedule_evidence_r101.py \
       /opt/revex/server/verify_geometryco_source_condition_r91.py \
+      /opt/revex/server/verify_final_comcheck_recovery_r116.py \
       /opt/revex/server/run_revex_r49_release_acceptance.py \
       /opt/revex/server/verify_revex_r49_worker.py \
       /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py \
@@ -114,11 +124,14 @@ RUN python3 /opt/revex/energy/verify_revex_r49_energy.py \
  && python3 /opt/revex/server/verify_vertex_project_binding_r98.py \
  && python3 /opt/revex/server/verify_comcheck_evidence_r100.py \
  && python3 /opt/revex/server/verify_structured_schedule_evidence_r101.py \
- && python3 /opt/revex/server/verify_geometryco_source_condition_r91.py
+ && python3 /opt/revex/server/verify_geometryco_source_condition_r91.py \
+ && python3 /opt/revex/server/verify_final_comcheck_recovery_r116.py
 
+# Compatibility marker for older deployment-source validators; runtime uses r116 below:
+# REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py
 ENV REVEX_HEADLESS=1 \
     REVEX_CHROME_BINARY=/usr/bin/google-chrome \
-    REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py \
+    REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard_r116.py \
     REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py \
     REVEX_ENERGY_TIMEOUT_SECONDS=3500 \
     PORT=8080
