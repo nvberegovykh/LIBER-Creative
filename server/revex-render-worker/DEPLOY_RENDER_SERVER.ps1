@@ -77,7 +77,7 @@ function Add-ServiceAccountUser([string]$GCloud, [string]$ServiceAccount, [strin
 }
 
 try {
-  Write-Host "REVEX r64 private render deployment" -ForegroundColor Cyan
+  Write-Host "REVEX r112 private render deployment" -ForegroundColor Cyan
   Write-Host "Public model: Qwen/Qwen-Image-Edit-2511 @ 6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9"
   Write-Host "Runtime: private Cloud Run RTX PRO 6000; tokenless public model"
   Write-Host "Project: $ProjectId  Region: $Region"
@@ -161,14 +161,21 @@ try {
     $env:REVEX_RENDER_WORKER_URL = $WorkerUrl
     $env:REVEX_RENDER_BROKER_SERVICE_ACCOUNT = $BrokerSa
 
-    Invoke-Checked "Preflight callable broker source under Node 22 contract" $Node @(
+    $package = Get-Content -LiteralPath (Join-Path $FunctionsDir "package.json") -Raw | ConvertFrom-Json
+    if ([string]$package.engines.node -ne "22") {
+      throw "REVEX render broker package.json must pin engines.node to 22."
+    }
+
+    $localNodeVersion = (& $Node --version).Trim()
+    Write-Host "Local broker preflight uses $localNodeVersion; deployed runtime is pinned separately to nodejs22." -ForegroundColor DarkGray
+    Invoke-Checked "Preflight callable broker export" $Node @(
       "-e",
-      "const t=Date.now();const m=require('./index.js');if(typeof m.runRevexRender!=='function')throw new Error('runRevexRender export missing');const ms=Date.now()-t;if(ms>10000)throw new Error('broker module discovery exceeded 10s: '+ms);console.log('REVEX broker module OK in '+ms+' ms');"
+      "const t=Date.now();const m=require('./index.js');if(typeof m.runRevexRender!=='function')throw new Error('runRevexRender export missing');const ms=Date.now()-t;console.log('REVEX broker module OK in '+ms+' ms on '+process.version+'; deployment runtime=nodejs22');"
     ) $FunctionsDir
 
-    # Deploy the callable wrapper through the documented Cloud Functions v2 API
-    # instead of making Firebase CLI source discovery a production dependency.
-    # onCall still validates the Firebase callable protocol and user ID token at runtime.
+    # Deploy the callable wrapper through the documented Cloud Functions v2 API.
+    # The deploy runtime itself is authoritative: it is pinned to Node 22 regardless of
+    # whichever compatible local Node version happens to be first on PATH.
     Invoke-Checked "Deploy authenticated REVEX render broker" $GCloud @(
       "functions","deploy","runRevexRender","--gen2","--region",$Region,"--project",$ProjectId,
       "--runtime","nodejs22","--source",$FunctionsDir,"--entry-point","runRevexRender","--trigger-http",
@@ -189,10 +196,18 @@ try {
     throw "REVEX render broker did not report ACTIVE after deployment; state=$FunctionState"
   }
 
+  $runtime = Invoke-NativeCapture $GCloud @(
+    "functions","describe","runRevexRender","--gen2","--project",$ProjectId,"--region",$Region,"--format","value(buildConfig.runtime)"
+  )
+  $RuntimeName = (@($runtime.Output) -join "").Trim()
+  if ($runtime.Code -ne 0 -or $RuntimeName -ne "nodejs22") {
+    throw "REVEX render broker runtime mismatch after deployment; expected nodejs22, got $RuntimeName."
+  }
+
   Write-Host ""
   Write-Host "PASS: REVEX private renderer is deployed end-to-end." -ForegroundColor Green
   Write-Host "Worker: $WorkerUrl"
-  Write-Host "Broker: runRevexRender ACTIVE"
+  Write-Host "Broker: runRevexRender ACTIVE · runtime nodejs22"
   Write-Host "Default renderer needs no Hugging Face account/token and performs no browser-side model inference."
 } catch {
   Write-Host ""
