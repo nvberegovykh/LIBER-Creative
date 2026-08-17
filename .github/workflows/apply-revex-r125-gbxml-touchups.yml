@@ -1,0 +1,60 @@
+name: Apply REVEX r125 gbXML geometry touchups
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [revex-r125-final-energy-touchups]
+    paths:
+      - 'server/revex-energy-worker/apply_gbxml_geometry_touchups_r125.py'
+      - '.github/workflows/apply-revex-r125-gbxml-touchups.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: revex-r125-final-energy-touchups
+          fetch-depth: 0
+
+      - name: Apply synchronized exporter + Dynamo source
+        run: python server/revex-energy-worker/apply_gbxml_geometry_touchups_r125.py
+
+      - name: Validate external/embedded source identity and touchup markers
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          py=Path('src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.py')
+          dyn=Path('src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn')
+          source=py.read_text(encoding='utf-8').replace('\r\n','\n').rstrip()
+          graph=json.loads(dyn.read_text(encoding='utf-8-sig'))
+          nodes=[n for n in graph['Nodes'] if 'PythonNodeModels.PythonNode' in str(n.get('ConcreteType') or '')]
+          assert len(nodes)==1
+          embedded=str(nodes[0]['Code']).replace('\r\n','\n').rstrip()
+          assert source==embedded
+          for token in (
+              'REVEX_R125_GEOMETRY_TOUCHUPS_BEGIN',
+              'bbox-whole-door-r125',
+              'CURTAIN_PANEL_GEOMETRY_HOST_PROOF_R125',
+              '_r125_curtain_parent_candidates',
+              'TOP_COVER_SEARCH_MAX_FT = float("inf")',
+          ):
+              assert token in source, token
+          print('REVEX_R125_GBXML_SOURCE_SYNC=PASSED')
+          PY
+
+      - name: Commit generated authoritative pair
+        run: |
+          if git diff --quiet -- src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.py src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn; then
+            echo 'Already applied.'
+            exit 0
+          fi
+          git config user.name 'revex-release-bot'
+          git config user.email 'revex-release-bot@users.noreply.github.com'
+          git add src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.py src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn
+          git commit -m 'REVEX r125: preserve curtain panels doors and top envelope'
+          git push origin HEAD:revex-r125-final-energy-touchups
