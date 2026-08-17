@@ -50,23 +50,19 @@ try {
   if (-not (Test-Path -LiteralPath $BaseDeploy -PathType Leaf)) { throw "Missing base Render deployer: $BaseDeploy" }
   $GCloud = Require-Command "gcloud"
 
-  # Build/deploy the current r119 image and authenticated broker first.
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $BaseDeploy -ProjectId $ProjectId -Region $Region -NoPause
   if ($LASTEXITCODE -ne 0) { throw "Base Render deployment failed with exit code $LASTEXITCODE." }
 
   $Bucket = Resolve-FirebaseBucket $GCloud
   Write-Host "Persistent model cache bucket: $Bucket" -ForegroundColor Green
 
-  # The prior /tmp HF cache is memory-backed and disappears with the Cloud Run instance.
-  # Mount the existing private Firebase Storage bucket so the 57.7 GB exact snapshot
-  # downloads once, survives cold-instance replacement, and resumes after transport loss.
   Invoke-Checked "Reset Render worker volume contract" $GCloud @(
     "run","services","update",$Service,
-    "--project=$ProjectId","--region=$Region","--clear-volumes","--quiet"
+    "--project=$ProjectId","--region=$Region","--clear-volume-mounts","--clear-volumes","--quiet"
   )
   Invoke-Checked "Mount persistent Qwen cache and long Hub timeouts" $GCloud @(
     "run","services","update",$Service,
-    "--project=$ProjectId","--region=$Region",
+    "--project=$ProjectId","--region=$Region","--execution-environment=gen2",
     "--add-volume","mount-path=$MountPath,type=cloud-storage,bucket=$Bucket,readonly=false",
     "--update-env-vars","HF_HOME=$MountPath/huggingface,REVEX_MODEL_CACHE_DIR=$ModelCache,HF_HUB_ETAG_TIMEOUT=120,HF_HUB_DOWNLOAD_TIMEOUT=900,HF_HUB_DISABLE_TELEMETRY=1,HF_XET_HIGH_PERFORMANCE=1,HF_ENABLE_PARALLEL_LOADING=YES",
     "--quiet"
