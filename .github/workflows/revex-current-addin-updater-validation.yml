@@ -98,7 +98,9 @@ jobs:
             'function Assert-InstalledSource',
             'function Get-LatestEngineeringRevisionState',
             'REVEX_DATA_ROOT',
-            '[System.IO.Path]::IsPathFullyQualified',
+            '[System.IO.Path]::IsPathRooted',
+            '$DriveRelative',
+            '$SingleRootSlash',
             '$RevexDataRoot',
             '$RevexInstallRoot',
             'engine-REVIT-SCHEDULE-EVIDENCE.json',
@@ -106,6 +108,7 @@ jobs:
             'fresh geometry + schedules + T/Z/EN + EPW together',
             'Never run both Retry and SYNC ENGINEERING for the same unchanged state'
           )) { if (-not $ps.Contains($needle)) { throw "Energy recovery launcher missing: $needle" } }
+          if ($ps.Contains('IsPathFullyQualified')) { throw 'Recovery must remain compatible with Windows PowerShell 5.1 / .NET Framework.' }
           if ($ps.Contains('do not rerun the five-minute gbXML export just to retry downstream Energy')) { throw 'Blanket no-resync instruction is forbidden after structured schedule capture was added.' }
           if ($cmd.Contains('Do NOT rerun gbXML')) { throw 'The user-facing recovery launcher must not override revision-aware Retry vs Sync semantics.' }
           if (-not $cmd.Contains('Follow the revision-aware Retry vs SYNC ENGINEERING instruction printed above.')) { throw 'The launcher must defer to the revision-aware controller result.' }
