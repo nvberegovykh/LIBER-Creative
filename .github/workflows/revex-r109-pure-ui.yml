@@ -1,0 +1,37 @@
+name: REVEX r109 pure responsive UI validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - 'docs/liber-apps/apps/revex/ui-polish-r109.js'
+      - 'docs/liber-apps/apps/revex/sync-docs-r24.js'
+      - 'docs/liber-apps/apps/revex/app.js'
+      - '.github/scripts/verify-revex-r109-pure-ui.js'
+      - '.github/workflows/revex-r109-pure-ui.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - 'docs/liber-apps/apps/revex/ui-polish-r109.js'
+      - 'docs/liber-apps/apps/revex/sync-docs-r24.js'
+      - 'docs/liber-apps/apps/revex/app.js'
+      - '.github/scripts/verify-revex-r109-pure-ui.js'
+      - '.github/workflows/revex-r109-pure-ui.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  pure-ui-r109:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check responsive UI
+        run: node --check docs/liber-apps/apps/revex/ui-polish-r109.js
+      - name: Verify desktop parity, touch Walk, linked Docs and Energy preservation
+        run: node .github/scripts/verify-revex-r109-pure-ui.js
