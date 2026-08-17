@@ -6,6 +6,8 @@ on:
     paths:
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/ui-polish-r109.js'
+      - 'docs/liber-apps/apps/revex/mobile-final-r122.js'
+      - 'docs/liber-apps/apps/revex/docs-pages-r115.js'
       - 'docs/liber-apps/apps/revex/sync-docs-r24.js'
       - 'docs/liber-apps/apps/revex/app.js'
       - '.github/scripts/verify-revex-r109-pure-ui.js'
@@ -15,6 +17,8 @@ on:
     paths:
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/ui-polish-r109.js'
+      - 'docs/liber-apps/apps/revex/mobile-final-r122.js'
+      - 'docs/liber-apps/apps/revex/docs-pages-r115.js'
       - 'docs/liber-apps/apps/revex/sync-docs-r24.js'
       - 'docs/liber-apps/apps/revex/app.js'
       - '.github/scripts/verify-revex-r109-pure-ui.js'
@@ -32,6 +36,16 @@ jobs:
         with:
           node-version: '22'
       - name: Syntax check responsive UI
-        run: node --check docs/liber-apps/apps/revex/ui-polish-r109.js
+        run: |
+          node --check docs/liber-apps/apps/revex/ui-polish-r109.js
+          node --check docs/liber-apps/apps/revex/mobile-final-r122.js
+          node --check docs/liber-apps/apps/revex/ui-integrity.js
+      - name: Verify r122 mobile ownership contract
+        run: |
+          grep -F "mobile-final-r122.js?v=20260817r122-mobile-final1" docs/liber-apps/apps/revex/ui-integrity.js
+          grep -F "typeof v.walkOn==='function'" docs/liber-apps/apps/revex/mobile-final-r122.js
+          grep -F ".view[hidden],.empty-view[hidden]{display:none!important}" docs/liber-apps/apps/revex/mobile-final-r122.js
+          grep -F "docsPdfOwner:'r115'" docs/liber-apps/apps/revex/mobile-final-r122.js
+          grep -F "derivedFromFullSet=true" docs/liber-apps/apps/revex/mobile-final-r122.js
       - name: Verify desktop parity, touch Walk, linked Docs and Energy preservation
         run: node .github/scripts/verify-revex-r109-pure-ui.js

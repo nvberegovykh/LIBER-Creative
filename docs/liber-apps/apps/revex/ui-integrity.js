@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260817r117-bim-properties1';
+  const BUILD='20260817r122-mobile-final1';
   const REVEX_R87_REPLAY_CONTRACT='energy-diagnostics-r68.js?v=20260816r87-energy-replay1';
   const REVEX_R87_REPLAY_LABEL="energyDiagnostics:'revision-scoped-replay-r87'";
   const REVEX_R92_REPLAY_COMPAT='energy-replay-r92.js?v=20260816r92-hosted-replay1';
@@ -67,8 +67,9 @@
     loadScript('viewer-texture-r115.js?v=20260817r115-texture1','viewer-texture-r115');
     loadScript('docs-pages-r115.js?v=20260817r115-docs1','docs-pages-r115');
     loadScript('render-touchups-r115.js?v=20260817r115-render-ui1','render-touchups-r115');
+    loadScript('mobile-final-r122.js?v=20260817r122-mobile-final1','mobile-final-r122');
   }
   function bind(){installCanonicalOverlayStore();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r116-preflight+source-bound-cache+terminal-status+durable-worker',moduleLoad:'after-import-map',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r110-responsive+r115-final-touchups+r117-properties',docs:'one-full-set+derived-pages',texture:'generated-uv+base-material-blend',render:'bounded+construction-fast',bimProperties:'instance+type+family+level+host+workset+material+vt-fallback',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r116-preflight+source-bound-cache+terminal-status+durable-worker',moduleLoad:'after-import-map',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r122-mobile-final+r115-touchups+r117-properties',docs:'r115-full-set+derived-pages+r122-linked-normalization',texture:'generated-uv+base-material-blend',render:'bounded+construction-fast',bimProperties:'instance+type+family+level+host+workset+material+vt-fallback',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
 })(window);
