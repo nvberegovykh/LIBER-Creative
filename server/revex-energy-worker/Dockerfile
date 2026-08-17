@@ -28,6 +28,10 @@ RUN curl -fL --retry 4 "https://github.com/NatLabRockies/OpenStudio/releases/dow
 
 WORKDIR /opt/revex
 COPY src/Liber.Revex.Revit/Engineering/Energy /opt/revex/energy
+# Bind the approved same-envelope reference to its immutable packaged location.
+# Both release QA and production runtime consume this exact path; no source-tree
+# fallback is accepted inside the worker image.
+ENV REVEX_APPROVED_ENVELOPE_REFERENCE=/opt/revex/energy/References/79_WINTHROP_APPROVED_PROPOSED.osm
 # Energy QA imports the exact authoritative gbXML exporter beside Energy via HERE.parent/Gbxml.
 # Keep both the .py and .dyn in the worker image so the identity regression test runs in Cloud Build.
 COPY src/Liber.Revex.Revit/Engineering/Gbxml /opt/revex/Gbxml
@@ -79,7 +83,7 @@ RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
  && test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.py \
  && test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn \
  && test -f /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler_core.py \
- && test -f /opt/revex/energy/References/79_WINTHROP_APPROVED_PROPOSED.osm \
+ && test -f "$REVEX_APPROVED_ENVELOPE_REFERENCE" \
  && test -f /opt/revex/firebase-functions/index.js \
  && python3 -m py_compile \
       /opt/revex/server/app.py \
@@ -113,6 +117,13 @@ RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
       /opt/revex/server/verify_revex_r49_worker.py \
       /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py \
       /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler_core.py
+
+# Fail fast on the exact production path before installing heavy Python runtime dependencies.
+# This is the path that failed in prior Cloud Builds, so the verifier must resolve the
+# packaged file itself rather than reconstructing a repository checkout path.
+RUN cd /opt/revex/server \
+ && python3 -c "import os; from pathlib import Path; import revex_reference_envelope_projection_r118 as r; expected=Path(os.environ['REVEX_APPROVED_ENVELOPE_REFERENCE']); actual=r._reference_path(); assert actual==expected,(actual,expected); assert actual.is_file(),actual; print('REVEX_R118_PACKAGED_REFERENCE_PATH=PASSED', actual)"
+
 RUN python3 -m pip install --no-cache-dir \
     -r /opt/revex/energy/requirements.txt \
     -r /opt/revex/energy/GeometryCo/requirements.txt \
