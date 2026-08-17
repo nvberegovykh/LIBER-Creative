@@ -57,7 +57,11 @@ public static class RevexWindowResponsivenessHotfix
             await Task.Delay(50);
         if (web.CoreWebView2 == null || !window.IsVisible) return;
 
-        RuntimeState state = States.GetOrCreateValue(window);
+        if (!States.TryGetValue(window, out RuntimeState? state))
+        {
+            state = new RuntimeState();
+            States.Add(window, state);
+        }
         if (!state.CoreBound)
         {
             state.CoreBound = true;
@@ -169,6 +173,9 @@ public static class RevexWindowResponsivenessHotfix
     private static T? Field<T>(RendairWindow window, string name) where T : class =>
         typeof(RendairWindow).GetField(name, PrivateInstance)?.GetValue(window) as T;
 
-    private static bool BoolField(RendairWindow window, string name) =>
-        typeof(RendairWindow).GetField(name, PrivateInstance)?.GetValue(window) as bool? ?? false;
+    private static bool BoolField(RendairWindow window, string name)
+    {
+        object? value = typeof(RendairWindow).GetField(name, PrivateInstance)?.GetValue(window);
+        return value is bool flag && flag;
+    }
 }
