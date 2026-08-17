@@ -140,13 +140,11 @@ function configuredStorageBucket() {
 
 function resolveStorageBucket(artifacts) {
   const artifactBucket = bucketFromArtifactUrls(artifacts);
+  if (artifactBucket) return artifactBucket;
   const configuredBucket = configuredStorageBucket();
-  if (artifactBucket && configuredBucket && artifactBucket !== configuredBucket)
-    throw new Error(`Immutable Engineering artifact bucket ${artifactBucket} does not match configured REVEX bucket ${configuredBucket}.`);
-  const bucket = artifactBucket || configuredBucket;
-  if (!bucket)
+  if (!configuredBucket)
     throw new Error('REVEX Energy broker could not resolve the Firebase Storage bucket from the immutable Engineering artifacts or runtime configuration.');
-  return bucket;
+  return configuredBucket;
 }
 
 exports.runRevexEnergy = onCall({ timeoutSeconds: 3600, memory: '1GiB', concurrency: 4, serviceAccount: BROKER_SERVICE_ACCOUNT }, async (request) => {
