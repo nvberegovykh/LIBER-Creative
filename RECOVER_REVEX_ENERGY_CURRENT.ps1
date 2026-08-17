@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 3.0
 
-$SourceCandidate = "8bbc4df21bbce402d617bfa9950fc57c0c6c5dc5"
+$SourceCandidate = "1b9940d533ab83882fdfb1de9eef3d67c233b0e2"
 $Revision = "eng_20260817T032812010Z"
 $Repo = "https://github.com/nvberegovykh/LIBER-Creative.git"
 $Work = Join-Path $env:TEMP ("REVEX-R118-RECOVERY-" + [guid]::NewGuid().ToString("N"))
