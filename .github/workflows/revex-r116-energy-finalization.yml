@@ -1,0 +1,55 @@
+name: REVEX r116 Energy finalization recovery
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/revex-energy-worker/durable_execution.py'
+      - 'server/revex-energy-worker/revex_comcheck_evidence.py'
+      - 'server/revex-energy-worker/verify_comcheck_evidence_r100.py'
+      - 'server/firebase-functions/index.js'
+      - '.github/scripts/verify-revex-r116-energy-finalization.js'
+      - '.github/workflows/revex-r116-energy-finalization.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  finalization-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify r116 terminal/cache/height contract
+        run: node .github/scripts/verify-revex-r116-energy-finalization.js
+      - name: Compile worker recovery sources
+        run: |
+          python -m py_compile \
+            server/revex-energy-worker/durable_execution.py \
+            server/revex-energy-worker/revex_comcheck_evidence.py \
+            server/revex-energy-worker/verify_comcheck_evidence_r100.py
+      - name: Run actual G-002 COMcheck evidence regression
+        env:
+          PYTHONPATH: server/revex-energy-worker
+        run: python server/revex-energy-worker/verify_comcheck_evidence_r100.py
+      - name: Parse authenticated Energy broker
+        run: node --check server/firebase-functions/index.js
+      - name: Scope guard - no Revit/GeometryCo/r49 simulation rewrite
+        shell: bash
+        run: |
+          changed="$(git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD)"
+          echo "$changed"
+          forbidden="$(printf '%s\n' "$changed" | grep -E '^src/Liber\.Revex\.Revit/Engineering/(Gbxml/|Energy/GeometryCo/|Energy/revex_energy_pipeline\.py$)|^src/Liber\.Revex\.Revit/.*\.cs$' || true)"
+          if [ -n "$forbidden" ]; then
+            echo 'r116 is downstream Energy recovery only; forbidden authority/core changes:'
+            echo "$forbidden"
+            exit 1
+          fi
