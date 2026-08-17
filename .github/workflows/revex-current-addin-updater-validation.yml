@@ -105,9 +105,8 @@ jobs:
             '$RevexDataRoot',
             '$RevexInstallRoot',
             'engine-REVIT-SCHEDULE-EVIDENCE.json',
-            'predates native structured schedule evidence',
-            'fresh geometry + schedules + T/Z/EN + EPW together',
-            'Never run both Retry and SYNC ENGINEERING for the same unchanged state'
+            'Structured current-Revit schedule regression',
+            'Retry replays one immutable revision. SYNC ENGINEERING publishes a new current Revit state. They are never substitutes for each other.'
           )) { if (-not $ps.Contains($needle)) { throw "Energy recovery launcher missing: $needle" } }
           if ($ps.Contains('IsPathFullyQualified')) { throw 'Recovery must remain compatible with Windows PowerShell 5.1 / .NET Framework.' }
           if ($ps.Contains('do not rerun the five-minute gbXML export just to retry downstream Energy')) { throw 'Blanket no-resync instruction is forbidden after structured schedule capture was added.' }
