@@ -7,6 +7,7 @@ on:
       - 'server/revex-render-worker/render_r119.py'
       - 'server/revex-render-worker/Dockerfile'
       - 'server/revex-render-worker/DEPLOY_RENDER_R119.ps1'
+      - '.github/scripts/verify-revex-r115-final-touchups.js'
       - '.github/workflows/revex-r119-render-cache.yml'
   workflow_dispatch:
 
@@ -40,6 +41,8 @@ jobs:
           }
           if ($worker -match 'runRevexEnergy|GeometryCo|COMcheck|SYNC ENGINEERING') { throw 'r119 Render cache source crossed into Energy scope.' }
           Write-Host 'PASS r119 persistent Render cache contract'
+      - name: Preserve r115 construction-render authority
+        run: node .github/scripts/verify-revex-r115-final-touchups.js
       - name: Parse PowerShell deployer
         shell: powershell
         run: |
@@ -56,7 +59,7 @@ jobs:
           git fetch --no-tags --depth=1 origin "$base_sha" "$head_sha"
           changed="$(git diff --name-only "$base_sha" "$head_sha")"
           echo "$changed"
-          forbidden="$(printf '%s\n' "$changed" | grep -Ev '^(server/revex-render-worker/(render_r119.py|Dockerfile|DEPLOY_RENDER_R119.ps1)|\.github/workflows/revex-r119-render-cache.yml)$' || true)"
+          forbidden="$(printf '%s\n' "$changed" | grep -Ev '^(server/revex-render-worker/(render_r119.py|Dockerfile|DEPLOY_RENDER_R119.ps1)|\.github/scripts/verify-revex-r115-final-touchups.js|\.github/workflows/revex-r119-render-cache.yml)$' || true)"
           if [ -n "$forbidden" ]; then
             echo 'r119 Render cache release contains unrelated changes:'
             echo "$forbidden"
