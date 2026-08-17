@@ -6,10 +6,10 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 3.0
 
-$SourceCandidate = "a6b8fde4a1eebf375110704a4da572ab71f6619d"
+$SourceCandidate = "6d68b5f19fee48560b386760417f9fbf890c5ae1"
 $Revision = "eng_20260817T032812010Z"
 $Repo = "https://github.com/nvberegovykh/LIBER-Creative.git"
-$Work = Join-Path $env:TEMP ("REVEX-R118-RECOVERY-" + [guid]::NewGuid().ToString("N"))
+$Work = Join-Path $env:TEMP ("REVEX-R121-RECOVERY-" + [guid]::NewGuid().ToString("N"))
 $Source = Join-Path $Work "source"
 $ExitCode = 1
 
@@ -45,7 +45,7 @@ function Capture-Native([string]$Command, [string[]]$Arguments) {
 }
 
 try {
-  Write-Host "REVEX r118 Energy recovery - production-path final" -ForegroundColor Cyan
+  Write-Host "REVEX r121 Energy recovery - envelope-class final" -ForegroundColor Cyan
   Write-Host "Fixed source: $SourceCandidate"
   Write-Host "Preserved revision: $Revision"
   Write-Host "Scope: Energy worker + authenticated broker only. No Revit sync. No add-in replacement. No BIM/Docs/Render mutation." -ForegroundColor Green
@@ -75,7 +75,7 @@ try {
   if ((Invoke-Native $Git @("init", $Source) -Quiet) -ne 0) { throw "git init failed." }
   if ((Invoke-Native $Git @("-C", $Source, "remote", "add", "origin", $Repo) -Quiet) -ne 0) { throw "git remote failed." }
 
-  Write-Host ">> Fetch exact production-path-final Energy source" -ForegroundColor DarkCyan
+  Write-Host ">> Fetch exact r121 envelope-class Energy source" -ForegroundColor DarkCyan
   if ((Invoke-Native $Git @("-C", $Source, "fetch", "--depth", "1", "origin", $SourceCandidate)) -ne 0) { throw "Exact fixed Energy source fetch failed." }
   if ((Invoke-Native $Git @("-C", $Source, "checkout", "--detach", "FETCH_HEAD") -Quiet) -ne 0) { throw "Exact fixed Energy checkout failed." }
   $checked = Capture-Native $Git @("-C", $Source, "rev-parse", "HEAD")
@@ -94,13 +94,13 @@ try {
   )
   if ($code -ne 0) { throw "Fixed Energy deployment failed with exit code $code." }
 
-  Write-Host "PASS: fixed r118 Energy worker + broker deployed." -ForegroundColor Green
+  Write-Host "PASS: r121 envelope-class Energy worker + broker deployed." -ForegroundColor Green
   Write-Host "Retry ONLY $Revision. Do not Sync Engineering." -ForegroundColor Green
   Start-Process "https://liberpict.com/liber-apps/apps/revex/index.html?projectId=revex_mspgzb7h_729b2936bfaa&specProjectId=spec_revex_mspgzb7h_729b2936bfaa&view=energy"
   $ExitCode = 0
 }
 catch {
-  Write-Host "REVEX r118 Energy recovery stopped safely: $($_.Exception.Message)" -ForegroundColor Red
+  Write-Host "REVEX r121 Energy recovery stopped safely: $($_.Exception.Message)" -ForegroundColor Red
   $ExitCode = 1
 }
 finally {
