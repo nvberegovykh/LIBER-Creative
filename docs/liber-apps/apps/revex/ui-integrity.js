@@ -58,15 +58,22 @@
     loadScript('appearance-state-r75.js?v=20260816r75-appearance1','appearance-state-r75');
     loadScript('viewer-runtime-r75.js?v=20260816r75-viewer1','viewer-runtime-r75');
     loadScript('companion-runtime-r75.js?v=20260816r75-companion1','companion-runtime-r75');
-    loadScript('mobile-ux-r100.js?v=20260817r100-mobile-ux1','mobile-ux-r100');
     // Revit WebView does not register the PWA service worker, so this query token is
     // the authoritative cache break for the r97 exact-job recovery loader.
     loadScript('viewer-interaction-r85-loader.js?v=20260816r98-live-edge2','viewer-interaction-r85-loader');
+    // r85 owns the base mobile viewer panels. Let it finish injecting first, then put
+    // the r100 layout layer last in the cascade so mobile width constraints are deterministic.
+    let mobileAttempts=0;
+    const loadMobile=()=>{
+      if(root.__revexViewerInteractionR85||mobileAttempts++>=40){loadScript('mobile-ux-r100.js?v=20260817r100-mobile-ux1','mobile-ux-r100');return;}
+      setTimeout(loadMobile,50);
+    };
+    loadMobile();
   }
   function bind(){installCanonicalOverlayStore();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
   // index.html declares the THREE import map after ui-integrity.js. Never inject a
   // module before DOM parsing reaches that import map; doing so produced the bare
   // specifier "three" error seen in the Revit WebView log.
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'single-native-hosted-flight+manual-revision-authorization+live-job-reattach',moduleLoad:'after-import-map',liveWorkerEdge:'r97-exact-job-recovery',mobileUx:'r100',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'single-native-hosted-flight+manual-revision-authorization+live-job-reattach',moduleLoad:'after-import-map',liveWorkerEdge:'r97-exact-job-recovery',mobileUx:'r100-after-r85',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
 })(window);
