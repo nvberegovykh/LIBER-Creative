@@ -198,6 +198,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     # Patch each dynamically loaded r49 module before the preflight and route the full
     # pinned implementation through the same r125 patch layer.
     r125.install_guard_touchups(r116, reference_envelope)
+    r125.install_worker_touchups()
     _install_full_pipeline_runner()
     base.EXACT_NAMES.update({
         "REFERENCE_ENVELOPE_PROJECTION_R118.json",
