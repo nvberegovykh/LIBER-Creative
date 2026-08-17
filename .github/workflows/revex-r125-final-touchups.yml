@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups_r125.py'
+      - 'src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner_r125.py'
       - 'src/Liber.Revex.Revit/Engineering/Energy/verify_revex_r125_touchups.py'
       - 'src/Liber.Revex.Revit/Services/EngineeringScheduleEvidenceService.cs'
       - 'server/revex-energy-worker/revex_energy_pipeline_guard_r118.py'
@@ -21,6 +22,7 @@ jobs:
         run: |
           python -m py_compile \
             src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups_r125.py \
+            src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner_r125.py \
             src/Liber.Revex.Revit/Engineering/Energy/verify_revex_r125_touchups.py \
             server/revex-energy-worker/revex_energy_pipeline_guard_r118.py \
             server/revex-energy-worker/app_entry.py
@@ -35,11 +37,13 @@ jobs:
           grep -F 'grandTotalTitle = ReadProperty(schedule.Definition, "GrandTotalTitle")' src/Liber.Revex.Revit/Services/EngineeringScheduleEvidenceService.cs
           grep -F 'displayType = ReadProperty(field, "DisplayType")' src/Liber.Revex.Revit/Services/EngineeringScheduleEvidenceService.cs
 
-      - name: Resumable publication preserved
+      - name: Full and resumable publication both patched
         run: |
           grep -F 'install_worker_touchups()' server/revex-energy-worker/app_entry.py
           grep -F 'install_publication_resume(APP)' server/revex-energy-worker/app_entry.py
           grep -F 'install_durable_energy_execution(APP)' server/revex-energy-worker/app_entry.py
+          grep -F '_install_full_pipeline_runner()' server/revex-energy-worker/revex_energy_pipeline_guard_r118.py
+          grep -F 'revex_pipeline_runner_r125.py' server/revex-energy-worker/revex_energy_pipeline_guard_r118.py
           grep -F 'PUBLICATION_RESUME_REUSE_VERIFIED' src/Liber.Revex.Revit/Engineering/Energy/revex_publication_resume_r124.py
           grep -F 'finalBytesRehashedImmediatelyBeforeUpload' src/Liber.Revex.Revit/Engineering/Energy/revex_publication_resume_r124.py
 
@@ -51,7 +55,7 @@ jobs:
           git fetch origin "$BASE_SHA" --depth=1 || true
           changed="$(git diff --name-only "$BASE_SHA" HEAD)"
           echo "$changed"
-          forbidden="$(printf '%s\n' "$changed" | grep -Ev '^(src/Liber\.Revex\.Revit/(Engineering/Energy/(revex_final_touchups_r125\.py|verify_revex_r125_touchups\.py)|Services/EngineeringScheduleEvidenceService\.cs)|server/revex-energy-worker/(revex_energy_pipeline_guard_r118\.py|app_entry\.py)|\.github/workflows/revex-r125-final-touchups\.yml)$' || true)"
+          forbidden="$(printf '%s\n' "$changed" | grep -Ev '^(src/Liber\.Revex\.Revit/(Engineering/Energy/(revex_final_touchups_r125\.py|revex_pipeline_runner_r125\.py|verify_revex_r125_touchups\.py)|Services/EngineeringScheduleEvidenceService\.cs)|server/revex-energy-worker/(revex_energy_pipeline_guard_r118\.py|app_entry\.py)|\.github/workflows/revex-r125-final-touchups\.yml)$' || true)"
           if [ -n "$forbidden" ]; then
             echo 'r125 contains unrelated changes:'
             echo "$forbidden"
