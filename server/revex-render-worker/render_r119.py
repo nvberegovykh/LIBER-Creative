@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 import os
 import time
 from pathlib import Path
@@ -8,20 +9,43 @@ from pathlib import Path
 import app as base
 import render_r115 as r115
 
-BUILD = "20260817r119-durable-model-cache1"
+BUILD = "20260817r119-durable-model-cache2"
 base.BUILD = BUILD
+CACHE_MARKER = ".revex-qwen-cache-complete.json"
+
+
+def _cache_is_complete(cache_root: Path) -> bool:
+    marker = cache_root / CACHE_MARKER
+    model_index = cache_root / "model_index.json"
+    if not marker.is_file() or not model_index.is_file():
+        return False
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+        return (
+            payload.get("model") == base.MODEL_ID
+            and payload.get("revision") == base.MODEL_REVISION
+            and payload.get("complete") is True
+        )
+    except Exception:
+        return False
+
+
+def _mark_cache_complete(cache_root: Path) -> None:
+    marker = cache_root / CACHE_MARKER
+    marker.write_text(
+        json.dumps({
+            "schema": "liber.revex.render-model-cache.v1",
+            "model": base.MODEL_ID,
+            "revision": base.MODEL_REVISION,
+            "complete": True,
+            "completedAt": time.time(),
+        }, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 def _durable_public_model_pipeline():
-    """Load the exact approved Qwen revision through a persistent resumable snapshot.
-
-    The live failure being repaired here happened before inference: a cold Cloud Run
-    instance had no local model cache and the Hub metadata request failed. r119 keeps
-    the exact public model/revision and tokenless authority, but downloads it into a
-    Cloud Storage mounted directory with long Hub timeouts. Partial downloads therefore
-    survive Cloud Run instance replacement and the model is loaded locally after the
-    exact snapshot has been resolved once.
-    """
+    """Resolve one exact public snapshot into durable storage, then load it offline."""
     if base._PIPELINE is not None:
         return base._PIPELINE
 
@@ -47,37 +71,42 @@ def _durable_public_model_pipeline():
                 source = str(model_path)
                 base._MODEL_STATE["origin"] = "private-local-cache"
             else:
-                cache_root = Path(
-                    str(os.environ.get("REVEX_MODEL_CACHE_DIR") or "/tmp/revex-qwen-2511").strip()
-                )
+                cache_root = Path(str(os.environ.get("REVEX_MODEL_CACHE_DIR") or "/tmp/revex-qwen-2511").strip())
                 cache_root.mkdir(parents=True, exist_ok=True)
-                etag_timeout = float(os.environ.get("HF_HUB_ETAG_TIMEOUT") or 120)
-                base._MODEL_STATE["origin"] = "public-hugging-face-persistent-cache"
+                source = str(cache_root)
 
-                last_error: Exception | None = None
-                source = ""
-                for attempt in range(1, 7):
-                    try:
-                        source = snapshot_download(
-                            repo_id=base.MODEL_ID,
-                            revision=base.MODEL_REVISION,
-                            local_dir=str(cache_root),
-                            token=False,
-                            etag_timeout=etag_timeout,
-                            max_workers=8,
-                        )
-                        break
-                    except Exception as exc:
-                        last_error = exc
-                        base._MODEL_STATE.update(
-                            status="downloading",
-                            error=f"snapshot attempt {attempt}/6: {str(exc)[:900]}",
-                        )
-                        if attempt >= 6:
-                            raise
-                        time.sleep(min(45, 5 * attempt))
-                if not source:
-                    raise RuntimeError(str(last_error or "Pinned Qwen snapshot could not be downloaded."))
+                if _cache_is_complete(cache_root):
+                    base._MODEL_STATE["origin"] = "public-hugging-face-persistent-cache-offline"
+                else:
+                    etag_timeout = float(os.environ.get("HF_HUB_ETAG_TIMEOUT") or 120)
+                    base._MODEL_STATE["origin"] = "public-hugging-face-persistent-cache-filling"
+                    last_error: Exception | None = None
+                    resolved = ""
+                    for attempt in range(1, 7):
+                        try:
+                            resolved = snapshot_download(
+                                repo_id=base.MODEL_ID,
+                                revision=base.MODEL_REVISION,
+                                local_dir=str(cache_root),
+                                token=False,
+                                etag_timeout=etag_timeout,
+                                max_workers=8,
+                            )
+                            break
+                        except Exception as exc:
+                            last_error = exc
+                            base._MODEL_STATE.update(
+                                status="downloading",
+                                error=f"snapshot attempt {attempt}/6: {str(exc)[:900]}",
+                            )
+                            if attempt >= 6:
+                                raise
+                            time.sleep(min(45, 5 * attempt))
+                    if not resolved:
+                        raise RuntimeError(str(last_error or "Pinned Qwen snapshot could not be downloaded."))
+                    if not (cache_root / "model_index.json").is_file():
+                        raise RuntimeError("Pinned Qwen snapshot returned without model_index.json; cache is incomplete.")
+                    _mark_cache_complete(cache_root)
 
             pipe = QwenImageEditPlusPipeline.from_pretrained(
                 source,
