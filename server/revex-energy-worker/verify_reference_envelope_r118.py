@@ -14,8 +14,8 @@ configured = str(os.environ.get("REVEX_APPROVED_ENVELOPE_REFERENCE") or "").stri
 if configured:
     expected = Path(configured).resolve(); assert reference == expected and expected.is_file(), (reference, expected)
 if Path("/opt/revex").is_dir():
-    expected = Path("/opt/revex/energy/References/79_WINTHROP_APPROVED_PROPOSED.osm")
-    assert reference == expected and reference.is_file(), (reference, expected)
+    expected_packaged = Path("/opt/revex/energy/References/79_WINTHROP_APPROVED_PROPOSED.osm")
+    assert reference == expected_packaged and reference.is_file(), (reference, expected_packaged)
 
 profiles = ref._approved_profiles(reference)
 assert profiles["window"]["construction"] == "WIN_EXT_TRIPLE_LOW_E"
