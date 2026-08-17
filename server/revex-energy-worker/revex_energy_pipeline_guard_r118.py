@@ -7,6 +7,12 @@ geometry rows that lack thermal properties may inherit performance from the appr
 79 Winthrop proposed envelope reference when current EN thermal facts corroborate the
 same envelope signature.
 
+r125 adds only final filing touch-ups on top of this established guard:
+- native Revit schedule totals outrank arithmetic region re-sums;
+- VT/VLT fallbacks are complete and explicit;
+- compact COMcheck labels;
+- template-preserving EN-1 publication.
+
 No Revit, gbXML, GeometryCo, simulation, project identity or current geometry authority
 is changed by this guard.
 """
@@ -15,6 +21,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 import json
+import os
 import sys
 import zipfile
 
@@ -22,7 +29,59 @@ import revex_energy_pipeline_guard as base
 import revex_energy_pipeline_guard_r116 as r116
 import revex_reference_envelope_projection_r118 as reference_envelope
 
+# r125 lives beside the pinned Energy implementation, which is already copied into the
+# production worker image. Make it importable from this server-side guard subprocess.
+_impl_hint = str(os.environ.get("REVEX_PIPELINE_IMPL") or "").strip()
+if _impl_hint:
+    _energy_root = Path(_impl_hint).resolve().parent
+else:
+    _packaged = Path("/opt/revex/energy")
+    _energy_root = _packaged if _packaged.is_dir() else (
+        Path(__file__).resolve().parents[2] / "src/Liber.Revex.Revit/Engineering/Energy"
+    )
+if str(_energy_root) not in sys.path:
+    sys.path.insert(0, str(_energy_root))
+
+import revex_final_touchups_r125 as r125
+
 _ORIGINAL_R116_EVIDENCE_RESOLVER = r116._resolve_comcheck_evidence_request
+
+_ORIGINAL_R116_SUBPROCESS_RUN = r116.subprocess.run
+
+
+def _install_full_pipeline_runner() -> None:
+    """Route only r116's pinned full-pipeline subprocess through the r125 in-process patch runner."""
+    if getattr(r116, "__revex_r125_subprocess_patched__", False):
+        return
+    runner = _energy_root / "revex_pipeline_runner_r125.py"
+    if not runner.is_file():
+        raise RuntimeError(f"REVEX r125 full pipeline runner is unavailable: {runner}")
+
+    def run(command, *args, **kwargs):
+        try:
+            values = list(command)
+        except TypeError:
+            return _ORIGINAL_R116_SUBPROCESS_RUN(command, *args, **kwargs)
+        if len(values) >= 2:
+            try:
+                target = Path(str(values[1])).resolve()
+                pinned = base._pipeline_impl().resolve()
+            except Exception:
+                target = None
+                pinned = None
+            if target is not None and pinned is not None and target == pinned:
+                values = [values[0], str(runner), "--impl", str(pinned), *values[2:]]
+                print(json.dumps({
+                    "stage": "FULL_PIPELINE_R125",
+                    "status": "PATCHED_RUNNER",
+                    "runner": str(runner),
+                    "impl": str(pinned),
+                }, ensure_ascii=True), flush=True)
+                return _ORIGINAL_R116_SUBPROCESS_RUN(values, *args, **kwargs)
+        return _ORIGINAL_R116_SUBPROCESS_RUN(command, *args, **kwargs)
+
+    r116.subprocess.run = run
+    r116.__revex_r125_subprocess_patched__ = True
 
 
 def _osm_fields_without_comments(block: str) -> list[str]:
@@ -51,7 +110,11 @@ def _resolve_comcheck_evidence_then_reference(request_path: Path, output_root: P
     # (G11.3 must not be hidden because G11.1 happens to have a thermal row).
     reference_envelope._osm_fields = _osm_fields_without_comments
     reference_envelope._has_existing_match = _exact_thermal_match_only
-    return reference_envelope.resolve_request(current, output_root)
+    projected = reference_envelope.resolve_request(current, output_root)
+    # r125 derives only publication facts. It never edits the immutable Engineering
+    # source: native schedule total is attached as authority metadata and missing VT
+    # receives approved-reference/code fallback in a derived page-facts copy.
+    return r125.apply_request_touchups(projected, output_root, reference_envelope)
 
 
 PACKAGE_NAME = "REVEX_RECOVERY_PACKAGE.zip"
@@ -129,16 +192,23 @@ def _ensure_recovery_package(request_path: Path) -> Path:
 
 
 def main(argv: Iterable[str] | None = None) -> int:
-    # r116 looks this function up from its module globals at execution time. Replace only
-    # that one downstream seam; every other r116 operation stays intact.
+    # r116 looks these functions up from its module globals at execution time.
     r116._resolve_comcheck_evidence_request = _resolve_comcheck_evidence_then_reference
     r116.PREFLIGHT_NAME = "COMCHECK_PREFLIGHT_R118.json"
+    # Patch each dynamically loaded r49 module before the preflight and route the full
+    # pinned implementation through the same r125 patch layer.
+    r125.install_guard_touchups(r116, reference_envelope)
+    r125.install_worker_touchups()
+    _install_full_pipeline_runner()
     base.EXACT_NAMES.update({
         "REFERENCE_ENVELOPE_PROJECTION_R118.json",
         "00_PAGE_FACTS_REFERENCE_ENVELOPE_R118.json",
         "00_PIPELINE_REQUEST_REFERENCE_ENVELOPE_R118.json",
         "COMCHECK_PREFLIGHT_R118.json",
         PACKAGE_MANIFEST_NAME,
+        "ENERGY_FINAL_TOUCHUPS_R125.json",
+        "00_PAGE_FACTS_FINAL_TOUCHUPS_R125.json",
+        "00_PIPELINE_REQUEST_FINAL_TOUCHUPS_R125.json",
     })
     request_path = _request_path_from_argv(argv)
     try:
