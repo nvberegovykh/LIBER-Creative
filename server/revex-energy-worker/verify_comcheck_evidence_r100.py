@@ -7,12 +7,13 @@ from pathlib import Path
 import revex_comcheck_evidence as r100
 
 ZTEXT = '''
-Z-001.00 ZONING ANALYSIS, MAPS
+G-002.00 BC CODE ANALYSIS
 PROPOSED 4 STORY W/ PENTHOUSE
 OCCUPANCY GROUP: R-2
 SCOPE OF WORK: Proposed 4 Story with Penthouse & Cellar residential building, Occupancy Group R-2, 9 D.U.
 PROFESSIONAL STATEMENT: THESE PLANS AND SPECIFICATIONS ARE IN COMPLIANCE WITH THE 2020 NYC ENERGY CONSERVATION CODE.
-MAX BUILDING HEIGHT 55' 55'-0", see Z-003
+Table 504.3/504.4
+Building Hight above grade plane 85' 65'
 Zoning analysis Area Calculation
 Floor Level Use Group BC Gross Area Gross Area Deduction Area Ultra Low Energy Building 5% Deduction Zoning Floor Area FAR
 CELLAR FLOOR II 2455.25 SF 0 SF 0 SF 0 SF 0 SF 0.00
@@ -25,15 +26,15 @@ Totals: 12906.9 SF 10451.65 SF 1,193.25 SF 463 SF 8795 SF 2.20
 '''
 ENTEXT = 'EN-008.00 COMCHECK ENVELOPE SCHEDULE WALL W1 NORTH 1600 SF R-13 R-8 WINDOW G1 NORTH 300 SF U 0.30 SHGC 0.30 DOOR D4 NORTH 80 SF U 0.30 ROOF R1 2409 SF R-15 R-26.4 FLOOR F1 2455 SF R-13 R-8'
 
-with tempfile.TemporaryDirectory(prefix='revex-r100-comcheck-') as td:
+with tempfile.TemporaryDirectory(prefix='revex-r116-comcheck-') as td:
     root = Path(td)
-    zpdf = root / 'REVIT_PAGE_Z_Z-001.00_ZONING.pdf'; zpdf.write_bytes(b'%PDF-fixture')
+    zpdf = root / 'REVIT_PAGE_T_G-002.00_BC_CODE_ANALYSIS.pdf'; zpdf.write_bytes(b'%PDF-fixture')
     enpdf = root / 'REVIT_PAGE_EN_EN-008.00_COMCHECK.pdf'; enpdf.write_bytes(b'%PDF-fixture')
     facts = root / 'facts.json'
     facts.write_text(json.dumps({
         'structuredIdentity': {'title':'18 Example Street','address':'18 Example Street','city':'Brooklyn','state':'NY','zip':'11225'},
         'pages': [
-            {'pageType':'Z','sheetNumber':'Z-001.00','sheetName':'ZONING ANALYSIS, MAPS','sourceFile':zpdf.name,'confidence':.99,'project':{},'bulk':{}},
+            {'pageType':'T','sheetNumber':'G-002.00','sheetName':'BC CODE ANALYSIS','sourceFile':zpdf.name,'confidence':.99,'project':{},'bulk':{}},
             {'pageType':'EN','sheetNumber':'EN-008.00','sheetName':'COMCHECK','sourceFile':enpdf.name,'confidence':.99,'project':{},'envelope':[]},
         ],
     }), encoding='utf-8')
@@ -58,22 +59,31 @@ with tempfile.TemporaryDirectory(prefix='revex-r100-comcheck-') as td:
     assert sem['floorAreaFt2'] == 10451.65
     assert sem['energyCode'].lower().startswith('2020 nyc energy conservation code')
     assert sem['wholeBuildingType'] == 'MULTIFAMILY'
-    z = next(page for page in derived['pages'] if page['pageType'] == 'Z')
-    assert z['bulk']['stories'] == 4
-    assert z['bulk']['buildingHeightFt'] == 55.0
+    t = next(page for page in derived['pages'] if page['pageType'] == 'T')
+    assert t['bulk']['stories'] == 4
+    assert t['bulk']['buildingHeightFt'] == 65.0
     en = next(page for page in derived['pages'] if page['pageType'] == 'EN')
     assert len(en['envelope']) == 5
     assert r100._missing_core(derived) == []
     audit = json.loads((root / 'COMCHECK_EVIDENCE_RESOLUTION_R100.json').read_text(encoding='utf-8'))
     assert audit['status'] == 'RESOLVED'
+    assert audit['deterministic']['buildingHeightFt'] == 65.0
     assert audit['deterministic']['floorAreaFt2']['column'] == 'Gross Area'
 
+# Actual G-002 code-analysis semantics: allowable/required first, provided/proposed last.
+assert r100._extract_height("Table 504.3/504.4\nBuilding Hight above grade plane 85' 65'") == 65.0
+assert r100._extract_height("Building Height above grade plane 85'-0\" 65'-0\"") == 65.0
+# The retired fake chain must not become an authority again.
+assert r100._extract_height("MAX BUILDING HEIGHT 85' 65'") is None
 assert r100._extract_zoning_gross_area('Zoning analysis Area Calculation Gross Area Totals: 100 SF 90 SF') is None
 assert r100._extract_zoning_gross_area(ZTEXT) == 10451.65
-assert '250 MIDWOOD' not in Path(r100.__file__).read_text(encoding='utf-8').upper()
-assert '79 WINTHROP' not in Path(r100.__file__).read_text(encoding='utf-8').upper()
+source = Path(r100.__file__).read_text(encoding='utf-8').upper()
+assert '250 MIDWOOD' not in source
+assert '79 WINTHROP' not in source
 print(json.dumps({
-    'REVEX_R100_COMCHECK_EVIDENCE': 'PASSED',
+    'REVEX_R116_COMCHECK_EVIDENCE': 'PASSED',
+    'buildingHeightAuthority': 'BUILDING HEIGHT/HIGHT ABOVE GRADE PLANE + PROVIDED/PROPOSED LAST VALUE',
+    'buildingHeightFixtureFt': 65.0,
     'floorAreaSource': 'Zoning analysis Area Calculation / Gross Area / Totals',
     'qaFloor': r100.MIN_CONFIDENCE,
     'projectSpecificHardcode': False,
