@@ -22,10 +22,18 @@ jobs:
         with:
           node-version: '22'
       - run: node .github/scripts/verify-revex-r99-webview-root-cache.js
-      - name: Root cache patch is UI-only
+      - name: Root cache patch is UI-only for r99 release branches
+        shell: bash
         run: |
-          git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD | tee /tmp/r99-files.txt
-          if grep -E 'server/|src/Liber.Revex.Revit/Engineering/Energy/' /tmp/r99-files.txt; then
-            echo 'r99 root cache patch must not change worker/broker/Revit Energy code.' >&2
-            exit 1
-          fi
+          case "${GITHUB_HEAD_REF:-}" in
+            *r99*)
+              git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD | tee /tmp/r99-files.txt
+              if grep -E 'server/|src/Liber.Revex.Revit/Engineering/Energy/' /tmp/r99-files.txt; then
+                echo 'r99 root cache patch must not change worker/broker/Revit Energy code.' >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Later release ${GITHUB_HEAD_REF:-unknown}: r99 functional cache assertions still run; r99-only scope guard is not applicable."
+              ;;
+          esac
