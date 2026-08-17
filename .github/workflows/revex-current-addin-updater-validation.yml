@@ -66,6 +66,10 @@ jobs:
             'viewer-repair-r79.js',
             'energy-diagnostics-r68.js',
             'EngineeringCompanionWebBridge.cs',
+            'EngineeringScheduleEvidenceService.cs',
+            'new EngineeringScheduleEvidenceService().Export',
+            'REVIT-SCHEDULE-EVIDENCE.json',
+            'ScheduleSheetInstance',
             '$InstalledRoot = Join-Path $RevexRoot "App"',
             'App.before-current.',
             'Atomic install failed; restoring the prior add-in payload.',
@@ -79,7 +83,7 @@ jobs:
           if ($ps.Contains('PUBLISH_REVEX_R49')) { throw 'Historical publisher invocation is forbidden in the current updater.' }
           if (-not $cmd.Contains('raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/UPDATE_REVEX_ADDIN_CURRENT.ps1')) { throw 'Launcher does not self-refresh from current main.' }
           if (-not $cmd.Contains('pause >nul')) { throw 'Launcher must remain open so success/failure can be read.' }
-      - name: Verify Energy recovery launcher scope
+      - name: Verify Energy recovery launcher scope and revision semantics
         shell: powershell
         run: |
           $ps = Get-Content '.\RECOVER_REVEX_ENERGY_CURRENT.ps1' -Raw
@@ -90,8 +94,15 @@ jobs:
             'REVEX_SOURCE_CANDIDATE',
             'roles/run.invoker',
             'serviceAccount:$BrokerSa',
-            'UPDATE_REVEX_ADDIN_CURRENT.ps1'
+            'UPDATE_REVEX_ADDIN_CURRENT.ps1',
+            'function Assert-InstalledSource',
+            'function Get-LatestEngineeringRevisionState',
+            'engine-REVIT-SCHEDULE-EVIDENCE.json',
+            'predates native structured schedule evidence',
+            'fresh geometry + schedules + T/Z/EN + EPW together',
+            'Never run both Retry and SYNC ENGINEERING for the same unchanged state'
           )) { if (-not $ps.Contains($needle)) { throw "Energy recovery launcher missing: $needle" } }
+          if ($ps.Contains('do not rerun the five-minute gbXML export just to retry downstream Energy')) { throw 'Blanket no-resync instruction is forbidden after structured schedule capture was added.' }
           if (-not $cmd.Contains('raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/RECOVER_REVEX_ENERGY_CURRENT.ps1')) { throw 'Energy recovery launcher does not self-refresh from main.' }
       - name: Compile complete Revit 2026 add-in
         shell: pwsh
