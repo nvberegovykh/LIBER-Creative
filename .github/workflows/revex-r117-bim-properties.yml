@@ -1,0 +1,44 @@
+name: REVEX r117 BIM properties validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/Liber.Revex.Revit/Services/ViewerExportService.cs'
+      - 'src/Liber.Revex.Revit/Services/ViewerPropertySnapshot.cs'
+      - 'docs/liber-apps/apps/revex/bim-properties-r117.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - '.github/scripts/verify-revex-r117-bim-properties.js'
+      - '.github/workflows/revex-r117-bim-properties.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bim-properties:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: JavaScript syntax
+        run: |
+          node --check docs/liber-apps/apps/revex/bim-properties-r117.js
+          node --check docs/liber-apps/apps/revex/ui-integrity.js
+          node --check .github/scripts/verify-revex-r117-bim-properties.js
+      - name: Verify BIM property contract
+        run: node .github/scripts/verify-revex-r117-bim-properties.js
+      - name: Scope guard
+        shell: bash
+        run: |
+          git fetch origin "${{ github.base_ref }}" --deepen=200
+          changed="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
+          echo "$changed"
+          forbidden="$(printf '%s\n' "$changed" | grep -Ev '^(src/Liber.Revex.Revit/Services/ViewerExportService.cs|src/Liber.Revex.Revit/Services/ViewerPropertySnapshot.cs|docs/liber-apps/apps/revex/bim-properties-r117.js|docs/liber-apps/apps/revex/ui-integrity.js|\.github/scripts/verify-revex-r117-bim-properties.js|\.github/workflows/revex-r117-bim-properties.yml)$' || true)"
+          if [ -n "$forbidden" ]; then
+            echo 'r117 property release contains unrelated changes:'
+            echo "$forbidden"
+            exit 1
+          fi
