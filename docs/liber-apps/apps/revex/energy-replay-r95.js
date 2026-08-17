@@ -1,9 +1,8 @@
 (function(root){
   'use strict';
-  const BUILD='20260816r95-single-owner1';
+  const BUILD='20260817r114-durable-energy1';
   const HARD_STOP=0.80;
-  // One project/revision single-flight map is shared with the native managed bridge.
-  // Hosted Companion may observe/delegate, but cannot create a second execution owner.
+  const WORKER_FRESH_MS=150000;
   const active=root.__revexManagedEnergyActive instanceof Map?root.__revexManagedEnergyActive:new Map();
   root.__revexManagedEnergyActive=active;
   const runtime=root.__revexHostedEnergyRuntime||{running:false,projectId:'',revision:'',startedAt:0,owner:''};
@@ -14,6 +13,17 @@
   const sourceRevisionOf=result=>clean(result?.manifest?.sourceEngineeringRevision||result?.manifest?.sourceRevision||result?.manifest?.engineeringRevision||result?.sourceRevision);
   const resultRevisionOf=result=>clean(result?.revision||result?.manifest?.resultRevision);
   function diagnostic(level,stage,message,detail={}){try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'energy replay r95',...detail});}catch(_){} }
+  function epochMs(value){
+    try{if(typeof value?.toMillis==='function')return Number(value.toMillis())||0;if(typeof value?.toDate==='function')return Number(value.toDate()?.getTime?.())||0;}catch(_){}
+    const direct=Date.parse(String(value||''));return Number.isFinite(direct)?direct:0;
+  }
+  function workerState(job){
+    const status=clean(job?.workerStatus).toUpperCase();
+    const stage=clean(job?.workerStage);
+    const heartbeatMs=epochMs(job?.workerHeartbeatAt);
+    const fresh=status==='RUNNING'&&heartbeatMs>0&&Date.now()-heartbeatMs<=WORKER_FRESH_MS;
+    return {status,stage,heartbeatMs,fresh,failure:clean(job?.workerFailure)};
+  }
 
   function sourceValid(source){
     const manifest=source?.manifest||{},binding=manifest.projectBinding||{};
@@ -64,17 +74,27 @@
   async function followExistingJob(Store,id,revision){
     const key=`${id}:${revision}`;
     const existing=active.get(key);
-    // If the native bridge owns the in-memory execution, return that exact promise.
     if(existing&&runtime.owner!=='job-monitor')return existing;
     if(existing)return existing;
     const task=(async()=>{
       runtime.running=true;runtime.owner='job-monitor';runtime.projectId=id;runtime.revision=revision;runtime.startedAt=Date.now();setButton(true);
+      let recoveryPromise=null,lastRecoveryAt=0;
+      const recover=reason=>{
+        if(recoveryPromise||Date.now()-lastRecoveryAt<15000)return;
+        lastRecoveryAt=Date.now();
+        diagnostic('WARN','ENERGY_DURABLE_RECOVERY',`Re-entering the Energy broker to recover ${revision}: ${reason}`,{projectId:id,revision,reason});
+        recoveryPromise=Promise.resolve().then(()=>Store.runEnergyServer(id,revision)).catch(error=>{
+          diagnostic('WARN','ENERGY_DURABLE_RECOVERY_EDGE',error?.message||String(error),{projectId:id,revision,reason});
+          return null;
+        }).finally(()=>{recoveryPromise=null;});
+      };
       try{
-        for(let attempt=1;attempt<=720;attempt+=1){
+        for(let attempt=1;attempt<=900;attempt+=1){
           const job=await readJob(Store,id,revision);
-          const status=clean(job?.status).toUpperCase(),stage=clean(job?.stage),resultRevision=clean(job?.resultRevision);
+          const status=clean(job?.status).toUpperCase(),stage=clean(job?.stage),resultRevision=clean(job?.resultRevision),worker=workerState(job);
           const elapsed=Math.round((Date.now()-runtime.startedAt)/1000);
-          post('BROKER_JOB',`Published revision ${revision} · broker ${status||'WAITING'}${stage?` / ${stage}`:''} · ${elapsed}s`,status==='COMPLETE',{projectId:id,revision,jobStatus:status,jobStage:stage,resultRevision,elapsedSeconds:elapsed});
+          const workerLabel=worker.status?` · worker ${worker.status}${worker.stage?` / ${worker.stage}`:''}`:'';
+          post('BROKER_JOB',`Published revision ${revision} · broker ${status||'WAITING'}${stage?` / ${stage}`:''}${workerLabel} · ${elapsed}s`,status==='COMPLETE',{projectId:id,revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,resultRevision,elapsedSeconds:elapsed});
           if(status==='COMPLETE'){
             const result=resultRevision?await waitExactResult(Store,id,revision,resultRevision):await Store.getEnergyResult(id);
             if(!exactResult(result,id,revision,resultRevision)||clean(result?.manifest?.status).toUpperCase()!=='COMPLETE')throw new Error('Broker job completed but the exact immutable Energy result is not COMPLETE.');
@@ -82,16 +102,42 @@
             post('COMPLETE',`Energy chain complete for ${revision} as ${resultRevisionOf(result)}.`,true,{projectId:id,revision,resultRevision:resultRevisionOf(result)});
             return {ok:true,result};
           }
+          if(worker.status==='COMPLETE'){
+            post('WORKER_FINALIZING',`Energy worker completed ${revision}; finalizing the strict REVEX package through the broker…`,false,{projectId:id,revision,workerStatus:worker.status,workerStage:worker.stage});
+            recover('worker completed after callable transport loss');
+            await sleep(3000);continue;
+          }
+          if(worker.status==='RUNNING'){
+            if(worker.fresh){
+              if(status==='FAILED'||status==='INFRASTRUCTURE_FAILED')post('WORKER_RECOVERING',`Broker transport dropped, but the Energy worker is alive for ${revision}; preserving the run and waiting for the final package.`,false,{projectId:id,revision,jobStatus:status,workerStatus:worker.status,workerStage:worker.stage});
+              await sleep(5000);continue;
+            }
+            post('WORKER_LEASE_STALE',`Energy worker heartbeat became stale for ${revision}; safely reacquiring the same immutable revision.`,false,{projectId:id,revision,workerStatus:worker.status,workerStage:worker.stage});
+            recover('worker heartbeat stale');
+            await sleep(5000);continue;
+          }
+          if(worker.status==='FAILED')throw new Error(worker.failure||`Energy worker failed at ${worker.stage||'unknown stage'}.`);
           if(status==='FAILED'||status==='INFRASTRUCTURE_FAILED')throw new Error(clean(job?.error)||`Energy broker job status is ${status}.`);
           await sleep(5000);
         }
-        throw new Error('Energy broker job exceeded the one-hour managed runtime window.');
+        throw new Error('Energy job exceeded the managed recovery window without producing the final package.');
       }finally{
         runtime.running=false;runtime.owner='';setButton(false);
         if(active.get(key)===task)active.delete(key);
       }
     })();
     active.set(key,task);return task;
+  }
+
+  async function recoverTransportFailure(Store,id,revision,error){
+    const job=await readJob(Store,id,revision).catch(()=>null);if(!job)throw error;
+    const status=clean(job.status).toUpperCase(),worker=workerState(job);
+    if(worker.status==='COMPLETE'||(worker.status==='RUNNING'&&worker.fresh)||status==='RUNNING'){
+      diagnostic('WARN','ENERGY_TRANSPORT_RECOVERY',`Callable transport ended while ${revision} remains recoverable.`,{projectId:id,revision,jobStatus:status,workerStatus:worker.status,workerStage:worker.stage,originalError:error?.message||String(error)});
+      post('BROKER_REATTACH',worker.status==='COMPLETE'?`Energy worker already completed ${revision}; finalizing cached package.`:`Energy worker for ${revision} is still alive; reattached without restarting it.`,false,{projectId:id,revision,jobStatus:status,workerStatus:worker.status,workerStage:worker.stage});
+      return followExistingJob(Store,id,revision);
+    }
+    throw error;
   }
 
   async function showConsent(Store,id,revision){
@@ -123,9 +169,11 @@
         if(forcePrompt||!consent)consent=await showConsent(Store,id,revision);
         post('BROKER_STARTING',`Published Engineering revision ${revision} found. Starting its exact managed Energy chain…`,false,{projectId:id,revision,auto});
         pulse=setInterval(async()=>{
-          try{const job=await readJob(Store,id,revision),status=clean(job?.status).toUpperCase(),stage=clean(job?.stage),elapsed=Math.round((Date.now()-runtime.startedAt)/1000);post('BROKER_JOB',`Published revision ${revision} · broker ${status||'CONNECTING'}${stage?` / ${stage}`:''} · ${elapsed}s`,status==='COMPLETE',{projectId:id,revision,jobStatus:status,jobStage:stage,elapsedSeconds:elapsed});}catch(error){diagnostic('WARN','ENERGY_JOB_POLL',error?.message||String(error));}
+          try{const job=await readJob(Store,id,revision),status=clean(job?.status).toUpperCase(),stage=clean(job?.stage),worker=workerState(job),elapsed=Math.round((Date.now()-runtime.startedAt)/1000);post('BROKER_JOB',`Published revision ${revision} · broker ${status||'CONNECTING'}${stage?` / ${stage}`:''}${worker.status?` · worker ${worker.status}`:''} · ${elapsed}s`,status==='COMPLETE',{projectId:id,revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,elapsedSeconds:elapsed});}catch(error){diagnostic('WARN','ENERGY_JOB_POLL',error?.message||String(error));}
         },5000);
-        const response=await Store.runEnergyServer(id,revision),expected=clean(response?.resultRevision);
+        let response;
+        try{response=await Store.runEnergyServer(id,revision);}catch(error){return recoverTransportFailure(Store,id,revision,error);}
+        const expected=clean(response?.resultRevision);
         if(!expected)throw new Error('Energy broker completed without returning an exact resultRevision.');
         post('BROKER_PASSED',`Managed worker returned exact result ${expected}; verifying immutable result state…`,true,{projectId:id,revision,resultRevision:expected});
         const result=exactResult(response?.result,id,revision,expected)?response.result:await waitExactResult(Store,id,revision,expected);
@@ -144,8 +192,8 @@
     const source=await readSource(Store,id),revision=clean(source?.revision||source?.manifest?.revision);if(!revision)throw new Error('No published Engineering revision exists for the selected REVEX project.');
     const key=`${id}:${revision}`;
     if(active.has(key))return active.get(key);
-    const job=await readJob(Store,id,revision),status=clean(job?.status).toUpperCase();
-    if(status==='RUNNING')return followExistingJob(Store,id,revision);
+    const job=await readJob(Store,id,revision),status=clean(job?.status).toUpperCase(),worker=workerState(job);
+    if(status==='RUNNING'||worker.status==='COMPLETE'||(worker.status==='RUNNING'&&worker.fresh))return followExistingJob(Store,id,revision);
     const native=root.__revexManagedEnergyBridge;
     if(typeof native?.authorizeCurrentRevision==='function'){
       runtime.running=true;runtime.owner='native-delegate';runtime.projectId=id;runtime.revision=revision;runtime.startedAt=Date.now();setButton(true);
@@ -162,20 +210,20 @@
       const Store=await StoreReady(30000),id=projectId();if(!id)return;
       const source=await readSource(Store,id),revision=clean(source?.revision||source?.manifest?.revision);if(!revision||!sourceValid(source))return;
       const key=`${id}:${revision}`;if(active.has(key))return;
-      const job=await readJob(Store,id,revision),jobStatus=clean(job?.status).toUpperCase();
-      if(jobStatus==='RUNNING'){post('BROKER_REATTACH',`Published revision ${revision} already has a RUNNING broker job; reattaching without launching another.`,false,{projectId:id,revision});await followExistingJob(Store,id,revision);return;}
-      // Failed results are deliberately NOT auto-executed. A retry may require the user's
-      // missing project identity / EN-1 fields, so the dialog must remain under user control.
+      const job=await readJob(Store,id,revision),jobStatus=clean(job?.status).toUpperCase(),worker=workerState(job);
+      if(jobStatus==='RUNNING'||worker.status==='COMPLETE'||(worker.status==='RUNNING'&&worker.fresh)){
+        post('BROKER_REATTACH',`Published revision ${revision} has a recoverable Energy job; reattaching without a duplicate launch.`,false,{projectId:id,revision,jobStatus,workerStatus:worker.status,workerStage:worker.stage});
+        await followExistingJob(Store,id,revision);return;
+      }
       const result=await Store.getEnergyResult(id),status=clean(result?.manifest?.status).toUpperCase();
       if(status==='FAILED'&&sourceRevisionOf(result)===revision){setButton(false);post('RETRY_READY',`Published revision ${revision} is preserved. Retry opens its authorization/identity form; no Revit re-export is required.`,false,{projectId:id,revision});}
     }catch(error){diagnostic('ERROR','ENERGY_REATTACH',error?.message||String(error));}
   }
 
-  // Observe the native owner so Retry cannot become live while a fresh SYNC is still running.
   root.addEventListener('revex:managed-energy-status',event=>{
     const detail=event.detail||{},stage=clean(detail.stage).toUpperCase(),revision=clean(detail.revision),id=clean(detail.projectId||projectId());
     if(revision){runtime.revision=revision;runtime.projectId=id;}
-    if(['VALIDATING','CLOUD_UPLOAD_PASSED','CONSENT_REQUIRED','CONSENT_RECORDED','BROKER_RUNNING','BROKER_STARTING','RESULT_WAIT','BROKER_PASSED'].includes(stage)){
+    if(['VALIDATING','CLOUD_UPLOAD_PASSED','CONSENT_REQUIRED','CONSENT_RECORDED','BROKER_RUNNING','BROKER_STARTING','RESULT_WAIT','BROKER_PASSED','BROKER_REATTACH','WORKER_RECOVERING','WORKER_FINALIZING','WORKER_LEASE_STALE'].includes(stage)){
       runtime.running=true;if(!runtime.owner)runtime.owner='observed-native';setButton(true);
     }else if(['COMPLETE','BROKER_FAILED','EVIDENCE_ONLY'].includes(stage)){
       runtime.running=false;if(runtime.owner==='observed-native')runtime.owner='';setButton(false);
@@ -189,10 +237,10 @@
     void activateRetry().catch(error=>diagnostic('ERROR','ENERGY_RETRY',error?.message||String(error)));
   },true);
 
-  root.__revexHostedEnergyReplayR95={build:BUILD,activateRetry,runHosted,autoRecover,followExistingJob,exactResult};
+  root.__revexHostedEnergyReplayR95={build:BUILD,activateRetry,runHosted,autoRecover,followExistingJob,exactResult,workerState};
   const install=()=>{if(runtime.running)setButton(true);setTimeout(autoRecover,350);};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install,{once:true});else install();
   root.addEventListener('revex:energy-open',()=>setTimeout(autoRecover,150));
   root.addEventListener('revex:source-revision-loaded',()=>setTimeout(autoRecover,150));
-  console.info('[REVEX] Energy r95',{singleFlight:'shared-native-hosted',autoConsentClose:false,failedRevisionAutoRun:false,liveJobReattach:true,hardStop:HARD_STOP});
+  console.info('[REVEX] Energy r114',{singleFlight:'shared-native-hosted',durableWorkerHeartbeat:true,cachedWorkerCompletion:true,transportLossIsNotFinalFailure:true,hardStop:HARD_STOP});
 })(window);
