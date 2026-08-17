@@ -48,7 +48,7 @@ jobs:
         env:
           PYTHONPATH: server/revex-energy-worker
         run: python server/revex-energy-worker/verify_comcheck_evidence_r100.py
-      - name: Wiring, transport and no-project-hardcode contract
+      - name: Wiring, transport, commit gate and no-project-hardcode contract
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -66,6 +66,12 @@ jobs:
           assert 'ScheduleSheetInstance' in service and 'placedOnSheets' in service
           assert 'new EngineeringScheduleEvidenceService().Export' in handler
           assert 'Directory.GetFiles(source.RunFolder, "*.json"' in commit
+          assert 'ValidateStructuredScheduleEvidence(source.RunFolder)' in commit
+          assert 'liber.revex.engineering-schedule-evidence.v1' in commit
+          assert 'active-revit-document-native-schedules' in commit
+          assert 'capturedCount + failedCount != scheduleCount' in commit
+          assert 'revit-schedule-evidence' in commit
+          assert 'structuredRevitSchedules = "active-revit-document-native-schedules"' in commit
           assert '.Concat(output.EvidenceFiles' in native_bridge
           assert 'declaredArtifacts = Array.isArray(manifest.artifacts)' in store
           assert 'transferFiles = files.filter' in store and 'for (let index = 0; index < files.length; index += 1)' in store
@@ -76,20 +82,20 @@ jobs:
           assert 'revex_structured_schedule_projection' in guard
           assert 'pdfFallbackSkipped' in guard
           assert 'revex_structured_schedule_facts.py' in docker
-          combined='\n'.join((service,handler,facts,projection,guard)).upper()
+          combined='\n'.join((service,handler,commit,facts,projection,guard)).upper()
           for forbidden in ('250 MIDWOOD','79 WINTHROP','G-002.00','G-002'):
               assert forbidden not in combined, forbidden
-          print('REVEX_R102_STRUCTURED_EVIDENCE_TRANSPORT=PASSED')
+          print('REVEX_R103_STRUCTURED_EVIDENCE_COMMIT_GATE=PASSED')
           PY
       - name: Pinned GeometryCo and r49 implementation are untouched
         run: |
           changed="$(git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD)"
           if printf '%s\n' "$changed" | grep -E '^src/Liber\.Revex\.Revit/Engineering/Energy/revex_energy_pipeline\.py$'; then
-            echo 'r102 must not modify the pinned r49 implementation.' >&2
+            echo 'r103 must not modify the pinned r49 implementation.' >&2
             exit 1
           fi
           if printf '%s\n' "$changed" | grep -E '^src/Liber\.Revex\.Revit/Engineering/Energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler\.py$'; then
-            echo 'r102 must not modify GeometryCo core.' >&2
+            echo 'r103 must not modify GeometryCo core.' >&2
             exit 1
           fi
 
@@ -99,4 +105,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build exact worker image and run embedded Energy QA
-        run: docker build --progress=plain -f server/revex-energy-worker/Dockerfile -t revex-energy-worker:r102 .
+        run: docker build --progress=plain -f server/revex-energy-worker/Dockerfile -t revex-energy-worker:r103 .
