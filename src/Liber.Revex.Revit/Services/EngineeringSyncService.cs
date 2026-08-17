@@ -14,6 +14,8 @@ public sealed class EngineeringSyncService
 {
     private const double PublicationMinimum = 0.80;
     private const double QualityTarget = 0.95;
+    private const string StructuredScheduleEvidenceName = "REVIT-SCHEDULE-EVIDENCE.json";
+
     public EngineeringSyncOutput Create(GbxmlEngineeringOutput source, RevexProjectBinding binding, string weatherPath)
     {
         string projectId = binding?.ProjectId?.Trim() ?? "";
@@ -33,6 +35,7 @@ public sealed class EngineeringSyncService
             throw new InvalidOperationException("Choose a REVEX project before Energy Sync.");
         IReadOnlyDictionary<string, double> integrity = ValidatePublicationIntegrity(source);
         ValidateEnergyPageEvidence(source.RunFolder, binding);
+        ValidateStructuredScheduleEvidence(source.RunFolder);
         string resolvedWeather = ResolveWeatherFile(weatherPath, Path.GetDirectoryName(source.GbxmlPath) ?? source.OutputFolder);
         WeatherMetadata weatherMeta = ValidateWeatherFile(resolvedWeather);
         RevexDiagnostics.Dependency("ENERGY-SYNC", "Weather input (.EPW)", true,
@@ -110,6 +113,8 @@ public sealed class EngineeringSyncService
                     ? "revit-page-index"
                     : name.Equals("revit-project-identity.json", StringComparison.OrdinalIgnoreCase)
                         ? "revit-project-identity"
+                    : name.Equals("engine-" + StructuredScheduleEvidenceName, StringComparison.OrdinalIgnoreCase)
+                        ? "revit-schedule-evidence"
                     : name.StartsWith("REVIT_PAGE_", StringComparison.OrdinalIgnoreCase) && name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)
                         ? "revit-page-pdf"
                         : "engine-evidence";
@@ -144,7 +149,7 @@ public sealed class EngineeringSyncService
                 weather = new { city = weatherMeta.City, stateProvince = weatherMeta.StateProvince, country = weatherMeta.Country, dataSource = weatherMeta.DataSource, wmo = weatherMeta.Wmo, latitude = weatherMeta.Latitude, longitude = weatherMeta.Longitude, timeZone = weatherMeta.TimeZone, elevation = weatherMeta.Elevation, sourceFile = Path.GetFileName(resolvedWeather), file = Path.GetFileName(weather), sha256 = Sha256(weather) },
                 artifacts,
                 revitWrites = new { spaces = true, energyAnalysisDetailModel = true, enEnergyPlanTags = true, other = false },
-                companionProcessing = new { geometryCo = "4.3.4", baselineAndProposed = true, reports = true, en1 = true, pageScan = "managed-ai-t-z-en-revit-pages", structuredProjectIdentity = "active-revit-document-t-z-title-evidence", comcheckCurrentProjectCxl = true, comcheckConsent = "one-immutable-engineering-revision-only", projectComcheckFiling = true },
+                companionProcessing = new { geometryCo = "4.3.4", baselineAndProposed = true, reports = true, en1 = true, pageScan = "managed-ai-t-z-en-revit-pages", structuredProjectIdentity = "active-revit-document-t-z-title-evidence", structuredRevitSchedules = "active-revit-document-native-schedules", comcheckCurrentProjectCxl = true, comcheckConsent = "one-immutable-engineering-revision-only", projectComcheckFiling = true },
                 writeBackToRevitAfterExport = false,
                 pdfInsertion = false,
                 printingSetChanges = false
@@ -244,6 +249,31 @@ public sealed class EngineeringSyncService
     {
         using var stream = File.OpenRead(path);
         return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+    }
+
+    private static void ValidateStructuredScheduleEvidence(string runFolder)
+    {
+        string path = Path.Combine(runFolder, StructuredScheduleEvidenceName);
+        if (!File.Exists(path))
+            throw new InvalidOperationException("Native Revit schedule evidence was not exported with the current gbXML run. Engineering Sync was not published.");
+
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(path));
+        JsonElement root = document.RootElement;
+        string schema = root.TryGetProperty("schema", out JsonElement schemaValue) ? schemaValue.GetString() ?? "" : "";
+        string authority = root.TryGetProperty("authority", out JsonElement authorityValue) ? authorityValue.GetString() ?? "" : "";
+        if (!string.Equals(schema, "liber.revex.engineering-schedule-evidence.v1", StringComparison.Ordinal) ||
+            !string.Equals(authority, "active-revit-document-native-schedules", StringComparison.Ordinal))
+            throw new InvalidOperationException("Native Revit schedule evidence has an incompatible schema or authority. Engineering Sync was not published.");
+
+        int scheduleCount = root.TryGetProperty("scheduleCount", out JsonElement scheduleCountValue) && scheduleCountValue.TryGetInt32(out int schedules) ? schedules : 0;
+        int capturedCount = root.TryGetProperty("capturedScheduleCount", out JsonElement capturedCountValue) && capturedCountValue.TryGetInt32(out int captured) ? captured : 0;
+        int failedCount = root.TryGetProperty("failedScheduleCount", out JsonElement failedCountValue) && failedCountValue.TryGetInt32(out int failed) ? failed : 0;
+        if (capturedCount + failedCount != scheduleCount)
+            throw new InvalidOperationException("Native Revit schedule evidence counts are internally inconsistent. Engineering Sync was not published.");
+        if (failedCount > 0)
+            RevexDiagnostics.Warn("ENERGY-SCHEDULES", $"Current native schedule snapshot contains {failedCount} unreadable schedule(s); the failures are preserved in immutable evidence and downstream structured facts remain conflict/missing-safe.");
+        RevexDiagnostics.Dependency("ENERGY-SYNC", "Native Revit schedule snapshot", true,
+            $"schedules={scheduleCount}; captured={capturedCount}; failed={failedCount}; {path}");
     }
 
     private static void ValidateEnergyPageEvidence(string runFolder, RevexProjectBinding binding)
