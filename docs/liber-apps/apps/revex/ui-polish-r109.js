@@ -1,13 +1,15 @@
 (function(root){
 'use strict';
-const BUILD='20260817r109-presentation1';
+const BUILD='20260817r109-pure-ui2';
 if(root.__revexUiPolishR109)return;
-root.__revexUiPolishR109={build:BUILD,presentationOnly:true};
+root.__revexUiPolishR109={build:BUILD,presentationOnly:true,desktopParity:true};
 const byId=id=>document.getElementById(id);
 const small=()=>root.matchMedia?.('(max-width:860px)')?.matches===true;
+const viewer=()=>root.__revexViewerR26Instance||null;
 const ICON={bim:'◇',design:'✦',spec:'≡',docs:'▤',energy:'ϟ',chat:'◌',history:'↺'};
 const LABEL={bim:'BIM',design:'Design Book',spec:'Spec Book',docs:'Docs',energy:'Energy',chat:'Chat',history:'History'};
 const GUIDE_KEY='liber.revex.ui-guide.r109';
+let walkMovePointer=null,walkLookPointer=null,walkOrigin=null,walkLookLast=null,touchKeys=new Set();
 
 function injectCss(){
  if(byId('revex-r109-ui'))return;
@@ -25,8 +27,19 @@ body.revex-app{background:#090c11}
 .rail,.chapter-rail,.inspector,.docs-tree-wrap{border-color:var(--r109-line)}
 .empty-card,.design-card,.energy-card,.issue-row,.fact,.docs-group details{border-color:var(--r109-line);box-shadow:0 16px 44px rgba(0,0,0,.13)}
 .button,.tool,.tool-select,.tool-field,input,select,textarea{border-radius:8px}
+.docs-group.printing-set{border:1px solid var(--r109-line);border-radius:11px;overflow:hidden;background:rgba(255,255,255,.015)}
+.docs-group.printing-set>h3{margin:0;padding:10px 11px;border-bottom:1px solid var(--r109-line)}
+.docs-group.printing-set details{margin:7px;border:1px solid var(--r109-line);border-radius:9px;overflow:hidden;background:rgba(255,255,255,.018);box-shadow:none}
+.docs-group.printing-set summary{padding:8px 9px}
+.docs-group.printing-set .docs-node.whole{font-weight:700}
+.docs-group.printing-set .docs-node.sheet{padding-left:16px}
 #revex-r109-help{min-width:32px;width:32px;padding:0;font-size:0}
 #revex-r109-help:after{content:'?';font:700 12px/1 var(--mono)}
+#revex-r109-actions{display:none}
+#revex-r109-actions-menu[hidden]{display:none!important}
+#revex-r109-actions-menu{position:fixed;z-index:9800;top:52px;right:7px;display:grid;min-width:190px;padding:6px;border:1px solid var(--r109-line);border-radius:12px;background:rgba(12,15,21,.98);box-shadow:0 20px 70px rgba(0,0,0,.58)}
+#revex-r109-actions-menu button{min-height:39px;border:0;border-radius:8px;background:transparent;color:var(--tx-2);text-align:left;padding:0 10px;font:11px var(--mono)}
+#revex-r109-actions-menu button:hover,#revex-r109-actions-menu button:focus-visible{background:var(--r109-soft);color:var(--tx);outline:0}
 #revex-r109-guide[hidden]{display:none!important}
 #revex-r109-guide{position:fixed;z-index:9999;inset:0;display:grid;place-items:center;padding:18px;background:rgba(3,5,8,.62)}
 #revex-r109-guide-card{width:min(680px,calc(100vw - 36px));max-height:min(80dvh,680px);overflow:auto;border:1px solid rgba(255,255,255,.12);border-radius:18px;background:#11161e;box-shadow:0 30px 100px rgba(0,0,0,.65);padding:18px}
@@ -38,26 +51,46 @@ body.revex-app{background:#090c11}
 .revex-r109-guide-item b{display:block;margin-bottom:3px;font-size:11px}.revex-r109-guide-item small{color:var(--tx-3);font-size:10px;line-height:1.4}
 #revex-r109-guide-close,#revex-r109-guide-done{border:1px solid var(--r109-line);border-radius:9px;background:var(--panel-2);color:var(--tx)}
 #revex-r109-guide-close{width:32px;height:32px}#revex-r109-guide-done{width:100%;min-height:40px;margin-top:11px}
+.revex-r109-walk-touch{display:none}
 @media(max-width:860px){
  html,body,.app-shell{width:100%;max-width:100vw}
- .topbar{padding-left:max(6px,env(safe-area-inset-left));padding-right:max(6px,env(safe-area-inset-right));flex-wrap:nowrap}
- .topbar .brand{flex:0 0 54px;max-width:54px;overflow:hidden}.topbar .brand .sp-crumb{display:none}
- .topbar .project-picker{flex:1 1 0;min-width:0;max-width:none;overflow:hidden}.topbar .project-picker>span{display:none}.topbar .project-picker select{width:100%;min-width:0;max-width:100%;text-overflow:ellipsis}
+ .app-shell{min-height:100dvh;height:100dvh;grid-template-rows:auto auto minmax(0,1fr)}
+ .topbar{padding:6px max(6px,env(safe-area-inset-right)) 6px max(6px,env(safe-area-inset-left));flex-wrap:nowrap;min-height:44px}
+ .topbar #rail-toggle{flex:0 0 34px;width:34px;min-width:34px}
+ .topbar .brand{flex:0 0 50px;max-width:50px;overflow:hidden}.topbar .brand .sp-crumb{display:none}.topbar .brand strong{font-size:11px}
+ .topbar .project-picker{flex:1 1 0;min-width:0;max-width:none;overflow:hidden}.topbar .project-picker>span{display:none}.topbar .project-picker select{width:100%;min-width:0;max-width:100%;height:32px;text-overflow:ellipsis}
  .topbar #new-project-button{flex:0 0 34px;width:34px;min-width:34px;padding:0;font-size:0}.topbar #new-project-button:after{content:'+';font-size:19px}
  .topbar .sync-indicator,.topbar #sync-button,.topbar .project-id-badge{display:none!important}
- .main-nav{display:block;padding:5px 6px;overflow:hidden}
+ #revex-r109-actions{display:grid;place-items:center;flex:0 0 34px;width:34px;height:34px;padding:0;border:1px solid var(--r109-line);border-radius:9px;background:var(--panel-2);color:var(--tx);font:18px/1 var(--mono)}
+ .main-nav{display:block;padding:5px 6px;overflow:hidden;min-height:44px}
  .main-nav .revex-tabs{display:grid!important;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px;width:100%;overflow:hidden}
  .main-nav [data-view]{height:34px;min-height:34px;width:100%;padding:0!important;display:grid;place-items:center;font-size:0!important;overflow:hidden}
  .main-nav [data-view]:before{content:attr(data-r109-icon);font:15px/1 var(--mono)}
  .main-nav .nav-spacer,.main-nav .utility{display:none!important}
- .viewport-tools.viewer-controls{left:7px!important;right:7px!important;max-width:calc(100% - 14px)!important;width:auto!important;overflow:auto!important;overscroll-behavior-x:contain}
- .viewport-tools.viewer-controls .tool,.viewport-tools.viewer-controls .tool-select,.viewport-tools.viewer-controls .tool-field{flex:0 0 auto}
+ #workspace,.view{min-width:0;min-height:0;max-width:100%;overflow:hidden}
+ .viewport-tools.viewer-controls{left:7px!important;right:7px!important;top:7px!important;max-width:calc(100% - 14px)!important;width:auto!important;display:grid!important;grid-template-columns:repeat(4,32px) minmax(58px,1fr) 44px 62px!important;gap:4px!important;overflow:hidden!important;padding:4px!important}
+ .viewport-tools.viewer-controls .tool{width:32px!important;min-width:32px!important;height:30px!important;min-height:30px!important;padding:0!important;font-size:0!important}
+ .viewport-tools.viewer-controls .tool:before{content:attr(data-r109-icon);font:14px/1 var(--mono)}
+ .viewport-tools.viewer-controls .tool-select{min-width:0;width:100%;padding:0 5px;font-size:9px}
+ .viewport-tools.viewer-controls .tool-field{min-width:0;width:100%;justify-content:center;padding:0 3px;overflow:hidden}.viewport-tools.viewer-controls .tool-field span,.viewport-tools.viewer-controls .tool-field b{display:none}.viewport-tools.viewer-controls .tool-field input[type=number]{width:35px;text-align:center;padding:0}.viewport-tools.viewer-controls .tool-field input[type=range]{width:54px;min-width:0}
  .rail,.chapter-rail,.inspector,.docs-tree-wrap{min-width:0;max-width:100%}
  .design-content,.docs-toolbar,.energy-head,.chat-head,.history-head,.spec-head{padding-left:10px!important;padding-right:10px!important}
+ .docs-toolbar{display:flex!important;gap:9px!important;align-items:flex-start!important;flex-wrap:wrap!important}.docs-toolbar>div:first-child{min-width:0;flex:1 1 230px}.docs-actions{display:flex;gap:5px;flex-wrap:wrap}.docs-actions .button{min-height:32px;padding:0 8px;font-size:10px}
+ .docs-explorer{display:grid!important;grid-template-columns:1fr!important;grid-template-rows:minmax(150px,34dvh) minmax(0,1fr)!important;min-height:0!important;height:100%!important;overflow:hidden!important}
+ .docs-tree-wrap{min-height:0!important;max-height:none!important;overflow:auto!important;border-right:0!important;border-bottom:1px solid var(--r109-line)}
+ .docs-tree{min-width:0}.docs-node{min-width:0}.docs-node span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .docs-preview{min-height:0!important;overflow:hidden!important}.docs-preview-head{gap:6px;flex-wrap:wrap}.docs-preview-head>div:first-child{min-width:0;flex:1 1 180px}.docs-preview-head>div:last-child{display:flex;gap:4px}.docs-preview-head .button{min-height:30px;padding:0 7px;font-size:9px}
+ #docs-frame{width:100%!important;height:100%!important;min-height:0!important}
+ .energy-layout{grid-template-columns:1fr!important;min-width:0!important;overflow:auto!important}.energy-card{min-width:0!important}
+ .spec-frame-wrap,.chat-frame-wrap{min-width:0;min-height:0}.spec-frame-wrap iframe,.chat-frame-wrap iframe{width:100%;max-width:100%}
+ .revex-r109-walk-touch{position:absolute;z-index:23;inset:44px 0 0;display:block;pointer-events:none;touch-action:none}.revex-r109-walk-touch[hidden]{display:none!important}
+ .revex-r109-walk-look,.revex-r109-walk-move{position:absolute;left:0;right:0;pointer-events:auto;touch-action:none;user-select:none;-webkit-user-select:none}.revex-r109-walk-look{top:0;height:47%;background:linear-gradient(180deg,rgba(77,163,255,.025),transparent 60%)}.revex-r109-walk-move{bottom:0;height:53%;background:linear-gradient(0deg,rgba(8,11,16,.28),transparent 75%)}
+ .revex-r109-walk-pad{position:absolute;left:50%;top:55%;width:112px;height:112px;transform:translate(-50%,-50%);border:1px solid rgba(255,255,255,.12);border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.035) 0 42%,rgba(255,255,255,.018) 44% 69%,transparent 70%);pointer-events:none}.revex-r109-walk-pad:before,.revex-r109-walk-pad:after{content:'';position:absolute;background:rgba(255,255,255,.08)}.revex-r109-walk-pad:before{left:50%;top:12px;bottom:12px;width:1px}.revex-r109-walk-pad:after{top:50%;left:12px;right:12px;height:1px}
+ .revex-r109-walk-knob{position:absolute;left:50%;top:55%;width:44px;height:44px;transform:translate(-50%,-50%);border:1px solid rgba(132,196,255,.38);border-radius:50%;background:rgba(77,163,255,.16);box-shadow:0 8px 24px rgba(0,0,0,.28);pointer-events:none}.revex-r109-walk-caption{position:absolute;bottom:max(9px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);color:rgba(255,255,255,.42);font:8px var(--mono);letter-spacing:.12em;white-space:nowrap;pointer-events:none}
  #revex-r109-guide{align-items:end;padding:10px max(8px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left))}
  #revex-r109-guide-card{width:100%;max-width:none;border-radius:17px}#revex-r109-guide-grid{grid-template-columns:1fr 1fr}
 }
-@media(max-width:500px){#revex-r109-guide-grid{grid-template-columns:1fr}}
+@media(max-width:500px){#revex-r109-guide-grid{grid-template-columns:1fr}.viewport-tools.viewer-controls{grid-template-columns:repeat(4,30px) minmax(50px,1fr) 40px 54px!important;gap:3px!important}.viewport-tools.viewer-controls .tool{width:30px!important;min-width:30px!important}}
 `;
  document.head.appendChild(style);
 }
@@ -68,19 +101,65 @@ function annotateTabs(){
   const label=LABEL[view]||button.textContent.trim();button.setAttribute('aria-label',label);button.title=label;
  });
 }
+function annotateViewerControls(){
+ const rows={
+  'fit-model':['⌖','Fit whole model'],
+  'detail-toggle':['▱','Exact model detail'],
+  'section-toggle':['⌗','Section box'],
+  'walk-toggle':['↟','Walk']
+ };
+ for(const [id,[icon,label]] of Object.entries(rows)){const button=byId(id);if(!button)continue;button.dataset.r109Icon=icon;button.setAttribute('aria-label',label);button.title=label;}
+}
 function ensureHelp(){
  const nav=document.querySelector('.main-nav');if(!nav||byId('revex-r109-help'))return;
  const button=document.createElement('button');button.id='revex-r109-help';button.type='button';button.className='utility button ghost compact';button.setAttribute('aria-label','REVEX quick guide');button.title='Quick guide';button.addEventListener('click',()=>showGuide(false));
  const render=byId('render-button');if(render?.parentElement===nav)render.insertAdjacentElement('afterend',button);else nav.appendChild(button);
 }
+function toggleActions(force){const menu=byId('revex-r109-actions-menu'),trigger=byId('revex-r109-actions');if(!menu||!trigger)return;const open=typeof force==='boolean'?force:menu.hidden;menu.hidden=!open;trigger.setAttribute('aria-expanded',String(open));}
+function ensureMobileActions(){
+ const top=document.querySelector('.topbar');if(!top)return;
+ let trigger=byId('revex-r109-actions');if(!trigger){trigger=document.createElement('button');trigger.id='revex-r109-actions';trigger.type='button';trigger.textContent='⋯';trigger.setAttribute('aria-label','More REVEX actions');trigger.setAttribute('aria-expanded','false');top.appendChild(trigger);trigger.addEventListener('click',event=>{event.stopPropagation();toggleActions()});}
+ let menu=byId('revex-r109-actions-menu');if(menu)return;
+ menu=document.createElement('div');menu.id='revex-r109-actions-menu';menu.hidden=true;menu.innerHTML='<button type="button" data-r109-proxy="sync-button">Import sync</button><button type="button" data-r109-proxy="invite-project-button">Invite to project</button><button type="button" data-r109-proxy="render-button">Render</button><button type="button" data-r109-guide="1">Quick guide</button>';
+ document.body.appendChild(menu);
+ menu.addEventListener('click',event=>{const button=event.target.closest('button');if(!button)return;toggleActions(false);if(button.dataset.r109Guide){showGuide(false);return;}const target=byId(button.dataset.r109Proxy);if(target&&!target.disabled)target.click();});
+ document.addEventListener('click',event=>{if(menu.hidden||event.target.closest('#revex-r109-actions,#revex-r109-actions-menu'))return;toggleActions(false)},true);
+}
 function ensureGuide(){
  if(byId('revex-r109-guide'))return;
- const wrap=document.createElement('div');wrap.id='revex-r109-guide';wrap.hidden=true;wrap.innerHTML=`<section id="revex-r109-guide-card" role="dialog" aria-modal="true" aria-labelledby="revex-r109-guide-title"><header><div><h2 id="revex-r109-guide-title">REVEX Companion</h2><p>One project, coordinated BIM, Design Book, Spec Book, Docs, Energy, Chat and History.</p></div><button id="revex-r109-guide-close" type="button" aria-label="Close">×</button></header><div id="revex-r109-guide-grid"><div class="revex-r109-guide-item"><b>BIM</b><small>Inspect the current synced model. Model review does not detach from Revit.</small></div><div class="revex-r109-guide-item"><b>Design Book</b><small>Review and develop project selections attached to their source positions.</small></div><div class="revex-r109-guide-item"><b>Spec Book</b><small>Read Revit-derived schedules with authored specification data.</small></div><div class="revex-r109-guide-item"><b>Docs</b><small>Open coordinated project documents and printing sets.</small></div><div class="revex-r109-guide-item"><b>Energy</b><small>Review the managed Engineering run and filing outputs.</small></div><div class="revex-r109-guide-item"><b>History</b><small>See revision and review history without replacing source evidence.</small></div></div><button id="revex-r109-guide-done" type="button">Got it</button></section>`;
+ const wrap=document.createElement('div');wrap.id='revex-r109-guide';wrap.hidden=true;wrap.innerHTML=`<section id="revex-r109-guide-card" role="dialog" aria-modal="true" aria-labelledby="revex-r109-guide-title"><header><div><h2 id="revex-r109-guide-title">REVEX Companion</h2><p>Same project and functionality on desktop and mobile; only layout and touch controls change.</p></div><button id="revex-r109-guide-close" type="button" aria-label="Close">×</button></header><div id="revex-r109-guide-grid"><div class="revex-r109-guide-item"><b>BIM</b><small>Inspect, section, Walk, edit appearance and review the same synced model.</small></div><div class="revex-r109-guide-item"><b>Design Book</b><small>Review the same project positions and versions on every screen size.</small></div><div class="revex-r109-guide-item"><b>Spec Book</b><small>Use the same Revit-derived schedules and authored specifications.</small></div><div class="revex-r109-guide-item"><b>Docs</b><small>Each printing-set revision stays one linked group: Full Set PDF plus its real single-sheet PDFs.</small></div><div class="revex-r109-guide-item"><b>Energy</b><small>Review the same managed Engineering revision and filing outputs.</small></div><div class="revex-r109-guide-item"><b>Walk on touch</b><small>Upper half looks around; lower half moves. It drives the same viewer state as desktop Walk.</small></div></div><button id="revex-r109-guide-done" type="button">Got it</button></section>`;
  document.body.appendChild(wrap);byId('revex-r109-guide-close').onclick=()=>hideGuide(true);byId('revex-r109-guide-done').onclick=()=>hideGuide(true);wrap.addEventListener('click',e=>{if(e.target===wrap)hideGuide(true)});
 }
 function showGuide(mark){const g=byId('revex-r109-guide');if(!g)return;g.hidden=false;if(mark)try{localStorage.setItem(GUIDE_KEY,'1')}catch(_){} }
 function hideGuide(mark){const g=byId('revex-r109-guide');if(g)g.hidden=true;if(mark)try{localStorage.setItem(GUIDE_KEY,'1')}catch(_){} }
 function maybeFirstGuide(){let done=true;try{done=localStorage.getItem(GUIDE_KEY)==='1'}catch(_){}if(done)return;setTimeout(()=>{if(!document.hidden)showGuide(false)},700)}
-function start(){injectCss();annotateTabs();ensureHelp();ensureGuide();maybeFirstGuide();try{root.__revexBrowserDiagnostics?.emit?.('INFO','UI_POLISH_R109','Presentation-only REVEX UI layer installed.',{initiator:'ui polish r109',mobile:small(),logicHooks:false})}catch(_){} }
+
+function ensureWalkTouch(){
+ const wrap=document.querySelector('#view-bim .viewport-wrap');if(!wrap)return null;
+ let overlay=byId('revex-r109-walk-touch');if(overlay)return overlay;
+ overlay=document.createElement('div');overlay.id='revex-r109-walk-touch';overlay.className='revex-r109-walk-touch';overlay.hidden=true;overlay.innerHTML='<div class="revex-r109-walk-look" aria-label="Drag to look around"></div><div class="revex-r109-walk-move" aria-label="Drag to move"><div class="revex-r109-walk-pad"></div><div class="revex-r109-walk-knob"></div><div class="revex-r109-walk-caption">DRAG TO MOVE · RELEASE TO STOP</div></div>';
+ wrap.appendChild(overlay);
+ const look=overlay.querySelector('.revex-r109-walk-look'),move=overlay.querySelector('.revex-r109-walk-move');
+ look.addEventListener('pointerdown',onLookDown);look.addEventListener('pointermove',onLookMove);look.addEventListener('pointerup',onLookUp);look.addEventListener('pointercancel',onLookUp);
+ move.addEventListener('pointerdown',onMoveDown);move.addEventListener('pointermove',onMoveMove);move.addEventListener('pointerup',onMoveUp);move.addEventListener('pointercancel',onMoveUp);
+ return overlay;
+}
+function syncWalkTouch(){const v=viewer(),overlay=ensureWalkTouch();if(!overlay)return;const on=small()&&Boolean(v?.walk)&&!byId('view-bim')?.hidden;overlay.hidden=!on;if(!on)clearTouchMove();}
+function onLookDown(event){const v=viewer();if(!v?.walk)return;walkLookPointer=event.pointerId;walkLookLast=[event.clientX,event.clientY];event.currentTarget.setPointerCapture?.(event.pointerId);event.preventDefault();}
+function onLookMove(event){const v=viewer();if(!v?.walk||event.pointerId!==walkLookPointer||!walkLookLast)return;const dx=event.clientX-walkLookLast[0],dy=event.clientY-walkLookLast[1];walkLookLast=[event.clientX,event.clientY];v.yaw-=dx*.0042;v.pitch=Math.max(-1.35,Math.min(1.35,v.pitch-dy*.0034));v.look?.();v.requestRender?.();event.preventDefault();}
+function onLookUp(event){if(event.pointerId!==walkLookPointer)return;walkLookPointer=null;walkLookLast=null;event.preventDefault();}
+function setTouchKeys(next){const v=viewer();if(!v?.keys)return;for(const key of touchKeys){v.keys.delete(key);if(/^Key[A-Z]$/.test(key))v.keys.delete(key.slice(3).toLowerCase());}touchKeys=new Set(next);for(const key of touchKeys){v.keys.add(key);if(/^Key[A-Z]$/.test(key))v.keys.add(key.slice(3).toLowerCase());}if(touchKeys.size)v.startWalkFrames?.();}
+function updateKnob(dx,dy){const move=byId('revex-r109-walk-touch')?.querySelector('.revex-r109-walk-move'),knob=move?.querySelector('.revex-r109-walk-knob');if(!move||!knob)return;const max=42,len=Math.hypot(dx,dy)||1,scale=Math.min(1,max/len);knob.style.transform=`translate(calc(-50% + ${Math.round(dx*scale)}px),calc(-50% + ${Math.round(dy*scale)}px))`;}
+function onMoveDown(event){const v=viewer();if(!v?.walk)return;walkMovePointer=event.pointerId;walkOrigin=[event.clientX,event.clientY];event.currentTarget.setPointerCapture?.(event.pointerId);updateKnob(0,0);setTouchKeys([]);event.preventDefault();}
+function onMoveMove(event){if(event.pointerId!==walkMovePointer||!walkOrigin)return;const dx=event.clientX-walkOrigin[0],dy=event.clientY-walkOrigin[1],dead=10,keys=[];if(dy<-dead)keys.push('KeyW');else if(dy>dead)keys.push('KeyS');if(dx<-dead)keys.push('KeyA');else if(dx>dead)keys.push('KeyD');setTouchKeys(keys);updateKnob(dx,dy);event.preventDefault();}
+function clearTouchMove(){const v=viewer();if(v?.keys)for(const key of touchKeys){v.keys.delete(key);if(/^Key[A-Z]$/.test(key))v.keys.delete(key.slice(3).toLowerCase());}touchKeys.clear();walkMovePointer=null;walkOrigin=null;const knob=byId('revex-r109-walk-touch')?.querySelector('.revex-r109-walk-knob');if(knob)knob.style.transform='translate(-50%,-50%)';}
+function onMoveUp(event){if(event.pointerId!==walkMovePointer)return;clearTouchMove();event.preventDefault();}
+function bindResponsiveSignals(){
+ root.addEventListener('resize',()=>{syncWalkTouch();toggleActions(false)});
+ root.addEventListener('revex:viewer-host-ready',()=>setTimeout(()=>{annotateViewerControls();ensureWalkTouch();syncWalkTouch()},0));
+ root.addEventListener('revex:source-revision-loaded',()=>setTimeout(()=>{annotateViewerControls();ensureWalkTouch();syncWalkTouch()},0));
+ document.addEventListener('click',event=>{if(event.target.closest?.('#walk-toggle')||event.target.closest?.('.main-nav [data-view]'))setTimeout(syncWalkTouch,0)});
+}
+function start(){injectCss();annotateTabs();annotateViewerControls();ensureHelp();ensureMobileActions();ensureGuide();ensureWalkTouch();bindResponsiveSignals();maybeFirstGuide();syncWalkTouch();try{root.__revexBrowserDiagnostics?.emit?.('INFO','UI_POLISH_R109','Pure responsive REVEX UI installed: same desktop owners, mobile control proxies, linked Docs presentation and shared-viewer touch Walk.',{initiator:'ui polish r109',mobile:small(),desktopParity:true,mutationObservers:false,docsStateRewrite:false})}catch(_){} }
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
 })(window);
