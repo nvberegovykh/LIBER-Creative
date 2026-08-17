@@ -1,0 +1,33 @@
+name: REVEX r124 resumable publication
+
+on:
+  pull_request:
+    paths:
+      - 'src/Liber.Revex.Revit/Engineering/Energy/revex_publication_resume_r124.py'
+      - 'server/revex-energy-worker/app_entry.py'
+      - '.github/workflows/revex-r124-resumable-publication.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax
+        run: |
+          python -m py_compile src/Liber.Revex.Revit/Engineering/Energy/revex_publication_resume_r124.py
+          python -m py_compile server/revex-energy-worker/app_entry.py
+      - name: Resume contract
+        run: |
+          grep -F 'R123_SOURCE = "8fcff4ee182ff3187fb6b0e6e6bcef8821a6df9e"' src/Liber.Revex.Revit/Engineering/Energy/revex_publication_resume_r124.py
+          grep -F '"geometryCoRerun": False' src/Liber.Revex.Revit/Engineering/Energy/revex_publication_resume_r124.py
+          grep -F '"energyPlusRerun": False' src/Liber.Revex.Revit/Engineering/Energy/revex_publication_resume_r124.py
+          grep -F 'finalBytesRehashedImmediatelyBeforeUpload' src/Liber.Revex.Revit/Engineering/Energy/revex_publication_resume_r124.py
+          grep -F 'REVEX_ENERGY_RELEASE_PACKAGE.zip' src/Liber.Revex.Revit/Engineering/Energy/revex_publication_resume_r124.py
+          grep -F 'install_publication_resume(APP)' server/revex-energy-worker/app_entry.py
+      - name: Full production worker image
+        run: |
+          docker build --progress=plain \
+            -f server/revex-energy-worker/Dockerfile \
+            -t revex-r124-resumable:${{ github.sha }} \
+            .
