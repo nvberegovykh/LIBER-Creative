@@ -28,6 +28,7 @@ public static class RendairWindowManager
         _activeDocumentRuntimeId = uiapp.ActiveUIDocument?.Document.GetHashCode() ?? 0;
 
         _window = new RendairWindow(_handler, _externalEvent);
+        RevexWindowResponsivenessHotfix.Attach(_window);
         _window.Closed += (_, _) =>
         {
             _externalEvent?.Dispose();
