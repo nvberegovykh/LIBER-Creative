@@ -6,6 +6,7 @@ on:
     paths:
       - 'src/Liber.Revex.Revit/Revit/RevitRequestHandler.cs'
       - 'src/Liber.Revex.Revit/UI/RendairWindow.cs'
+      - 'src/Liber.Revex.Revit/Services/RevexWindowResponsivenessHotfix.cs'
       - 'src/Liber.Revex.Revit/Services/EngineeringCompanionWebBridge.cs'
       - '.github/scripts/verify-revex-r86-explicit-entry.js'
       - '.github/workflows/revex-r86-explicit-entry.yml'
@@ -13,9 +14,11 @@ on:
     branches:
       - main
       - 'agent/revex-r86-*'
+      - 'agent/revex-r106-*'
     paths:
       - 'src/Liber.Revex.Revit/Revit/RevitRequestHandler.cs'
       - 'src/Liber.Revex.Revit/UI/RendairWindow.cs'
+      - 'src/Liber.Revex.Revit/Services/RevexWindowResponsivenessHotfix.cs'
       - 'src/Liber.Revex.Revit/Services/EngineeringCompanionWebBridge.cs'
       - '.github/scripts/verify-revex-r86-explicit-entry.js'
       - '.github/workflows/revex-r86-explicit-entry.yml'
@@ -34,7 +37,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-      - name: Verify opening REVEX cannot queue hidden Revit work
+      - name: Verify startup is read-only and WebView host stays single-path
         shell: pwsh
         run: node .github/scripts/verify-revex-r86-explicit-entry.js
       - name: Preserve single-shot managed Energy initialization

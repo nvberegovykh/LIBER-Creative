@@ -15,23 +15,13 @@ public sealed class RevitRequestHandler : IExternalEventHandler
     {
         if (request.Kind == RevitRequestKind.ResolveActiveProjectBinding)
         {
-            // r86: project-binding discovery is never an implicit Revit action.
-            // Older window code may still issue this request on entry/document switch;
-            // satisfy its callback immediately without putting anything in Revit's
-            // ExternalEvent queue. Explicit SYNC actions resolve/verify binding inside
-            // their own user-triggered request.
-            RevexDiagnostics.Stage("REVIT", "IMPLICIT_ACTION_BLOCKED", "PASSED",
-                $"kind={request.Kind}; initiator={request.Initiator}; queueDepth={_queue.Count}; no ExternalEvent work queued");
-            try
-            {
-                request.Callback(RevitRequestResult.Fail(
-                    "Automatic project-binding probes are disabled. Choose the REVEX project explicitly; no Revit work was started."));
-            }
-            catch (Exception ex)
-            {
-                RevexDiagnostics.Error("REVIT", "Implicit-action rejection callback failed.", ex);
-            }
-            return;
+            // Read-only active-document binding recovery is safe to queue implicitly:
+            // it reads the active document fingerprint + T/Z identity and the durable
+            // REVEX binding keyed to that fingerprint. It creates no transaction and
+            // performs no Revit mutation. New/rebound projects still require an explicit
+            // user selection during SYNC.
+            RevexDiagnostics.Stage("REVIT", "READ_ONLY_BINDING_PROBE_QUEUED", "PASSED",
+                $"kind={request.Kind}; initiator={request.Initiator}; queueDepth={_queue.Count}");
         }
 
         _queue.Enqueue(request);
@@ -58,11 +48,11 @@ public sealed class RevitRequestHandler : IExternalEventHandler
             }
             else if (request.Kind == RevitRequestKind.ResolveActiveProjectBinding)
             {
-                // Defense in depth for any stale binary/request that bypasses Enqueue().
-                RevexDiagnostics.Stage("REVIT", "IMPLICIT_ACTION_BLOCKED", "PASSED",
-                    $"kind={request.Kind}; initiator={request.Initiator}; no document traversal performed");
-                result = RevitRequestResult.Fail(
-                    "Automatic project-binding probes are disabled. Choose the REVEX project explicitly; no Revit work was started.");
+                RevexDiagnostics.Info("REVIT", $"Read-only project binding probe. Document={uidoc.Document.Title}; ActiveView={uidoc.ActiveView?.Name ?? "<none>"}");
+                RevexProjectBinding binding = SettingsService.ResolveProjectBinding(uidoc.Document, candidate: null, allowRebind: false);
+                RevexDiagnostics.Stage("REVIT", "READ_ONLY_BINDING_PROBE", "PASSED",
+                    $"document={binding.DocumentTitle}; fingerprint={binding.DocumentFingerprint}; project={binding.ProjectId}; source={binding.BindingSource}; revitWrites=false");
+                result = RevitRequestResult.Bound($"Recovered the active Revit model's verified REVEX project binding: {binding.ProjectId}.", binding);
             }
             else
             {
