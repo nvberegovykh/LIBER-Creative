@@ -25,7 +25,9 @@ must(worker,'workerStatus": "FAILED"','worker must persist FAILED state');
 must(worker,'@firestore.transactional','duplicate worker launches must be transactionally lease-guarded');
 must(worker,'workerLeaseExpiresAt','worker lease expiry must be durable');
 must(worker,'return jsonify(cached), 200','completed worker response must be replayable without recomputation');
-must(worker,'return jsonify({\n                "schema": "liber.revex.energy-worker-async.v1"','fresh duplicate launch must attach, not duplicate');
+must(worker,'"schema": "liber.revex.energy-worker-async.v1"','fresh duplicate must return the durable async attachment schema');
+must(worker,'if disposition == "RUNNING"','fresh duplicate launch must branch to attachment instead of execution');
+must(worker,'}), 202','fresh duplicate attachment must be nonterminal HTTP 202');
 forbid(worker,'firestore.Client()\n    storage_client = storage.Client()\n\n    def durable_run_energy','cloud clients must not bind at module install/import time');
 must(entry,'install_durable_energy_execution(APP)','production app must install the durability wrapper');
 must(requirements,'google-cloud-firestore==','worker image must carry Firestore durability client');
@@ -53,7 +55,6 @@ must(loader,'20260817r114-durable-energy1','native live edge import must be cach
 must(ui,"energy-replay-r95.js?v=20260817r114-durable-energy1",'hosted Energy owner must be cache-broken');
 must(ui,"viewer-interaction-r85-loader.js?v=20260817r114-durable-energy1",'native Energy loader must be cache-broken');
 
-// r114 is execution-envelope-only: strict r49 package and GeometryCo policy remain present.
 for(const required of ['BASELINE_UPDATED_GEOMETRY.osm','PROPOSED_UPDATED_GEOMETRY.osm','EN-1_READY_TO_INSERT.xlsx','COMcheck_PROJECT_INPUT_READY.cxl','COMcheck_OFFICIAL_BACKSTOP_REPORT.pdf','COMcheck_BACKSTOP_RESULT.json'])must(broker,required,`strict final package output missing: ${required}`);
 must(geometry,'MINIMUM_MAPPING_CONFIDENCE = 0.75','GeometryCo 75% confidence contract must remain present');
 forbid(replay,'SYNC ENGINEERING','recovery must not instruct a new Revit sync');
