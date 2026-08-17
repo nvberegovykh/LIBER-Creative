@@ -77,9 +77,6 @@ def install_durable_energy_execution(app) -> None:
     if original is None or getattr(original, "__revex_r114_durable__", False):
         return
 
-    db = firestore.Client()
-    storage_client = storage.Client()
-
     def durable_run_energy():
         data = request.get_json(silent=True) or {}
         project_id = str(data.get("projectId") or "").strip()
@@ -89,6 +86,10 @@ def install_durable_energy_execution(app) -> None:
         if not project_id or not source_revision or not bucket_name or not output_prefix:
             return original()
 
+        # Bind cloud clients only inside the live request. Docker/import QA therefore
+        # stays credential-free while Cloud Run receives ADC through its service account.
+        db = firestore.Client()
+        storage_client = storage.Client()
         job_ref = db.document(f"projects/{project_id}/revexEnergyJobs/{source_revision}")
         bucket = storage_client.bucket(bucket_name)
         cache_path = _cache_path(output_prefix)
