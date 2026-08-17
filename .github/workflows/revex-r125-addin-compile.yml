@@ -1,0 +1,37 @@
+name: REVEX r125 Revit add-in compile
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/Liber.Revex.Revit/**'
+      - '.github/workflows/revex-r125-addin-compile.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Compile complete Revit 2026 add-in
+        shell: pwsh
+        run: |
+          dotnet restore src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -p:RevexCiRevitApi=true -p:Platform=x64
+          dotnet build src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -c Release -p:RevexCiRevitApi=true -p:Platform=x64 --no-restore
+      - name: Verify r125 schedule + gbXML source contract
+        shell: pwsh
+        run: |
+          $schedule = Get-Content 'src/Liber.Revex.Revit/Services/EngineeringScheduleEvidenceService.cs' -Raw
+          foreach ($needle in @('ShowGrandTotal','GrandTotalTitle','DisplayType')) {
+            if (-not $schedule.Contains($needle)) { throw "Missing native schedule metadata: $needle" }
+          }
+          $py = Get-Content 'src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.py' -Raw
+          foreach ($needle in @('REVEX_R125_GEOMETRY_TOUCHUPS_BEGIN','bbox-whole-door-r125','CURTAIN_PANEL_GEOMETRY_HOST_PROOF_R125','TOP_COVER_SEARCH_MAX_FT = float("inf")')) {
+            if (-not $py.Contains($needle)) { throw "Missing r125 gbXML marker: $needle" }
+          }
