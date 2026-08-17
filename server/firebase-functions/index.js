@@ -4,7 +4,6 @@ const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const { setGlobalOptions } = require('firebase-functions/v2');
 const { initializeApp } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
-const { getStorage } = require('firebase-admin/storage');
 const { GoogleAuth } = require('google-auth-library');
 const { projectAccessRole } = require('./project-access');
 
@@ -93,18 +92,61 @@ async function requireComcheckConsent(projectId, sourceRevision, uid) {
   return { ...consent, recordPath: ref.path };
 }
 
-function workerErrorDetail(error) {
+function workerErrorDetail(error, stage = 'WORKER_REQUEST') {
   const status = Number(error?.response?.status || error?.code || 0) || null;
   const body = error?.response?.data;
   const workerMessage = typeof body === 'string'
     ? body
     : String(body?.error || body?.message || error?.message || error || 'Unknown managed-worker error');
   return {
-    stage: 'WORKER_REQUEST',
+    stage,
     status,
     message: workerMessage.slice(0, 4000),
     worker: 'revex-energy-worker-r49'
   };
+}
+
+function bucketFromArtifactUrls(artifacts) {
+  const buckets = new Set();
+  for (const row of artifacts || []) {
+    const raw = String(row?.url || '').trim();
+    if (!raw) continue;
+    try {
+      const parsed = new URL(raw);
+      if (parsed.hostname === 'firebasestorage.googleapis.com') {
+        const match = parsed.pathname.match(/\/v0\/b\/([^/]+)\/o(?:\/|$)/i);
+        if (match?.[1]) buckets.add(decodeURIComponent(match[1]));
+      } else if (parsed.hostname === 'storage.googleapis.com') {
+        const bucket = parsed.pathname.split('/').filter(Boolean)[0];
+        if (bucket) buckets.add(decodeURIComponent(bucket));
+      }
+    } catch (_) {}
+  }
+  if (buckets.size > 1)
+    throw new Error(`Immutable Engineering artifacts resolve to multiple storage buckets: ${[...buckets].join(', ')}`);
+  return buckets.size === 1 ? [...buckets][0] : '';
+}
+
+function configuredStorageBucket() {
+  const explicit = String(process.env.REVEX_STORAGE_BUCKET || '').trim();
+  if (explicit) return explicit;
+  try {
+    const config = JSON.parse(String(process.env.FIREBASE_CONFIG || '{}'));
+    return String(config?.storageBucket || '').trim();
+  } catch (_) {
+    return '';
+  }
+}
+
+function resolveStorageBucket(artifacts) {
+  const artifactBucket = bucketFromArtifactUrls(artifacts);
+  const configuredBucket = configuredStorageBucket();
+  if (artifactBucket && configuredBucket && artifactBucket !== configuredBucket)
+    throw new Error(`Immutable Engineering artifact bucket ${artifactBucket} does not match configured REVEX bucket ${configuredBucket}.`);
+  const bucket = artifactBucket || configuredBucket;
+  if (!bucket)
+    throw new Error('REVEX Energy broker could not resolve the Firebase Storage bucket from the immutable Engineering artifacts or runtime configuration.');
+  return bucket;
 }
 
 exports.runRevexEnergy = onCall({ timeoutSeconds: 3600, memory: '1GiB', concurrency: 4, serviceAccount: BROKER_SERVICE_ACCOUNT }, async (request) => {
@@ -174,24 +216,29 @@ exports.runRevexEnergy = onCall({ timeoutSeconds: 3600, memory: '1GiB', concurre
     revisionSource: loadedEngineering.source, revisionRef: loadedEngineering.ref
   });
 
-  const workerUrl = String(process.env.REVEX_ENERGY_WORKER_URL || '').replace(/\/+$/, '');
-  if (!workerUrl) throw new HttpsError('internal', 'REVEX_ENERGY_WORKER_URL is not configured.');
-  const bucketName = getStorage().bucket().name;
   const outputPrefix = `projects/${projectId}/revex/energy/server-results/${sourceRevision}`;
   const jobRef = db.doc(`projects/${projectId}/revexEnergyJobs/${sourceRevision}`);
   await jobRef.set({
     schema: 'liber.revex.energy-job.v1', projectId, sourceRevision, status: 'RUNNING',
     startedAt: FieldValue.serverTimestamp(), requestedBy: uid,
     worker: 'managed-openstudio-3.10', clientBuild: String(data.clientBuild || ''),
-    correlationId, stage: 'WORKER_REQUEST',
+    correlationId, stage: 'BROKER_PREPARE',
     comcheckConsent: {
       schema: comcheckConsent.schema, service: comcheckConsent.service, endpoint: comcheckConsent.endpoint,
       scope: comcheckConsent.scope, approvedAt: comcheckConsent.approvedAt, approvedByUid: uid
     }
   }, { merge: true });
 
+  let failureStage = 'BROKER_PREPARE';
   try {
-    brokerLog('WORKER_REQUEST_STARTED', { correlationId, projectId, sourceRevision, workerUrl });
+    const workerUrl = String(process.env.REVEX_ENERGY_WORKER_URL || '').replace(/\/+$/, '');
+    if (!workerUrl) throw new Error('REVEX_ENERGY_WORKER_URL is not configured.');
+    const bucketName = resolveStorageBucket(artifacts);
+    brokerLog('STORAGE_BUCKET_RESOLVED', { correlationId, projectId, sourceRevision, bucketName, source: bucketFromArtifactUrls(artifacts) ? 'immutable-artifact-url' : 'runtime-config' });
+    failureStage = 'WORKER_REQUEST';
+    await jobRef.set({ stage: failureStage, storageBucket: bucketName, workerUrl }, { merge: true });
+
+    brokerLog('WORKER_REQUEST_STARTED', { correlationId, projectId, sourceRevision, workerUrl, bucketName });
     const googleAuth = new GoogleAuth();
     const client = await googleAuth.getIdTokenClient(workerUrl);
     const response = await client.request({
@@ -282,7 +329,7 @@ exports.runRevexEnergy = onCall({ timeoutSeconds: 3600, memory: '1GiB', concurre
     brokerLog('RESULT_PUBLISHED', { correlationId, projectId, sourceRevision, resultRevision, status: resultManifest.status || body.status || 'UNKNOWN', workerSourceCandidate });
     return { ok: true, status: resultManifest.status || body.status || 'UNKNOWN', sourceRevision, resultRevision, error: resultManifest.error || body.error || null };
   } catch (error) {
-    const detail = workerErrorDetail(error);
+    const detail = workerErrorDetail(error, failureStage);
     console.error('[REVEX ENERGY BROKER]', JSON.stringify({ correlationId, projectId, sourceRevision, ...detail }), error);
     await jobRef.set({
       status: 'INFRASTRUCTURE_FAILED', finishedAt: FieldValue.serverTimestamp(),
