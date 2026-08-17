@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import json, tempfile
+import json, os, tempfile
 from pathlib import Path
 import revex_reference_envelope_projection_r118 as ref
 import revex_energy_pipeline_guard_r118 as guard
@@ -8,7 +8,22 @@ import revex_energy_pipeline_guard_r118 as guard
 # Use the exact production r118 normalizers.
 ref._osm_fields = guard._osm_fields_without_comments
 ref._has_existing_match = guard._exact_thermal_match_only
-reference = Path(__file__).resolve().parents[2] / "src/Liber.Revex.Revit/Engineering/Energy/References/79_WINTHROP_APPROVED_PROPOSED.osm"
+
+# IMPORTANT: exercise the production resolver itself. The previous verifier rebuilt
+# a source-checkout path and therefore passed locally while failing inside the worker
+# image. If Docker supplies an explicit packaged reference, it must resolve to that
+# exact file; otherwise the local/CI source checkout path is acceptable.
+reference = ref._reference_path()
+configured = str(os.environ.get("REVEX_APPROVED_ENVELOPE_REFERENCE") or "").strip()
+if configured:
+    expected = Path(configured).resolve()
+    assert reference == expected, (reference, expected)
+    assert expected.is_file(), expected
+if Path("/opt/revex").is_dir():
+    expected_packaged = Path("/opt/revex/energy/References/79_WINTHROP_APPROVED_PROPOSED.osm")
+    assert reference == expected_packaged, (reference, expected_packaged)
+    assert reference.is_file(), reference
+
 profiles = ref._approved_profiles(reference)
 for kind, construction in (("window","WIN_EXT_TRIPLE_LOW_E"),("door","DOOR_EXT")):
     p=profiles[kind]
@@ -41,4 +56,12 @@ with tempfile.TemporaryDirectory() as td:
 
 source=Path(__file__).with_name("revex_reference_envelope_projection_r118.py").read_text()
 assert "250_Midwood_Street" not in source and "COMcheck_250_MIDWOOD" not in source
-print(json.dumps({"REVEX_R118_REFERENCE_ENVELOPE":"PASSED","reference":reference.name,"U":.30,"SHGC":.30,"VT":.45,"resolvedCodes":sorted(windows+doors),"currentGeometryPreserved":True,"currentProjectCxlNotThermalAuthority":True}))
+print(json.dumps({
+    "REVEX_R118_REFERENCE_ENVELOPE":"PASSED",
+    "reference":str(reference),
+    "productionPackagedPath":str(reference).replace("\\","/").endswith("/opt/revex/energy/References/79_WINTHROP_APPROVED_PROPOSED.osm") if Path("/opt/revex").is_dir() else None,
+    "U":.30,"SHGC":.30,"VT":.45,
+    "resolvedCodes":sorted(windows+doors),
+    "currentGeometryPreserved":True,
+    "currentProjectCxlNotThermalAuthority":True
+}))
