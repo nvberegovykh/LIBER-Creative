@@ -6,8 +6,18 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 3.0
 $Stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$RevexRoot = Join-Path $env:LOCALAPPDATA "LIBER\REVEX"
-$LogRoot = Join-Path $RevexRoot "Logs"
+$RevexInstallRoot = Join-Path $env:LOCALAPPDATA "LIBER\REVEX"
+$RequestedDataRoot = ([string]$env:REVEX_DATA_ROOT).Trim()
+if ($RequestedDataRoot) {
+  $ExpandedDataRoot = [Environment]::ExpandEnvironmentVariables($RequestedDataRoot)
+  if (-not [System.IO.Path]::IsPathFullyQualified($ExpandedDataRoot)) {
+    throw "REVEX_DATA_ROOT must be an absolute path."
+  }
+  $RevexDataRoot = [System.IO.Path]::GetFullPath($ExpandedDataRoot)
+} else {
+  $RevexDataRoot = $RevexInstallRoot
+}
+$LogRoot = Join-Path $RevexDataRoot "Logs"
 $LogPath = Join-Path $LogRoot ("RECOVER_REVEX_ENERGY_CURRENT." + $Stamp + ".log")
 $LatestLogPath = Join-Path $LogRoot "RECOVER_REVEX_ENERGY_CURRENT.latest.log"
 $DeployScript = Join-Path $env:TEMP ("REVEX-ENERGY-DEPLOY-" + [guid]::NewGuid().ToString("N") + ".ps1")
@@ -63,7 +73,7 @@ function Read-WorkerEnv([object]$Worker, [string]$Name) {
 }
 
 function Get-LatestEngineeringRevisionState {
-  $root = Join-Path $RevexRoot "Engineering\Sync\revisions"
+  $root = Join-Path $RevexDataRoot "Engineering\Sync\revisions"
   if (-not (Test-Path -LiteralPath $root -PathType Container)) {
     return [pscustomobject]@{ Revision = ""; Folder = ""; StructuredSchedules = $false }
   }
@@ -77,7 +87,7 @@ function Get-LatestEngineeringRevisionState {
 }
 
 function Assert-InstalledSource([string]$ExpectedSha) {
-  $markerPath = Join-Path $RevexRoot "App\REVEX-CURRENT-SOURCE.json"
+  $markerPath = Join-Path $RevexInstallRoot "App\REVEX-CURRENT-SOURCE.json"
   if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
     throw "The updated add-in has no REVEX-CURRENT-SOURCE.json marker. Worker/add-in source equality cannot be proven."
   }
@@ -97,6 +107,7 @@ try {
 
   Write-Host "REVEX Energy single-shot recovery" -ForegroundColor Cyan
   Write-Host "Log: $LogPath"
+  Write-Host "Data root: $RevexDataRoot"
   Write-Host "Scope: current Energy worker + broker, exact broker/worker IAM verification, then current add-in only. Renderer is untouched."
 
   $GCloud = Require-Command @("gcloud.cmd", "gcloud.exe", "gcloud") "Google Cloud CLI"
