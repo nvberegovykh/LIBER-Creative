@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260817r110-responsive1';
+  const BUILD='20260817r113-live-fix1';
   const REVEX_R87_REPLAY_CONTRACT='energy-diagnostics-r68.js?v=20260816r87-energy-replay1';
   const REVEX_R87_REPLAY_LABEL="energyDiagnostics:'revision-scoped-replay-r87'";
   const REVEX_R92_REPLAY_COMPAT='energy-replay-r92.js?v=20260816r92-hosted-replay1';
@@ -60,8 +60,9 @@
     loadScript('companion-runtime-r75.js?v=20260816r75-companion1','companion-runtime-r75');
     loadScript('viewer-interaction-r85-loader.js?v=20260816r98-live-edge2','viewer-interaction-r85-loader');
     loadScript('ui-polish-r109.js?v=20260817r110-responsive1','ui-polish-r109');
+    loadScript('docs-presentation-r113.js?v=20260817r113-docs1','docs-presentation-r113');
   }
   function bind(){installCanonicalOverlayStore();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'single-native-hosted-flight+manual-revision-authorization+live-job-reattach',moduleLoad:'after-import-map',liveWorkerEdge:'r97-exact-job-recovery',ui:'r110-responsive',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'single-native-hosted-flight+manual-revision-authorization+live-job-reattach',moduleLoad:'after-import-map',liveWorkerEdge:'r97-exact-job-recovery',ui:'r110-responsive',docs:'r113-one-visible-revision-per-set',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
 })(window);
