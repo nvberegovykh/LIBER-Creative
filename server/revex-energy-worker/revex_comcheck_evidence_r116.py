@@ -26,25 +26,30 @@ def _last_height_value(window: str) -> float | None:
     return float(values[-1]) if values else None
 
 
+def _unambiguous(values: list[float]) -> float | None:
+    if not values:
+        return None
+    rounded = {round(float(value), 3) for value in values}
+    return float(next(iter(rounded))) if len(rounded) == 1 else None
+
+
 def _provided_height_above_grade_plane(text: str) -> float | None:
-    """Return only an unambiguous actual/provided height-above-grade-plane value.
+    """Return only an unambiguous PROVIDED/PROPOSED height above grade plane.
 
-    Typical visible row semantics are:
+    Visible code-analysis semantics:
         Building Hight above grade plane | 85' | 65'
-    where the first value is permitted/maximum and the last value is the
-    provided/proposed building. Energy/COMcheck therefore needs 65 ft.
+    The first value is allowable/required; the final value is the project's
+    provided/proposed building height. Therefore the example resolves to 65 ft.
 
-    Each independently visible matching row is isolated before taking its final
-    feet value. If two actual-height rows disagree, the fallback fails closed.
-    Zoning phrases such as MAX BUILDING HEIGHT are never treated as actual height.
+    Intact extracted rows are authoritative for this fallback. Flattened-window
+    parsing is used only when the PDF extractor did not preserve usable rows. This
+    prevents a second matching row from contaminating the first and guarantees that
+    conflicting current rows fail closed instead of silently selecting one.
     """
     raw = str(text or "")
-    candidates: list[float] = []
-
-    # First use intact PDF text rows. Never allow the next matching height row to
-    # contaminate this row's provided value; this was the source of the old 67-ft
-    # false agreement when two different rows appeared consecutively.
     lines = [line for line in raw.splitlines() if line.strip()]
+    row_candidates: list[float] = []
+
     for index, line in enumerate(lines):
         flattened = base._flat(line)
         if not HEIGHT_ROW.search(flattened):
@@ -59,13 +64,17 @@ def _provided_height_above_grade_plane(text: str) -> float | None:
                 continuation.append(following)
             value = _last_height_value(" ".join(continuation))
         if value is not None:
-            candidates.append(value)
+            row_candidates.append(value)
 
-    # Some PDF extractors flatten merged Revit schedule cells. Isolate every exact
-    # row occurrence by the next exact row label (or a short section boundary), so
-    # repeated/conflicting rows remain independently testable rather than collapsing.
+    # When intact matching rows were recovered, resolve only those rows. Two rows
+    # that say 65 and 67 are a real current-evidence conflict and must return None.
+    if row_candidates:
+        return _unambiguous(row_candidates)
+
+    # Fallback for PDF text where Revit table cells were flattened into one stream.
     source = base._flat(raw)
     matches = list(HEIGHT_ROW.finditer(source))
+    flat_candidates: list[float] = []
     for index, match in enumerate(matches):
         stop = min(len(source), match.start() + 220)
         if index + 1 < len(matches):
@@ -76,12 +85,8 @@ def _provided_height_above_grade_plane(text: str) -> float | None:
             window = window[:boundary.start() + 1]
         value = _last_height_value(window)
         if value is not None:
-            candidates.append(value)
-
-    if not candidates:
-        return None
-    rounded = {round(float(value), 3) for value in candidates}
-    return float(next(iter(rounded))) if len(rounded) == 1 else None
+            flat_candidates.append(value)
+    return _unambiguous(flat_candidates)
 
 
 def resolve_request(
