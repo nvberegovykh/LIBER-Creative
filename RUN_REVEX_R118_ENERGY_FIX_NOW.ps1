@@ -5,7 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 3.0
-$EnergySource = "811d1e8039db26a4221112041df7b8d8eb58d9c1"
+$EnergySource = "f34c3ae43303a682de4a58b5a603ec25f0ce1570"
 $Revision = "eng_20260817T032812010Z"
 $Repo = "https://github.com/nvberegovykh/LIBER-Creative.git"
 $Work = Join-Path $env:TEMP ("REVEX-R118-" + [guid]::NewGuid().ToString("N"))
@@ -69,7 +69,7 @@ try {
   $env:REVEX_FIREBASE_AUTH_VERIFIED = "1"
 
   New-Item -ItemType Directory -Path $Work -Force | Out-Null
-  Write-Host ">> Fetch exact r118 Energy source" -ForegroundColor DarkCyan
+  Write-Host ">> Fetch exact r118 Energy source + argv hotfix" -ForegroundColor DarkCyan
   if ((Invoke-Native $Git @("init",$Source) -Quiet) -ne 0) { throw "git init failed." }
   if ((Invoke-Native $Git @("-C",$Source,"remote","add","origin",$Repo) -Quiet) -ne 0) { throw "git remote failed." }
   if ((Invoke-Native $Git @("-C",$Source,"fetch","--depth","1","origin",$EnergySource)) -ne 0) { throw "Exact r118 source fetch failed." }
@@ -78,8 +78,8 @@ try {
   if ($checked.Text.ToLowerInvariant() -ne $EnergySource) { throw "Exact-source checkout mismatch: $($checked.Text)" }
 
   Write-Host ">> Deploy r118 Energy worker + authenticated broker" -ForegroundColor DarkCyan
-  $deploy = Join-Path $Source "server\revex-energy-worker\DEPLOY_ENERGY_CURRENT.ps1"
-  if (-not (Test-Path -LiteralPath $deploy -PathType Leaf)) { throw "r118 Energy deployment primitive is missing." }
+  $deploy = Join-Path $Source "server\revex-energy-worker\DEPLOY_ENERGY_CURRENT_ARGV_FIX.ps1"
+  if (-not (Test-Path -LiteralPath $deploy -PathType Leaf)) { throw "argv-safe r118 Energy deployment primitive is missing." }
   $code = Invoke-Native "powershell.exe" @("-NoProfile","-ExecutionPolicy","Bypass","-File",$deploy,"-ProjectId",$ProjectId,"-Region",$Region,"-SourceCandidate",$EnergySource,"-NoPause")
   if ($code -ne 0) { throw "r118 Energy deployment failed with exit code $code." }
 
