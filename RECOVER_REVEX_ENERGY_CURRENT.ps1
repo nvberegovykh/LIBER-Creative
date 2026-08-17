@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 3.0
 
-$SourceCandidate = "1b9940d533ab83882fdfb1de9eef3d67c233b0e2"
+$SourceCandidate = "a6b8fde4a1eebf375110704a4da572ab71f6619d"
 $Revision = "eng_20260817T032812010Z"
 $Repo = "https://github.com/nvberegovykh/LIBER-Creative.git"
 $Work = Join-Path $env:TEMP ("REVEX-R118-RECOVERY-" + [guid]::NewGuid().ToString("N"))
@@ -45,7 +45,7 @@ function Capture-Native([string]$Command, [string[]]$Arguments) {
 }
 
 try {
-  Write-Host "REVEX r118 Energy recovery" -ForegroundColor Cyan
+  Write-Host "REVEX r118 Energy recovery - production-path final" -ForegroundColor Cyan
   Write-Host "Fixed source: $SourceCandidate"
   Write-Host "Preserved revision: $Revision"
   Write-Host "Scope: Energy worker + authenticated broker only. No Revit sync. No add-in replacement. No BIM/Docs/Render mutation." -ForegroundColor Green
@@ -75,7 +75,7 @@ try {
   if ((Invoke-Native $Git @("init", $Source) -Quiet) -ne 0) { throw "git init failed." }
   if ((Invoke-Native $Git @("-C", $Source, "remote", "add", "origin", $Repo) -Quiet) -ne 0) { throw "git remote failed." }
 
-  Write-Host ">> Fetch exact fixed Energy source" -ForegroundColor DarkCyan
+  Write-Host ">> Fetch exact production-path-final Energy source" -ForegroundColor DarkCyan
   if ((Invoke-Native $Git @("-C", $Source, "fetch", "--depth", "1", "origin", $SourceCandidate)) -ne 0) { throw "Exact fixed Energy source fetch failed." }
   if ((Invoke-Native $Git @("-C", $Source, "checkout", "--detach", "FETCH_HEAD") -Quiet) -ne 0) { throw "Exact fixed Energy checkout failed." }
   $checked = Capture-Native $Git @("-C", $Source, "rev-parse", "HEAD")
@@ -84,7 +84,7 @@ try {
   $deploy = Join-Path $Source "server\revex-energy-worker\DEPLOY_ENERGY_CURRENT_ARGV_FIX.ps1"
   if (-not (Test-Path -LiteralPath $deploy -PathType Leaf)) { throw "Fixed Energy deployer is missing." }
 
-  Write-Host ">> Deploy fixed Energy worker + broker" -ForegroundColor DarkCyan
+  Write-Host ">> Deploy exact Energy worker + broker" -ForegroundColor DarkCyan
   $code = Invoke-Native "powershell.exe" @(
     "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $deploy,
     "-ProjectId", $ProjectId,
