@@ -1,0 +1,66 @@
+name: REVEX r125 final Energy touchups
+
+on:
+  pull_request:
+    paths:
+      - 'src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups_r125.py'
+      - 'src/Liber.Revex.Revit/Engineering/Energy/verify_revex_r125_touchups.py'
+      - 'server/revex-energy-worker/revex_energy_pipeline_guard_r118.py'
+      - 'server/revex-energy-worker/app_entry.py'
+      - '.github/workflows/revex-r125-final-touchups.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax
+        run: |
+          python -m py_compile \
+            src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups_r125.py \
+            src/Liber.Revex.Revit/Engineering/Energy/verify_revex_r125_touchups.py \
+            server/revex-energy-worker/revex_energy_pipeline_guard_r118.py \
+            server/revex-energy-worker/app_entry.py
+
+      - name: Native total, VT and compact-label regression
+        working-directory: src/Liber.Revex.Revit/Engineering/Energy
+        run: python verify_revex_r125_touchups.py
+
+      - name: Resumable publication preserved
+        run: |
+          grep -F 'install_worker_touchups()' server/revex-energy-worker/app_entry.py
+          grep -F 'install_publication_resume(APP)' server/revex-energy-worker/app_entry.py
+          grep -F 'install_durable_energy_execution(APP)' server/revex-energy-worker/app_entry.py
+          grep -F 'PUBLICATION_RESUME_REUSE_VERIFIED' src/Liber.Revex.Revit/Engineering/Energy/revex_publication_resume_r124.py
+          grep -F 'finalBytesRehashedImmediatelyBeforeUpload' src/Liber.Revex.Revit/Engineering/Energy/revex_publication_resume_r124.py
+
+      - name: Scope guard
+        shell: bash
+        run: |
+          BASE_SHA='${{ github.event.pull_request.base.sha }}'
+          if [ -z "$BASE_SHA" ]; then BASE_SHA="$(git rev-parse HEAD^)"; fi
+          git fetch origin "$BASE_SHA" --depth=1 || true
+          changed="$(git diff --name-only "$BASE_SHA" HEAD)"
+          echo "$changed"
+          forbidden="$(printf '%s\n' "$changed" | grep -Ev '^(src/Liber\.Revex\.Revit/Engineering/Energy/(revex_final_touchups_r125\.py|verify_revex_r125_touchups\.py)|server/revex-energy-worker/(revex_energy_pipeline_guard_r118\.py|app_entry\.py)|\.github/workflows/revex-r125-final-touchups\.yml)$' || true)"
+          if [ -n "$forbidden" ]; then
+            echo 'r125 contains unrelated changes:'
+            echo "$forbidden"
+            exit 1
+          fi
+
+      - name: Full production worker image
+        run: |
+          docker build --progress=plain \
+            -f server/revex-energy-worker/Dockerfile \
+            -t revex-r125-final-touchups:${{ github.sha }} \
+            .
+
+      - name: Production-image r125 regression including EN-1 LibreOffice
+        run: |
+          docker run --rm \
+            -e PYTHONPATH=/opt/revex/energy:/opt/revex/server \
+            revex-r125-final-touchups:${{ github.sha }} \
+            python3 /opt/revex/energy/verify_revex_r125_touchups.py
