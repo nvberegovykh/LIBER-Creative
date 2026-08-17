@@ -1,4 +1,4 @@
-/* REVEX r54 self-hosted renderer overlay.
+/* REVEX self-hosted renderer overlay.
  * Default path: existing LIBER/Firebase session -> private broker -> private GPU.
  * No Hugging Face account, model token, Google AI popup, or browser inference.
  * Gemini remains an explicit fallback handled by render-agent.js.
@@ -6,13 +6,13 @@
 (function (root) {
   'use strict';
 
-  const BUILD = '20260816r54-selfhost-render1';
+  const BUILD = '20260817r110-selfhost-render2';
   const MODEL = 'Qwen/Qwen-Image-Edit-2511';
   const MODEL_REVISION = '6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9';
   const Store = root.RevexStore;
   const state = root.__revexState;
   const $ = (selector, base = document) => base.querySelector(selector);
-  const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[char]));
+  const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;' }[char]));
   let running = false;
   let allowGoogleOnce = false;
   let activeJob = null;
@@ -21,7 +21,7 @@
   let unsubscribeJob = null;
 
   const diagnostic = (level, stage, message, detail = {}) => {
-    try { root.__revexBrowserDiagnostics?.emit?.(level, stage, message, { initiator: 'self-host render r54', ...detail }); } catch (_) {}
+    try { root.__revexBrowserDiagnostics?.emit?.(level, stage, message, { initiator: 'self-host render r110', ...detail }); } catch (_) {}
   };
 
   function toast(message, bad = false) {
@@ -148,13 +148,8 @@
     resultObjectUrl = URL.createObjectURL(blob);
     const stage = $('#render-ai-stage');
     if (!stage) return;
-    stage.innerHTML = `<div class="render-ai-compare">
-      ${sourceUrl ? `<img class="render-ai-source" src="${esc(sourceUrl)}" alt="REVEX viewport source" />` : ''}
-      <img class="render-ai-result" src="${esc(resultObjectUrl)}" alt="REVEX self-hosted architectural render" />
-    </div>
-    <div class="render-ai-stage-tools"><button id="render-selfhost-source" type="button">Hold source</button><button id="render-selfhost-save" type="button">Save to Design Book</button></div>`;
-    const generated = $('.render-ai-result', stage);
-    const source = $('.render-ai-source', stage);
+    stage.innerHTML = `<div class="render-ai-compare">${sourceUrl ? `<img class="render-ai-source" src="${esc(sourceUrl)}" alt="REVEX viewport source" />` : ''}<img class="render-ai-result" src="${esc(resultObjectUrl)}" alt="REVEX self-hosted architectural render" /></div><div class="render-ai-stage-tools"><button id="render-selfhost-source" type="button">Hold source</button><button id="render-selfhost-save" type="button">Save to Design Book</button></div>`;
+    const generated = $('.render-ai-result', stage), source = $('.render-ai-source', stage);
     const compare = (on) => { if (generated) generated.style.opacity = on ? '0' : '1'; if (source) source.style.opacity = '1'; };
     $('#render-selfhost-source', stage)?.addEventListener('pointerdown', () => compare(true));
     $('#render-selfhost-source', stage)?.addEventListener('pointerup', () => compare(false));
@@ -224,15 +219,12 @@
         settings: { resolution, preserveGeometry: true, asynchronousClient: true },
         status: 'queued'
       });
+      if (!activeJob?.id) throw new Error('REVEX could not create the project render job.');
       subscribeJob(state.projectId, activeJob.id);
       diagnostic('INFO', 'SELFHOST_RENDER_QUEUED', 'Private REVEX render queued.', { projectId: state.projectId, jobId: activeJob.id, resolution });
       const result = await callBroker({
-        schema: 'liber.revex.render-broker-request.v1',
-        projectId: state.projectId,
-        jobId: activeJob.id,
-        sourceImageDataUrl,
-        prompt,
-        seed: Math.floor(Math.random() * 0x7fffffff),
+        schema: 'liber.revex.render-broker-request.v1', projectId: state.projectId, jobId: activeJob.id,
+        sourceImageDataUrl, prompt, seed: Math.floor(Math.random() * 0x7fffffff),
         settings: { resolution, preserveGeometry: true, sourceRevision: reference.sourceRevision || state.cloudState?.revision || null }
       });
       if (!result?.ok || !result?.resultUrl) throw new Error(result?.message || result?.error || 'REVEX GPU worker returned no render.');
@@ -248,11 +240,7 @@
       diagnostic('ERROR', 'SELFHOST_RENDER_FAILED', message, { projectId: state.projectId, jobId: activeJob?.id || null });
       const host = $('#render-agent-messages');
       if (host) {
-        const row = document.createElement('div');
-        row.className = 'render-agent-message tool error';
-        row.innerHTML = `<div class="render-agent-message-body">${esc(message)}<br><button id="revex-fallback-inline" type="button">Use Google fallback</button></div>`;
-        host.appendChild(row);
-        $('#revex-fallback-inline', row)?.addEventListener('click', useGoogleFallback);
+        const row = document.createElement('div');row.className = 'render-agent-message tool error';row.innerHTML = `<div class="render-agent-message-body">${esc(message)}<br><button id="revex-fallback-inline" type="button">Use Google fallback</button></div>`;host.appendChild(row);$('#revex-fallback-inline', row)?.addEventListener('click', useGoogleFallback);
       }
     } finally {
       running = false;
@@ -263,76 +251,58 @@
   }
 
   function useGoogleFallback(event) {
-    event?.preventDefault?.();
-    event?.stopPropagation?.();
-    allowGoogleOnce = true;
-    const hiddenResolution = $('#google-ai-resolution');
-    const selfResolution = $('#revex-selfhost-resolution')?.value || '1K';
-    if (hiddenResolution) hiddenResolution.value = selfResolution;
-    $('#render-google-generate')?.click();
+    event?.preventDefault?.();event?.stopPropagation?.();allowGoogleOnce = true;
+    const hiddenResolution = $('#google-ai-resolution');const selfResolution = $('#revex-selfhost-resolution')?.value || '1K';if (hiddenResolution) hiddenResolution.value = selfResolution;$('#render-google-generate')?.click();
   }
 
   function decorate() {
-    const dialog = $('#render-dialog');
-    const panel = $('#render-agent-panel');
-    if (!dialog || !panel) return;
+    const dialog = $('#render-dialog'), panel = $('#render-agent-panel');
+    if (!dialog || !panel) return false;
     dialog.classList.add('revex-selfhost-render');
     const eyebrow = $('.render-head .eyebrow', dialog); if (eyebrow) eyebrow.textContent = 'REVEX PRIVATE GPU + PUBLIC QWEN';
     const title = $('#render-dialog-title', dialog); if (title) title.textContent = 'REVEX Render';
     const head = $('.render-workspace-head strong', dialog); if (head) head.textContent = 'REVEX Render Engine';
-    const chip = $('#render-agent-capability');
-    if (chip) { chip.textContent = 'REVEX GPU · no extra login'; chip.dataset.tone = 'good'; }
+    const chip = $('#render-agent-capability');if (chip) { chip.textContent = 'REVEX GPU · no extra login'; chip.dataset.tone = 'good'; }
     const panelTitle = $('.render-agent-head strong', panel); if (panelTitle) panelTitle.textContent = 'REVEX AI Render';
     const panelSub = $('.render-agent-head span:not(.render-agent-chip)', panel); if (panelSub) panelSub.textContent = 'off-device · geometry locked';
-
     const googleConfig = $('.render-google-config', panel);
     if (googleConfig && !googleConfig.dataset.selfhosted) {
-      const priorResolution = $('#google-ai-resolution')?.value || '1K';
-      googleConfig.dataset.selfhosted = '1';
-      googleConfig.innerHTML = `<div class="render-selfhost-runtime"><strong>Qwen Image Edit 2511</strong><span>private Cloud Run GPU · pinned public Apache-2.0 model · no Hugging Face login</span></div>
-        <label>Output<select id="revex-selfhost-resolution"><option value="1K">1K · fastest</option><option value="2K">2K · review</option><option value="4K">4K · final</option></select></label>
-        <select id="google-ai-resolution" hidden><option value="1K">1K</option><option value="2K">2K</option><option value="4K">4K</option></select>
-        <button id="revex-google-fallback" class="button ghost" type="button">Google fallback</button>`;
-      $('#revex-selfhost-resolution').value = priorResolution;
-      $('#google-ai-resolution').value = priorResolution;
-      $('#revex-selfhost-resolution')?.addEventListener('change', () => { const h = $('#google-ai-resolution'); if (h) h.value = $('#revex-selfhost-resolution').value; });
-      $('#revex-google-fallback')?.addEventListener('click', useGoogleFallback);
+      const priorResolution = $('#google-ai-resolution')?.value || '1K';googleConfig.dataset.selfhosted = '1';
+      googleConfig.innerHTML = `<div class="render-selfhost-runtime"><strong>Qwen Image Edit 2511</strong><span>private Cloud Run GPU · pinned public Apache-2.0 model · no Hugging Face login</span></div><label>Output<select id="revex-selfhost-resolution"><option value="1K">1K · fastest</option><option value="2K">2K · review</option><option value="4K">4K · final</option></select></label><select id="google-ai-resolution" hidden><option value="1K">1K</option><option value="2K">2K</option><option value="4K">4K</option></select><button id="revex-google-fallback" class="button ghost" type="button">Google fallback</button>`;
+      $('#revex-selfhost-resolution').value = priorResolution;$('#google-ai-resolution').value = priorResolution;
+      $('#revex-selfhost-resolution')?.addEventListener('change', () => { const h = $('#google-ai-resolution'); if (h) h.value = $('#revex-selfhost-resolution').value; });$('#revex-google-fallback')?.addEventListener('click', useGoogleFallback);
     }
-    const button = $('#render-google-generate');
-    if (button && !running) button.textContent = 'Render current viewport';
-    const status = $('#render-status');
-    if (status && /connect google ai|google ai connected|permission/i.test(status.textContent || ''))
-      setStatus('Ready · private REVEX GPU · no model login required', 'good');
+    const button = $('#render-google-generate');if (button && !running) button.textContent = 'Render current viewport';
+    const status = $('#render-status');if (status && /connect google ai|google ai connected|permission/i.test(status.textContent || '')) setStatus('Ready · private REVEX GPU · no model login required', 'good');
+    return true;
+  }
+
+  function scheduleDecorate(attempt = 0) {
+    if (decorate()) return;
+    if (attempt < 50) setTimeout(() => scheduleDecorate(attempt + 1), 100);
   }
 
   function interceptClick(event) {
     const target = event.target?.closest?.('#render-google-generate');
     if (!target) return;
     if (allowGoogleOnce) { allowGoogleOnce = false; return; }
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    runSelfHosted(event);
+    event.preventDefault();event.stopImmediatePropagation();runSelfHosted(event);
   }
 
   function interceptSubmit(event) {
     if (event.target?.id !== 'render-form') return;
     if (allowGoogleOnce) { allowGoogleOnce = false; return; }
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    runSelfHosted(event);
+    event.preventDefault();event.stopImmediatePropagation();runSelfHosted(event);
   }
 
   document.addEventListener('click', interceptClick, true);
   document.addEventListener('submit', interceptSubmit, true);
-  const observer = new MutationObserver(() => decorate());
-  observer.observe(document.documentElement, { childList: true, subtree: true });
-  const dialogObserver = new MutationObserver(() => setTimeout(decorate, 0));
-  const attachDialogObserver = () => {
-    const dialog = $('#render-dialog');
-    if (dialog) dialogObserver.observe(dialog, { attributes: true, attributeFilter: ['hidden'] });
-  };
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { decorate(); attachDialogObserver(); }, { once: true });
-  else { decorate(); attachDialogObserver(); }
-  root.__revexSelfHostedRenderR54 = Object.freeze({ build: BUILD, model: MODEL, revision: MODEL_REVISION, provider: 'revex-selfhosted', browserInference: false, extraLogin: false });
-  console.info('[REVEX] self-hosted renderer ' + BUILD, { model: MODEL, revision: MODEL_REVISION, browserInference: false, huggingFaceLogin: false, googleFallback: true });
+  document.addEventListener('click', (event) => {
+    if (event.target?.closest?.('#render-button,#element-render,#design-render,#revex-r110-render')) setTimeout(() => scheduleDecorate(), 0);
+  });
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => scheduleDecorate(), { once: true });
+  else scheduleDecorate();
+
+  root.__revexSelfHostedRenderR54 = Object.freeze({ build: BUILD, model: MODEL, revision: MODEL_REVISION, provider: 'revex-selfhosted', browserInference: false, extraLogin: false, globalMutationObserver: false });
+  console.info('[REVEX] self-hosted renderer ' + BUILD, { model: MODEL, revision: MODEL_REVISION, browserInference: false, huggingFaceLogin: false, googleFallback: true, globalMutationObserver: false });
 })(window);
