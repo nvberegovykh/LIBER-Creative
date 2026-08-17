@@ -1,0 +1,54 @@
+name: REVEX r118 approved-envelope COMcheck recovery
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/revex-energy-worker/revex_reference_envelope_projection_r118.py'
+      - 'server/revex-energy-worker/revex_energy_pipeline_guard_r118.py'
+      - 'server/revex-energy-worker/verify_reference_envelope_r118.py'
+      - 'server/revex-energy-worker/Dockerfile'
+      - '.github/workflows/revex-r118-reference-envelope.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reference-envelope:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Python syntax
+        run: |
+          python -m py_compile \
+            server/revex-energy-worker/revex_reference_envelope_projection_r118.py \
+            server/revex-energy-worker/revex_energy_pipeline_guard_r118.py \
+            server/revex-energy-worker/verify_reference_envelope_r118.py
+      - name: Approved reference envelope regression
+        working-directory: server/revex-energy-worker
+        run: python verify_reference_envelope_r118.py
+      - name: Preserve r116 terminal/durability contract
+        working-directory: server/revex-energy-worker
+        run: python verify_final_comcheck_recovery_r116.py
+      - name: Docker production path points to r118
+        run: |
+          grep -F 'COPY server/revex-energy-worker/revex_reference_envelope_projection_r118.py' server/revex-energy-worker/Dockerfile
+          grep -F 'COPY server/revex-energy-worker/revex_energy_pipeline_guard_r118.py' server/revex-energy-worker/Dockerfile
+          grep -F 'REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard_r118.py' server/revex-energy-worker/Dockerfile
+          grep -F '79_WINTHROP_APPROVED_PROPOSED.osm' server/revex-energy-worker/Dockerfile
+      - name: Scope guard
+        shell: bash
+        run: |
+          git fetch origin "${{ github.base_ref }}" --deepen=200
+          changed="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
+          echo "$changed"
+          forbidden="$(printf '%s\n' "$changed" | grep -Ev '^(server/revex-energy-worker/(revex_reference_envelope_projection_r118.py|revex_energy_pipeline_guard_r118.py|verify_reference_envelope_r118.py|Dockerfile)|\.github/workflows/revex-r118-reference-envelope.yml)$' || true)"
+          if [ -n "$forbidden" ]; then
+            echo 'r118 reference-envelope release contains unrelated changes:'
+            echo "$forbidden"
+            exit 1
+          fi
