@@ -7,6 +7,7 @@ const read=p=>fs.readFileSync(path.join(root,p),'utf8');
 const handler=read('src/Liber.Revex.Revit/Revit/RevitRequestHandler.cs');
 const windowHost=read('src/Liber.Revex.Revit/UI/RendairWindow.cs');
 const energyHost=read('src/Liber.Revex.Revit/Services/EngineeringCompanionWebBridge.cs');
+const responsiveHost=read('src/Liber.Revex.Revit/Services/RevexWindowResponsivenessHotfix.cs');
 
 const must=(text,needle,label)=>assert(text.includes(needle),label||`Missing ${needle}`);
 const forbid=(text,needle,label)=>assert(!text.includes(needle),label||`Forbidden ${needle}`);
@@ -43,6 +44,20 @@ must(windowHost,'ResolveActiveDocumentProjectBinding();','startup must recover t
 must(windowHost,'MakeButton("SYNC BIM + BOOKS"','explicit BIM sync button must remain');
 must(windowHost,'MakeButton("SYNC ENGINEERING"','explicit Engineering sync button must remain');
 
+// r106: native mode buttons must never drive Companion through ExecuteScriptAsync.
+// The user log proved rapid Engineering→Design routing could hang the WebView renderer.
+forbid(responsiveHost,'AddHandler(Button.ClickEvent','native DESIGN/ENGINEERING controls must stay decoupled from Companion tab clicks');
+forbid(responsiveHost,'ExecuteScriptAsync','responsiveness adapter must not execute Companion JavaScript');
+must(responsiveHost,'ProcessFailed +=','first renderer stall must have deterministic host recovery');
+must(responsiveHost,'web.Reload();','renderer recovery must reload the exact current URL');
+const recoveryStart=responsiveHost.indexOf('web.CoreWebView2.ProcessFailed +=');
+const recoveryEnd=responsiveHost.indexOf('web.CoreWebView2.NavigationCompleted +=',recoveryStart);
+assert(recoveryStart>=0&&recoveryEnd>recoveryStart,'Could not isolate renderer recovery block.');
+const recovery=responsiveHost.slice(recoveryStart,recoveryEnd);
+forbid(recovery,'BuildCompanionUri','renderer recovery must never reconstruct/change project or module URL');
+forbid(recovery,'_engineeringModeActive','renderer recovery must never infer a module from native mode state');
+forbid(recovery,'view=','renderer recovery must preserve the exact current Companion view');
+
 const ensureStart=energyHost.indexOf('public static async Task<(bool ok, string message)> EnsureManagedEnergyBridgeAsync');
 const coreStart=energyHost.indexOf('private static async Task<(bool ok, string message)> EnsureManagedEnergyBridgeCoreAsync');
 assert(ensureStart>=0&&coreStart>ensureStart,'Could not isolate managed Energy bridge initialization.');
@@ -51,7 +66,8 @@ forbid(ensure,'TryResumeLatestEngineeringRevisionAsync','opening/reloading the b
 must(ensure,'return await EnsureManagedEnergyBridgeCoreAsync(web);','Energy bridge initialization must remain initialization-only');
 
 console.log(JSON.stringify({
-  schema:'liber.revex.r106-read-only-entry.v1',status:'PASSED',
+  schema:'liber.revex.r106-read-only-entry.v2',status:'PASSED',
   entry:{readOnlyActiveDocumentBinding:true,revitMutation:false,projectAutoCreation:false,autoEnergyResume:false},
+  webView:{nativeModeBrowserRouting:false,firstStallSameUrlRecovery:true,moduleGuessing:false},
   explicitActions:{bimSync:true,engineeringSync:true,newOrReboundProjectStillExplicit:true,bindingVerificationInsideExplicitActions:true}
 },null,2));
