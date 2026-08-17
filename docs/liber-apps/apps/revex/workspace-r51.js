@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import './design-versions-r52.js';
-import './render-selfhost-r54.js';
+import './render-selfhost-r54.js?v=20260817r110-selfhost-render2';
 
-const BUILD = '20260816r54-workspace3';
+const BUILD = '20260817r110-workspace4';
 const state = window.__revexState;
 const $ = (selector, root = document) => root.querySelector(selector);
 
