@@ -7,9 +7,9 @@ namespace Liber.Revex.Revit.Services;
 /// <summary>
 /// Captures the active document's native Revit schedule state as read-only Engineering evidence.
 /// This is not a Design Book/Spec Book formatter: every non-template ViewSchedule is preserved
-/// independently with native field order, table cells, and exact sheet placements. Managed Energy
-/// can therefore consume facts from the same current model without rediscovering them from PDFs or
-/// inheriting values from a reference project.
+/// independently with native field order, table cells, exact sheet placements, and native total
+/// presentation metadata. Managed Energy can therefore consume facts from the same current model
+/// without rediscovering them from PDFs or inheriting values from a reference project.
 /// </summary>
 public sealed class EngineeringScheduleEvidenceService
 {
@@ -53,6 +53,17 @@ public sealed class EngineeringScheduleEvidenceService
                     name = schedule.Name,
                     uniqueId = schedule.UniqueId,
                     isMaterialTakeoff = schedule.Definition.IsMaterialTakeoff,
+                    // r125: keep Revit's own grand-total formatting contract. Existing
+                    // bodyRows remain the exact visible text; these flags let future Energy
+                    // revisions identify an untitled grand total without arithmetic re-summing.
+                    definition = new
+                    {
+                        showGrandTotal = ReadProperty(schedule.Definition, "ShowGrandTotal"),
+                        showGrandTotalTitle = ReadProperty(schedule.Definition, "ShowGrandTotalTitle"),
+                        grandTotalTitle = ReadProperty(schedule.Definition, "GrandTotalTitle"),
+                        showHeaders = ReadProperty(schedule.Definition, "ShowHeaders"),
+                        showTitle = ReadProperty(schedule.Definition, "ShowTitle")
+                    },
                     placedOnSheets = ReadPlacements(doc, schedule, placements),
                     fields = ReadFields(schedule),
                     headerRows = ReadRows(schedule, table.GetSectionData(SectionType.Header), SectionType.Header),
@@ -132,6 +143,7 @@ public sealed class EngineeringScheduleEvidenceService
                     columnHeading = field.ColumnHeading ?? "",
                     hidden = field.IsHidden,
                     fieldType = ReadProperty(field, "FieldType"),
+                    displayType = ReadProperty(field, "DisplayType"),
                     horizontalAlignment = ReadProperty(field, "HorizontalAlignment"),
                     sheetColumnWidth = field.SheetColumnWidth
                 });
