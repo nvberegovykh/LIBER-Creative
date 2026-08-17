@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260817r110-docs-core1';
+  const BUILD='20260817r113-docs-core2';
   const Store=root.RevexStore;
   if(!Store||root.__revexSyncDocsR24) return;
   root.__revexSyncDocsR24=true;
@@ -94,7 +94,7 @@
         after:{revision:result.revision,scheduleCount:result.integrity?.counts?.schedules||null,elementCount:result.integrity?.counts?.elements||null,affectedPlanViews:affected?.views?.length||0},
         note:'Atomic REVEX source revision: BIM, Design Book, Spec Book, Docs and affected native Revit plan exports.'
       });
-    }catch(e){console.warn('[REVEX r110 Docs] source history',e);}
+    }catch(e){console.warn('[REVEX r113 Docs] source history',e);}
 
     if(!result.cloud||!Store.isCloud()||!Store.user?.uid||!Store.fs?.storage){
       post('docs-local-preview',{printingSets:printing?.sets?.length||0,affectedPlans:affected?.views?.length||0});
@@ -147,7 +147,7 @@
           affectedViews:view.name?[view.name]:[],before:null,after:{libraryId:id,storagePath:uploaded.path},
           note:'Native Revit plan export generated from the same authoritative REVEX source revision.'
         });
-      }catch(e){console.warn('[REVEX r110 Docs] plan history',e);}
+      }catch(e){console.warn('[REVEX r113 Docs] plan history',e);}
     }
     result.affectedPlanDocs=affectedRecords;
     post('docs-index-complete',{
@@ -199,9 +199,7 @@
           singlePageUrl:row.singlePageUrl||row.localUrl||row.url||null,
           legacyLibraryId:row.id||null
         };
-        const key=sheetKey(sheet);
-        if(seen.has(key))continue;
-        seen.add(key);file.sheetIndex.push(sheet);
+        const key=sheetKey(sheet);if(seen.has(key))continue;seen.add(key);file.sheetIndex.push(sheet);
       }
       file.sheetIndex.sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0));
     }
@@ -268,19 +266,30 @@
     const manualOut=rows.filter(file=>file.revexDocKind!=='printing-set'&&!legacyIds.has(String(file.id||''))&&file.revexDocKind!=='affected-revit-plan'&&String(file.folderPath||'').startsWith('record_out'));
     const bySet=new Map();
     printing.forEach(file=>{const key=file.printingSetId||file.printingSetName||file.name;if(!bySet.has(key))bySet.set(key,[]);bySet.get(key).push(file);});
+    s.docsRevisionBySet=s.docsRevisionBySet||{};
     const selection=s.docSelection;
     const selectedPage=Number(selection?.sourcePage||selection?.page)||null;
-    const printHtml=[...bySet.values()].map(revisions=>{
+    const setEntries=[...bySet.entries()];
+    const printHtml=setEntries.map(([key,revisions],setIndex)=>{
       revisions.sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
       const latest=revisions[0];
-      const allText=`${latest.printingSetName||''} ${revisions.flatMap(row=>(row.sheetIndex||[]).map(p=>`${p.sheetNumber} ${p.sheetName}`)).join(' ')}`;
+      const selectedInSet=revisions.find(row=>String(row.id)===String(selection?.file?.id||''));
+      const preferredId=selectedInSet?.id||s.docsRevisionBySet[key]||latest?.id;
+      const file=revisions.find(row=>String(row.id)===String(preferredId))||latest;
+      if(!file)return '';
+      const allText=`${file.printingSetName||''} ${(file.sheetIndex||[]).map(p=>`${p.sheetNumber} ${p.sheetName}`).join(' ')}`;
       if(!matches(allText))return '';
-      return `<section class="docs-group printing-set"><h3>${esc(latest.printingSetName||'Printing Set')}<small>${revisions.length} revision${revisions.length===1?'':'s'}</small></h3>${revisions.map((file,ri)=>{
-        const selected=selection?.file?.id===file.id;
-        return `<details ${ri===0||selected?'open':''}><summary><span>${ri===0?'Current':'Revision'} · ${esc(file.revision||fmt(file.createdAt))}</span><small>${(file.sheetIndex||[]).length} sheets</small></summary><button type="button" class="docs-node whole ${selected&&!selection?.sheet?'active':''}" data-doc-id="${esc(file.id)}"><span>Full document</span><small>PDF</small></button>${(file.sheetIndex||[]).map(sheet=>`<button type="button" class="docs-node sheet ${selected&&selectedPage===Number(sheet.page)?'active':''}" data-doc-id="${esc(file.id)}" data-page="${Number(sheet.page)||1}"><b>${esc(sheet.sheetNumber||String(sheet.page))}</b><span>${esc(sheet.sheetName||'Sheet')}</span><small>${sheet.singlePageStoragePath||sheet.singlePageUrl||sheet.singlePageLocalUrl?'PDF':'p.'+(Number(sheet.page)||1)}</small></button>`).join('')}</details>`;
-      }).join('')}</section>`;
+      s.docsRevisionBySet[key]=file.id;
+      const selected=String(selection?.file?.id||'')===String(file.id);
+      const versionControl=revisions.length>1
+        ? `<select class="docs-version-select" data-set-index="${setIndex}" aria-label="${esc(file.printingSetName||'Printing Set')} revision">${revisions.map((row,ri)=>`<option value="${esc(row.id)}" ${String(row.id)===String(file.id)?'selected':''}>${ri===0?'Current':'Previous'} · ${esc(row.revision||fmt(row.createdAt))}</option>`).join('')}</select>`
+        : `<span class="docs-current-revision">${esc(file.revision||fmt(file.createdAt))}</span>`;
+      return `<section class="docs-group printing-set" data-printing-set="${esc(key)}"><div class="docs-set-head"><h3>${esc(file.printingSetName||'Printing Set')}<small>${(file.sheetIndex||[]).length} sheets</small></h3>${versionControl}</div><button type="button" class="docs-node whole ${selected&&!selection?.sheet?'active':''}" data-doc-id="${esc(file.id)}"><span>Full document</span><small>PDF</small></button>${(file.sheetIndex||[]).map(sheet=>`<button type="button" class="docs-node sheet ${selected&&selectedPage===Number(sheet.page)?'active':''}" data-doc-id="${esc(file.id)}" data-page="${Number(sheet.page)||1}"><b>${esc(sheet.sheetNumber||String(sheet.page))}</b><span>${esc(sheet.sheetName||'Sheet')}</span><small>${sheet.singlePageStoragePath||sheet.singlePageUrl||sheet.singlePageLocalUrl?'PDF':'p.'+(Number(sheet.page)||1)}</small></button>`).join('')}</section>`;
     }).join('');
     host.innerHTML=printHtml+affectedGroup(affected)+manualGroup('Record In',manualIn)+manualGroup('Record Out',manualOut)||'<div class="file-empty">No matching project documents.</div>';
+    host.querySelectorAll('.docs-version-select').forEach(select=>select.addEventListener('change',()=>{
+      const entry=setEntries[Number(select.dataset.setIndex)||0];if(!entry)return;s.docsRevisionBySet[entry[0]]=select.value;renderLibrary();
+    }));
     host.querySelectorAll('.docs-node').forEach(button=>button.addEventListener('click',()=>{
       const file=printing.find(row=>String(row.id)===String(button.dataset.docId))||rows.find(row=>String(row.id)===String(button.dataset.docId));if(!file)return;
       const page=button.dataset.page?Number(button.dataset.page):null;
@@ -300,7 +309,7 @@
       const blob=await response.blob(),file=new File([blob],name,{type:'application/pdf'});
       if(navigator.share&&navigator.canShare?.({files:[file]})){await navigator.share({title:sel.sheet.sheetNumber||'REVEX sheet',files:[file]});return;}
       if(navigator.clipboard)await navigator.clipboard.writeText(url);else root.open(url,'_blank','noopener');
-    }catch(error){console.warn('[REVEX r110 Docs] share sheet PDF',error);root.open(url,'_blank','noopener');}
+    }catch(error){console.warn('[REVEX r113 Docs] share sheet PDF',error);root.open(url,'_blank','noopener');}
   }
 
   function installDocsCore(){
@@ -308,10 +317,11 @@
     root.selectDocument=selectDocument;
     root.renderLibrary=renderLibrary;
     const search=document.getElementById('docs-search');
-    if(search&&!search.dataset.revexR110Docs){
-      search.dataset.revexR110Docs='1';
+    if(search&&!search.dataset.revexR113Docs){
+      search.dataset.revexR113Docs='1';
       search.addEventListener('input',()=>queueMicrotask(renderLibrary));
     }
+    root.addEventListener('revex:r24-revision',()=>queueMicrotask(renderLibrary));
     renderLibrary();
   }
 
@@ -319,7 +329,8 @@
   else installDocsCore();
 
   console.log('[REVEX] sync Docs '+BUILD,{
-    revisionedPrintingSets:true,singlePageSheetPdfs:true,isolatedSheetViewer:true,isolatedSheetShare:true,
+    revisionedPrintingSets:true,singleVisibleRevisionPerSet:true,revisionSelector:true,
+    fullDocumentPlusLinkedSheets:true,singlePageSheetPdfs:true,isolatedSheetViewer:true,isolatedSheetShare:true,
     legacySheetProjection:'render-only',nativeAffectedPlans:true,appendOnlyHistory:true,manualDocsPreserved:true,
     globalClickInterception:false,mutationObservers:false
   });
