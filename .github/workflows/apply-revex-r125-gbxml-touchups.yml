@@ -20,6 +20,7 @@ jobs:
           ref: revex-r125-final-energy-touchups
           fetch-depth: 0
 
+      # Keep the 547 KB external exporter and Dynamo's embedded Python node identical.
       - name: Apply synchronized exporter + Dynamo source
         run: python server/revex-energy-worker/apply_gbxml_geometry_touchups_r125.py
 
