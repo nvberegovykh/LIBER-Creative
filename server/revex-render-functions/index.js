@@ -7,10 +7,6 @@ const { projectAccessRole } = require('./project-access');
 
 setGlobalOptions({ region: 'us-central1', maxInstances: 4 });
 
-// Firebase discovers exported functions by loading this module during deploy. Keep
-// expensive Admin/Google client modules out of global discovery and initialize them
-// only in the deployed runtime. This follows Firebase's onInit deployment-timeout
-// guidance and makes broker discovery deterministic on slower Windows/CI hosts.
 let db = null;
 let FieldValue = null;
 let storage = null;
@@ -32,7 +28,7 @@ const JOB_RE = /^[A-Za-z0-9_-]{1,160}$/;
 const RENDER_BROKER_SERVICE_ACCOUNT = process.env.REVEX_RENDER_BROKER_SERVICE_ACCOUNT || 'revex-render-broker@liber-apps-cca20.iam.gserviceaccount.com';
 const RENDER_WORKER_URL = String(process.env.REVEX_RENDER_WORKER_URL || '').replace(/\/+$/, '');
 const SOURCE_MAX_BYTES = 24 * 1024 * 1024;
-const BUILD = '20260816r64-render-broker2';
+const BUILD = '20260817r110-render-broker3';
 
 function runtimeServices() {
   if (!db || !FieldValue || !storage || !GoogleAuth) {
@@ -97,8 +93,30 @@ exports.runRevexRender = onCall({
   const accessRole = await assertProjectAccess(projectId, uid);
   const jobRef = runtime.db.doc(`projects/${projectId}/revexRenders/${jobId}`);
   const jobSnap = await jobRef.get();
-  if (!jobSnap.exists) throw new HttpsError('failed-precondition', 'Create the REVEX render job before dispatching it.');
-  const existing = jobSnap.data() || {};
+  let existing = jobSnap.exists ? (jobSnap.data() || {}) : null;
+
+  // The browser normally creates the project render record first. The callable may
+  // still arrive before that write is visible to this Gen2 runtime (or after an
+  // offline/reconnected client write). Project access has already been verified, so
+  // make the same project-scoped job idempotently here instead of failing a valid
+  // render. This does not broaden access: only an authenticated project member can
+  // reach this point and every later write stays under this exact project/job path.
+  if (!existing) {
+    existing = {
+      createdBy: uid,
+      provider: 'revex-selfhosted',
+      model: 'Qwen/Qwen-Image-Edit-2511',
+      status: 'queued',
+      brokerCreated: true
+    };
+    await jobRef.set({
+      ...existing,
+      createdAt: runtime.FieldValue.serverTimestamp(),
+      updatedAt: runtime.FieldValue.serverTimestamp(),
+      brokerBuild: BUILD
+    }, { merge: true });
+  }
+
   if (existing.createdBy && String(existing.createdBy) !== uid && accessRole !== 'owner' && accessRole !== 'liber-admin')
     throw new HttpsError('permission-denied', 'This render job belongs to another project member.');
   if (!RENDER_WORKER_URL)
