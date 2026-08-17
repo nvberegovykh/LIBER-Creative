@@ -48,11 +48,13 @@ jobs:
           if (@($errors).Count) { $errors | Format-List | Out-String | Write-Error; exit 1 }
           Write-Host 'PASS DEPLOY_RENDER_R119.ps1 parse'
       - name: Scope guard
+        if: github.event_name == 'pull_request'
         shell: bash
         run: |
-          git fetch origin "${{ github.base_ref }}" --depth=300
-          base="$(git merge-base "origin/${{ github.base_ref }}" HEAD)"
-          changed="$(git diff --name-only "$base...HEAD")"
+          base_sha="${{ github.event.pull_request.base.sha }}"
+          head_sha="${{ github.event.pull_request.head.sha }}"
+          git fetch --no-tags --depth=1 origin "$base_sha" "$head_sha"
+          changed="$(git diff --name-only "$base_sha" "$head_sha")"
           echo "$changed"
           forbidden="$(printf '%s\n' "$changed" | grep -Ev '^(server/revex-render-worker/(render_r119.py|Dockerfile|DEPLOY_RENDER_R119.ps1)|\.github/workflows/revex-r119-render-cache.yml)$' || true)"
           if [ -n "$forbidden" ]; then
