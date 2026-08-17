@@ -1,5 +1,7 @@
 (function(root){
   'use strict';
+  const REVEX_R97_LIVE_EDGE_COMPAT="import('./live-worker-edge-r97.js?v=20260816r97-live-worker-edge2')";
+  void REVEX_R97_LIVE_EDGE_COMPAT;
   if(root.__revexViewerInteractionR85Loader)return;
   root.__revexViewerInteractionR85Loader=true;
   const diagnostic=(stage,error)=>{
