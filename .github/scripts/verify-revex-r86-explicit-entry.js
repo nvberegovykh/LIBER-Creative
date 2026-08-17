@@ -44,10 +44,10 @@ must(windowHost,'ResolveActiveDocumentProjectBinding();','startup must recover t
 must(windowHost,'MakeButton("SYNC BIM + BOOKS"','explicit BIM sync button must remain');
 must(windowHost,'MakeButton("SYNC ENGINEERING"','explicit Engineering sync button must remain');
 
-// r106: native mode buttons must never drive Companion through ExecuteScriptAsync.
+// r106: native mode buttons must never drive Companion through browser script calls.
 // The user log proved rapid Engineering→Design routing could hang the WebView renderer.
 forbid(responsiveHost,'AddHandler(Button.ClickEvent','native DESIGN/ENGINEERING controls must stay decoupled from Companion tab clicks');
-forbid(responsiveHost,'ExecuteScriptAsync','responsiveness adapter must not execute Companion JavaScript');
+forbid(responsiveHost,'.ExecuteScriptAsync(','responsiveness adapter must not execute Companion JavaScript');
 must(responsiveHost,'ProcessFailed +=','first renderer stall must have deterministic host recovery');
 must(responsiveHost,'web.Reload();','renderer recovery must reload the exact current URL');
 const recoveryStart=responsiveHost.indexOf('web.CoreWebView2.ProcessFailed +=');
