@@ -33,6 +33,7 @@ COPY src/Liber.Revex.Revit/Engineering/Energy /opt/revex/energy
 COPY src/Liber.Revex.Revit/Engineering/Gbxml /opt/revex/Gbxml
 COPY server/revex-energy-worker/app.py /opt/revex/server/app.py
 COPY server/revex-energy-worker/app_entry.py /opt/revex/server/app_entry.py
+COPY server/revex-energy-worker/durable_execution.py /opt/revex/server/durable_execution.py
 COPY server/revex-energy-worker/revex_energy_pipeline_guard.py /opt/revex/server/revex_energy_pipeline_guard.py
 COPY server/revex-energy-worker/revex_energy_identity_normalizer.py /opt/revex/server/revex_energy_identity_normalizer.py
 COPY server/revex-energy-worker/revex_identity_content_agent.py /opt/revex/server/revex_identity_content_agent.py
@@ -72,6 +73,7 @@ RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
  && python3 -m py_compile \
       /opt/revex/server/app.py \
       /opt/revex/server/app_entry.py \
+      /opt/revex/server/durable_execution.py \
       /opt/revex/server/revex_energy_pipeline_guard.py \
       /opt/revex/server/revex_energy_identity_normalizer.py \
       /opt/revex/server/revex_identity_content_agent.py \

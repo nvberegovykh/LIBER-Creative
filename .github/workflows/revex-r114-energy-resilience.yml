@@ -1,0 +1,60 @@
+name: REVEX r114 resilient Energy validation
+
+on:
+  pull_request:
+    paths:
+      - 'server/revex-energy-worker/durable_execution.py'
+      - 'server/revex-energy-worker/app_entry.py'
+      - 'server/revex-energy-worker/requirements-server.txt'
+      - 'server/revex-energy-worker/Dockerfile'
+      - 'server/revex-energy-worker/DEPLOY_ENERGY_RESILIENT_R114.ps1'
+      - 'docs/liber-apps/apps/revex/energy-replay-r95.js'
+      - 'docs/liber-apps/apps/revex/live-worker-edge-r97.js'
+      - 'docs/liber-apps/apps/revex/viewer-interaction-r85-loader.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - '.github/scripts/verify-revex-r114-energy-resilience.js'
+      - '.github/workflows/revex-r114-energy-resilience.yml'
+  workflow_dispatch:
+
+jobs:
+  energy-resilience:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify r114 durable Energy contract
+        run: node .github/scripts/verify-revex-r114-energy-resilience.js
+      - name: Parse browser Energy owners
+        run: |
+          node --check docs/liber-apps/apps/revex/energy-replay-r95.js
+          node --check docs/liber-apps/apps/revex/live-worker-edge-r97.js
+          node --check docs/liber-apps/apps/revex/viewer-interaction-r85-loader.js
+          node --check docs/liber-apps/apps/revex/ui-integrity.js
+      - name: Compile durable worker wrapper
+        run: python -m py_compile server/revex-energy-worker/durable_execution.py server/revex-energy-worker/app_entry.py
+      - name: Parse r114 deployment in Windows PowerShell
+        shell: powershell
+        run: |
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'server/revex-energy-worker/DEPLOY_ENERGY_RESILIENT_R114.ps1'), [ref]$null, [ref]$errors)
+          if ($errors.Count) { $errors | Format-List | Out-String | Write-Error; exit 1 }
+          Write-Host 'DEPLOY_ENERGY_RESILIENT_R114.ps1 parse OK'
+      - name: Scope guard - Energy execution envelope only
+        shell: bash
+        run: |
+          git fetch origin "${{ github.base_ref }}"
+          changed="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
+          echo "$changed"
+          forbidden="$(printf '%s\n' "$changed" | grep -E '^src/Liber.Revex.Revit/Engineering/Energy/(GeometryCo/|revex_energy_pipeline\.py$)|^src/Liber.Revex.Revit/Engineering/Gbxml/' || true)"
+          if [ -n "$forbidden" ]; then
+            echo 'r114 must not modify GeometryCo, the r49 Energy pipeline, or Revit gbXML authority:'
+            echo "$forbidden"
+            exit 1
+          fi

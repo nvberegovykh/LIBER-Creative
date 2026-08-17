@@ -1,6 +1,7 @@
 (function(root){
   'use strict';
-  const BUILD='20260816r97-live-worker-edge2';
+  const BUILD='20260817r114-live-worker-edge1';
+  const WORKER_FRESH_MS=150000;
   if(root.__revexLiveWorkerEdgeR97)return;
   root.__revexLiveWorkerEdgeR97={build:BUILD};
 
@@ -16,6 +17,16 @@
     try{root.dispatchEvent(new CustomEvent('revex:managed-energy-status',{detail:payload}));}catch(_){}
     const node=document.getElementById('energy-run-status');
     if(node){node.textContent=message;node.dataset.tone=ok?'good':stage==='BROKER_FAILED'?'bad':'busy';}
+  }
+  function epochMs(value){
+    try{if(typeof value?.toMillis==='function')return Number(value.toMillis())||0;if(typeof value?.toDate==='function')return Number(value.toDate()?.getTime?.())||0;}catch(_){}
+    const direct=Date.parse(String(value||''));return Number.isFinite(direct)?direct:0;
+  }
+  function workerState(job){
+    const hosted=root.__revexHostedEnergyReplayR95?.workerState;
+    if(typeof hosted==='function')return hosted(job);
+    const status=clean(job?.workerStatus).toUpperCase(),stage=clean(job?.workerStage),heartbeatMs=epochMs(job?.workerHeartbeatAt);
+    return {status,stage,heartbeatMs,fresh:status==='RUNNING'&&heartbeatMs>0&&Date.now()-heartbeatMs<=WORKER_FRESH_MS,failure:clean(job?.workerFailure)};
   }
   async function StoreReady(timeoutMs=30000){
     const started=Date.now();
@@ -35,7 +46,7 @@
     return snap?.exists?.()?snap.data():null;
   }
   async function readJobAfterCallable(Store,id,revision,error){
-    const generic=/functions\/internal|\binternal\b/i.test(clean(error?.message||error));
+    const generic=/functions\/internal|\binternal\b|econnreset|socket|network/i.test(clean(error?.message||error));
     const attempts=generic?12:1;
     let job=null;
     for(let attempt=0;attempt<attempts;attempt+=1){
@@ -43,12 +54,14 @@
         diagnostic('WARN','ENERGY_JOB_READ_AFTER_CALLABLE',readError?.message||String(readError));
         return null;
       }
-      if(job&&clean(job.status))return job;
+      if(job&&(clean(job.status)||clean(job.workerStatus)))return job;
       if(attempt+1<attempts)await sleep(500);
     }
     return job;
   }
   function exactJobError(job,status){
+    const worker=workerState(job);
+    if(worker.status==='FAILED'&&worker.failure)return `${worker.stage||'WORKER_FAILED'}: ${worker.failure}`;
     const stage=clean(job?.stage)||'WORKER_REQUEST';
     const detail=clean(job?.error)||`Energy broker job status is ${status||'UNKNOWN'}.`;
     const http=job?.workerHttpStatus?` [HTTP ${job.workerHttpStatus}]`:'';
@@ -63,10 +76,6 @@
     return resultProject===id&&sourceRevision===revision&&(!clean(resultRevision)||actual===clean(resultRevision));
   }
 
-  // WebView2 can produce synthetic keyboard events without a key. The legacy viewer
-  // blindly called toLowerCase() on event.key, which detached unrelated UI behavior.
-  // Ignore only malformed key-less events before they reach the viewer; normal keyboard
-  // navigation is untouched.
   function installKeyboardGuard(){
     if(root.__revexR97KeyboardGuard)return;
     root.__revexR97KeyboardGuard=true;
@@ -85,9 +94,6 @@
     const resultRevision=clean(job?.resultRevision);
     const follow=root.__revexHostedEnergyReplayR95?.followExistingJob;
     if(typeof follow==='function')return follow(Store,ctx.id,ctx.revision);
-
-    // Fallback only if the hosted follower is unavailable. COMPLETE is still accepted
-    // only when the exact immutable result is already current and bound to this source.
     if(status==='COMPLETE'){
       const result=await Store.getEnergyResult(ctx.id);
       if(!exactResult(result,ctx.id,ctx.revision,resultRevision)||clean(result?.manifest?.status).toUpperCase()!=='COMPLETE')
@@ -105,24 +111,24 @@
     if(!ctx)return null;
     const job=await readJobAfterCallable(Store,ctx.id,ctx.revision,error);
     if(!job)return null;
-    const status=clean(job?.status).toUpperCase();
-    const stage=clean(job?.stage);
-    if(status==='RUNNING'||status==='COMPLETE'){
-      const completed=status==='COMPLETE';
+    const status=clean(job?.status).toUpperCase(),stage=clean(job?.stage),worker=workerState(job);
+    const durable=worker.status==='COMPLETE'||(worker.status==='RUNNING'&&worker.fresh);
+    if(status==='RUNNING'||status==='COMPLETE'||durable){
+      const completed=status==='COMPLETE'||worker.status==='COMPLETE';
       diagnostic(completed?'INFO':'WARN',completed?'ENERGY_CALLABLE_EDGE_COMPLETED':'ENERGY_CALLABLE_EDGE_DROPPED',completed
-        ?'The callable edge ended after the exact server job already completed; recovering the published result instead of reporting a false failure.'
-        :'The callable edge ended while the exact server job is still RUNNING; reattaching instead of launching another execution.',
-        {projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,resultRevision:clean(job.resultRevision),originalError:error?.message||String(error)});
-      post(completed?'BROKER_RECOVERED_COMPLETE':'BROKER_REATTACH',completed
-        ?`Server job for ${ctx.revision} already completed as ${clean(job.resultRevision)||'an exact result'}; recovering that result.`
-        :`Server job for ${ctx.revision} is still RUNNING${stage?` / ${stage}`:''}; reattached without restarting it.`,completed,
-        {projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,resultRevision:clean(job.resultRevision)});
+        ?'The callable edge ended after the exact worker completed; recovering/finalizing the cached result instead of reporting a false failure.'
+        :'The callable edge ended while the exact Energy worker is still alive; following its durable heartbeat instead of launching another execution.',
+        {projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,resultRevision:clean(job.resultRevision),originalError:error?.message||String(error)});
+      post(completed?'WORKER_FINALIZING':'WORKER_RECOVERING',completed
+        ?`Energy worker completed ${ctx.revision}; finalizing its cached strict package.`
+        :`Energy worker for ${ctx.revision} is still alive${worker.stage?` / ${worker.stage}`:''}; preserving the run despite broker transport loss.`,false,
+        {projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,resultRevision:clean(job.resultRevision)});
       return followAuthoritativeJob(Store,ctx,job,'callable-edge');
     }
-    if(status==='FAILED'||status==='INFRASTRUCTURE_FAILED'){
+    if(worker.status==='FAILED'||status==='FAILED'||status==='INFRASTRUCTURE_FAILED'){
       const exact=exactJobError(job,status);
-      diagnostic('ERROR','ENERGY_JOB_EXACT_FAILURE',exact,{projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerHttpStatus:job?.workerHttpStatus||null,originalError:error?.message||String(error)});
-      post('BROKER_FAILED',exact,false,{projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerHttpStatus:job?.workerHttpStatus||null});
+      diagnostic('ERROR','ENERGY_JOB_EXACT_FAILURE',exact,{projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,workerHttpStatus:job?.workerHttpStatus||null,originalError:error?.message||String(error)});
+      post('BROKER_FAILED',exact,false,{projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,workerHttpStatus:job?.workerHttpStatus||null});
       const raised=new Error(exact);raised.name='RevexEnergyJobError';raised.job=job;throw raised;
     }
     return null;
@@ -145,12 +151,12 @@
         wrapped.__revexR97LiveJobRecovery=true;
         wrapped.__revexOriginal=original;
         bridge.authorizeCurrentRevision=wrapped;
-        diagnostic('INFO','ENERGY_NATIVE_EDGE_R97','Native managed-Energy retry now preserves and follows the exact Firestore job if the callable transport drops.');
+        diagnostic('INFO','ENERGY_NATIVE_EDGE_R114','Native managed-Energy edge now distinguishes broker transport loss from worker failure using the durable worker heartbeat/cache.');
         return true;
       }
       await sleep(100);
     }
-    diagnostic('WARN','ENERGY_NATIVE_EDGE_R97','Native managed-Energy bridge was not available for live-job wrapping.');
+    diagnostic('WARN','ENERGY_NATIVE_EDGE_R114','Native managed-Energy bridge was not available for durable live-job wrapping.');
     return false;
   }
 
@@ -158,21 +164,21 @@
     try{
       const Store=await StoreReady(5000),ctx=await context(Store);if(!ctx)return;
       const job=await readJob(Store,ctx.id,ctx.revision);if(!job)return;
-      const status=clean(job.status).toUpperCase(),stage=clean(job.stage);
-      if(status==='RUNNING'||status==='COMPLETE'){
-        diagnostic('INFO',status==='COMPLETE'?'ENERGY_JOB_COMPLETE_R97':'ENERGY_JOB_REATTACH_R97',status==='COMPLETE'
+      const status=clean(job.status).toUpperCase(),stage=clean(job.stage),worker=workerState(job);
+      if(status==='RUNNING'||status==='COMPLETE'||worker.status==='COMPLETE'||(worker.status==='RUNNING'&&worker.fresh)){
+        diagnostic('INFO',status==='COMPLETE'?'ENERGY_JOB_COMPLETE_R114':'ENERGY_JOB_REATTACH_R114',status==='COMPLETE'
           ?`Found COMPLETE job for ${ctx.revision}; binding its exact immutable result.`
-          :`Found RUNNING job for ${ctx.revision}; attaching to it without a duplicate launch.`,
-          {projectId:ctx.id,revision:ctx.revision,jobStage:stage,resultRevision:clean(job.resultRevision)});
-        void followAuthoritativeJob(Store,ctx,job,'page-load').catch(error=>diagnostic('ERROR','ENERGY_JOB_FOLLOW_R97',error?.message||String(error)));
+          :`Found recoverable Energy execution for ${ctx.revision}; following it without a duplicate launch.`,
+          {projectId:ctx.id,revision:ctx.revision,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,resultRevision:clean(job.resultRevision)});
+        void followAuthoritativeJob(Store,ctx,job,'page-load').catch(error=>diagnostic('ERROR','ENERGY_JOB_FOLLOW_R114',error?.message||String(error)));
         return;
       }
-      if(status==='FAILED'||status==='INFRASTRUCTURE_FAILED'){
+      if(worker.status==='FAILED'||status==='FAILED'||status==='INFRASTRUCTURE_FAILED'){
         const exact=exactJobError(job,status);
-        post('BROKER_FAILED',exact,false,{projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerHttpStatus:job?.workerHttpStatus||null});
-        diagnostic('ERROR','ENERGY_JOB_EXACT_FAILURE',exact,{projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerHttpStatus:job?.workerHttpStatus||null});
+        post('BROKER_FAILED',exact,false,{projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,workerHttpStatus:job?.workerHttpStatus||null});
+        diagnostic('ERROR','ENERGY_JOB_EXACT_FAILURE',exact,{projectId:ctx.id,revision:ctx.revision,jobStatus:status,jobStage:stage,workerStatus:worker.status,workerStage:worker.stage,workerHttpStatus:job?.workerHttpStatus||null});
       }
-    }catch(error){diagnostic('WARN','ENERGY_JOB_RECOVERY_R97',error?.message||String(error));}
+    }catch(error){diagnostic('WARN','ENERGY_JOB_RECOVERY_R114',error?.message||String(error));}
   }
 
   installKeyboardGuard();
@@ -180,5 +186,5 @@
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install,{once:true});else install();
   root.addEventListener('revex:energy-open',()=>{void wrapNativeBridge();setTimeout(()=>void surfaceExistingJob(),150);});
   root.addEventListener('revex:source-revision-loaded',()=>{void wrapNativeBridge();setTimeout(()=>void surfaceExistingJob(),150);});
-  console.info('[REVEX] live worker edge r97',{callableFailure:'read-exact-job-and-reattach-or-complete',duplicateLaunch:'blocked',malformedViewerKey:'ignored-only',qaHardStop:'unchanged'});
+  console.info('[REVEX] live worker edge r114',{callableFailure:'worker-heartbeat-aware',duplicateLaunch:'lease-guarded',cachedCompletion:true,malformedViewerKey:'ignored-only',qaHardStop:'unchanged'});
 })(window);
