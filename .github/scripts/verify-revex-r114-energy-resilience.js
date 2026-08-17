@@ -55,7 +55,7 @@ must(ui,"viewer-interaction-r85-loader.js?v=20260817r114-durable-energy1",'nativ
 
 // r114 is execution-envelope-only: strict r49 package and GeometryCo policy remain present.
 for(const required of ['BASELINE_UPDATED_GEOMETRY.osm','PROPOSED_UPDATED_GEOMETRY.osm','EN-1_READY_TO_INSERT.xlsx','COMcheck_PROJECT_INPUT_READY.cxl','COMcheck_OFFICIAL_BACKSTOP_REPORT.pdf','COMcheck_BACKSTOP_RESULT.json'])must(broker,required,`strict final package output missing: ${required}`);
-must(geometry,'CONFIDENCE_THRESHOLD','GeometryCo confidence contract must remain present');
+must(geometry,'MINIMUM_MAPPING_CONFIDENCE = 0.75','GeometryCo 75% confidence contract must remain present');
 forbid(replay,'SYNC ENGINEERING','recovery must not instruct a new Revit sync');
 
 console.log(JSON.stringify({schema:'liber.revex.r114.energy-resilience.v1',status:'PASSED',heartbeatSeconds:15,leaseSeconds:120,workerCache:true,transportLossRecoverable:true,staleWorkerReacquire:true,strictFinalPackage:true},null,2));
