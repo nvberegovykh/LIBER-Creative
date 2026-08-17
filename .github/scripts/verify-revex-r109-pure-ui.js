@@ -51,9 +51,15 @@ must(ui,'v.look?.()','touch look must use existing viewer camera logic');
 must(docs,"revexDocKind:'printing-set'",'Docs must publish printing-set records');
 must(docs,'sheetIndex,createdAt:at','printing set must own its sheet index');
 must(docs,'row.singlePageStoragePath=uploaded.path','each available sheet must retain its isolated PDF path');
-must(docs,"mode:'isolated-sheet-pdf'",'sheet selection must support isolated single-page PDFs');
-must(app,'class="docs-node whole','core Docs must render the full-set PDF in the same revision group');
-must(app,'class="docs-node sheet','core Docs must render linked sheet rows beneath the full set');
+must(docs,"isolated?'isolated-sheet-pdf':'document'",'sheet selection must prefer isolated single-page PDFs');
+must(docs,'singlePageStoragePath:row.singlePageStoragePath||row.storagePath||null','legacy sheet records must project their existing PDF into the derived set view');
+must(docs,'const printing=rows.filter(file=>file.revexDocKind===\'printing-set\').map','printing-set projection must work on copied render rows');
+must(docs,"legacySheetProjection:'render-only'",'legacy sheet cleanup must be render-only, not a Firestore/state rewrite');
+forbid(docs,"document.addEventListener('click'",'Docs must not own navigation through a global click interceptor');
+forbid(docs,'stopImmediatePropagation','Docs must not steal core click events');
+forbid(docs,'MutationObserver','Docs must not observe/rewrite the DOM continuously');
+must(app,'class="docs-node whole','base Docs markup must retain the full-set entry');
+must(app,'class="docs-node sheet','base Docs markup must retain linked sheet rows');
 
 // Render must be event-driven. The prior whole-document observer recursively retriggered
 // decorate() as it rewrote the Render DOM and could pin the browser main thread.
@@ -73,7 +79,7 @@ must(broker,"createdBy: uid",'broker recovery job must remain owned by the authe
 console.log(JSON.stringify({
  schema:'liber.revex.r110.live-ui-render.v1',status:'PASSED',
  mobile:{sameDesktopOwners:true,hiddenIntegrity:true,semanticSvgTabs:true,directRender:true,touchWalkSharedViewer:true},
- docs:{linkedPrintingSetGroup:true,fullSet:true,isolatedSheetPdfs:true,stateRewrite:false},
+ docs:{linkedPrintingSetGroup:true,fullSet:true,isolatedSheetPdfs:true,legacyProjection:'render-only',globalClickInterceptor:false,stateRewrite:false},
  render:{globalMutationObserver:false,idempotentBrokerJob:true,webviewCacheBreak:true},
  energy:{r95Diagnostics:true,r89Identity:true,r95Replay:true,liveWorkerEdge:true}
 },null,2));
