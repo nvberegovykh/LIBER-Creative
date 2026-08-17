@@ -1,0 +1,32 @@
+name: REVEX r113 Render + Docs validation
+
+on:
+  pull_request:
+    paths:
+      - 'server/revex-render-functions/**'
+      - 'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
+      - 'docs/liber-apps/apps/revex/docs-presentation-r113.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - '.github/scripts/verify-revex-r113-render-docs.js'
+      - '.github/workflows/revex-r113-render-docs.yml'
+  workflow_dispatch:
+
+jobs:
+  render-docs:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify r113 Render + Docs contract
+        run: node .github/scripts/verify-revex-r113-render-docs.js
+      - name: Parse Render deployment in Windows PowerShell
+        shell: powershell
+        run: |
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'), [ref]$null, [ref]$errors)
+          if ($errors.Count) { $errors | Format-List | Out-String | Write-Error; exit 1 }
+          Write-Host 'DEPLOY_RENDER_SERVER.ps1 parse OK'
+      - name: Parse Render broker
+        run: node --check server/revex-render-functions/index.js
