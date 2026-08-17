@@ -76,8 +76,25 @@ function Add-ServiceAccountUser([string]$GCloud, [string]$ServiceAccount, [strin
   )
 }
 
+function Resolve-FirebaseStorageBucket([string]$GCloud) {
+  $listed = Invoke-NativeCapture $GCloud @(
+    "storage","buckets","list","--project",$ProjectId,"--format","value(name)"
+  )
+  if ($listed.Code -ne 0) { throw "Could not enumerate Google Cloud Storage buckets for $ProjectId." }
+  $prefix = [Regex]::Escape($ProjectId)
+  $names = @($listed.Output | ForEach-Object {
+    ([string]$_).Trim().TrimEnd('/') -replace '^gs://',''
+  } | Where-Object { $_ } | Select-Object -Unique)
+  $firebaseBuckets = @($names | Where-Object { $_ -match "^$prefix\.(?:appspot\.com|firebasestorage\.app)$" })
+  if ($firebaseBuckets.Count -ne 1) {
+    $detail = if ($names.Count) { $names -join ', ' } else { '<none>' }
+    throw "REVEX requires exactly one Firebase Storage bucket for $ProjectId; discovered: $detail"
+  }
+  return [string]$firebaseBuckets[0]
+}
+
 try {
-  Write-Host "REVEX r112 private render deployment" -ForegroundColor Cyan
+  Write-Host "REVEX r113 private render deployment" -ForegroundColor Cyan
   Write-Host "Public model: Qwen/Qwen-Image-Edit-2511 @ 6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9"
   Write-Host "Runtime: private Cloud Run RTX PRO 6000; tokenless public model"
   Write-Host "Project: $ProjectId  Region: $Region"
@@ -146,6 +163,9 @@ try {
     throw "The private REVEX GPU worker URL could not be resolved."
   }
 
+  $StorageBucket = Resolve-FirebaseStorageBucket $GCloud
+  Write-Host "Firebase Storage authority: $StorageBucket" -ForegroundColor DarkGray
+
   Invoke-Checked "Allow only REVEX broker to invoke private GPU worker" $GCloud @(
     "run","services","add-iam-policy-binding",$Service,"--project",$ProjectId,"--region",$Region,
     "--member","serviceAccount:$BrokerSa","--role","roles/run.invoker","--quiet"
@@ -157,9 +177,11 @@ try {
 
   $previousWorker = $env:REVEX_RENDER_WORKER_URL
   $previousBroker = $env:REVEX_RENDER_BROKER_SERVICE_ACCOUNT
+  $previousStorage = $env:REVEX_STORAGE_BUCKET
   try {
     $env:REVEX_RENDER_WORKER_URL = $WorkerUrl
     $env:REVEX_RENDER_BROKER_SERVICE_ACCOUNT = $BrokerSa
+    $env:REVEX_STORAGE_BUCKET = $StorageBucket
 
     $package = Get-Content -LiteralPath (Join-Path $FunctionsDir "package.json") -Raw | ConvertFrom-Json
     if ([string]$package.engines.node -ne "22") {
@@ -173,19 +195,17 @@ try {
       "const t=Date.now();const m=require('./index.js');if(typeof m.runRevexRender!=='function')throw new Error('runRevexRender export missing');const ms=Date.now()-t;console.log('REVEX broker module OK in '+ms+' ms on '+process.version+'; deployment runtime=nodejs22');"
     ) $FunctionsDir
 
-    # Deploy the callable wrapper through the documented Cloud Functions v2 API.
-    # The deploy runtime itself is authoritative: it is pinned to Node 22 regardless of
-    # whichever compatible local Node version happens to be first on PATH.
     Invoke-Checked "Deploy authenticated REVEX render broker" $GCloud @(
       "functions","deploy","runRevexRender","--gen2","--region",$Region,"--project",$ProjectId,
       "--runtime","nodejs22","--source",$FunctionsDir,"--entry-point","runRevexRender","--trigger-http",
       "--allow-unauthenticated","--service-account",$BrokerSa,
-      "--set-env-vars","REVEX_RENDER_WORKER_URL=$WorkerUrl,REVEX_RENDER_BROKER_SERVICE_ACCOUNT=$BrokerSa",
+      "--set-env-vars","REVEX_RENDER_WORKER_URL=$WorkerUrl,REVEX_RENDER_BROKER_SERVICE_ACCOUNT=$BrokerSa,REVEX_STORAGE_BUCKET=$StorageBucket",
       "--memory","1GiB","--timeout","3600s","--concurrency","4","--max-instances","4","--quiet"
     )
   } finally {
     $env:REVEX_RENDER_WORKER_URL = $previousWorker
     $env:REVEX_RENDER_BROKER_SERVICE_ACCOUNT = $previousBroker
+    $env:REVEX_STORAGE_BUCKET = $previousStorage
   }
 
   $function = Invoke-NativeCapture $GCloud @(
@@ -204,9 +224,19 @@ try {
     throw "REVEX render broker runtime mismatch after deployment; expected nodejs22, got $RuntimeName."
   }
 
+  $bucketState = Invoke-NativeCapture $GCloud @(
+    "functions","describe","runRevexRender","--gen2","--project",$ProjectId,"--region",$Region,
+    "--format","value(serviceConfig.environmentVariables.REVEX_STORAGE_BUCKET)"
+  )
+  $LiveStorageBucket = (@($bucketState.Output) -join "").Trim()
+  if ($bucketState.Code -ne 0 -or $LiveStorageBucket -ne $StorageBucket) {
+    throw "REVEX render broker storage binding mismatch after deployment; expected $StorageBucket, got $LiveStorageBucket."
+  }
+
   Write-Host ""
   Write-Host "PASS: REVEX private renderer is deployed end-to-end." -ForegroundColor Green
   Write-Host "Worker: $WorkerUrl"
+  Write-Host "Storage: $StorageBucket"
   Write-Host "Broker: runRevexRender ACTIVE · runtime nodejs22"
   Write-Host "Default renderer needs no Hugging Face account/token and performs no browser-side model inference."
 } catch {
