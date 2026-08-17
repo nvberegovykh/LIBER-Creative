@@ -3,7 +3,7 @@ const fs=require('fs');
 const path=require('path');
 const assert=require('assert');
 const root=path.resolve(__dirname,'..','..');
-const read=p=>fs.readFileSync(path.join(root,p),'utf8');
+const read=p=>fs.readFileSync(path.join(root,p),'utf8').replace(/\r\n/g,'\n');
 const handler=read('src/Liber.Revex.Revit/Revit/RevitRequestHandler.cs');
 const windowHost=read('src/Liber.Revex.Revit/UI/RendairWindow.cs');
 const energyHost=read('src/Liber.Revex.Revit/Services/EngineeringCompanionWebBridge.cs');
