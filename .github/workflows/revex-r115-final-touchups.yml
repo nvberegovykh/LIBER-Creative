@@ -1,0 +1,51 @@
+name: REVEX r115 final touchups validation
+
+on:
+  pull_request:
+    paths:
+      - 'docs/liber-apps/apps/revex/viewer-texture-r115.js'
+      - 'docs/liber-apps/apps/revex/docs-pages-r115.js'
+      - 'docs/liber-apps/apps/revex/render-touchups-r115.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - 'server/revex-render-worker/render_r115.py'
+      - 'server/revex-render-worker/Dockerfile'
+      - '.github/scripts/verify-revex-r115-final-touchups.js'
+      - '.github/workflows/revex-r115-final-touchups.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  final-touchups:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: JavaScript syntax
+        run: |
+          node --check docs/liber-apps/apps/revex/viewer-texture-r115.js
+          node --check docs/liber-apps/apps/revex/docs-pages-r115.js
+          node --check docs/liber-apps/apps/revex/render-touchups-r115.js
+          node --check docs/liber-apps/apps/revex/ui-integrity.js
+      - name: Python syntax
+        run: python -m py_compile server/revex-render-worker/render_r115.py
+      - name: Verify exact r115 touchup contract
+        run: node .github/scripts/verify-revex-r115-final-touchups.js
+      - name: Preserve Energy execution core
+        shell: bash
+        run: |
+          git fetch origin "${{ github.base_ref }}" --deepen=200
+          changed="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
+          echo "$changed"
+          forbidden="$(printf '%s\n' "$changed" | grep -E '^server/revex-energy-worker/|^src/Liber.Revex.Revit/Engineering/Energy/|^src/Liber.Revex.Revit/Engineering/Gbxml/' || true)"
+          if [ -n "$forbidden" ]; then
+            echo 'r115 final touchups must not modify Energy/Revit engineering core:'
+            echo "$forbidden"
+            exit 1
+          fi

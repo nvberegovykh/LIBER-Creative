@@ -21,14 +21,15 @@ RUN python -m pip install --upgrade pip==25.2 \
  && python -m pip install -r requirements.txt
 
 COPY server/revex-render-worker/app.py ./app.py
+COPY server/revex-render-worker/render_r115.py ./render_r115.py
 COPY server/revex-render-worker/model-manifest.json ./model-manifest.json
 # Cloud Build uses the classic Dockerfile parser, so keep build-time manifest QA in a
 # single shell instruction rather than Dockerfile heredoc syntax.
-RUN python -m py_compile app.py \
+RUN python -m py_compile app.py render_r115.py \
  && python -c "import json; m=json.load(open('model-manifest.json', encoding='utf-8')); assert m['model']=='Qwen/Qwen-Image-Edit-2511'; assert m['revision']=='6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9'; assert m['authentication']=='none-public-repository'; assert m['integrity']['allowMovingMain'] is False; assert m['integrity']['allowHuggingFaceTokenRequirement'] is False"
 
 # The upstream weights are intentionally not copied into GitHub or the image.
 # Default runtime resolves the exact immutable public revision tokenlessly.
 # REVEX_MODEL_PATH is an optional future private immutable cache mount; it is
 # never required for normal use and never changes the approved model identity.
-CMD ["gunicorn","--bind","0.0.0.0:8080","--workers","1","--threads","4","--timeout","3600","app:APP"]
+CMD ["gunicorn","--bind","0.0.0.0:8080","--workers","1","--threads","4","--timeout","3600","render_r115:APP"]
