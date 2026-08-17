@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260817r101-design-ux1';
+  const BUILD='20260816r98-live-edge2';
   const REVEX_R87_REPLAY_CONTRACT='energy-diagnostics-r68.js?v=20260816r87-energy-replay1';
   const REVEX_R87_REPLAY_LABEL="energyDiagnostics:'revision-scoped-replay-r87'";
   const REVEX_R92_REPLAY_COMPAT='energy-replay-r92.js?v=20260816r92-hosted-replay1';
@@ -61,27 +61,11 @@
     // Revit WebView does not register the PWA service worker, so this query token is
     // the authoritative cache break for the r97 exact-job recovery loader.
     loadScript('viewer-interaction-r85-loader.js?v=20260816r98-live-edge2','viewer-interaction-r85-loader');
-    // r85 owns the base responsive viewer panels. Let it finish first, then apply
-    // the small-screen interaction layer and finally the all-screen design shell.
-    let mobileAttempts=0;
-    const loadDesign=()=>{
-      let designAttempts=0;
-      const wait=()=>{
-        if(root.__revexMobileUxR100||designAttempts++>=40){loadScript('design-ux-r101.js?v=20260817r101-design-ux1','design-ux-r101');return;}
-        setTimeout(wait,50);
-      };
-      wait();
-    };
-    const loadMobile=()=>{
-      if(root.__revexViewerInteractionR85||mobileAttempts++>=40){loadScript('mobile-ux-r100.js?v=20260817r100-mobile-ux1','mobile-ux-r100');loadDesign();return;}
-      setTimeout(loadMobile,50);
-    };
-    loadMobile();
   }
   function bind(){installCanonicalOverlayStore();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
   // index.html declares the THREE import map after ui-integrity.js. Never inject a
   // module before DOM parsing reaches that import map; doing so produced the bare
   // specifier "three" error seen in the Revit WebView log.
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'single-native-hosted-flight+manual-revision-authorization+live-job-reattach',moduleLoad:'after-import-map',liveWorkerEdge:'r97-exact-job-recovery',responsiveUx:'r100-small-screen+r101-all-screen-design',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'single-native-hosted-flight+manual-revision-authorization+live-job-reattach',moduleLoad:'after-import-map',liveWorkerEdge:'r97-exact-job-recovery',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
 })(window);
