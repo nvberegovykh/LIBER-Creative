@@ -21,6 +21,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -47,7 +49,7 @@ jobs:
       - name: Scope guard - Energy execution envelope only
         shell: bash
         run: |
-          git fetch origin "${{ github.base_ref }}" --depth=1
+          git fetch origin "${{ github.base_ref }}"
           changed="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
           echo "$changed"
           forbidden="$(printf '%s\n' "$changed" | grep -E '^src/Liber.Revex.Revit/Engineering/Energy/(GeometryCo/|revex_energy_pipeline\.py$)|^src/Liber.Revex.Revit/Engineering/Gbxml/' || true)"
