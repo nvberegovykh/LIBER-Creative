@@ -1,0 +1,40 @@
+name: REVEX r111 Energy broker bucket validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/firebase-functions/index.js'
+      - '.github/scripts/verify-revex-r111-energy-broker-bucket.js'
+      - '.github/workflows/revex-r111-energy-broker-bucket.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'server/firebase-functions/index.js'
+      - '.github/scripts/verify-revex-r111-energy-broker-bucket.js'
+      - '.github/workflows/revex-r111-energy-broker-bucket.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  broker-bucket:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check Energy broker
+        run: node --check server/firebase-functions/index.js
+      - name: Reproduce and guard real 250 broker boundary
+        run: node .github/scripts/verify-revex-r111-energy-broker-bucket.js
+      - name: Preserve broker-worker authority contract
+        run: node .github/scripts/verify-revex-r77-energy-broker-worker-contract.js
+      - name: Ensure fix remains server-side only
+        run: |
+          changed="$(git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD)"
+          if printf '%s\n' "$changed" | grep -E '^src/Liber\.Revex\.Revit/|^server/revex-energy-worker/|^docs/liber-apps/apps/revex/'; then
+            echo 'r111 broker-bucket repair must not rewrite Revit, worker, or Companion runtime.' >&2
+            exit 1
+          fi
