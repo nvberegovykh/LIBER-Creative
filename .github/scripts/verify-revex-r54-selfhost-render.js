@@ -25,7 +25,7 @@ const unifiedDeploy = read('DEPLOY_REVEX_CURRENT_SERVICES.ps1');
 const unifiedBootstrap = read('DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1');
 
 // Default render path is private/off-device and requires no model-provider login.
-must(workspace, "import './render-selfhost-r54.js';", 'workspace must load self-host renderer');
+must(workspace, "import './render-selfhost-r54.js?v=20260817r110-selfhost-render2';", 'workspace must load the cache-broken self-host renderer');
 must(selfhost, "provider: 'revex-selfhosted'", 'self-host provider not declared');
 must(selfhost, "browserInference: false", 'browser inference must stay disabled');
 must(selfhost, "extraLogin: false", 'default renderer must require no extra login');
@@ -35,6 +35,13 @@ must(selfhost, 'runRevexRender', 'browser must use private authenticated render 
 mustNot(selfhost, 'huggingface.co/api', 'browser must never call Hugging Face directly');
 mustNot(selfhost, 'from_pretrained', 'browser must never load the model');
 mustNot(selfhost.toLowerCase(), 'rendair.com', 'Rendair routing must not return');
+// r110: renderer UI may decorate on explicit open/startup retries only. A whole-document
+// MutationObserver retriggered decorate() on every BIM/Docs/status DOM mutation and caused
+// the live Companion main thread to collapse.
+mustNot(selfhost, 'new MutationObserver', 'self-host renderer must not install DOM MutationObservers');
+mustNot(selfhost, 'observer.observe(document.documentElement', 'whole-document render observer must never return');
+must(selfhost, 'function scheduleDecorate', 'renderer must use bounded event-driven decoration');
+must(selfhost, 'globalMutationObserver: false', 'runtime must diagnose observer-free render ownership');
 
 // Exact public upstream is pinned and tokenless; no moving-main dependency.
 assert.strictEqual(manifest.model, 'Qwen/Qwen-Image-Edit-2511');
@@ -59,6 +66,10 @@ must(broker, "if (!request.auth?.uid)", 'render broker must require LIBER auth')
 must(broker, 'assertProjectAccess', 'render broker must enforce project access');
 must(broker, 'getIdTokenClient(RENDER_WORKER_URL)', 'broker must invoke private Cloud Run with identity token');
 must(broker, 'projects/${projectId}/revex/renders/${jobId}', 'render source/result path must be project/job scoped');
+// r110: authenticated project members may recover the exact project/job record if the
+// browser Firestore write is not yet visible to the Gen2 broker.
+must(broker, 'if (!existing)', 'broker must recover the client-write visibility race');
+must(broker, 'brokerCreated: true', 'broker-created recovery job must be auditable');
 must(deploy, '--no-allow-unauthenticated', 'worker must not be public');
 must(deploy, '--gpu-type=nvidia-rtx-pro-6000', '96 GiB render GPU contract missing');
 must(deploy, '--cpu=20', 'RTX PRO 6000 CPU floor missing');
@@ -114,7 +125,7 @@ mustNot(unifiedDeploy, 'PUBLISH_REVEX_R49.ps1', 'unified launcher must never inv
 mustNot(unifiedBootstrap, 'PUBLISH_REVEX_R49.ps1', 'unified bootstrap must never invoke the stale publisher');
 
 console.log(JSON.stringify({
-  schema: 'liber.revex.r54-selfhost-render-energy-viewer-qa.v1',
+  schema: 'liber.revex.r110-selfhost-render-energy-viewer-qa.v2',
   status: 'PASSED',
   model: manifest.model,
   revision: manifest.revision,
@@ -122,6 +133,7 @@ console.log(JSON.stringify({
   extraModelLogin: false,
   browserInference: false,
   googleFallback: true,
+  globalMutationObserver: false,
   viewerFunctionPreserved: true,
   energyAcceptedReviewPreserved: true,
   cleanCurrentDeployment: true,
