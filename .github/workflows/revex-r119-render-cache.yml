@@ -1,0 +1,67 @@
+name: REVEX r119 persistent Render cache
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/revex-render-worker/render_r119.py'
+      - 'server/revex-render-worker/Dockerfile'
+      - 'server/revex-render-worker/DEPLOY_RENDER_R119.ps1'
+      - '.github/scripts/verify-revex-r115-final-touchups.js'
+      - '.github/workflows/revex-r119-render-cache.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  render-cache:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Python syntax
+        run: python -m py_compile server/revex-render-worker/render_r119.py
+      - name: Verify Render cache contract
+        shell: powershell
+        run: |
+          $worker = Get-Content -Raw 'server/revex-render-worker/render_r119.py'
+          $docker = Get-Content -Raw 'server/revex-render-worker/Dockerfile'
+          $deploy = Get-Content -Raw 'server/revex-render-worker/DEPLOY_RENDER_R119.ps1'
+          foreach ($marker in @('snapshot_download(', 'revision=base.MODEL_REVISION', 'local_dir=str(cache_root)', 'token=False', 'etag_timeout=etag_timeout', 'local_files_only=True')) {
+            if (-not $worker.Contains($marker)) { throw "Missing Render worker marker: $marker" }
+          }
+          foreach ($marker in @('render_r119.py', 'HF_HUB_ETAG_TIMEOUT=120', 'HF_HUB_DOWNLOAD_TIMEOUT=900', 'render_r119:APP')) {
+            if (-not $docker.Contains($marker)) { throw "Missing Render Docker marker: $marker" }
+          }
+          foreach ($marker in @('type=cloud-storage', 'REVEX_MODEL_CACHE_DIR=', 'HF_HUB_ETAG_TIMEOUT=120', 'HF_HUB_DOWNLOAD_TIMEOUT=900', '-clear-volumes')) {
+            if (-not $deploy.Contains($marker)) { throw "Missing Render deployment marker: $marker" }
+          }
+          if ($worker -match 'runRevexEnergy|GeometryCo|COMcheck|SYNC ENGINEERING') { throw 'r119 Render cache source crossed into Energy scope.' }
+          Write-Host 'PASS r119 persistent Render cache contract'
+      - name: Preserve r115 construction-render authority
+        run: node .github/scripts/verify-revex-r115-final-touchups.js
+      - name: Parse PowerShell deployer
+        shell: powershell
+        run: |
+          $tokens=$null; $errors=$null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'server/revex-render-worker/DEPLOY_RENDER_R119.ps1'), [ref]$tokens, [ref]$errors)
+          if (@($errors).Count) { $errors | Format-List | Out-String | Write-Error; exit 1 }
+          Write-Host 'PASS DEPLOY_RENDER_R119.ps1 parse'
+      - name: Scope guard
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          base_sha="${{ github.event.pull_request.base.sha }}"
+          head_sha="${{ github.event.pull_request.head.sha }}"
+          git fetch --no-tags --depth=1 origin "$base_sha" "$head_sha"
+          changed="$(git diff --name-only "$base_sha" "$head_sha")"
+          echo "$changed"
+          forbidden="$(printf '%s\n' "$changed" | grep -Ev '^(server/revex-render-worker/(render_r119.py|Dockerfile|DEPLOY_RENDER_R119.ps1)|\.github/scripts/verify-revex-r115-final-touchups.js|\.github/workflows/revex-r119-render-cache.yml)$' || true)"
+          if [ -n "$forbidden" ]; then
+            echo 'r119 Render cache release contains unrelated changes:'
+            echo "$forbidden"
+            exit 1
+          fi

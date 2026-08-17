@@ -7,6 +7,8 @@ const docs=read('docs/liber-apps/apps/revex/docs-pages-r115.js');
 const renderUi=read('docs/liber-apps/apps/revex/render-touchups-r115.js');
 const worker=read('server/revex-render-worker/render_r115.py');
 const docker=read('server/revex-render-worker/Dockerfile');
+const r119Path='server/revex-render-worker/render_r119.py';
+const r119=fs.existsSync(r119Path)?read(r119Path):'';
 const must=(t,n,m)=>assert(t.includes(n),m||`missing ${n}`),forbid=(t,n,m)=>assert(!t.includes(n),m||`forbidden ${n}`);
 for(const marker of ['viewer-texture-r115.js?v=20260817r115-texture1','docs-pages-r115.js?v=20260817r115-docs1','render-touchups-r115.js?v=20260817r115-render-ui1'])must(ui,marker,'r115 runtime must be cache-broken and loaded');
 must(texture,"geometry.setAttribute('uv'",'exact meshes without UVs must receive generated UVs');
@@ -32,5 +34,11 @@ must(worker,'lighting fixtures','worker must preserve modeled lighting fixtures'
 must(worker,'same location, same orientation, same functional role','worker must enforce equivalent substitution');
 must(worker,'Only surroundings outside the modeled building may be imagined','worker must enforce surroundings-only imagination');
 must(docker,'COPY server/revex-render-worker/render_r115.py ./render_r115.py','r115 worker wrapper must ship');
-must(docker,'render_r115:APP','production worker must boot through r115 wrapper');
-console.log(JSON.stringify({schema:'liber.revex.r115.final-touchups.v1',status:'PASSED',texture:{generatedUv:true,baseBlend:true},docs:{fullSetAuthority:true,derivedOnePage:true,revisionTree:false},render:{boundedModal:true,fast1kSeconds:30,buildingAuthority:'revit',surroundingsOnly:true}},null,2));
+if(docker.includes('render_r119:APP')){
+  must(docker,'COPY server/revex-render-worker/render_r119.py ./render_r119.py','r119 wrapper must ship if it owns the production entry point');
+  must(r119,'import render_r115 as r115','newer production wrapper must inherit the r115 construction-render owner');
+  must(r119,'APP = r115.APP','newer production wrapper must expose the r115 application unchanged');
+}else{
+  must(docker,'render_r115:APP','production worker must boot through r115 wrapper');
+}
+console.log(JSON.stringify({schema:'liber.revex.r115.final-touchups.v1',status:'PASSED',texture:{generatedUv:true,baseBlend:true},docs:{fullSetAuthority:true,derivedOnePage:true,revisionTree:false},render:{boundedModal:true,fast1kSeconds:30,buildingAuthority:'revit',surroundingsOnly:true,r115AuthorityPreserved:true}},null,2));
