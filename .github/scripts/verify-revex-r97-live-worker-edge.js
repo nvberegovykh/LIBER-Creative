@@ -11,14 +11,19 @@ const source = fs.readFileSync(sourcePath, 'utf8');
 const loader = fs.readFileSync(loaderPath, 'utf8');
 new vm.Script(source, { filename: sourcePath });
 new vm.Script(loader, { filename: loaderPath });
+
+// r97 transport-loss invariants remain mandatory, while r116 adds explicit
+// pipeline-terminal handling so BLOCKED_* can never be re-followed forever.
 assert(source.includes("status==='RUNNING'||status==='COMPLETE'||durable"));
-assert(source.includes("worker.status==='FAILED'||status==='FAILED'||status==='INFRASTRUCTURE_FAILED'"));
+assert(source.includes("pipelineTerminal(status)||worker.status==='FAILED'"));
 assert(source.includes("worker.status==='RUNNING'&&worker.fresh"));
+assert(source.includes('workerPipelineStatus'));
 assert(source.includes('followAuthoritativeJob'));
 assert(source.includes('readJobAfterCallable'));
 assert(source.includes('event.stopImmediatePropagation'));
-assert(source.includes('ENERGY_NATIVE_EDGE_R114'));
-assert(loader.includes('live-worker-edge-r97.js?v=20260817r114-durable-energy1'));
+assert(source.includes('ENERGY_NATIVE_EDGE_R116'));
+assert(loader.includes('REVEX_R114_LIVE_EDGE_COMPAT'));
+assert(loader.includes('live-worker-edge-r97.js?v=20260817r116-final-energy1'));
 
 function makeHarness(job) {
   const listeners = new Map();
@@ -88,7 +93,7 @@ function makeHarness(job) {
     await new Promise(resolve => setTimeout(resolve, 30));
     const result = await h.window.__revexManagedEnergyBridge.authorizeCurrentRevision();
     assert.deepStrictEqual(JSON.parse(JSON.stringify(result)), { ok: true, followed: true });
-    assert.strictEqual(h.getFollowCount(), 1, 'dropped callable after server completion must bind the exact completed job instead of surfacing a false functions/internal failure');
+    assert.strictEqual(h.getFollowCount(), 1, 'dropped callable after strict server completion must bind the exact completed job');
   }
   {
     const now=Date.now();
@@ -97,6 +102,15 @@ function makeHarness(job) {
     const result = await h.window.__revexManagedEnergyBridge.authorizeCurrentRevision();
     assert.deepStrictEqual(JSON.parse(JSON.stringify(result)), { ok: true, followed: true });
     assert.strictEqual(h.getFollowCount(), 1, 'broker transport loss must not terminate a worker with a fresh durable heartbeat');
+  }
+  {
+    const h = makeHarness({ status: 'BLOCKED_COMCHECK_INPUT', stage: 'COMCHECK_INPUT', error: 'missing filing-grade current-project COMcheck input', workerStatus: 'FAILED', workerStage: 'PIPELINE_TERMINAL', workerPipelineStatus: 'BLOCKED_COMCHECK_INPUT' });
+    await new Promise(resolve => setTimeout(resolve, 30));
+    await assert.rejects(
+      () => h.window.__revexManagedEnergyBridge.authorizeCurrentRevision(),
+      error => /COMCHECK_INPUT: missing filing-grade current-project COMcheck input/.test(String(error?.message || error))
+    );
+    assert.strictEqual(h.getFollowCount(), 0, 'terminal COMcheck evidence failure must not enter durable recovery/finalization loop');
   }
   {
     const h = makeHarness({ status: 'INFRASTRUCTURE_FAILED', stage: 'WORKER_REQUEST', error: 'upstream reset', workerHttpStatus: 503 });
@@ -119,11 +133,12 @@ function makeHarness(job) {
     assert.strictEqual(stopped, false, 'normal keyboard event must remain untouched');
   }
   console.log(JSON.stringify({
-    schema: 'liber.revex.r114-live-worker-edge-qa.v1',
+    schema: 'liber.revex.r116-live-worker-edge-qa.v1',
     status: 'PASSED',
     callableDropRunningJob: 'reattach-same-job',
     callableDropCompletedJob: 'bind-exact-complete-result',
     callableDropLiveWorker: 'durable-heartbeat-preserves-run',
+    blockedComcheckInput: 'terminal-no-loop',
     infrastructureFailureWithoutWorker: 'exact-firestore-job-error',
     malformedViewerKey: 'ignored-before-legacy-toLowerCase',
     duplicateLaunch: 'not-created',
