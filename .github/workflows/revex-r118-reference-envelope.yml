@@ -56,7 +56,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           if [ -z "$BASE_SHA" ]; then
-            echo 'workflow_dispatch: scope guard has no PR base and is not applicable.'
+            echo 'workflow_dispatch scope guard has no PR base and is not applicable.'
             exit 0
           fi
           git fetch origin "$BASE_SHA" --depth=1
@@ -81,4 +81,5 @@ jobs:
             .
 
       - name: Full build completed
-        run: echo 'PASS: exact production Dockerfile and all embedded Energy dependency/QA stages completed.'
+        run: |
+          echo 'PASS: exact production Dockerfile and all embedded Energy dependency/QA stages completed.'
