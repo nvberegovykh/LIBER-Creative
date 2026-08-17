@@ -1,0 +1,148 @@
+name: REVEX r104 full release convergence
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'RECOVER_REVEX_ENERGY_CURRENT.ps1'
+      - 'RECOVER_REVEX_ENERGY_CURRENT.cmd'
+      - 'UPDATE_REVEX_ADDIN_CURRENT.ps1'
+      - 'server/revex-energy-worker/**'
+      - 'server/firebase-functions/**'
+      - 'src/Liber.Revex.Revit/**'
+      - 'docs/liber-apps/apps/revex/store.js'
+      - '.github/scripts/verify-revex-r104-full-stack.py'
+      - '.github/workflows/revex-r104-full-release-convergence.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-variation-replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Final full-stack architecture contract
+        run: python .github/scripts/verify-revex-r104-full-stack.py
+      - name: Current-generation regression
+        run: node .github/scripts/verify-revex-current-generation-r53.js
+      - name: Current-project identity and finish regression
+        run: python .github/scripts/verify-revex-r69-energy-finish.py
+      - name: Revit analytical topology fallback regression
+        run: python .github/scripts/verify-revex-r73-energy-topology-fallback.py
+      - name: Broker-worker authority regression
+        run: node .github/scripts/verify-revex-r77-energy-broker-worker-contract.js
+      - name: GeometryCo source-condition regression
+        env:
+          PYTHONPATH: server/revex-energy-worker
+        run: python server/revex-energy-worker/verify_geometryco_source_condition_r91.py
+      - name: Structured current-Revit schedule regression
+        env:
+          PYTHONPATH: server/revex-energy-worker
+        run: python server/revex-energy-worker/verify_structured_schedule_evidence_r101.py
+      - name: Bounded current T/Z/EN COMcheck evidence regression
+        env:
+          PYTHONPATH: server/revex-energy-worker
+        run: python server/revex-energy-worker/verify_comcheck_evidence_r100.py
+      - name: Broker syntax and full output contract
+        run: |
+          node --check server/firebase-functions/index.js
+          python - <<'PY'
+          from pathlib import Path
+          broker=Path('server/firebase-functions/index.js').read_text(encoding='utf-8')
+          worker=Path('server/revex-energy-worker/app.py').read_text(encoding='utf-8')
+          required=('BASELINE_UPDATED_GEOMETRY.osm','PROPOSED_UPDATED_GEOMETRY.osm','EN-1_READY_TO_INSERT.xlsx','COMcheck_PROJECT_INPUT_READY.cxl','COMcheck_OFFICIAL_BACKSTOP_REPORT.pdf','COMcheck_BACKSTOP_RESULT.json')
+          for item in required:
+              assert item in broker and item in worker, item
+          print('REVEX_R104_STRICT_RESULT_CONTRACT=PASSED')
+          PY
+      - name: Pinned GeometryCo and r49 implementation not rewritten
+        run: |
+          changed="$(git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD)"
+          if printf '%s\n' "$changed" | grep -E '^src/Liber\.Revex\.Revit/Engineering/Energy/revex_energy_pipeline\.py$'; then
+            echo 'Final convergence must not rewrite the pinned r49 implementation.' >&2
+            exit 1
+          fi
+          if printf '%s\n' "$changed" | grep -E '^src/Liber\.Revex\.Revit/Engineering/Energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler\.py$'; then
+            echo 'Final convergence must not rewrite GeometryCo core.' >&2
+            exit 1
+          fi
+
+  windows-release-contract:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Parse every user-facing/deployment PowerShell path in Windows PowerShell
+        shell: powershell
+        run: |
+          foreach ($path in @(
+            '.\RECOVER_REVEX_ENERGY_CURRENT.ps1',
+            '.\UPDATE_REVEX_ADDIN_CURRENT.ps1',
+            '.\server\revex-energy-worker\DEPLOY_ENERGY_WORKER_ONLY_R69.ps1',
+            '.\server\revex-energy-worker\DEPLOY_ENERGY_BROKER_ONLY_R77.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors) | Out-Null
+            if (@($errors).Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Error
+              exit 1
+            }
+          }
+      - name: Verify no worker-only or Firebase-broker final path survived
+        shell: powershell
+        run: |
+          $recovery = Get-Content '.\RECOVER_REVEX_ENERGY_CURRENT.ps1' -Raw
+          $launcher = Get-Content '.\RECOVER_REVEX_ENERGY_CURRENT.cmd' -Raw
+          foreach ($needle in @(
+            'DEPLOY_ENERGY_WORKER_ONLY_R69.ps1',
+            'DEPLOY_ENERGY_BROKER_ONLY_R77.ps1',
+            'Assert-FullLiveEdge',
+            'Worker + authenticated broker + IAM + installed Revit add-in are verified together.'
+          )) { if (-not $recovery.Contains($needle)) { throw "Missing full-stack convergence marker: $needle" } }
+          if ($recovery.Contains('DEPLOY_REVEX_CURRENT_SERVICES.ps1')) { throw 'Fragile unified/Firebase Energy deployment must not own final convergence.' }
+          if ($recovery.Contains('Scope: Energy worker only')) { throw 'Worker-only final mode is prohibited.' }
+          if ($launcher.Contains('Do NOT rerun gbXML')) { throw 'Launcher must not override revision-aware Retry vs Sync semantics.' }
+      - name: Final full-stack architecture contract
+        shell: pwsh
+        run: python .github/scripts/verify-revex-r104-full-stack.py
+      - name: Compile complete Revit 2026 add-in
+        shell: pwsh
+        run: |
+          dotnet restore src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -p:RevexCiRevitApi=true -p:Platform=x64
+          dotnet build src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -c Release -p:RevexCiRevitApi=true -p:Platform=x64 --no-restore
+      - name: Preserve viewer/render/energy compatibility contracts
+        shell: pwsh
+        run: |
+          node .github/scripts/verify-revex-current-generation-r53.js
+          node .github/scripts/verify-revex-r72-nonblocking-viewer.js
+          python .github/scripts/verify-revex-r69-energy-finish.py
+          node .github/scripts/verify-revex-r54-selfhost-render.js
+          python .github/scripts/verify-revex-r73-energy-topology-fallback.py
+          node .github/scripts/verify-revex-r83-energy-single-shot.js
+
+  worker-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build exact worker image and run all embedded Energy QA
+        run: docker build --progress=plain -f server/revex-energy-worker/Dockerfile -t revex-energy-worker:r104 .
