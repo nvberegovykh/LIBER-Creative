@@ -6,9 +6,9 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 3.0
 
-$SourceCandidate = "8f5efbc81a30907f605d02c80272067a6b5e8ddd"
+$SourceCandidate = "b69071c621220cc875fff041bb2082e80e44774b"
 $Repo = "https://github.com/nvberegovykh/LIBER-Creative.git"
-$Work = Join-Path $env:TEMP ("REVEX-R124-RESUME-" + [guid]::NewGuid().ToString("N"))
+$Work = Join-Path $env:TEMP ("REVEX-R125-FINAL-" + [guid]::NewGuid().ToString("N"))
 $Source = Join-Path $Work "source"
 $ExitCode = 1
 
@@ -44,11 +44,13 @@ function Capture-Native([string]$Command, [string[]]$Arguments) {
 }
 
 try {
-  Write-Host "REVEX r124 Energy recovery - resumable publication" -ForegroundColor Cyan
+  Write-Host "REVEX r125 Energy recovery - final filing touchups" -ForegroundColor Cyan
   Write-Host "Fixed source: $SourceCandidate"
-  Write-Host "Policy: reuse byte-verified completed simulation outputs when only downstream publication failed; rebuild Packager, EN-1, official COMcheck and the normal release ZIP." -ForegroundColor Green
-  Write-Host "Integrity: final artifact bytes are re-hashed immediately before upload; if no trustworthy partial run exists, the preserved full pipeline runs normally." -ForegroundColor Green
-  Write-Host "Scope: Energy worker + authenticated broker only. No Revit sync. No add-in replacement. No BIM/Docs/Render mutation." -ForegroundColor Green
+  Write-Host "Publication: reuse byte-verified completed simulation outputs when safe; rebuild Packager, EN-1, official COMcheck and REVEX_ENERGY_RELEASE_PACKAGE.zip." -ForegroundColor Green
+  Write-Host "COMcheck: native Revit schedule totals outrank diagram re-sums; actual VT wins, then approved same-envelope VT, then bounded clear/tinted fallback; compact assembly labels." -ForegroundColor Green
+  Write-Host "EN-1: original workbook appearance is preserved; only editable values plus print-copy visibility/fit are touched." -ForegroundColor Green
+  Write-Host "Geometry source fix is included in current main for future Engineering exports: whole door openings, per-panel multi-floor curtain-wall mapping, and actual Levels/physical top cover for bulkheads." -ForegroundColor Green
+  Write-Host "Scope of THIS command: Energy worker + authenticated broker only. It does not create a new Engineering revision or rerun Revit." -ForegroundColor Green
 
   $Git = Require-Command "git"
   $GCloud = Require-Command "gcloud"
@@ -75,7 +77,7 @@ try {
   if ((Invoke-Native $Git @("init", $Source) -Quiet) -ne 0) { throw "git init failed." }
   if ((Invoke-Native $Git @("-C", $Source, "remote", "add", "origin", $Repo) -Quiet) -ne 0) { throw "git remote failed." }
 
-  Write-Host ">> Fetch exact r124 resumable-publication Energy source" -ForegroundColor DarkCyan
+  Write-Host ">> Fetch exact r125 final Energy source" -ForegroundColor DarkCyan
   if ((Invoke-Native $Git @("-C", $Source, "fetch", "--depth", "1", "origin", $SourceCandidate)) -ne 0) { throw "Exact fixed Energy source fetch failed." }
   if ((Invoke-Native $Git @("-C", $Source, "checkout", "--detach", "FETCH_HEAD") -Quiet) -ne 0) { throw "Exact fixed Energy checkout failed." }
   $checked = Capture-Native $Git @("-C", $Source, "rev-parse", "HEAD")
@@ -84,7 +86,7 @@ try {
   $deploy = Join-Path $Source "server\revex-energy-worker\DEPLOY_ENERGY_CURRENT_ARGV_FIX.ps1"
   if (-not (Test-Path -LiteralPath $deploy -PathType Leaf)) { throw "Fixed Energy deployer is missing." }
 
-  Write-Host ">> Deploy exact Energy worker + broker" -ForegroundColor DarkCyan
+  Write-Host ">> Deploy exact r125 Energy worker + broker" -ForegroundColor DarkCyan
   $code = Invoke-Native "powershell.exe" @(
     "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $deploy,
     "-ProjectId", $ProjectId,
@@ -94,14 +96,14 @@ try {
   )
   if ($code -ne 0) { throw "Fixed Energy deployment failed with exit code $code." }
 
-  Write-Host "PASS: r124 resumable-publication Energy worker + broker deployed." -ForegroundColor Green
-  Write-Host "Open Energy and Retry the CURRENT published Engineering revision. Do not Sync Engineering." -ForegroundColor Green
-  Write-Host "When the prior expensive outputs verify, Retry skips GeometryCo/EnergyPlus and publishes REVEX_ENERGY_RELEASE_PACKAGE.zip." -ForegroundColor Green
-  Start-Process "https://liberpict.com/liber-apps/apps/revex/index.html?projectId=revex_mspgzb7h_729b2936bfaa&specProjectId=spec_revex_mspgzb7h_729b2936bfaa&view=energy"
+  Write-Host "PASS: r125 final Energy worker + broker deployed." -ForegroundColor Green
+  Write-Host "Open Energy and Retry the CURRENT published Engineering revision. Do not create a new revision for these filing touchups." -ForegroundColor Green
+  Write-Host "If the prior simulation artifacts verify, Retry skips GeometryCo/EnergyPlus and publishes REVEX_ENERGY_RELEASE_PACKAGE.zip." -ForegroundColor Green
+  Start-Process "https://liberpict.com/liber-apps/apps/revex/index.html?projectId=revex_mspgzb7h_729b2936bfaa&specProjectId=spec_revex_mspgzb7h2936bfaa&view=energy"
   $ExitCode = 0
 }
 catch {
-  Write-Host "REVEX r124 Energy recovery stopped safely: $($_.Exception.Message)" -ForegroundColor Red
+  Write-Host "REVEX r125 Energy recovery stopped safely: $($_.Exception.Message)" -ForegroundColor Red
   $ExitCode = 1
 }
 finally {
