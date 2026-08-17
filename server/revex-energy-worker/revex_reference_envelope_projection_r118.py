@@ -2,12 +2,12 @@
 """REVEX r118 approved-envelope thermal projection.
 
 The immutable current project remains the authority for identity, tag, geometry,
-area and orientation.  When a current EN thermal-boundary geometry row has no
+area and orientation. When a current EN thermal-boundary geometry row has no
 matching thermal-property row, REVEX may inherit only thermal performance from
 the approved 79 Winthrop proposed envelope reference after the current EN facts
 corroborate that same envelope signature.
 
-No current Engineering evidence is mutated.  No prior-project identity, quantity,
+No current Engineering evidence is mutated. No prior-project identity, quantity,
 area, orientation or CXL is copied into the current project.
 """
 from __future__ import annotations
@@ -86,9 +86,7 @@ def _approved_profiles(path: Path) -> dict[str, dict]:
             continue
         glazing[handle] = {
             "material": fields[1],
-            # COMcheck/IP U-values are shown to two decimals in the approved filing
-            # schedule.  Converting the exact OpenStudio SI value 1.7 gives 0.299...
-            # and therefore the approved filing value 0.30.
+            # Exact approved OSM value 1.7 W/m2-K converts to the 0.30 IP filing value.
             "uFactor": round(u_si * W_M2K_TO_BTU_H_FT2_F, 2),
             "uFactorSI": u_si,
             "shgc": shgc,
@@ -196,7 +194,9 @@ def resolve_request(request_path: Path, output_root: Path) -> Path:
                 continue
             row["_sourceFile"] = page.get("sourceFile")
             rows.append(row)
-    thermal_rows = [row for row in rows if _number(row.get("uFactor")) is not None]
+    # Freeze the original current-revision thermal set. Reference projections never become
+    # corroboration for another projection and never hide an exact missing tag in the audit.
+    current_thermal_rows = [row for row in rows if _number(row.get("uFactor")) is not None]
     geometry_rows = [
         row for row in rows
         if _number(row.get("grossAreaFt2")) is not None
@@ -209,12 +209,12 @@ def resolve_request(request_path: Path, output_root: Path) -> Path:
 
     profiles = _approved_profiles(_reference_path())
     window_corroboration = [
-        row for row in thermal_rows
+        row for row in current_thermal_rows
         if _text(row.get("kind")).lower() == "window"
         and _profile_matches_row(profiles["window"], row, require_shgc=True)
     ]
     door_corroboration = [
-        row for row in thermal_rows
+        row for row in current_thermal_rows
         if _text(row.get("kind")).lower() == "door"
         and _is_glazed_door(row)
         and _profile_matches_row(profiles["door"], row, require_shgc=False)
@@ -229,7 +229,7 @@ def resolve_request(request_path: Path, output_root: Path) -> Path:
     filled: list[dict] = []
     skipped: list[dict] = []
     for geometry in geometry_rows:
-        if _has_existing_match(geometry, thermal_rows):
+        if _has_existing_match(geometry, current_thermal_rows):
             continue
         kind = _text(geometry.get("kind")).lower()
         code, _ = _row_code(geometry)
@@ -240,7 +240,7 @@ def resolve_request(request_path: Path, output_root: Path) -> Path:
             continue
 
         # VT lives on the current geometry row so r49 preserves it when it merges the
-        # exact-code reference thermal row.  Geometry/area/orientation are untouched.
+        # exact-code reference thermal row. Geometry/area/orientation are untouched.
         if profile.get("vt") is not None and geometry.get("vt") in (None, ""):
             geometry["vt"] = profile["vt"]
 
@@ -271,7 +271,6 @@ def resolve_request(request_path: Path, output_root: Path) -> Path:
             skipped.append({"code": code, "kind": kind, "reason": "no EN page container"})
             continue
         target.setdefault("envelope", []).append(thermal)
-        thermal_rows.append(thermal)
         filled.append({
             "code": code,
             "kind": kind,
