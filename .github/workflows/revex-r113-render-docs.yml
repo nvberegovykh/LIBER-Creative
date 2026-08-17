@@ -5,8 +5,7 @@ on:
     paths:
       - 'server/revex-render-functions/**'
       - 'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
-      - 'docs/liber-apps/apps/revex/docs-presentation-r113.js'
-      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - 'docs/liber-apps/apps/revex/sync-docs-r24.js'
       - '.github/scripts/verify-revex-r113-render-docs.js'
       - '.github/workflows/revex-r113-render-docs.yml'
   workflow_dispatch:
@@ -28,5 +27,7 @@ jobs:
           [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'), [ref]$null, [ref]$errors)
           if ($errors.Count) { $errors | Format-List | Out-String | Write-Error; exit 1 }
           Write-Host 'DEPLOY_RENDER_SERVER.ps1 parse OK'
-      - name: Parse Render broker
-        run: node --check server/revex-render-functions/index.js
+      - name: Parse Render broker and Docs owner
+        run: |
+          node --check server/revex-render-functions/index.js
+          node --check docs/liber-apps/apps/revex/sync-docs-r24.js
