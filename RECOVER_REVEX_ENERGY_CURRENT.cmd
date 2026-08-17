@@ -20,7 +20,7 @@ del /q "%REVEX_RECOVERY_PS1%" >nul 2>&1
 echo.
 if "%CODE%"=="0" (
   echo PASS: REVEX Energy recovery and add-in update completed.
-  echo Reopen Revit 2026. Do NOT rerun gbXML just to retry the already-published revision.
+  echo Follow the revision-aware Retry vs SYNC ENGINEERING instruction printed above.
 ) else (
   echo REVEX Energy recovery exited with code %CODE%.
 )

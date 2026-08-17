@@ -6,7 +6,20 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 3.0
 $Stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$LogRoot = Join-Path $env:LOCALAPPDATA "LIBER\REVEX\Logs"
+$RevexInstallRoot = Join-Path $env:LOCALAPPDATA "LIBER\REVEX"
+$RequestedDataRoot = ([string]$env:REVEX_DATA_ROOT).Trim()
+if ($RequestedDataRoot) {
+  $ExpandedDataRoot = [Environment]::ExpandEnvironmentVariables($RequestedDataRoot)
+  $DriveRelative = $ExpandedDataRoot -match '^[A-Za-z]:(?:$|[^\\/])'
+  $SingleRootSlash = $ExpandedDataRoot.StartsWith('\') -and -not $ExpandedDataRoot.StartsWith('\\')
+  if (-not [System.IO.Path]::IsPathRooted($ExpandedDataRoot) -or $DriveRelative -or $SingleRootSlash) {
+    throw "REVEX_DATA_ROOT must be an absolute path."
+  }
+  $RevexDataRoot = [System.IO.Path]::GetFullPath($ExpandedDataRoot)
+} else {
+  $RevexDataRoot = $RevexInstallRoot
+}
+$LogRoot = Join-Path $RevexDataRoot "Logs"
 $LogPath = Join-Path $LogRoot ("RECOVER_REVEX_ENERGY_CURRENT." + $Stamp + ".log")
 $LatestLogPath = Join-Path $LogRoot "RECOVER_REVEX_ENERGY_CURRENT.latest.log"
 $DeployScript = Join-Path $env:TEMP ("REVEX-ENERGY-DEPLOY-" + [guid]::NewGuid().ToString("N") + ".ps1")
@@ -61,6 +74,33 @@ function Read-WorkerEnv([object]$Worker, [string]$Name) {
   return ""
 }
 
+function Get-LatestEngineeringRevisionState {
+  $root = Join-Path $RevexDataRoot "Engineering\Sync\revisions"
+  if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+    return [pscustomobject]@{ Revision = ""; Folder = ""; StructuredSchedules = $false }
+  }
+  $folder = Get-ChildItem -LiteralPath $root -Directory -Filter "eng_*" -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+  if (-not $folder) {
+    return [pscustomobject]@{ Revision = ""; Folder = ""; StructuredSchedules = $false }
+  }
+  $structured = Test-Path -LiteralPath (Join-Path $folder.FullName "engine-REVIT-SCHEDULE-EVIDENCE.json") -PathType Leaf
+  return [pscustomobject]@{ Revision = $folder.Name; Folder = $folder.FullName; StructuredSchedules = [bool]$structured }
+}
+
+function Assert-InstalledSource([string]$ExpectedSha) {
+  $markerPath = Join-Path $RevexInstallRoot "App\REVEX-CURRENT-SOURCE.json"
+  if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
+    throw "The updated add-in has no REVEX-CURRENT-SOURCE.json marker. Worker/add-in source equality cannot be proven."
+  }
+  $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+  $actual = ([string]$marker.commit).Trim().ToLowerInvariant()
+  if ($actual -ne $ExpectedSha) {
+    throw "Worker/add-in source mismatch: live worker is $ExpectedSha but installed add-in is $actual. Main moved during recovery; rerun this same recovery once so both sides converge on one exact commit."
+  }
+  return $actual
+}
+
 try {
   try {
     Start-Transcript -LiteralPath $LogPath -Force | Out-Null
@@ -69,19 +109,27 @@ try {
 
   Write-Host "REVEX Energy single-shot recovery" -ForegroundColor Cyan
   Write-Host "Log: $LogPath"
+  Write-Host "Data root: $RevexDataRoot"
   Write-Host "Scope: current Energy worker + broker, exact broker/worker IAM verification, then current add-in only. Renderer is untouched."
 
   $GCloud = Require-Command @("gcloud.cmd", "gcloud.exe", "gcloud") "Google Cloud CLI"
   $Git = Require-Command @("git.exe", "git") "Git"
+
+  $before = Get-LatestEngineeringRevisionState
+  if ($before.Revision) {
+    Write-Host "Latest local Engineering revision before recovery: $($before.Revision); structuredSchedules=$($before.StructuredSchedules)"
+  } else {
+    Write-Host "No local immutable Engineering revision was found before recovery."
+  }
 
   $mainLine = Invoke-Capture $Git @("ls-remote", "https://github.com/nvberegovykh/LIBER-Creative.git", "refs/heads/main")
   $MainSha = (($mainLine -split "\s+")[0]).Trim().ToLowerInvariant()
   if ($MainSha -notmatch '^[0-9a-f]{40}$') { throw "GitHub main did not resolve to an exact SHA." }
   Write-Host "Current main: $MainSha" -ForegroundColor Green
 
-  Write-Host ">> Deploy exact current Energy worker + broker only" -ForegroundColor DarkCyan
+  Write-Host ">> Deploy current Energy worker + broker, then prove the live source SHA" -ForegroundColor DarkCyan
   $ProgressPreference = "SilentlyContinue"
-  Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/DEPLOY_REVEX_CURRENT_SERVICES.ps1" -OutFile $DeployScript
+  Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/nvberegovykh/LIBER-Creative/$MainSha/DEPLOY_REVEX_CURRENT_SERVICES.ps1" -OutFile $DeployScript
   $deployCode = Invoke-Native "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $DeployScript, "-ProjectId", $ProjectId, "-Region", $Region, "-SkipRender", "-NoPause")
   if ($deployCode -ne 0) { throw "Current Energy worker+broker deployment failed with exit code $deployCode." }
 
@@ -93,7 +141,7 @@ try {
   $WorkerUrl = [string]$worker.status.url
   $WorkerSource = Read-WorkerEnv $worker "REVEX_SOURCE_CANDIDATE"
   if (-not $WorkerUrl) { throw "Energy worker has no live URL." }
-  if ($WorkerSource -ne $MainSha) { throw "Live worker source mismatch: expected $MainSha, got $WorkerSource." }
+  if ($WorkerSource -ne $MainSha) { throw "Live worker source mismatch: expected $MainSha, got $WorkerSource. Main moved during deployment; rerun this same recovery once." }
 
   $functionText = Invoke-Capture $GCloud @("functions", "describe", "runRevexEnergy", "--gen2", "--project=$ProjectId", "--region=$Region", "--format=json")
   $function = $functionText | ConvertFrom-Json
@@ -103,7 +151,7 @@ try {
   $BrokerSource = [string]$function.serviceConfig.environmentVariables.REVEX_SOURCE_CANDIDATE
   if ($LiveBrokerSa -ne $BrokerSa) { throw "Broker runtime identity mismatch: expected $BrokerSa, got $LiveBrokerSa." }
   if ($BrokerWorkerUrl.TrimEnd('/') -ne $WorkerUrl.TrimEnd('/')) { throw "Broker points to a different worker URL: $BrokerWorkerUrl vs $WorkerUrl." }
-  if ($BrokerSource -ne $MainSha) { throw "Live broker source mismatch: expected $MainSha, got $BrokerSource." }
+  if ($BrokerSource -ne $MainSha) { throw "Live broker source mismatch: expected $MainSha, got $BrokerSource. Main moved during deployment; rerun this same recovery once." }
 
   $policyText = Invoke-Capture $GCloud @("run", "services", "get-iam-policy", $Service, "--project=$ProjectId", "--region=$Region", "--format=json")
   $policy = $policyText | ConvertFrom-Json
@@ -112,17 +160,33 @@ try {
   })
   if ($invoker.Count -eq 0) { throw "Live worker IAM does not allow the actual Energy broker service account to invoke it." }
 
-  Write-Host "PASS: live broker and worker are both exact main $MainSha, broker identity is exact, worker URL is exact, worker is Ready, and run.invoker binding is present." -ForegroundColor Green
+  Write-Host "PASS: live broker and worker are exact source $MainSha, broker identity is exact, worker URL is exact, worker is Ready, and run.invoker binding is present." -ForegroundColor Green
 
-  Write-Host ">> Update the Revit add-in to the same current main" -ForegroundColor DarkCyan
-  Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/UPDATE_REVEX_ADDIN_CURRENT.ps1" -OutFile $UpdateScript
+  Write-Host ">> Update the Revit add-in, then prove it matches the live worker source" -ForegroundColor DarkCyan
+  Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/nvberegovykh/LIBER-Creative/$MainSha/UPDATE_REVEX_ADDIN_CURRENT.ps1" -OutFile $UpdateScript
   Write-Host "If Revit is open, save and close it once. This same recovery process will wait and continue automatically." -ForegroundColor Yellow
   $updateCode = Invoke-Native "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $UpdateScript)
   if ($updateCode -ne 0) { throw "Server edge is repaired, but the current add-in update failed with exit code $updateCode." }
+  $InstalledSha = Assert-InstalledSource $MainSha
 
+  $after = Get-LatestEngineeringRevisionState
   Write-Host ""
-  Write-Host "PASS: REVEX Energy recovery completed from exact main $MainSha." -ForegroundColor Green
-  Write-Host "The existing published Engineering revision remains valid. Reopen Revit and use the Energy authorization once; do not rerun the five-minute gbXML export just to retry downstream Energy." -ForegroundColor Green
+  Write-Host "PASS: REVEX Energy recovery completed from one exact source $InstalledSha." -ForegroundColor Green
+  Write-Host "Worker + broker + installed Revit add-in are source-identical." -ForegroundColor Green
+  Write-Host ""
+  if ($after.Revision -and $after.StructuredSchedules) {
+    Write-Host "Latest Engineering revision $($after.Revision) already contains native Revit schedule evidence." -ForegroundColor Green
+    Write-Host "If the Revit model/evidence has NOT changed: reopen Revit -> Energy -> Retry this published revision. Do not resync merely to replay downstream Energy." -ForegroundColor Green
+    Write-Host "If geometry, schedules, T/Z/EN evidence, or weather changed: run SYNC ENGINEERING once to publish the new current state." -ForegroundColor Yellow
+  } elseif ($after.Revision) {
+    Write-Host "Latest Engineering revision $($after.Revision) predates native structured schedule evidence." -ForegroundColor Yellow
+    Write-Host "It remains replayable through the bounded T/Z/EN PDF fallback, but that does not prove the new structured-evidence path." -ForegroundColor Yellow
+    Write-Host "To run the current model through the repaired reusable path: reopen Revit -> SYNC ENGINEERING once. That new revision captures fresh geometry + schedules + T/Z/EN + EPW together." -ForegroundColor Green
+  } else {
+    Write-Host "No Engineering revision exists yet." -ForegroundColor Yellow
+    Write-Host "Reopen Revit -> select/create the correct REVEX project if needed -> SYNC ENGINEERING once. The first immutable revision will capture fresh geometry + schedules + T/Z/EN + EPW together." -ForegroundColor Green
+  }
+  Write-Host "Never run both Retry and SYNC ENGINEERING for the same unchanged state; Retry replays an immutable revision, Sync publishes a new current state." -ForegroundColor Cyan
   $ExitCode = 0
 } catch {
   Write-Host ""

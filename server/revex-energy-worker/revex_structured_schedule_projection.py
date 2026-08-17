@@ -16,7 +16,7 @@ from typing import Any
 import revex_structured_schedule_facts as graph
 
 SCHEMA = "liber.revex.structured-schedule-projection.v1"
-VERSION = "20260816r101-projection1"
+VERSION = "20260816r102-projection2"
 SCHEDULE_SCHEMA = "liber.revex.engineering-schedule-evidence.v1"
 SCHEDULE_AUTHORITY = "active-revit-document-native-schedules"
 
@@ -73,6 +73,18 @@ def _remove_floor_area(facts: dict) -> int:
     return removed
 
 
+def _remove_energy_code(facts: dict) -> int:
+    removed = 0
+    semantic = facts.get("comcheckSemantic")
+    if isinstance(semantic, dict) and semantic.get("energyCode") not in (None, ""):
+        semantic["energyCode"] = None; removed += 1
+    for page in list(facts.get("pages") or []):
+        project = page.get("project")
+        if isinstance(project, dict) and project.get("energyCode") not in (None, ""):
+            project["energyCode"] = None; removed += 1
+    return removed
+
+
 def _page(facts: dict, source_file: str) -> dict:
     pages = facts.setdefault("pages", [])
     for page in pages:
@@ -122,6 +134,21 @@ def resolve_request(request_path: Path, output_root: Path) -> Path:
             sources.append({"semanticType":"floorAreaFt2","method":"STRUCTURED_NATIVE_REVIT_SCHEDULE_RECONCILIATION","candidates":floor.get("candidates") or []})
             semantic["sources"] = sources
             facts["comcheckSemantic"] = semantic
+
+    energy_code = dict(results.get("energyCode") or {})
+    if energy_code.get("status") in {"RESOLVED", "CONFLICT"}:
+        removed["energyCode"] = _remove_energy_code(facts)
+        if energy_code.get("status") == "RESOLVED":
+            semantic = dict(facts.get("comcheckSemantic") or {})
+            semantic["energyCode"] = energy_code.get("value")
+            sources = list(semantic.get("sources") or [])
+            sources.append({"semanticType":"energyCode","method":"STRUCTURED_NATIVE_REVIT_SCHEDULE_RECONCILIATION","candidates":energy_code.get("candidates") or []})
+            semantic["sources"] = sources
+            facts["comcheckSemantic"] = semantic
+            if schedule_path is not None:
+                target = _page(facts, schedule_path.name)
+                target.setdefault("project", {})["energyCode"] = energy_code.get("value")
+                target.setdefault("structuredScheduleFacts", {})["energyCode"] = energy_code
 
     audit = {
         "schema": SCHEMA, "version": VERSION, "sourceEngineeringRevision": _text(request.get("revision")),

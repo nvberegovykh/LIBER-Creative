@@ -9,11 +9,11 @@ all equally valid current-revision candidates agree. Conflicts remain unresolved
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
-from typing import Any, Callable
+from typing import Any
 import re
 
 SCHEMA = "liber.revex.structured-schedule-facts.v1"
-VERSION = "20260816r101-fact-graph1"
+VERSION = "20260816r102-fact-graph2"
 
 
 def _text(value: Any) -> str:
@@ -55,13 +55,31 @@ def _int(value: Any) -> int | None:
     return number if 1 <= number <= 200 else None
 
 
-def _headings(schedule: dict) -> list[str]:
+def _column_headings(schedule: dict) -> list[str]:
+    """Reconstruct native Revit headings across fields + all visible header rows.
+
+    Revit schedules frequently use generic ScheduleField names while the user-visible semantic
+    labels (for example PROPOSED/PROVIDED) live in merged/multi-row headers. Energy must follow
+    the visible table, not assume field names are the presentation header.
+    """
     fields = [row for row in list(schedule.get("fields") or []) if not bool(row.get("hidden"))]
-    headings = [_text(row.get("columnHeading") or row.get("name")) for row in fields]
-    if any(headings):
-        return headings
-    header_rows = list(schedule.get("headerRows") or [])
-    return [_text(value) for value in list(header_rows[-1] or [])] if header_rows else []
+    field_headings = [_text(row.get("columnHeading") or row.get("name")) for row in fields]
+    header_rows = [[_text(value) for value in list(raw or [])] for raw in list(schedule.get("headerRows") or [])]
+    body_rows = [list(raw or []) for raw in list(schedule.get("bodyRows") or [])]
+    width = max([len(field_headings), *(len(row) for row in header_rows), *(len(row) for row in body_rows), 0])
+    headings: list[str] = []
+    for col in range(width):
+        tokens: list[str] = []
+        for row in header_rows:
+            value = _text(row[col]) if col < len(row) else ""
+            if value and _norm(value) not in {_norm(existing) for existing in tokens}:
+                tokens.append(value)
+        if col < len(field_headings):
+            value = field_headings[col]
+            if value and _norm(value) not in {_norm(existing) for existing in tokens}:
+                tokens.append(value)
+        headings.append(" / ".join(tokens))
+    return headings
 
 
 def _placements(schedule: dict) -> list[dict]:
@@ -80,8 +98,11 @@ def _proposed_columns(headings: list[str]) -> list[int]:
     indexes = []
     for i, heading in enumerate(headings):
         h = _norm(heading)
-        if h in {"proposed", "provided", "provided proposed", "proposed provided"}:
-            indexes.append(i)
+        if not re.search(r"\b(?:proposed|provided)\b", h):
+            continue
+        if re.search(r"\b(?:permitted|required|allowable|maximum|max)\b", h):
+            continue
+        indexes.append(i)
     return indexes
 
 
@@ -132,13 +153,11 @@ def building_height_candidates(evidence: dict) -> list[Candidate]:
     """Current building height above grade plane, never base height or occupied-floor height."""
     out: list[Candidate] = []
     for schedule in list(evidence.get("schedules") or []):
-        headings = _headings(schedule); proposed = _proposed_columns(headings)
-        if len(proposed) != 1:
+        headings = _column_headings(schedule); proposed = _proposed_columns(headings)
+        if not proposed:
             continue
-        col = proposed[0]
         for r_index, raw in enumerate(list(schedule.get("bodyRows") or [])):
             row = [_text(value) for value in list(raw or [])]
-            if col >= len(row): continue
             label = _row_label(row, proposed)
             semantic = _norm(label)
             # Accept exact building-height-above-grade semantics, including the common "hight" typo.
@@ -147,31 +166,39 @@ def building_height_candidates(evidence: dict) -> list[Candidate]:
                 continue
             if any(token in semantic for token in ("base height", "occupied floor", "story height", "parapet", "penthouse", "bulkhead")):
                 continue
-            value = _feet(row[col])
-            if value is None: continue
-            out.append(_candidate(schedule, fact="buildingHeightFt", value=round(value, 6), unit="ft",
-                                  row_index=r_index, row_label=label, column_index=col,
-                                  column_heading=headings[col], cell_text=row[col],
-                                  semantic_rule="BUILDING_HEIGHT_ABOVE_GRADE_PLANE + PROPOSED/PROVIDED"))
+            for col in proposed:
+                if col >= len(row):
+                    continue
+                value = _feet(row[col])
+                if value is None:
+                    continue
+                out.append(_candidate(schedule, fact="buildingHeightFt", value=round(value, 6), unit="ft",
+                                      row_index=r_index, row_label=label, column_index=col,
+                                      column_heading=headings[col], cell_text=row[col],
+                                      semantic_rule="BUILDING_HEIGHT_ABOVE_GRADE_PLANE + PROPOSED/PROVIDED"))
     return out
 
 
 def stories_candidates(evidence: dict) -> list[Candidate]:
     out: list[Candidate] = []
     for schedule in list(evidence.get("schedules") or []):
-        headings = _headings(schedule); proposed = _proposed_columns(headings)
-        if len(proposed) != 1: continue
-        col = proposed[0]
+        headings = _column_headings(schedule); proposed = _proposed_columns(headings)
+        if not proposed:
+            continue
         for r_index, raw in enumerate(list(schedule.get("bodyRows") or [])):
             row = [_text(value) for value in list(raw or [])]
-            if col >= len(row): continue
             label = _row_label(row, proposed); semantic = _norm(label)
-            if not re.search(r"\bnumber of stor(?:y|ies) above grade plane\b", semantic): continue
-            value = _int(row[col])
-            if value is None: continue
-            out.append(_candidate(schedule, fact="stories", value=value, unit="count", row_index=r_index,
-                                  row_label=label, column_index=col, column_heading=headings[col], cell_text=row[col],
-                                  semantic_rule="NUMBER_OF_STORIES_ABOVE_GRADE_PLANE + PROPOSED/PROVIDED"))
+            if not re.search(r"\bnumber of stor(?:y|ies) above grade plane\b", semantic):
+                continue
+            for col in proposed:
+                if col >= len(row):
+                    continue
+                value = _int(row[col])
+                if value is None:
+                    continue
+                out.append(_candidate(schedule, fact="stories", value=value, unit="count", row_index=r_index,
+                                      row_label=label, column_index=col, column_heading=headings[col], cell_text=row[col],
+                                      semantic_rule="NUMBER_OF_STORIES_ABOVE_GRADE_PLANE + PROPOSED/PROVIDED"))
     return out
 
 
@@ -179,7 +206,7 @@ def zoning_gross_area_candidates(evidence: dict) -> list[Candidate]:
     """Gross Area total from a current zoning/area-calculation schedule; excludes BC Gross and ZFA."""
     out: list[Candidate] = []
     for schedule in list(evidence.get("schedules") or []):
-        headings = _headings(schedule)
+        headings = _column_headings(schedule)
         gross_cols = [i for i, heading in enumerate(headings)
                       if "gross area" in _norm(heading)
                       and not any(token in _norm(heading) for token in ("bc gross area", "deduction", "zoning floor area"))]
@@ -200,6 +227,42 @@ def zoning_gross_area_candidates(evidence: dict) -> list[Candidate]:
     return out
 
 
+def _energy_code_value(value: Any) -> str | None:
+    source = _text(value)
+    patterns = (
+        r"\b(20\d{2})\s+(?:NEW\s+YORK\s+CITY|NYC)\s+ENERGY\s+CONSERVATION\s+CODE\b",
+        r"\b(20\d{2})\s+NYCECC\b(?:\s+APPENDIX\s+CA)?",
+        r"\b(20\d{2})\s+NYC\s+ENERGY\s+CODE\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, source, re.I)
+        if match:
+            return f"{match.group(1)} NYCECC"
+    return None
+
+
+def energy_code_candidates(evidence: dict) -> list[Candidate]:
+    """Explicit current-project NYC Energy Conservation Code text from native Revit schedules."""
+    out: list[Candidate] = []
+    for schedule in list(evidence.get("schedules") or []):
+        headings = _column_headings(schedule)
+        rows = [[_text(value) for value in list(raw or [])] for raw in list(schedule.get("headerRows") or [])]
+        rows += [[_text(value) for value in list(raw or [])] for raw in list(schedule.get("bodyRows") or [])]
+        header_count = len(list(schedule.get("headerRows") or []))
+        for index, row in enumerate(rows):
+            for col, cell in enumerate(row):
+                value = _energy_code_value(cell)
+                if value is None:
+                    continue
+                row_index = index - header_count if index >= header_count else -1 - index
+                out.append(_candidate(schedule, fact="energyCode", value=value, unit="code",
+                                      row_index=row_index, row_label="Explicit energy-code text",
+                                      column_index=col, column_heading=headings[col] if col < len(headings) else "",
+                                      cell_text=cell,
+                                      semantic_rule="EXPLICIT_CURRENT_REVIT_NYCECC_TEXT"))
+    return out
+
+
 def _resolve(fact: str, candidates: list[Candidate], tolerance: float = 1e-6) -> dict:
     rows = [row.json() for row in candidates]
     if not candidates:
@@ -214,7 +277,7 @@ def _resolve(fact: str, candidates: list[Candidate], tolerance: float = 1e-6) ->
                     group.append(row); placed = True; break
             if not placed: groups.append([row])
     else:
-        by = {}
+        by: dict[str, list[Candidate]] = {}
         for row in candidates: by.setdefault(str(row.value), []).append(row)
         groups = list(by.values())
     if len(groups) != 1:
@@ -226,6 +289,7 @@ def _resolve(fact: str, candidates: list[Candidate], tolerance: float = 1e-6) ->
 
 def resolve_core(evidence: dict) -> dict:
     results = {
+        "energyCode": _resolve("energyCode", energy_code_candidates(evidence)),
         "buildingHeightFt": _resolve("buildingHeightFt", building_height_candidates(evidence), tolerance=0.01),
         "stories": _resolve("stories", stories_candidates(evidence), tolerance=0),
         "floorAreaFt2": _resolve("floorAreaFt2", zoning_gross_area_candidates(evidence), tolerance=0.1),

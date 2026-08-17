@@ -126,6 +126,8 @@ function Assert-SourceContract([string]$Root) {
     "docs\liber-apps\apps\revex\viewer-repair-r79.js",
     "docs\liber-apps\apps\revex\energy-diagnostics-r68.js",
     "src\Liber.Revex.Revit\Services\EngineeringCompanionWebBridge.cs",
+    "src\Liber.Revex.Revit\Services\EngineeringScheduleEvidenceService.cs",
+    "src\Liber.Revex.Revit\Services\EngineeringSyncService.cs",
     "src\Liber.Revex.Revit\Revit\RevitRequestHandler.cs",
     $ProjectPath
   )
@@ -134,6 +136,15 @@ function Assert-SourceContract([string]$Root) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
       throw "Current-main source contract is incomplete: missing $relative."
     }
+  }
+
+  $handler = Get-Content -LiteralPath (Join-Path $Root "src\Liber.Revex.Revit\Revit\RevitRequestHandler.cs") -Raw
+  $scheduleService = Get-Content -LiteralPath (Join-Path $Root "src\Liber.Revex.Revit\Services\EngineeringScheduleEvidenceService.cs") -Raw
+  if (-not $handler.Contains('new EngineeringScheduleEvidenceService().Export')) {
+    throw "Current add-in source does not wire native Revit schedules into Engineering Sync."
+  }
+  if (-not $scheduleService.Contains('REVIT-SCHEDULE-EVIDENCE.json') -or -not $scheduleService.Contains('ScheduleSheetInstance')) {
+    throw "Current add-in source does not preserve structured native Revit schedule evidence and sheet placement."
   }
 }
 

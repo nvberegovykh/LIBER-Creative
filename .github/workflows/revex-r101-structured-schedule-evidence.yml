@@ -7,6 +7,9 @@ on:
       - 'src/Liber.Revex.Revit/Services/EngineeringScheduleEvidenceService.cs'
       - 'src/Liber.Revex.Revit/Revit/RevitRequestHandler.cs'
       - 'src/Liber.Revex.Revit/Services/EngineeringSyncService.cs'
+      - 'src/Liber.Revex.Revit/Services/EngineeringCompanionWebBridge.cs'
+      - 'docs/liber-apps/apps/revex/store.js'
+      - 'server/revex-energy-worker/app.py'
       - 'server/revex-energy-worker/revex_structured_schedule_facts.py'
       - 'server/revex-energy-worker/revex_structured_schedule_projection.py'
       - 'server/revex-energy-worker/revex_comcheck_evidence.py'
@@ -45,13 +48,16 @@ jobs:
         env:
           PYTHONPATH: server/revex-energy-worker
         run: python server/revex-energy-worker/verify_comcheck_evidence_r100.py
-      - name: Wiring and no-project-hardcode contract
+      - name: Wiring, transport and no-project-hardcode contract
         run: |
           python - <<'PY'
           from pathlib import Path
           service=Path('src/Liber.Revex.Revit/Services/EngineeringScheduleEvidenceService.cs').read_text(encoding='utf-8')
           handler=Path('src/Liber.Revex.Revit/Revit/RevitRequestHandler.cs').read_text(encoding='utf-8')
           commit=Path('src/Liber.Revex.Revit/Services/EngineeringSyncService.cs').read_text(encoding='utf-8')
+          native_bridge=Path('src/Liber.Revex.Revit/Services/EngineeringCompanionWebBridge.cs').read_text(encoding='utf-8')
+          store=Path('docs/liber-apps/apps/revex/store.js').read_text(encoding='utf-8')
+          worker=Path('server/revex-energy-worker/app.py').read_text(encoding='utf-8')
           facts=Path('server/revex-energy-worker/revex_structured_schedule_facts.py').read_text(encoding='utf-8')
           projection=Path('server/revex-energy-worker/revex_structured_schedule_projection.py').read_text(encoding='utf-8')
           guard=Path('server/revex-energy-worker/revex_energy_pipeline_guard.py').read_text(encoding='utf-8')
@@ -60,7 +66,12 @@ jobs:
           assert 'ScheduleSheetInstance' in service and 'placedOnSheets' in service
           assert 'new EngineeringScheduleEvidenceService().Export' in handler
           assert 'Directory.GetFiles(source.RunFolder, "*.json"' in commit
+          assert '.Concat(output.EvidenceFiles' in native_bridge
+          assert 'declaredArtifacts = Array.isArray(manifest.artifacts)' in store
+          assert 'transferFiles = files.filter' in store and 'for (let index = 0; index < files.length; index += 1)' in store
+          assert 'sourceArtifacts": [str(path) for path in local_by_name.values()]' in worker
           assert 'building (?:height|hight) above grade plane' in facts
+          assert 'EXPLICIT_CURRENT_REVIT_NYCECC_TEXT' in facts
           assert 'CONFLICT' in facts and 'corroboratingCandidateCount' in facts
           assert 'revex_structured_schedule_projection' in guard
           assert 'pdfFallbackSkipped' in guard
@@ -68,17 +79,17 @@ jobs:
           combined='\n'.join((service,handler,facts,projection,guard)).upper()
           for forbidden in ('250 MIDWOOD','79 WINTHROP','G-002.00','G-002'):
               assert forbidden not in combined, forbidden
-          print('REVEX_R101_WIRING=PASSED')
+          print('REVEX_R102_STRUCTURED_EVIDENCE_TRANSPORT=PASSED')
           PY
       - name: Pinned GeometryCo and r49 implementation are untouched
         run: |
           changed="$(git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD)"
           if printf '%s\n' "$changed" | grep -E '^src/Liber\.Revex\.Revit/Engineering/Energy/revex_energy_pipeline\.py$'; then
-            echo 'r101 must not modify the pinned r49 implementation.' >&2
+            echo 'r102 must not modify the pinned r49 implementation.' >&2
             exit 1
           fi
           if printf '%s\n' "$changed" | grep -E '^src/Liber\.Revex\.Revit/Engineering/Energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler\.py$'; then
-            echo 'r101 must not modify GeometryCo core.' >&2
+            echo 'r102 must not modify GeometryCo core.' >&2
             exit 1
           fi
 
@@ -88,4 +99,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build exact worker image and run embedded Energy QA
-        run: docker build --progress=plain -f server/revex-energy-worker/Dockerfile -t revex-energy-worker:r101 .
+        run: docker build --progress=plain -f server/revex-energy-worker/Dockerfile -t revex-energy-worker:r102 .
