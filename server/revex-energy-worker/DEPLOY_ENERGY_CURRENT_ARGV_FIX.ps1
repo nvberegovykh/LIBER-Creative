@@ -25,9 +25,17 @@ try {
     throw "Expected at least five direct gcloud array-expression calls; found $($matches.Count). Refusing an incomplete argv patch."
   }
 
-  $fixed = [regex]::Replace($text, $pattern, '& $GCloud $1')
+  $fixed = [regex]::Replace($text, $pattern, {
+    param($match)
+    $argvText = [regex]::Replace($match.Groups[1].Value, '\s*,\s*', ' ')
+    return '& $GCloud ' + $argvText
+  })
+
   if ($fixed -match '& \$GCloud @\(') {
     throw "Direct gcloud array-expression invocation remains after argv repair."
+  }
+  if ($fixed -match '& \$GCloud\s+"auth"\s*,') {
+    throw "gcloud argv repair still contains comma-array syntax."
   }
 
   [System.IO.File]::WriteAllText($Runtime, $fixed, (New-Object System.Text.UTF8Encoding($false)))
