@@ -54,6 +54,7 @@ public sealed class ViewerExportService
         }
 
         var elements = new List<object>();
+        var types = new Dictionary<long, ViewerPropertySnapshot.TypeSnapshot>();
         var categoryCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         foreach (Element element in new FilteredElementCollector(doc, view.Id)
@@ -63,12 +64,18 @@ public sealed class ViewerExportService
             try
             {
                 Element? type = doc.GetElement(element.GetTypeId());
+                if (type != null && !types.ContainsKey(type.Id.Value))
+                {
+                    try { types[type.Id.Value] = ViewerPropertySnapshot.CaptureType(doc, type); } catch { }
+                }
+
                 BoundingBoxXYZ? box = PhysicalBoundingBox(element, view) ?? element.get_BoundingBox(view);
                 string categoryKey = RevitCategoryClassifier.Key(element.Category);
                 categoryCounts[categoryKey] = categoryCounts.GetValueOrDefault(categoryKey) + 1;
                 string? level = element.LevelId == ElementId.InvalidElementId
                     ? null
                     : doc.GetElement(element.LevelId)?.Name;
+                long? levelId = element.LevelId == ElementId.InvalidElementId ? null : element.LevelId.Value;
 
                 var materials = element.GetMaterialIds(false)
                     .Concat(element.GetMaterialIds(true))
@@ -78,6 +85,8 @@ public sealed class ViewerExportService
                     .Select(m => new { id = m.Id.Value, uniqueId = m.UniqueId, name = m.Name, color = new[] { (int)m.Color.Red, (int)m.Color.Green, (int)m.Color.Blue }, transparency = m.Transparency, shininess = m.Shininess, smoothness = m.Smoothness })
                     .ToArray();
 
+                var family = ViewerPropertySnapshot.ResolveFamily(element, type);
+                Element? host = ViewerPropertySnapshot.ResolveHost(element);
                 bool curtainContainer = RevexMeshExportService.IsCurtainContainer(element);
                 elements.Add(new
                 {
@@ -88,12 +97,23 @@ public sealed class ViewerExportService
                     categoryKey,
                     name = element.Name,
                     type = type?.Name ?? "",
+                    typeId = type?.Id.Value,
                     typeUniqueId = type?.UniqueId,
-                    family = ResolveFamilyName(element, type),
+                    family = family.name,
+                    familyId = family.id,
+                    familyUniqueId = family.uniqueId,
                     level,
+                    levelId,
+                    hostId = host?.Id.Value,
+                    hostUniqueId = host?.UniqueId,
+                    hostName = host?.Name,
+                    workset = ViewerPropertySnapshot.ResolveWorkset(doc, element),
+                    pinned = element.Pinned,
+                    designOption = element.DesignOption?.Name,
                     geometryRole = curtainContainer ? "container" : "physical",
                     proxyEligible = !curtainContainer,
                     materials,
+                    parameters = ViewerPropertySnapshot.CaptureParameters(doc, element),
                     bbox = box == null ? null : new
                     {
                         min = new[] { box.Min.X, box.Min.Y, box.Min.Z },
@@ -120,7 +140,7 @@ public sealed class ViewerExportService
         string metadataPath = Path.Combine(folder, "viewer-model.json");
         File.WriteAllText(metadataPath, JsonSerializer.Serialize(new
         {
-            schema = "liber.revex.viewer.v2",
+            schema = "liber.revex.viewer.v3",
             source = new
             {
                 documentTitle = doc.Title,
@@ -133,6 +153,10 @@ public sealed class ViewerExportService
                 coordinateSystem = new { handedness = "revit", horizontal = new[] { "X", "Y" }, vertical = "Z", unit = "feet" }
             },
             levels,
+            types = types.Values
+                .OrderBy(row => row.Family, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(row => row.Name, StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
             geometry = new
             {
                 authority = ifcPath == null ? null : Path.GetFileName(ifcPath),
@@ -163,46 +187,6 @@ public sealed class ViewerExportService
 
         CopyOfflineCompanion(folder);
         return (fbxPath, meshResult?.Path, meshResult?.ManifestPath, meshResult?.PagePaths ?? Array.Empty<string>(), metadataPath, elements.Count);
-    }
-
-
-    private static string ResolveFamilyName(Element element, Element? type)
-    {
-        // Loaded families expose their Family directly through the instance Symbol.
-        // System-family types (Walls/Floors/Roofs/etc.) do not have a Family object,
-        // but Revit exposes the same grouping identity through ElementType.FamilyName /
-        // SYMBOL_FAMILY_NAME_PARAM. Keep Category only as the final deterministic fallback.
-        if (element is FamilyInstance familyInstance)
-        {
-            string loaded = familyInstance.Symbol?.FamilyName ?? familyInstance.Symbol?.Family?.Name ?? string.Empty;
-            if (!string.IsNullOrWhiteSpace(loaded)) return loaded.Trim();
-        }
-
-        if (type is ElementType elementType)
-        {
-            try
-            {
-                string familyName = elementType.FamilyName ?? string.Empty;
-                if (!string.IsNullOrWhiteSpace(familyName)) return familyName.Trim();
-            }
-            catch { }
-
-            try
-            {
-                string parameterName = elementType.get_Parameter(BuiltInParameter.SYMBOL_FAMILY_NAME_PARAM)?.AsString() ?? string.Empty;
-                if (!string.IsNullOrWhiteSpace(parameterName)) return parameterName.Trim();
-            }
-            catch { }
-        }
-
-        try
-        {
-            string parameterName = type?.get_Parameter(BuiltInParameter.SYMBOL_FAMILY_NAME_PARAM)?.AsString() ?? string.Empty;
-            if (!string.IsNullOrWhiteSpace(parameterName)) return parameterName.Trim();
-        }
-        catch { }
-
-        return (element.Category?.Name ?? type?.Name ?? "System / Other").Trim();
     }
 
     private static readonly HashSet<string> NonModelCategoryNames = new(StringComparer.OrdinalIgnoreCase)
