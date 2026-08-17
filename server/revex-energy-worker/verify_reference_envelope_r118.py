@@ -60,6 +60,14 @@ rows += [
     {"kind":"floor","assemblyType":"F2.1","description":"F2.1 Exposed exterior floor joist","orientation":None,"grossAreaFt2":120,"confidence":.99,"evidence":"F2.1 Exposed exterior floor"},
     {"kind":"floor","assemblyType":"S1.1","description":"S1.1 Cellar slab on grade","orientation":None,"grossAreaFt2":130,"confidence":.99,"evidence":"S1.1 Cellar slab on grade"},
 ]
+# Live regression: one physical roof may be split into R1/R2/R3/R4 diagram regions
+# while current schedule fragments disagree. Recovery must normalize them to one approved roof class.
+rows += [
+    {"kind":"roof","assemblyType":"R1","description":"R1 current thermal fragment","grossAreaFt2":None,"cavityR":26.4,"continuousR":15.0,"confidence":.99,"evidence":"R1 R26.4 R15"},
+    {"kind":"roof","assemblyType":"R2","description":"R2 conflicting thermal fragment","grossAreaFt2":None,"cavityR":30.0,"continuousR":10.0,"confidence":.99,"evidence":"R2 R30 R10"},
+    {"kind":"roof","assemblyType":"R3","description":"R3 conflicting thermal fragment","grossAreaFt2":None,"cavityR":20.0,"continuousR":5.0,"confidence":.99,"evidence":"R3 R20 R5"},
+    {"kind":"roof","assemblyType":"R4","description":"R4 conflicting thermal fragment","grossAreaFt2":None,"cavityR":13.0,"continuousR":8.0,"confidence":.99,"evidence":"R4 R13 R8"},
+]
 
 facts = {"pages":[{"pageType":"EN","sourceFile":"CURRENT_EN.pdf","sheetNumber":"EN-001","confidence":.99,"envelope":rows}]}
 with tempfile.TemporaryDirectory() as td:
@@ -85,6 +93,29 @@ with tempfile.TemporaryDirectory() as td:
     original={(r["kind"],r["assemblyType"],r.get("grossAreaFt2"),r.get("orientation")) for r in rows if r.get("grossAreaFt2") is not None}
     now={(r["kind"],r["assemblyType"],r.get("grossAreaFt2"),r.get("orientation")) for r in derived["pages"][0]["envelope"] if r.get("grossAreaFt2") is not None}
     assert original == now
+    roof_geometry=[r for r in derived["pages"][0]["envelope"] if r.get("kind")=="roof" and r.get("grossAreaFt2") is not None]
+    roof_thermal=[r for r in derived["pages"][0]["envelope"] if r.get("kind")=="roof" and r.get("grossAreaFt2") is None]
+    assert len(roof_geometry)==4 and round(sum(float(r["grossAreaFt2"]) for r in roof_geometry),3)==406.0
+    signatures={(float(r.get("cavityR") or 0),float(r.get("continuousR") or 0)) for r in roof_thermal if ref._row_code(r)[0] in set(roof_codes)}
+    assert signatures=={(26.4,15.0)}, signatures
+    assert audit["roofDiagramRegionsNormalizedToOneThermalClass"]==roof_codes
+
+# Package is emitted even for terminal FAILED; status is not falsified to COMPLETE.
+with tempfile.TemporaryDirectory() as td:
+    root=Path(td); out=root/"out"; out.mkdir()
+    request=root/"request.json"; request.write_text(json.dumps({"revision":"eng_pkg","projectId":"current","outputFolder":str(out)}),encoding="utf-8")
+    (out/"COMcheck_PROJECT_INPUT_READY.cxl").write_text("cxl",encoding="utf-8")
+    (out/"FAILURE_SUMMARY.txt").write_text("downstream failure",encoding="utf-8")
+    (out/"energy-result.json").write_text(json.dumps({"schema":"liber.revex.energy-result.v1","pipelineVersion":"0.8.19-r49","projectId":"current","sourceEngineeringRevision":"eng_pkg","status":"FAILED","artifacts":[],"revitWriteBack":False,"pdfInsertion":False}),encoding="utf-8")
+    package=guard._ensure_recovery_package(request); assert package.is_file()
+    result=json.loads((out/"energy-result.json").read_text())
+    assert result["status"]=="FAILED"
+    package_row=next(r for r in result["artifacts"] if r["name"]==guard.PACKAGE_NAME)
+    assert package_row["userVisible"] is True and package_row["kind"]=="recovery-package"
+    import zipfile
+    with zipfile.ZipFile(package) as z:
+        names=set(z.namelist())
+        assert "COMcheck_PROJECT_INPUT_READY.cxl" in names and "FAILURE_SUMMARY.txt" in names and guard.PACKAGE_MANIFEST_NAME in names
 
 source=Path(__file__).with_name("revex_reference_envelope_projection_r118.py").read_text()
 assert "250_Midwood_Street" not in source and "COMcheck_250_MIDWOOD" not in source

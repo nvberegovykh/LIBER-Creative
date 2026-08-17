@@ -285,6 +285,54 @@ def resolve_request(request_path: Path, output_root: Path) -> Path:
             corroboration.append({"code": _row_code(row)[0], "kind": _text(row.get("kind")).lower(), "class": cls})
     reference_proven = bool(corroboration)
 
+    # r123: R1/R2/R3/R4 are diagram regions of one physical roof, not independent
+    # roof constructions.  In recovery mode the current project keeps every roof
+    # region area/geometry, while the approved same-envelope reference supplies one
+    # roof thermal class.  Conflicting current roof thermal rows are therefore removed
+    # from the DERIVED facts only; immutable Engineering evidence is never mutated.
+    normalized_roof_codes: list[str] = []
+    if reference_proven and profiles.get("roof"):
+        roof_codes: set[str] = set()
+        for page in en_pages:
+            for row in list(page.get("envelope") or []):
+                if _text(row.get("kind")).lower() != "roof" or _number(row.get("grossAreaFt2")) is None:
+                    continue
+                code, _ = _row_code(row)
+                if not code:
+                    continue
+                roof_codes.add(code)
+                # Geometry rows remain geometry rows. Any embedded thermal numbers are
+                # stripped only in this derived projection so one approved class is used.
+                for key in ("uFactor", "shgc", "vt", "cavityR", "continuousR"):
+                    row[key] = None
+                row["referenceEnvelopeGeometryOnly"] = True
+
+        if roof_codes:
+            for page in en_pages:
+                kept = []
+                for row in list(page.get("envelope") or []):
+                    code, _ = _row_code(row)
+                    is_thermal_only_roof = (
+                        _text(row.get("kind")).lower() == "roof"
+                        and code in roof_codes
+                        and _number(row.get("grossAreaFt2")) is None
+                    )
+                    if not is_thermal_only_roof:
+                        kept.append(row)
+                page["envelope"] = kept
+
+            # Rebuild the derived row indexes after removing conflicting roof thermal rows.
+            rows = []
+            for page in en_pages:
+                for row in list(page.get("envelope") or []):
+                    if float(row.get("confidence") or 0) < MIN_CONFIDENCE:
+                        continue
+                    row["_sourceFile"] = page.get("sourceFile")
+                    rows.append(row)
+            thermal_rows = [row for row in rows if _has_any_thermal(row)]
+            geometry_rows = [row for row in rows if _number(row.get("grossAreaFt2")) is not None and not _has_any_thermal(row) and _text(row.get("kind")).lower() in {"roof", "floor", "wall", "window", "door"} and _row_code(row)[0]]
+            normalized_roof_codes = sorted(roof_codes)
+
     filled: list[dict] = []
     skipped: list[dict] = []
     for geometry in geometry_rows:
@@ -327,6 +375,7 @@ def resolve_request(request_path: Path, output_root: Path) -> Path:
         "referenceAuthority": ["thermal envelope class", "U-factor", "SHGC", "VT", "cavity R", "continuous R"],
         "reference": REFERENCE_NAME, "referenceSha256": profiles["referenceSha256"],
         "referenceFamilyCorroborated": reference_proven, "corroboration": corroboration,
+        "roofDiagramRegionsNormalizedToOneThermalClass": normalized_roof_codes,
         "referenceProfiles": {key: {k: value.get(k) for k in ("class", "construction", "material", "uFactor", "shgc", "vt", "cavityR", "continuousR")} for key, value in profiles.items() if isinstance(value, dict)},
         "filled": filled, "skipped": skipped,
         "sourceEvidenceMutated": False, "referenceProjectIdentityCopied": False, "referenceProjectQuantitiesCopied": False, "currentProjectCxlUsedAsThermalAuthority": False,

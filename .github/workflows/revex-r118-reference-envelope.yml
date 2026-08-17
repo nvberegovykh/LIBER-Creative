@@ -8,6 +8,8 @@ on:
       - 'server/revex-energy-worker/revex_energy_pipeline_guard_r118.py'
       - 'server/revex-energy-worker/verify_reference_envelope_r118.py'
       - 'server/revex-energy-worker/Dockerfile'
+      - 'docs/liber-apps/apps/revex/energy-r27.js'
+      - 'docs/liber-apps/apps/revex/index.html'
       - '.github/workflows/revex-r118-reference-envelope.yml'
   workflow_dispatch:
 
@@ -30,10 +32,17 @@ jobs:
             server/revex-energy-worker/revex_reference_envelope_projection_r118.py \
             server/revex-energy-worker/revex_energy_pipeline_guard_r118.py \
             server/revex-energy-worker/verify_reference_envelope_r118.py
+          node --check docs/liber-apps/apps/revex/energy-r27.js
 
       - name: Approved reference envelope regression
         working-directory: server/revex-energy-worker
         run: python verify_reference_envelope_r118.py
+
+      - name: Package row tap/download contract
+        run: |
+          grep -F 'data-download-url=' docs/liber-apps/apps/revex/energy-r27.js
+          grep -F 'downloadArtifact(row.dataset.downloadUrl,row.dataset.downloadName)' docs/liber-apps/apps/revex/energy-r27.js
+          grep -F 'energy-r27.js?v=20260817r123-package-download1' docs/liber-apps/apps/revex/index.html
 
       - name: Install r116 verifier runtime dependencies
         run: python -m pip install --disable-pip-version-check -r server/revex-energy-worker/requirements-server.txt
@@ -49,6 +58,7 @@ jobs:
           grep -F 'reference = ref._reference_path()' server/revex-energy-worker/verify_reference_envelope_r118.py
           grep -F 'expected_packaged = Path("/opt/revex/energy/References/79_WINTHROP_APPROVED_PROPOSED.osm")' server/revex-energy-worker/verify_reference_envelope_r118.py
           grep -F 'REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard_r118.py' server/revex-energy-worker/Dockerfile
+          grep -F 'PACKAGE_NAME = "REVEX_RECOVERY_PACKAGE.zip"' server/revex-energy-worker/revex_energy_pipeline_guard_r118.py
 
       - name: Scope guard
         shell: bash
@@ -62,22 +72,21 @@ jobs:
           git fetch origin "$BASE_SHA" --depth=1
           changed="$(git diff --name-only "$BASE_SHA" HEAD)"
           echo "$changed"
-          forbidden="$(printf '%s\n' "$changed" | grep -Ev '^(server/revex-energy-worker/(revex_reference_envelope_projection_r118.py|revex_energy_pipeline_guard_r118.py|verify_reference_envelope_r118.py|Dockerfile)|\.github/workflows/revex-r118-reference-envelope.yml)$' || true)"
+          forbidden="$(printf '%s\n' "$changed" | grep -Ev '^(server/revex-energy-worker/(revex_reference_envelope_projection_r118.py|revex_energy_pipeline_guard_r118.py|verify_reference_envelope_r118.py|Dockerfile)|docs/liber-apps/apps/revex/(energy-r27.js|index.html)|\.github/workflows/revex-r118-reference-envelope.yml)$' || true)"
           if [ -n "$forbidden" ]; then
-            echo 'r118 reference-envelope release contains unrelated changes:'
+            echo 'r123 package-guarantee release contains unrelated changes:'
             echo "$forbidden"
             exit 1
           fi
 
-      # This is intentionally the complete production worker image, not a mocked
-      # or partial unit image. It installs Chrome, OpenStudio/EnergyPlus,
-      # LibreOffice, Python dependencies, runs the r49 acceptance chain,
-      # official COMcheck QA, r116 durability checks, and r118 reference QA.
+      # Complete production worker image: Chrome, OpenStudio/EnergyPlus, LibreOffice,
+      # Python dependencies, r49 acceptance, official COMcheck QA, r116 durability,
+      # r121 envelope-class regression and r123 package guarantee regression.
       - name: FULL production Energy worker image build
         run: |
           docker build --progress=plain \
             -f server/revex-energy-worker/Dockerfile \
-            -t revex-r118-production-path:${{ github.sha }} \
+            -t revex-r123-package-guarantee:${{ github.sha }} \
             .
 
       - name: Full build completed

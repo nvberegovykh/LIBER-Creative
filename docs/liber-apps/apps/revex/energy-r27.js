@@ -1,6 +1,6 @@
 const Store = window.RevexStore;
 const $ = (selector) => document.querySelector(selector);
-const BUILD = '20260816r89-nine-output1';
+const BUILD = '20260817r123-package-download1';
 let sourceState = null;
 let resultState = null;
 let unsubscribeSource = () => {};
@@ -118,9 +118,30 @@ function renderResult() {
     const failureEvidence = !complete && isFailureEvidence(row);
     const label = failureEvidence ? 'Failure evidence' : filing ? 'Ready to insert later' : row.kind || 'Energy evidence';
     const body = `<span>${esc(row.reviewName || row.name || 'Artifact')}</span><small>${esc(label)}${row.bytes ? ` · ${size(row.bytes)}` : ''}</small>`;
-    return row.url ? `<a class="energy-artifact${filing?' is-filing':''}" href="${esc(row.url)}" target="_blank" rel="noopener">${body}</a>` : `<div class="energy-artifact${filing?' is-filing':''}">${body}</div>`;
+    const url=clean(row.url),name=clean(row.reviewName||row.name||'REVEX-artifact');
+    return url ? `<a class="energy-artifact${filing?' is-filing':''}" href="${esc(url)}" data-download-url="${esc(url)}" data-download-name="${esc(name)}" download="${esc(name)}" role="button" style="cursor:pointer;touch-action:manipulation">${body}</a>` : `<div class="energy-artifact${filing?' is-filing':''}">${body}</div>`;
   }).join('') || '<div class="energy-empty">The result manifest contains no downloadable artifact index.</div>';
 }
+
+async function downloadArtifact(url,name){
+  if(!url)return;
+  try{
+    const response=await fetch(url,{cache:'no-store',credentials:'omit'});
+    if(!response.ok)throw new Error(`HTTP ${response.status}`);
+    const blob=await response.blob(),objectUrl=URL.createObjectURL(blob),a=document.createElement('a');
+    a.href=objectUrl;a.download=name||'REVEX-artifact';a.style.display='none';document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(objectUrl),30000);
+  }catch(_){
+    const a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener';document.body.appendChild(a);a.click();a.remove();
+  }
+}
+
+document.addEventListener('click',(event)=>{
+  const row=event.target.closest?.('#energy-artifacts .energy-artifact[data-download-url]');
+  if(!row)return;
+  event.preventDefault();
+  void downloadArtifact(row.dataset.downloadUrl,row.dataset.downloadName);
+});
 
 async function hydrate() {
   const id = projectId();
