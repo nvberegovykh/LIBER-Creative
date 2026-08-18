@@ -84,8 +84,10 @@ assert.ok(projected.some(row=>row.id==='affected'),'affected authoritative plan 
 const current=projected.find(row=>row.id==='permit-r2');
 const old=projected.find(row=>row.id==='permit-r1');
 assert.ok(current&&old,'printing-set parents were lost');
-assert.deepEqual(api.orderedSheets(current).map(row=>Number(row.page)),[1,2,3,4,5],'current Full Set children are not in source-page order');
-assert.deepEqual(api.orderedSheets(old).map(row=>Number(row.page)),[1,2],'legacy page was attached to the wrong printing-set revision');
+const currentPages=Array.from(api.orderedSheets(current),row=>Number(row.page));
+const oldPages=Array.from(api.orderedSheets(old),row=>Number(row.page));
+assert.equal(JSON.stringify(currentPages),JSON.stringify([1,2,3,4,5]),'current Full Set children are not in source-page order');
+assert.equal(JSON.stringify(oldPages),JSON.stringify([1,2]),'legacy page was attached to the wrong printing-set revision');
 
 const page2=api.orderedSheets(current).find(row=>Number(row.page)===2);
 assert.equal(page2.singlePageStoragePath,'legacy/pages/A-102.pdf','matching legacy child did not enrich the parent sheetIndex');
