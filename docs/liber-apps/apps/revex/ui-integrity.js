@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260818r131-priority-fixes1';
+  const BUILD='20260818r132-priority-fixes2';
   const REVEX_R87_REPLAY_CONTRACT='energy-diagnostics-r68.js?v=20260816r87-energy-replay1';
   const REVEX_R87_REPLAY_LABEL="energyDiagnostics:'revision-scoped-replay-r87'";
   const REVEX_R92_REPLAY_COMPAT='energy-replay-r92.js?v=20260816r92-hosted-replay1';
@@ -50,6 +50,25 @@
 
   function updateProjectId(){const select=document.getElementById('project-select');if(!select)return;let badge=document.getElementById('project-id-badge');if(!badge){badge=document.createElement('button');badge.id='project-id-badge';badge.type='button';badge.className='sp-badge project-id-badge';badge.title='Copy REVEX Project ID';select.closest('.project-picker')?.insertAdjacentElement('afterend',badge);badge.addEventListener('click',async()=>{const id=String(select.value||'').trim();if(!id)return;try{await navigator.clipboard.writeText(id);badge.textContent='ID copied';setTimeout(updateProjectId,1000)}catch(_){}})}const id=String(select.value||'').trim();badge.hidden=!id;const text=id?`ID ${id}`:'';if(badge.textContent!==text)badge.textContent=text;}
   function enforceLabels(){const invite=document.getElementById('invite-project-button'),render=document.getElementById('render-button');if(invite&&invite.textContent!=='Invite')invite.textContent='Invite';if(render&&render.textContent!=='Render')render.textContent='Render';}
+  function installChatProjectGuard(){
+    if(root.__revexChatProjectGuardCurrent)return;
+    root.__revexChatProjectGuardCurrent=true;
+    let boundProject='';
+    root.addEventListener('revex:authoritative-project-bound',(event)=>{
+      const projectId=String(event?.detail?.projectId||'').trim();
+      if(!projectId)return;
+      if(!boundProject){boundProject=projectId;return;}
+      if(boundProject===projectId)return;
+      const previous=boundProject;boundProject=projectId;
+      const state=root.__revexState;
+      if(state){state.chatConnId='';state.chatLoaded=false;}
+      const frame=document.getElementById('chat-frame');
+      if(frame)frame.src='about:blank';
+      try{root.__revexBrowserDiagnostics?.emit?.('INFO','CHAT_PROJECT_BOUNDARY','Project Chat iframe reset at project boundary so connection keys cannot leak across REVEX projects.',{initiator:'ui integrity loader',previousProjectId:previous,projectId});}catch(_){}
+      const tab=document.querySelector('[data-view="chat"]');
+      if(tab?.classList.contains('active'))setTimeout(()=>tab.click(),0);
+    });
+  }
   function loadScript(src,key,type='text/javascript'){if(document.querySelector(`script[data-revex-runtime="${key}"]`))return;const script=document.createElement('script');script.dataset.revexRuntime=key;script.src=src;script.type=type;script.async=false;script.onerror=()=>root.__revexBrowserDiagnostics?.emit?.('ERROR','RUNTIME_LOAD',`Could not load ${src}.`,{initiator:'ui integrity loader'});document.head.appendChild(script);}
   function loadReviewIntegrity(){if(document.querySelector('script[data-revex-review-integrity]'))return;const script=document.createElement('script');script.type='module';script.dataset.revexReviewIntegrity='1';script.src='review-integrity-r50.js?v=20260813r49-review2';script.onerror=()=>root.__revexBrowserDiagnostics?.emit?.('ERROR','REVIEW_RUNTIME','Could not load review-integrity-r50.js.',{initiator:'ui integrity loader'});document.head.appendChild(script);}
   function loadCurrentRepairs(){
@@ -66,7 +85,7 @@
     loadScript('ui-polish-r109.js?v=20260817r110-responsive1','ui-polish-r109');
     loadScript('viewer-texture-r115.js?v=20260817r126-texture-precedence1','viewer-texture-r115');
     loadScript('docs-pages-r115.js?v=20260818r131-docs-fullset-order2','docs-pages-r115');
-    loadScript('render-touchups-r115.js?v=20260817r115-render-ui1','render-touchups-r115');
+    loadScript('render-touchups-r115.js?v=20260818r132-render-owner-guard1','render-touchups-r115');
     loadScript('mobile-final-r122.js?v=20260817r122-mobile-final1','mobile-final-r122');
     loadScript('appearance-convergence-r126.js?v=20260817r126-appearance1','appearance-convergence-r126');
     loadScript('docs-convergence-r126.js?v=20260817r126-docs1','docs-convergence-r126');
@@ -76,7 +95,7 @@
     loadScript('blocks-palette-r126.js?v=20260817r126-blocks1','blocks-palette-r126');
     loadScript('render-convergence-r126.js?v=20260818r129-freeze-guard1','render-convergence-r126');
   }
-  function bind(){installCanonicalOverlayStore();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
+  function bind(){installCanonicalOverlayStore();installChatProjectGuard();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r125-preserved',moduleLoad:'r126-convergence-last',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r122-mobile+r126-responsive-owners',docs:'r115-full-set-page-number+r126-ownership-guard',texture:'instance-uv>type-texture>design-color>revit',render:'google-gemini-client+qwen-shadow+interaction-freeze-guard',issues:'revexIssues+all-active-default+empty-selection-inspector',history:'technical-NYC-day',dailyReport:'separate-post-sync-worker',blocks:'walk-only-user-triggered-revit-family',bimProperties:'r117-preserved',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r125-preserved',moduleLoad:'r126-convergence-last',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r122-mobile+r126-responsive-owners',docs:'r115-full-set-page-number+r126-ownership-guard',texture:'instance-uv>type-texture>design-color>revit',render:'google-gemini-client+docked-owner+qwen-shadow+interaction-freeze-guard',chat:'project-boundary-connection-reset',issues:'revexIssues+all-active-default+empty-selection-inspector',history:'technical-NYC-day',dailyReport:'separate-post-sync-worker',blocks:'walk-only-user-triggered-revit-family',bimProperties:'r117-preserved',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
 })(window);
