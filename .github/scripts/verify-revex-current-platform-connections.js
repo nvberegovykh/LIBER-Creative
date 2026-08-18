@@ -15,21 +15,27 @@ const manager = read('src/Liber.Revex.Revit/UI/RendairWindowManager.cs');
 const familyService = read('src/Liber.Revex.Revit/Services/FamilyPlacementService.cs');
 const app = read('docs/liber-apps/apps/revex/app.js');
 const ui = read('docs/liber-apps/apps/revex/ui-integrity.js');
+const chatBoundary = read('docs/liber-apps/apps/revex/chat-convergence-r136.js');
 const store = read('docs/liber-apps/apps/revex/store.js');
 const firebaseService = read('docs/liber-apps/js/firebase-service.js');
 const wallt = read('docs/liber-apps/apps/revex/wallt-control-plane.js');
+const walltFixer = read('docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js');
 const projectAccess = read('server/firebase-functions/project-access.js');
 const projectChat = read('server/firebase-functions/project-chat.js');
 const functionsMain = read('server/firebase-functions/main.js');
 const functionsPackage = JSON.parse(read('server/firebase-functions/package.json'));
 
-// DOCS: one Full Set library object owns ordered linked sheet pages.
+// DOCS: one Full Set library object owns ordered linked sheet pages, including legacy projection.
 must(docsPages,
+  "BUILD='20260818r134-docs-linked-pages1'",
   'fullSetAuthority:true',
   "fullSetOrderAuthority:'full-set-page-number'",
+  'legacySheetProjection:true',
   'function orderedSheets(file)',
-  'function replaceSheet(file,page,next)',
+  'function projectRows(rows)',
+  'function mergeLegacySheet(file,row)',
   'derivedFromFullSet:true',
+  'const rows=projectRows(s.library)',
   'singlePageStoragePath',
   'sheetIndex',
   'async function openFull(file)',
@@ -60,6 +66,8 @@ must(blocks,
   "provider:'blocks'",
   'walkOnly:true',
   'placementDistanceFt:3',
+  'viewer.camera.position.clone().addScaledVector(dir,3)',
+  'return{x:target.x,y:-target.z,z:target.y',
   "type:'liber:revex-integration-open'",
   "type:'liber:revex-integration-arm'",
   "type:'liber:revex-family-place-r126'",
@@ -75,7 +83,8 @@ must(bridge,
   'liber:revex-integration-open',
   'BlocksFamilies',
   'host == "blocksrvt.com" || host.EndsWith(".blocksrvt.com"',
-  'extension is ".rfa" or ".zip"'
+  'extension is ".rfa" or ".zip"',
+  'PendingFamilies[token] = new PendingFamily(path, suggested, info.Length, DateTime.UtcNow, target)'
 );
 must(manager,
   'RevexWebIntegrationBridge.ConfigureFamilyPlacement();',
@@ -83,17 +92,24 @@ must(manager,
 );
 must(familyService,
   'private const double MaxHostDistanceFt = 8.0;',
+  'private const int MaxZipEntries = 2048;',
+  'private const long MaxExpandedZipBytes = 512L * 1024L * 1024L;',
+  'double targetZ = double.IsFinite(request.Z) ? request.Z : level.Elevation;',
+  'TryNearestFacePlacement(doc, symbol, point)',
+  'TryNearestHostedPlacement(doc, symbol, level, point)',
+  'ComputeReferences = true',
+  'destination.StartsWith(root, StringComparison.OrdinalIgnoreCase)',
   'new Transaction(doc, "REVEX · Place BIM family")',
   'placementType.Contains("ViewBased"',
   'placementType.Contains("Adaptive"',
   'placementType.Contains("Curve"',
   'unsupported placement type',
-  'TryNearestHostedPlacement',
   'REVEX could not place'
 );
 forbid(blocks, 'doc.Create.NewFamilyInstance', 'new Transaction(');
+forbid(familyService, 'ZipFile.ExtractToDirectory(path, extractedFolder)');
 
-// CHAT: frontend resolves one exact project-scoped secure-chat connection.
+// CHAT: Secure Chat owns messages/storage; r136 owns exact active-project boundary.
 must(app,
   'async function ensureChatEmbedded(context = state.selectedContext)',
   'Store.ensureProjectChat(state.projectId)',
@@ -110,14 +126,20 @@ must(firebaseService,
   'async _callEnsureProjectChatHttp(payload)',
   'ensureProjectChatHttp'
 );
-must(ui,
-  'function installChatProjectGuard()',
-  "root.addEventListener('revex:authoritative-project-bound'",
-  "state.chatConnId=''",
-  'state.chatLoaded=false',
-  "frame.src='about:blank'",
-  'CHAT_PROJECT_BOUNDARY'
+must(chatBoundary,
+  "BUILD='20260818r136-project-chat1'",
+  "owner:'secure-chat'",
+  'projectIsolated:true',
+  "Project changed while Chat connection was resolving.",
+  'Blocked a cross-project Chat connection',
+  "sessionStorage.removeItem('liber_revex_chat_draft')",
+  'frame.dataset.revexProjectId=projectId',
+  'CHAT_FRAME_BOUNDARY'
 );
+must(ui,
+  "loadScript('chat-convergence-r136.js?v=20260818r136-project-chat1','chat-convergence-r136')"
+);
+forbid(ui, 'function installChatProjectGuard()');
 
 // CHAT backend is source-bound: preserve valid linked history, otherwise deterministic repair.
 if (functionsPackage.main !== 'main.js') throw new Error('Firebase function composition must use main.js');
@@ -153,13 +175,24 @@ forbid(projectChat,
   "collection('chatMessages')"
 );
 
-// WALLT may operate these owners, but must not become their storage/engine implementation.
+// WALLT operates existing owners and exposes only bounded registered Fixer actions.
 must(wallt,
+  "const BUILD = '20260818-wallt-control2'",
   "const CHANNEL_HELPER = 'helper'",
   "const CHANNEL_FIXER = 'fixer'",
   'registerAdapter',
+  'const adapterName = type.slice(0, separator)',
   'helperChat',
   'helperIssue'
+);
+must(walltFixer,
+  "registerAdapter('current'",
+  'reversibleLocalOnly:true',
+  'sourceMutation:false',
+  'docs_reassert_owner',
+  'chat_reset_active_project',
+  'bim_reapply_overlays',
+  'energy_reopen_review'
 );
 forbid(wallt,
   "callFunction('ensureProjectChat'",
@@ -167,13 +200,16 @@ forbid(wallt,
   'PDFDocument.load',
   "'projects',projectId,'library'"
 );
+forbid(walltFixer, 'firebase.firestore', 'NewFamilyInstance', 'PDFDocument.load');
 
 console.log(JSON.stringify({
   REVEX_CURRENT_PLATFORM_CONNECTIONS: 'PASSED',
   docs: {
     owner: 'docs-pages-r115',
+    build: 'r134',
     fullSetAuthority: true,
     linkedSheetIndex: true,
+    legacyDetachedSheetsFolded: true,
     detachedSheetLibraryWrites: false
   },
   families: {
@@ -181,17 +217,23 @@ console.log(JSON.stringify({
     provider: 'blocks',
     opaqueDownloadToken: true,
     revitExternalEventMutation: true,
+    exactWalkZ: true,
+    faceAndElementHostFallback: true,
+    boundedZip: true,
     unsupportedPlacementFailsClosed: true
   },
   chat: {
-    owner: 'secure-chat + source-bound project connection resolver',
+    owner: 'secure-chat messages/storage + r136 project boundary',
     projectScoped: true,
-    projectBoundaryReset: true,
+    asyncRaceBlocked: true,
+    serverMismatchFailsClosed: true,
     existingHistoryPreserved: true,
     deterministicRepair: true,
     regions: ['us-central1','europe-west1']
   },
   wallt: {
+    controlBuild: 'control2',
+    executableFixerAdapters: true,
     operatorOnly: true,
     duplicateDomainOwner: false
   }
