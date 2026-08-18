@@ -1,0 +1,27 @@
+name: REVEX WALLT helper + fixer control plane
+
+on:
+  pull_request:
+    paths:
+      - 'docs/liber-apps/apps/revex/wallt-control-plane.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - 'docs/liber-apps/js/wallt-agent.js'
+      - '.github/scripts/verify-revex-wallt-control-plane.js'
+      - '.github/workflows/revex-wallt-control-plane-validation.yml'
+  workflow_dispatch:
+
+jobs:
+  wallt-control-plane:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: JavaScript syntax
+        run: |
+          node --check docs/liber-apps/apps/revex/wallt-control-plane.js
+          node --check docs/liber-apps/apps/revex/ui-integrity.js
+          node --check .github/scripts/verify-revex-wallt-control-plane.js
+      - name: Verify isolated helper and fixer channels
+        run: node .github/scripts/verify-revex-wallt-control-plane.js
