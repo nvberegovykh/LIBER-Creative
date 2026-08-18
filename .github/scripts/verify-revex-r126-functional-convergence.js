@@ -11,20 +11,23 @@ const pages=read('docs/liber-apps/apps/revex/docs-pages-r115.js');
 const appearance=read('docs/liber-apps/apps/revex/appearance-convergence-r126.js');
 const texture=read('docs/liber-apps/apps/revex/viewer-texture-r115.js');
 const issues=read('docs/liber-apps/apps/revex/issues-convergence-r126.js');
+const issuesInspector=read('docs/liber-apps/apps/revex/issues-inspector-r126.js');
 const daily=read('docs/liber-apps/apps/revex/history-daily-r126.js');
 const blocks=read('docs/liber-apps/apps/revex/blocks-palette-r126.js');
 const renderClient=read('docs/liber-apps/apps/revex/render-convergence-r126.js');
 const renderWorker=read('server/revex-render-worker/render_r126.py');
 const renderDeploy=read('server/revex-render-worker/DEPLOY_RENDER_R126.ps1');
-const docker=read('server/revex-render-worker/Dockerfile');
 const report=read('server/revex-report-functions/index.js');
 const bridge=read('src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs');
 const placement=read('src/Liber.Revex.Revit/Services/FamilyPlacementService.cs');
 const plans=read('src/Liber.Revex.Revit/Services/AffectedPlanExportService.cs');
 
+// The query token is the first live r126 deployment token. The internal build can
+// advance during pre-merge QA without creating a stale live asset because r126 has
+// never been served from main under this token yet.
 must(index,'ui-integrity.js?v=20260817r126-functional-convergence1','root cache key');
-must(ui,"BUILD='20260817r126-functional-convergence1'",'r126 loader');
-for(const file of ['appearance-convergence-r126.js','docs-convergence-r126.js','issues-convergence-r126.js','history-daily-r126.js','blocks-palette-r126.js','render-convergence-r126.js']) must(ui,file,'r126 loader');
+must(ui,"BUILD='20260817r126-functional-convergence2'",'r126 loader');
+for(const file of ['appearance-convergence-r126.js','docs-convergence-r126.js','issues-convergence-r126.js','issues-inspector-r126.js','history-daily-r126.js','blocks-palette-r126.js','render-convergence-r126.js']) must(ui,file,'r126 loader');
 
 must(pages,'fullSetAuthority:true','Docs canonical owner');
 must(pages,'derivedFromFullSet:true','Docs linked sheet authority');
@@ -39,9 +42,13 @@ mustNot(appearance,'URL.createObjectURL(file)','appearance short-lived blob prev
 must(texture,'material.color.set(0xffffff)','texture not tinted by fallback color');
 
 must(issues,"collection(Store.db,'projects',projectId,'revexIssues')",'issue source collection');
-must(issues,"if(!selectedMembers.size)return rows",'no member means all active');
+must(issues,"if(!selectedMembers.size)return rows",'no member filter means all active');
 must(issues,"INACTIVE=new Set",'active status contract');
 must(issues,'Store.updateIssue','issue editing');
+must(issuesInspector,"if(!host||s?.selectedElement)return",'selected element keeps element inspector authority');
+must(issuesInspector,"No BIM element selected — showing every active issue",'empty BIM selection shows all active issues');
+must(issuesInspector,"(s?.issues||[]).filter(active)",'empty selection uses active project issues');
+must(issuesInspector,'v.selectAndRoute?.(row)','empty issue can navigate to anchored BIM element');
 
 must(daily,"TZ='America/New_York'",'NYC day boundary');
 must(daily,'technicalHistorySeparate:true','technical/report separation');
@@ -80,4 +87,4 @@ if(tabs<7)throw new Error(`main module tabs missing: ${tabs}`);
 for(const forbidden of ['runRevexEnergy','GeometryCo','COMcheck']){
   mustNot(blocks,forbidden,'Blocks scope');mustNot(docs,forbidden,'Docs scope');mustNot(issues,forbidden,'Issues scope');mustNot(renderClient,forbidden,'Render client scope');
 }
-console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',docs:'single-final-owner',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active-default',history:'NYC-day-technical',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'server-warm-min1',energy:'scope-preserved'}));
+console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',docs:'single-final-owner',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active+empty-selection-inspector',history:'NYC-day-technical',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'server-warm-min1',energy:'scope-preserved'}));
