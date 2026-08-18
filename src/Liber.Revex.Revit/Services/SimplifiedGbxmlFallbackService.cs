@@ -153,7 +153,7 @@ public sealed class SimplifiedGbxmlFallbackService
             }
         }
 
-        var openingCandidates = CollectOpeningCandidates(doc);
+        var openingCandidates = CollectOpeningCandidates(doc).ToList();
         int openingPieces = 0;
         int opaqueFallbacks = 0;
         foreach (Element opening in openingCandidates)
