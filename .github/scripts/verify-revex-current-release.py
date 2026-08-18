@@ -146,6 +146,8 @@ must(contracts,
      "required_for_complete=True")
 must(touchups,
      "MISSING_VT = 0.45",
+     "def _actual_vt(row: dict)",
+     "ACTIVE_ENVELOPE_EVIDENCE_VT",
      "_artifact_by_role",
      'revit-schedule-evidence',
      "Compatibility adapter only for previously-published revisions lacking role metadata",
@@ -159,6 +161,17 @@ must(pipeline,
      '"userVisible"] = False',
      '"kind": "release-package"',
      '"entryCount": 9')
+
+# Execute the actual-evidence VT parser too: a value present only in evidence text must
+# remain the actual value, while missing evidence reaches the fixed 0.45 policy later.
+energy_root = ROOT / "src/Liber.Revex.Revit/Engineering/Energy"
+if str(energy_root) not in sys.path:
+    sys.path.insert(0, str(energy_root))
+import revex_final_touchups as current_touchups
+assert abs(float(current_touchups._actual_vt({"evidence": "Fenestration VT = 0.37"})) - 0.37) < 1e-9
+assert abs(float(current_touchups._actual_vt({"visibleTransmittance": "0.52"})) - 0.52) < 1e-9
+assert current_touchups._actual_vt({"evidence": "Fenestration U 0.30 SHGC 0.30"}) is None
+assert abs(float(current_touchups.MISSING_VT) - 0.45) < 1e-9
 
 # Current release must retain every capability category recovered from the actual project
 # conversation, not merely Energy.
@@ -180,7 +193,8 @@ print(json.dumps({
     "fullUiAndBimContract": True,
     "typedEvidence": True,
     "scheduleEvidenceByRole": True,
-    "actualVtWins": True,
+    "actualVtFieldPreserved": True,
+    "actualVtTextEvidencePreserved": True,
     "missingVt": 0.45,
     "completeFilingPackageRequired": True,
     "releasePackage": "REVEX_ENERGY_RELEASE_PACKAGE.zip",
