@@ -1,0 +1,89 @@
+name: REVEX r126 functional convergence
+on:
+  push:
+    branches: [revex-r126-functional-convergence]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  convergence:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: '8.0.x' }
+      - name: Browser/runtime JavaScript syntax
+        shell: powershell
+        run: |
+          $files=@(
+            'docs/liber-apps/apps/revex/ui-integrity.js',
+            'docs/liber-apps/apps/revex/docs-convergence-r126.js',
+            'docs/liber-apps/apps/revex/appearance-convergence-r126.js',
+            'docs/liber-apps/apps/revex/issues-convergence-r126.js',
+            'docs/liber-apps/apps/revex/history-daily-r126.js',
+            'docs/liber-apps/apps/revex/blocks-palette-r126.js',
+            'docs/liber-apps/apps/revex/render-convergence-r126.js',
+            'docs/liber-apps/apps/revex/viewer-texture-r115.js',
+            'server/revex-report-functions/index.js'
+          )
+          foreach($f in $files){node --check $f;if($LASTEXITCODE-ne 0){exit $LASTEXITCODE}}
+      - name: r126 convergence contract
+        run: node .github/scripts/verify-revex-r126-functional-convergence.js
+      - name: Install report worker dependencies
+        working-directory: server/revex-report-functions
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Report deterministic unit checks
+        working-directory: server/revex-report-functions
+        shell: node {0}
+        run: |
+          const t=require('./index.js')._test;
+          const assert=require('node:assert/strict');
+          assert.equal(t.nycDay('2026-08-17T03:59:59Z'),'2026-08-16');
+          assert.equal(t.nycDay('2026-08-17T04:00:00Z'),'2026-08-17');
+          assert.equal(t.activeIssue({status:'review'}),true);
+          assert.equal(t.activeIssue({status:'resolved'}),false);
+          const a={elements:[{id:1,uniqueId:'u1',category:'Walls',family:'Basic Wall',type:'A',level:'L1',parameters:[],materials:[],bbox:{min:[0,0,0],max:[1,1,10]}}]};
+          const b={elements:[{id:1,uniqueId:'u1',category:'Walls',family:'Basic Wall',type:'B',level:'L1',parameters:[],materials:[],bbox:{min:[0,0,0],max:[1,1,10]}}]};
+          const d=t.diffViewer(a,b,'r2');assert.equal(d.length,1);assert.equal(d[0].kind,'modified');assert.ok(d[0].fields.includes('type'));
+          console.log('PASS deterministic Daily Report boundaries/diff');
+      - name: Render worker Python syntax
+        run: python -m py_compile server/revex-render-worker/render_r119.py server/revex-render-worker/render_r126.py
+      - name: Preserve r125 Energy filing touchups
+        working-directory: src/Liber.Revex.Revit/Engineering/Energy
+        run: python verify_revex_r125_touchups.py
+      - name: Preserve existing REVEX full-stack guards
+        shell: powershell
+        run: |
+          node .github/scripts/verify-revex-r104-full-stack.py 2>$null
+          if($LASTEXITCODE-ne 0){python .github/scripts/verify-revex-r104-full-stack.py}
+          node .github/scripts/verify-revex-r109-pure-ui.js
+          node .github/scripts/verify-revex-r115-final-touchups.js
+          node .github/scripts/verify-revex-r116-energy-finalization.js
+          node .github/scripts/verify-revex-r117-bim-properties.js
+      - name: Parse r126 PowerShell deployment controllers
+        shell: powershell
+        run: |
+          foreach($f in @('server/revex-render-worker/DEPLOY_RENDER_R126.ps1','server/revex-report-functions/DEPLOY_REPORT_R126.ps1')){
+            $tokens=$null;$errors=$null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f),[ref]$tokens,[ref]$errors)
+            if(@($errors).Count){$errors|Format-List|Out-String|Write-Error;exit 1}
+          }
+          Write-Host 'PASS r126 PowerShell parse'
+      - name: Compile complete Revit 2026 add-in
+        shell: powershell
+        run: dotnet build src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -c Release -p:RevexCiRevitApi=true
+      - name: Energy scope preservation
+        shell: bash
+        run: |
+          base="$(git merge-base HEAD origin/main 2>/dev/null || true)"
+          if [ -z "$base" ]; then git fetch origin main --depth=1; base="$(git merge-base HEAD origin/main)"; fi
+          changed="$(git diff --name-only "$base" HEAD)"
+          echo "$changed"
+          forbidden="$(printf '%s\n' "$changed" | grep -E '^(server/revex-energy-worker/|src/Liber.Revex.Revit/Engineering/Energy/|RECOVER_REVEX_ENERGY_CURRENT\.|RUN_REVEX_ENERGY_NOW\.)' || true)"
+          if [ -n "$forbidden" ]; then echo 'r126 touched protected Energy recovery paths:'; echo "$forbidden"; exit 1; fi
