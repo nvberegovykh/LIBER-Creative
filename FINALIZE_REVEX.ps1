@@ -20,14 +20,11 @@ $LatestLog = Join-Path $LogRoot "FINALIZE_REVEX.latest.log"
 $AddinPath = Join-Path $env:APPDATA "Autodesk\Revit\Addins\2026\LIBER.REVEX.addin"
 $RevitDir = "C:\Program Files\Autodesk\Revit 2026"
 $ProjectPath = "src\Liber.Revex.Revit\Liber.Revex.Revit.csproj"
+$RenderModel = "gemini-3.1-flash-image"
 $ExitCode = 1
 $TranscriptStarted = $false
 $SourceSha = ""
 $script:EnergyService = ""
-$script:RenderService = ""
-# First issuance is blocked only by issuance-critical relations. Render is explicitly deferred;
-# its existing live path is left untouched and can be converged after Energy + UI acceptance.
-$script:RenderDeferredFirstIssuance = $true
 
 New-Item -ItemType Directory -Path $LogRoot, $WorkRoot -Force | Out-Null
 
@@ -83,6 +80,11 @@ function Wait-RevitClosed {
     Start-Sleep -Milliseconds 750
   }
 }
+function Invoke-ReleaseController([string]$Label,[string]$Path,[string[]]$Arguments) {
+  if(-not(Test-Path -LiteralPath $Path -PathType Leaf)){throw "$Label controller is missing: $Path"}
+  $argv=@("-NoProfile","-ExecutionPolicy","Bypass","-File",$Path)+$Arguments
+  Require-Ok $Label "powershell.exe" $argv
+}
 
 function Assert-CurrentSource([string]$Root,[string]$Node,[string]$Python) {
   $required=@(
@@ -94,6 +96,9 @@ function Assert-CurrentSource([string]$Root,[string]$Node,[string]$Python) {
     ".github\scripts\patch-live-firestore-rules.js",
     "firebase\revex-project-access-r43.rules",
     "firebase\deploy-current-access.ps1",
+    "docs\liber-apps\apps\revex\workspace-r51.js",
+    "docs\liber-apps\apps\revex\render-agent.js",
+    "docs\liber-apps\apps\revex\render-convergence-r126.js",
     "src\Liber.Revex.Revit\Engineering\Energy\revex_energy_contracts.py",
     "src\Liber.Revex.Revit\Engineering\Energy\revex_final_touchups.py",
     "src\Liber.Revex.Revit\Engineering\Energy\revex_pipeline_runner.py",
@@ -102,7 +107,6 @@ function Assert-CurrentSource([string]$Root,[string]$Node,[string]$Python) {
     "src\Liber.Revex.Revit\Engineering\Gbxml\LIBER_gbXML_Preflight_and_Export.py",
     "src\Liber.Revex.Revit\Engineering\Gbxml\LIBER_gbXML_Preflight_and_Export.dyn",
     "server\revex-energy-worker\deploy-current.ps1",
-    "server\revex-render-worker\deploy-current.ps1",
     "server\revex-report-functions\deploy-current.ps1",
     $ProjectPath
   )
@@ -112,11 +116,17 @@ function Assert-CurrentSource([string]$Root,[string]$Node,[string]$Python) {
   if([string]$release.authority-ne "canonical-current-files"){throw "REVEX current release manifest has no canonical authority."}
   if([string]$release.current.releaseVerifier-ne ".github/scripts/verify-revex-current-release.py" -or
      [string]$release.current.energyDeployer-ne "server/revex-energy-worker/deploy-current.ps1" -or
-     [string]$release.current.renderDeployer-ne "server/revex-render-worker/deploy-current.ps1" -or
      [string]$release.current.reportDeployer-ne "server/revex-report-functions/deploy-current.ps1" -or
      [string]$release.current.accessDeployer-ne "firebase/deploy-current-access.ps1"){
     throw "REVEX current release manifest does not point to canonical current controllers."
   }
+
+  $workspace=Get-Content -Raw -LiteralPath (Join-Path $Root "docs\liber-apps\apps\revex\workspace-r51.js")
+  $render=Get-Content -Raw -LiteralPath (Join-Path $Root "docs\liber-apps\apps\revex\render-agent.js")
+  $renderConvergence=Get-Content -Raw -LiteralPath (Join-Path $Root "docs\liber-apps\apps\revex\render-convergence-r126.js")
+  if($workspace.Contains("render-selfhost-r54.js")){throw "Current workspace still imports the experimental self-hosted Render owner."}
+  foreach($marker in @("gemini-3.1-flash-image","generativelanguage.googleapis.com/v1/models/","x-goog-user-project","captureRenderReference","Save to Design Book")){if(-not($render.Contains($marker)-or$workspace.Contains($marker))){throw "Current Google Render path is missing: $marker"}}
+  foreach($marker in @("providerOwner:'render-agent.js'","localModelCache:false","legacyIframe:false")){if(-not $renderConvergence.Contains($marker)){throw "Current Render convergence is missing: $marker"}}
 
   Require-Ok "Current-generation regression guard" $Node @(".github\scripts\verify-revex-current-generation-r53.js") $Root
   Require-Ok "Current WebView/UI root cache guard" $Node @(".github\scripts\verify-revex-r99-webview-root-cache.js") $Root
@@ -139,24 +149,38 @@ function Build-Addin([string]$Root,[string]$Dotnet) {
   }
 }
 
-function Verify-LiveUi([string]$Root) {
-  $sourceUi=Get-Content -LiteralPath (Join-Path $Root "docs\liber-apps\apps\revex\ui-integrity.js") -Raw
-  $match=[regex]::Match($sourceUi,"BUILD='([^']+)'")
-  if(-not $match.Success){throw "Current UI BUILD marker could not be resolved."}
-  $build=$match.Groups[1].Value
-  $uri="https://liberpict.com/liber-apps/apps/revex/ui-integrity.js?revex_source=$($SourceSha.Substring(0,12))"
-  $deadline=(Get-Date).AddMinutes(10)
-  while((Get-Date)-lt $deadline){
-    try{$live=(Invoke-WebRequest -UseBasicParsing -Uri $uri -Headers @{"Cache-Control"="no-cache";"Pragma"="no-cache"}).Content;if($live.Contains("BUILD='$build'")){Write-Host "PASS: live Companion UI is current ($build)." -ForegroundColor Green;return}}catch{}
-    Start-Sleep -Seconds 10
-  }
-  throw "Live REVEX Companion did not expose the exact current UI build within 10 minutes. No access/broker cutover or local add-in install was started."
+function Verify-GoogleRenderApi([string]$GCloud) {
+  Step "Verify canonical Google Render provider"
+  if((Invoke-Native $GCloud @("services","enable","generativelanguage.googleapis.com","--project",$ProjectId,"--quiet") -Quiet)-ne 0){throw "Gemini API could not be enabled for $ProjectId."}
+  $token=Capture-Native $GCloud @("auth","print-access-token")
+  if($token.Code-ne 0-or-not $token.Text){throw "Google Cloud could not issue an OAuth token for Render verification."}
+  $headers=@{Authorization="Bearer $($token.Text.Trim())";"x-goog-user-project"=$ProjectId}
+  try{$model=Invoke-RestMethod -Method Get -Uri "https://generativelanguage.googleapis.com/v1/models/$RenderModel" -Headers $headers -TimeoutSec 30}catch{throw "Google Render provider verification failed: $($_.Exception.Message)"}
+  if([string]$model.name-ne "models/$RenderModel"){throw "Google Render provider returned an unexpected model identity."}
+  Write-Host "PASS: Render provider $RenderModel is reachable with project OAuth." -ForegroundColor Green
 }
 
-function Invoke-ReleaseController([string]$Label,[string]$Path,[string[]]$Arguments) {
-  if(-not(Test-Path -LiteralPath $Path -PathType Leaf)){throw "$Label controller is missing: $Path"}
-  $argv=@("-NoProfile","-ExecutionPolicy","Bypass","-File",$Path)+$Arguments
-  Require-Ok $Label "powershell.exe" $argv
+function Verify-LiveUi([string]$Root) {
+  $checks=@(
+    @{Rel="ui-integrity.js"; Marker="BUILD='20260817r126-functional-convergence2'"},
+    @{Rel="workspace-r51.js"; Marker="const BUILD = '20260818-current-workspace1'"},
+    @{Rel="render-agent.js"; Marker="const MODEL = 'gemini-3.1-flash-image'"},
+    @{Rel="render-convergence-r126.js"; Marker="providerOwner:'render-agent.js'"}
+  )
+  $deadline=(Get-Date).AddMinutes(10)
+  while((Get-Date)-lt $deadline){
+    $all=$true
+    foreach($check in $checks){
+      try{
+        $uri="https://liberpict.com/liber-apps/apps/revex/$($check.Rel)?revex_source=$($SourceSha.Substring(0,12))"
+        $live=(Invoke-WebRequest -UseBasicParsing -Uri $uri -Headers @{"Cache-Control"="no-cache";"Pragma"="no-cache"}).Content
+        if(-not $live.Contains([string]$check.Marker)){$all=$false;break}
+      }catch{$all=$false;break}
+    }
+    if($all){Write-Host "PASS: live Companion UI + Google Render runtime are current." -ForegroundColor Green;return}
+    Start-Sleep -Seconds 10
+  }
+  throw "Live REVEX Companion did not expose the exact current UI/Render runtime within 10 minutes."
 }
 
 function Verify-LiveAccessSource([string]$GCloud) {
@@ -178,30 +202,20 @@ function Verify-LiveAccessSource([string]$GCloud) {
 }
 
 function Verify-LiveSourceBindings([string]$GCloud) {
-  Step "Verify every mutable live issuance service is bound to the exact release source"
-  $services=@($script:EnergyService)
-  if(-not $script:RenderDeferredFirstIssuance){$services += $script:RenderService}
-  foreach($service in $services){
-    $state=Capture-Native $GCloud @("run","services","describe",$service,"--project",$ProjectId,"--region",$Region,"--format","json")
-    if($state.Code-ne 0-or-not $state.Text){throw "Live service could not be verified: $service"}
-    $run=$state.Text|ConvertFrom-Json;$envs=@{};foreach($row in @($run.spec.template.spec.containers[0].env)){$envs[[string]$row.name]=[string]$row.value}
-    if([string]$envs["REVEX_SOURCE_CANDIDATE"]-ne $SourceSha){throw "$service is not bound to exact source $SourceSha."}
-  }
-  $functionNames=@("runRevexEnergy","documentRevexRevision","finalizeRevexDailyReport")
-  if(-not $script:RenderDeferredFirstIssuance){$functionNames += "runRevexRender"}
-  foreach($functionName in $functionNames){
-    $state=Capture-Native $GCloud @("functions","describe",$functionName,"--gen2","--project",$ProjectId,"--region",$Region,"--format","json")
-    if($state.Code-ne 0-or-not $state.Text){throw "Live function could not be verified: $functionName"}
-    $fn=$state.Text|ConvertFrom-Json
+  Step "Verify mutable live issuance services are bound to the exact release source"
+  $state=Capture-Native $GCloud @("run","services","describe",$script:EnergyService,"--project",$ProjectId,"--region",$Region,"--format","json")
+  if($state.Code-ne 0-or-not $state.Text){throw "Live Energy service could not be verified: $($script:EnergyService)"}
+  $run=$state.Text|ConvertFrom-Json;$envs=@{};foreach($row in @($run.spec.template.spec.containers[0].env)){$envs[[string]$row.name]=[string]$row.value}
+  if([string]$envs["REVEX_SOURCE_CANDIDATE"]-ne $SourceSha){throw "$($script:EnergyService) is not bound to exact source $SourceSha."}
+  foreach($functionName in @("runRevexEnergy","documentRevexRevision","finalizeRevexDailyReport")){
+    $fnState=Capture-Native $GCloud @("functions","describe",$functionName,"--gen2","--project",$ProjectId,"--region",$Region,"--format","json")
+    if($fnState.Code-ne 0-or-not $fnState.Text){throw "Live function could not be verified: $functionName"}
+    $fn=$fnState.Text|ConvertFrom-Json
     if([string]$fn.state-ne "ACTIVE"){throw "$functionName is not ACTIVE."}
     if([string]$fn.serviceConfig.environmentVariables.REVEX_SOURCE_CANDIDATE-ne $SourceSha){throw "$functionName is not bound to exact source $SourceSha."}
   }
   Verify-LiveAccessSource $GCloud
-  if($script:RenderDeferredFirstIssuance){
-    Write-Host "PASS: Access, Energy and Report are source-bound to $SourceSha. Render is deferred and untouched for first issuance." -ForegroundColor Green
-  }else{
-    Write-Host "PASS: Access, Energy, Render and Report are all source-bound to $SourceSha." -ForegroundColor Green
-  }
+  Write-Host "PASS: Access, Energy and Report are source-bound to $SourceSha; Render is the verified live Companion client path." -ForegroundColor Green
 }
 
 function Install-AddinAtomically {
@@ -219,7 +233,7 @@ function Install-AddinAtomically {
     $assembly=Join-Path $InstalledRoot "Liber.Revex.Revit.dll"
     $marker=[ordered]@{
       schema="liber.revex.current-release.v2";repository="nvberegovykh/LIBER-Creative";sourceCommit=$SourceSha;finalizedAtUtc=[DateTime]::UtcNow.ToString("o");
-      energyWorker=$script:EnergyService;renderWorker=$(if($script:RenderDeferredFirstIssuance){$null}else{$script:RenderService});renderFirstIssuanceDeferred=$script:RenderDeferredFirstIssuance;missingVt=0.45;actualVtWins=$true;projectAccessSourceBound=$true;
+      energyWorker=$script:EnergyService;renderProvider=$RenderModel;renderRuntime="Companion render-agent.js";missingVt=0.45;actualVtWins=$true;projectAccessSourceBound=$true;
       geometryPolicy="whole-door + curtain-panel + physical-cover corrections";uiPolicy="full current convergence";previousInstalledRevisionShadow=$BackupRoot
     }|ConvertTo-Json -Depth 8
     [IO.File]::WriteAllText((Join-Path $InstalledRoot "REVEX-CURRENT-SOURCE.json"),$marker,[Text.UTF8Encoding]::new($false))
@@ -250,10 +264,9 @@ function Install-AddinAtomically {
 
 try{
   try{Start-Transcript -LiteralPath $LogPath -Force|Out-Null;$TranscriptStarted=$true}catch{}
-  Write-Host "REVEX one-command current release finalizer" -ForegroundColor Cyan
-  Write-Host "First issuance critical path: Companion + project access + Revit add-in + Energy + Report." -ForegroundColor Green
-  Write-Host "Render is deferred for first issuance and cannot block this release." -ForegroundColor Yellow
-  Write-Host "Versioned implementations stay as shadow files; current runtime uses canonical facades." -ForegroundColor Green
+  Write-Host "REVEX one-command full current release finalizer" -ForegroundColor Cyan
+  Write-Host "Scope: Companion + BIM + Design Book + Spec Book + Docs + Issues + History + Blocks + Render + Revit add-in + Energy + Report + access." -ForegroundColor Green
+  Write-Host "Render: verified Google Gemini image path in Companion; experimental Qwen worker is not a release dependency." -ForegroundColor Green
   Write-Host "VT policy: preserve actual VT; when absent use exactly 0.45." -ForegroundColor Green
   Write-Host "Persistent log: $LogPath"
 
@@ -270,34 +283,24 @@ try{
   $sha=Capture-Native $Git @("rev-parse","HEAD") $SourceRoot
   if($sha.Code-ne 0-or $sha.Text-notmatch '^[0-9a-fA-F]{40}$'){throw "Exact current source SHA could not be resolved."}
   $SourceSha=$sha.Text.ToLowerInvariant();$short=$SourceSha.Substring(0,12)
-  $script:EnergyService="revex-energy-$short";$script:RenderService="revex-render-$short"
+  $script:EnergyService="revex-energy-$short"
   Write-Host "Exact release source: $SourceSha" -ForegroundColor Green
 
   Assert-CurrentSource $SourceRoot $Node $Python
   Build-Addin $SourceRoot $Dotnet
   Ensure-GCloudAuth $GCloud;Ensure-FirebaseAuth $Firebase
   $env:REVEX_FIREBASE_AUTH_VERIFIED="1"
+  Verify-GoogleRenderApi $GCloud
 
   $energyDeploy=Join-Path $SourceRoot "server\revex-energy-worker\deploy-current.ps1"
-  $renderDeploy=Join-Path $SourceRoot "server\revex-render-worker\deploy-current.ps1"
   $reportDeploy=Join-Path $SourceRoot "server\revex-report-functions\deploy-current.ps1"
   $accessDeploy=Join-Path $SourceRoot "firebase\deploy-current-access.ps1"
 
   Invoke-ReleaseController "Stage and verify current Energy candidate without broker cutover" $energyDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:EnergyService,"-SourceCandidate",$SourceSha,"-CandidateOnly","-NoPause")
-  if(-not $script:RenderDeferredFirstIssuance){
-    Invoke-ReleaseController "Stage, warm and verify current Render candidate without broker cutover" $renderDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:RenderService,"-SourceCandidate",$SourceSha,"-CandidateOnly","-NoPause")
-  }else{
-    Write-Host ">> Render deferred for first issuance; no Render build, warm wait, broker cutover, or Render verification will run." -ForegroundColor Yellow
-  }
-
-  Step "Verify current Companion UI is live before any access or broker cutover"
+  Step "Verify current Companion UI and Render runtime are live before access/Energy cutover"
   Verify-LiveUi $SourceRoot
-
   Invoke-ReleaseController "Deploy preserved source-bound project access rules" $accessDeploy @("-ProjectId",$ProjectId,"-SourceCandidate",$SourceSha,"-NoPause")
   Invoke-ReleaseController "Deploy source-bound Report and Daily Report" $reportDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-SourceCandidate",$SourceSha,"-NoPause")
-  if(-not $script:RenderDeferredFirstIssuance){
-    Invoke-ReleaseController "Cut Render broker to the already-warm current candidate" $renderDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:RenderService,"-SourceCandidate",$SourceSha,"-BrokerOnly","-NoPause")
-  }
   Invoke-ReleaseController "Cut Energy broker to the already-verified current candidate" $energyDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:EnergyService,"-SourceCandidate",$SourceSha,"-BrokerOnly","-NoPause")
 
   Verify-LiveSourceBindings $GCloud
@@ -305,12 +308,12 @@ try{
   Install-AddinAtomically
 
   Write-Host ""
-  Write-Host "PASS: REVEX first-issuance critical release is converged on one exact source revision." -ForegroundColor Green
+  Write-Host "PASS: REVEX full current release is converged." -ForegroundColor Green
   Write-Host "Source: $SourceSha"
-  Write-Host "Project access: owner/member/admin rules preserved and source-bound"
+  Write-Host "Companion/UI/BIM/Books/Docs/Issues/History/Blocks: exact current live runtime verified"
+  Write-Host "Render: $RenderModel via canonical Companion render-agent.js; Google API reachability verified"
   Write-Host "Energy: $($script:EnergyService) · actual VT preserved · missing VT 0.45 · complete release package required"
-  Write-Host "Render: deferred for first issuance; existing live Render remains untouched"
-  Write-Host "Report/Daily Report: source-bound $SourceSha"
+  Write-Host "Report/Daily Report + access: source-bound $SourceSha"
   Write-Host "Revit add-in: $(Join-Path $InstalledRoot 'Liber.Revex.Revit.dll')"
   Write-Host "Previous installed add-in preserved as shadow: $BackupRoot"
   Write-Host ""
@@ -320,7 +323,7 @@ try{
   Write-Host ""
   Write-Host "REVEX finalization stopped safely." -ForegroundColor Red
   Write-Host $_.Exception.Message -ForegroundColor Red
-  Write-Host "Do not run any legacy/recovery controller. Rerun this same FINALIZE_REVEX command after correcting the reported dependency." -ForegroundColor Yellow
+  Write-Host "Do not run any legacy/recovery controller. Rerun this same FINALIZE_REVEX command only after the reported dependency is corrected." -ForegroundColor Yellow
   Write-Host "Persistent log: $LogPath" -ForegroundColor Yellow
   $ExitCode=1
 }finally{
