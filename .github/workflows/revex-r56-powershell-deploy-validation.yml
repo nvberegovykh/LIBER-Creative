@@ -10,7 +10,8 @@ on:
     paths:
       - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
       - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
-      - 'server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1'
+      - 'server/revex-report-functions/DEPLOY_REPORT_R126.ps1'
+      - 'server/revex-render-worker/DEPLOY_RENDER_R126.ps1'
       - 'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
       - '.github/workflows/revex-r56-powershell-deploy-validation.yml'
   pull_request:
@@ -18,7 +19,8 @@ on:
     paths:
       - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
       - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
-      - 'server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1'
+      - 'server/revex-report-functions/DEPLOY_REPORT_R126.ps1'
+      - 'server/revex-render-worker/DEPLOY_RENDER_R126.ps1'
       - 'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
       - '.github/workflows/revex-r56-powershell-deploy-validation.yml'
 
@@ -28,13 +30,14 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Parse deployment scripts with Windows PowerShell
+      - name: Parse current deployment scripts with Windows PowerShell
         shell: powershell
         run: |
           $files = @(
             'DEPLOY_REVEX_CURRENT_SERVICES.ps1',
             'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1',
-            'server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1',
+            'server/revex-report-functions/DEPLOY_REPORT_R126.ps1',
+            'server/revex-render-worker/DEPLOY_RENDER_R126.ps1',
             'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
           )
           foreach ($file in $files) {
@@ -46,35 +49,41 @@ jobs:
               throw "PowerShell parser rejected $file"
             }
           }
-      - name: Reject unsafe gcloud value projections
+      - name: Reject unsafe gcloud argv and legacy current-service scope
         shell: powershell
         run: |
           $launcher = Get-Content -Raw 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
-          if ($launcher -match '(?m)&\s+\$GCloud\s+auth\s+list\b') {
-            throw 'Root launcher contains direct gcloud auth-list syntax instead of safe argv splatting.'
-          }
-          if (-not ($launcher.Contains('"--format","value(account)"') -or $launcher.Contains('"--format", "value(account)"'))) {
-            throw 'Root launcher is missing the Windows-safe split account projection.'
-          }
-
           $bootstrap = Get-Content -Raw 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
-          if (-not ($bootstrap.Contains('"--format", "value(account)"') -or $bootstrap.Contains('"--format","value(account)"'))) {
-            throw 'Bootstrap is missing the Windows-safe split account projection.'
+
+          foreach ($pair in @(
+            @{ Name='launcher'; Text=$launcher },
+            @{ Name='bootstrap'; Text=$bootstrap }
+          )) {
+            if ($pair.Text -match '(?m)&\s+\$GCloud\s+auth\s+list\b') {
+              throw "$($pair.Name) contains direct gcloud auth-list syntax instead of argv splatting."
+            }
+            $hasProjection = $pair.Text.Contains('"--format", "value(account)"') -or
+                             $pair.Text.Contains('"--format","value(account)"') -or
+                             $pair.Text.Contains('"--format=value(account)"')
+            if (-not $hasProjection) { throw "$($pair.Name) is missing an explicit account projection." }
           }
 
           foreach ($file in @(
-            'server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1',
+            'server/revex-report-functions/DEPLOY_REPORT_R126.ps1',
+            'server/revex-render-worker/DEPLOY_RENDER_R126.ps1',
             'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
           )) {
             $text = Get-Content -Raw $file
             if ($text -match '(?m)&\s+\$GCloud\s+auth\s+list\b' -or
                 $text -match '(?m)&\s+\$GCloud\s+builds\s+get-default-service-account\b' -or
                 $text -match '(?m)&\s+\$GCloud\s+run\s+services\s+describe\b') {
-              throw "$file contains direct gcloud invocation syntax that lets PowerShell reinterpret native arguments."
+              throw "$file contains direct gcloud invocation syntax that lets Windows PowerShell reinterpret native arguments."
             }
-            $splitProjection = $text.Contains('"--format","value(account)"') -or $text.Contains('"--format", "value(account)"')
-            $legacyProjection = $text.Contains('--format=value(account)')
-            if (-not ($splitProjection -or $legacyProjection)) {
-              throw "$file is missing an explicit account projection."
-            }
+          }
+
+          foreach ($required in @('DEPLOY_REPORT_R126.ps1','DEPLOY_RENDER_R126.ps1')) {
+            if (-not $bootstrap.Contains($required)) { throw "Current bootstrap missing $required" }
+          }
+          foreach ($forbidden in @('DEPLOY_ENERGY_CURRENT.ps1','DEPLOY_ENERGY_WORKER_ONLY_R69.ps1','EnergyWorkerOnly')) {
+            if ($launcher.Contains($forbidden) -or $bootstrap.Contains($forbidden)) { throw "Current r126 deployment revives historical Energy path $forbidden" }
           }

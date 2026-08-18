@@ -11,16 +11,16 @@ on:
     paths:
       - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
       - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
-      - 'server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1'
-      - 'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
+      - 'server/revex-report-functions/DEPLOY_REPORT_R126.ps1'
+      - 'server/revex-render-worker/DEPLOY_RENDER_R126.ps1'
       - '.github/workflows/revex-r57-bootstrap-argv-validation.yml'
   pull_request:
     branches: [main]
     paths:
       - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
       - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
-      - 'server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1'
-      - 'server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1'
+      - 'server/revex-report-functions/DEPLOY_REPORT_R126.ps1'
+      - 'server/revex-render-worker/DEPLOY_RENDER_R126.ps1'
       - '.github/workflows/revex-r57-bootstrap-argv-validation.yml'
 
 jobs:
@@ -29,12 +29,14 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Parse launchers and validate bootstrap transformation
+      - name: Parse current r126 launchers and deployment primitives
         shell: powershell
         run: |
           $files = @(
             '.\DEPLOY_REVEX_CURRENT_SERVICES.ps1',
-            '.\DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
+            '.\DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1',
+            '.\server\revex-report-functions\DEPLOY_REPORT_R126.ps1',
+            '.\server\revex-render-worker\DEPLOY_RENDER_R126.ps1'
           )
           foreach ($file in $files) {
             $tokens = $null
@@ -45,8 +47,9 @@ jobs:
               throw "PowerShell parser rejected ${file}: $messages"
             }
           }
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1 -ValidateOnly -NoPause
-          if ($LASTEXITCODE -ne 0) { throw 'Bootstrap validation failed.' }
+          node .github/scripts/verify-revex-current-generation-r53.js
+          node .github/scripts/verify-revex-r99-webview-root-cache.js
+          node .github/scripts/verify-revex-r126-functional-convergence.js
       - name: Prove explicit gcloud flag/value arguments stay separate
         shell: powershell
         run: |
@@ -58,9 +61,7 @@ jobs:
           $arguments = @('auth','list','--filter','status:ACTIVE','--format','value(account)')
           $actual = (& $fake @arguments | Out-String).Trim()
           $expected = '[auth][list][--filter][status:ACTIVE][--format][value(account)]'
-          if ($actual -ne $expected) {
-            throw "Native argv collapsed: $actual"
-          }
+          if ($actual -ne $expected) { throw "Native argv collapsed: $actual" }
       - name: Prove one active account survives StrictMode scalar unwrapping
         shell: powershell
         run: |
@@ -70,32 +71,27 @@ jobs:
           $selected = [string](@($single)[0])
           if ($selected -ne 'admin@example.com') { throw "Scalar account indexing corrupted the account: $selected" }
           $bootstrap = Get-Content -Raw .\DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1
-          foreach ($required in @(
-            '@($active).Count',
-            'Replace(''$active.Count'', ''@($active).Count'')',
-            'Replace(''$accounts.Count'', ''@($accounts).Count'')',
-            'Replace(''[string]$active[0]'', ''[string](@($active)[0])'')',
-            'Replace(''[string]$accounts[0]'', ''[string](@($accounts)[0])'')'
-          )) {
-            if (-not $bootstrap.Contains($required)) { throw "Bootstrap is missing scalar-account hardening: $required" }
-          }
-      - name: Require automatic interactive auth recovery and persistent logs
+          $launcher = Get-Content -Raw .\DEPLOY_REVEX_CURRENT_SERVICES.ps1
+          if (-not $bootstrap.Contains('@($active).Count')) { throw 'Bootstrap is missing StrictMode-safe active-account normalization.' }
+          if (-not $launcher.Contains('@($output).Count')) { throw 'Launcher is missing StrictMode-safe active-account normalization.' }
+      - name: Require automatic gcloud recovery persistent logs and current-only scope
         shell: powershell
         run: |
           $launcher = Get-Content -Raw .\DEPLOY_REVEX_CURRENT_SERVICES.ps1
-          $firebaseRecovery = $launcher.Contains('& $Firebase login --reauth') -or $launcher.Contains('Invoke-NativeExitCode $Firebase @("login","--reauth")')
-          $gcloudRecovery = $launcher.Contains('& $GCloud auth login') -or $launcher.Contains('Invoke-NativeExitCode $GCloud @("auth","login")')
-          if (-not $firebaseRecovery) { throw 'Managed launcher is missing Firebase automatic reauth.' }
-          if (-not $gcloudRecovery) { throw 'Managed launcher is missing gcloud automatic login.' }
-          foreach ($required in @(
-            'deployment will resume automatically after approval',
-            'DEPLOY_REVEX_CURRENT_SERVICES.latest.log',
-            'Start-Transcript'
-          )) {
-            if (-not $launcher.Contains($required)) { throw "Managed launcher is missing auth/logging contract: $required" }
+          $bootstrap = Get-Content -Raw .\DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1
+          if (-not $launcher.Contains('Invoke-NativeExitCode $GCloud @("auth", "login")')) { throw 'Managed launcher is missing gcloud automatic login.' }
+          foreach ($required in @('DEPLOY_REVEX_CURRENT_SERVICES.latest.log','Start-Transcript','Report + warm Render only')) {
+            if (-not $launcher.Contains($required)) { throw "Managed launcher is missing current auth/logging contract: $required" }
           }
-      - name: Preserve REVEX renderer Energy and viewer contracts
+          foreach ($required in @('DEPLOY_REPORT_R126.ps1','DEPLOY_RENDER_R126.ps1','Verify root cache key matches the current UI BUILD','Verify r126 functional convergence')) {
+            if (-not $bootstrap.Contains($required)) { throw "Current bootstrap missing r126 contract: $required" }
+          }
+          foreach ($forbidden in @('DEPLOY_ENERGY_CURRENT.ps1','DEPLOY_ENERGY_WORKER_ONLY_R69.ps1','EnergyWorkerOnly','PUBLISH_REVEX_R49.ps1')) {
+            if ($launcher.Contains($forbidden) -or $bootstrap.Contains($forbidden)) { throw "Current deployment revives forbidden historical path: $forbidden" }
+          }
+      - name: Preserve REVEX current renderer Energy viewer and r126 contracts
         shell: powershell
         run: |
           node .github/scripts/verify-revex-current-generation-r53.js
           node .github/scripts/verify-revex-r54-selfhost-render.js
+          node .github/scripts/verify-revex-r126-functional-convergence.js

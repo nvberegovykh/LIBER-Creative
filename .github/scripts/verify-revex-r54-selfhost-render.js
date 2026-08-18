@@ -75,7 +75,7 @@ must(deploy, '--gpu-type=nvidia-rtx-pro-6000', '96 GiB render GPU contract missi
 must(deploy, '--cpu=20', 'RTX PRO 6000 CPU floor missing');
 must(deploy, '--memory=80Gi', 'RTX PRO 6000 instance-memory floor missing');
 must(deploy, '--concurrency=1', 'GPU worker concurrency must remain one');
-must(deploy, '--min-instances=0', 'GPU service must be able to scale to zero');
+must(deploy, '--min-instances=0', 'legacy base GPU primitive must retain scale-to-zero behavior; r126 warm service overrides it separately');
 must(deploy, 'roles/run.invoker', 'private worker invoker grant missing');
 
 // Existing render job and Design Book paths are reused; no parallel data universe.
@@ -106,26 +106,30 @@ must(energyQa, 'REVIT_TO_GBXML_GEOMETRY_INTEGRITY_REVIEW', 'accepted geometry re
 must(energyQa, 'sub-80 geometry integrity failure was incorrectly downgraded', 'hard floor regression test missing');
 must(currentGuard, 'reconcile_publication_message_severity', 'current-generation Energy guard missing');
 
-// Production Energy deployment must use fresh/current source, never the stale r49 archive-restoration publisher.
-must(currentEnergyDeploy, '[Parameter(Mandatory = $true)]', 'current Energy deploy must require an exact source candidate');
-must(currentEnergyDeploy, 'REVEX_SOURCE_CANDIDATE=$SourceCandidate', 'Energy worker must be bound to deployed source candidate');
-must(currentEnergyDeploy, 'REVEX_ENERGY_WORKER_URL=$WorkerUrl', 'Energy broker must bind to the just-deployed worker');
-must(currentEnergyDeploy, 'verify-revex-current-generation-r53.js', 'Energy deploy must run the current-generation guard before cloud changes');
-must(currentEnergyDeploy, '--no-allow-unauthenticated', 'Energy worker must remain private');
+// The preserved Energy deploy primitive must remain current-source-safe, but r126 operational
+// finalization deliberately does not invoke it: Energy recovery is protected and unchanged.
+must(currentEnergyDeploy, '[Parameter(Mandatory = $true)]', 'preserved Energy deploy must require an exact source candidate');
+must(currentEnergyDeploy, 'REVEX_SOURCE_CANDIDATE=$SourceCandidate', 'preserved Energy worker must be bound to deployed source candidate');
+must(currentEnergyDeploy, 'REVEX_ENERGY_WORKER_URL=$WorkerUrl', 'preserved Energy broker must bind to the just-deployed worker');
+must(currentEnergyDeploy, 'verify-revex-current-generation-r53.js', 'preserved Energy deploy must run the current-generation guard before cloud changes');
+must(currentEnergyDeploy, '--no-allow-unauthenticated', 'preserved Energy worker must remain private');
 must(currentEnergyDeploy, 'roles/run.invoker', 'only the Energy broker may invoke private worker');
-mustNot(currentEnergyDeploy, 'REVEX_R49_SOURCE_', 'current Energy deploy must not restore the legacy immutable source archive');
-mustNot(currentEnergyDeploy, 'CanonicalSourceCommit', 'current Energy deploy must not pin the stale publisher candidate');
-must(unifiedDeploy, 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1', 'unified launcher must delegate to the Windows-safe current-source bootstrap');
-must(unifiedDeploy, 'Start-Transcript', 'unified launcher must preserve deployment diagnostics');
-must(unifiedBootstrap, '"clone", "--depth", "1", "--branch", "main"', 'unified bootstrap must begin from a fresh GitHub main clone');
-must(unifiedBootstrap, '"rev-parse", "HEAD"', 'unified bootstrap must resolve the exact cloned main commit');
-must(unifiedBootstrap, 'DEPLOY_ENERGY_CURRENT.ps1', 'unified bootstrap must use the current Energy path');
-must(unifiedBootstrap, 'DEPLOY_RENDER_SERVER.ps1', 'unified bootstrap must use the private render path');
-mustNot(unifiedDeploy, 'PUBLISH_REVEX_R49.ps1', 'unified launcher must never invoke the stale publisher');
-mustNot(unifiedBootstrap, 'PUBLISH_REVEX_R49.ps1', 'unified bootstrap must never invoke the stale publisher');
+mustNot(currentEnergyDeploy, 'REVEX_R49_SOURCE_', 'preserved Energy deploy must not restore the legacy immutable source archive');
+mustNot(currentEnergyDeploy, 'CanonicalSourceCommit', 'preserved Energy deploy must not pin the stale publisher candidate');
+must(unifiedDeploy, 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1', 'current launcher must delegate to the Windows-safe current-source bootstrap');
+must(unifiedDeploy, 'Start-Transcript', 'current launcher must preserve deployment diagnostics');
+must(unifiedBootstrap, '"clone", "--depth", "1", "--branch", "main"', 'current bootstrap must begin from a fresh GitHub main clone');
+must(unifiedBootstrap, '"rev-parse", "HEAD"', 'current bootstrap must resolve the exact cloned main commit');
+must(unifiedBootstrap, 'DEPLOY_REPORT_R126.ps1', 'current bootstrap must deploy the r126 post-sync Report/Daily Report service');
+must(unifiedBootstrap, 'DEPLOY_RENDER_R126.ps1', 'current bootstrap must deploy the warm r126 Render path');
+mustNot(unifiedBootstrap, 'DEPLOY_ENERGY_CURRENT.ps1', 'current r126 bootstrap must not deploy or replace Energy');
+mustNot(unifiedBootstrap, 'DEPLOY_ENERGY_WORKER_ONLY_R69.ps1', 'current r126 bootstrap must not revive the historical worker-only path');
+mustNot(unifiedDeploy, 'EnergyWorkerOnly', 'current r126 launcher must not expose the historical Energy worker-only switch');
+mustNot(unifiedDeploy, 'PUBLISH_REVEX_R49.ps1', 'current launcher must never invoke the stale publisher');
+mustNot(unifiedBootstrap, 'PUBLISH_REVEX_R49.ps1', 'current bootstrap must never invoke the stale publisher');
 
 console.log(JSON.stringify({
-  schema: 'liber.revex.r110-selfhost-render-energy-viewer-qa.v2',
+  schema: 'liber.revex.r126-preserved-r110-render-energy-viewer-qa.v3',
   status: 'PASSED',
   model: manifest.model,
   revision: manifest.revision,
@@ -136,6 +140,7 @@ console.log(JSON.stringify({
   globalMutationObserver: false,
   viewerFunctionPreserved: true,
   energyAcceptedReviewPreserved: true,
-  cleanCurrentDeployment: true,
+  currentOperationalDeploy: 'r126-report+warm-render',
+  energyOperationallyProtected: true,
   stalePublisherUsed: false
 }, null, 2));

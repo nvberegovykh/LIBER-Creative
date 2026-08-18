@@ -38,17 +38,17 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Parse Windows PowerShell updater and recovery launcher
+      - name: Parse Windows PowerShell updater and separate Energy recovery launcher
         shell: powershell
         run: |
           foreach ($path in @('.\UPDATE_REVEX_ADDIN_CURRENT.ps1', '.\RECOVER_REVEX_ENERGY_CURRENT.ps1')) {
             $tokens = $null
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors) | Out-Null
-            if ($errors.Count -gt 0) { $errors | Format-List | Out-String | Write-Error; exit 1 }
+            if (@($errors).Count -gt 0) { $errors | Format-List | Out-String | Write-Error; exit 1 }
           }
 
-      - name: Verify updater source policy
+      - name: Verify exact-current r126 updater source policy
         shell: powershell
         run: |
           $ps = Get-Content '.\UPDATE_REVEX_ADDIN_CURRENT.ps1' -Raw
@@ -60,14 +60,19 @@ jobs:
             'Wait-RevitClosed',
             '"--branch", "main"',
             'verify-revex-current-generation-r53.js',
-            'verify-revex-r72-nonblocking-viewer.js',
-            'verify-revex-r69-energy-finish.py',
-            'verify-revex-r73-energy-topology-fallback.py',
-            'viewer-runtime-r75.js',
-            'appearance-state-r75.js',
-            'companion-runtime-r75.js',
-            'viewer-repair-r79.js',
-            'energy-diagnostics-r68.js',
+            'verify-revex-r99-webview-root-cache.js',
+            'verify-revex-r126-functional-convergence.js',
+            'ui-integrity.js',
+            'docs-convergence-r126.js',
+            'appearance-convergence-r126.js',
+            'issues-convergence-r126.js',
+            'issues-inspector-r126.js',
+            'history-daily-r126.js',
+            'blocks-palette-r126.js',
+            'render-convergence-r126.js',
+            'RevexFamilyPlacementExternalHandler.cs',
+            'AffectedPlanExportService.cs',
+            'FamilyPlacementService.cs',
             'EngineeringCompanionWebBridge.cs',
             'EngineeringScheduleEvidenceService.cs',
             'new EngineeringScheduleEvidenceService().Export',
@@ -77,17 +82,21 @@ jobs:
             'App.before-current.',
             'Atomic install failed; restoring the prior add-in payload.',
             'REVEX-CURRENT-SOURCE.json',
+            'currentGenerationValidated = $true',
+            'currentUiRootCacheValidated = $true',
+            'r126FunctionalConvergenceValidated = $true',
             'staleR49CanonicalSourceUsed = $false',
             'cloudServicesChanged = $false'
           )
-          foreach ($needle in $required) { if (-not $ps.Contains($needle)) { throw "Missing updater safety marker: $needle" } }
+          foreach ($needle in $required) { if (-not $ps.Contains($needle)) { throw "Missing current updater safety marker: $needle" } }
+          foreach ($forbidden in @('CanonicalSourceCommit','PUBLISH_REVEX_R49','DEPLOY_ENERGY_CURRENT','DEPLOY_ENERGY_WORKER_ONLY_R69','RECOVER_REVEX_ENERGY_CURRENT')) {
+            if ($ps.Contains($forbidden)) { throw "Current updater references forbidden historical/cloud path: $forbidden" }
+          }
           if ($ps.Contains('Save/close Revit completely, then rerun this updater')) { throw 'Startup Revit guard must wait instead of failing/rerun.' }
-          if ($ps.Contains('CanonicalSourceCommit')) { throw 'Historical canonical source pin is forbidden in the current updater.' }
-          if ($ps.Contains('PUBLISH_REVEX_R49')) { throw 'Historical publisher invocation is forbidden in the current updater.' }
           if (-not $cmd.Contains('raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/UPDATE_REVEX_ADDIN_CURRENT.ps1')) { throw 'Launcher does not self-refresh from current main.' }
           if (-not $cmd.Contains('pause >nul')) { throw 'Launcher must remain open so success/failure can be read.' }
 
-      - name: Verify r125 Energy recovery launcher scope and semantics
+      - name: Preserve separate r125 Energy recovery artifact without making it current
         shell: powershell
         run: |
           $ps = Get-Content '.\RECOVER_REVEX_ENERGY_CURRENT.ps1' -Raw
@@ -105,12 +114,12 @@ jobs:
             'DEPLOY_ENERGY_CURRENT_ARGV_FIX.ps1',
             'specProjectId=spec_revex_mspgzb7h_729b2936bfaa',
             'future geometry refresh requires the r125 add-in/exporter and a new Engineering Sync'
-          )) { if (-not $ps.Contains($needle)) { throw "r125 Energy recovery controller missing: $needle" } }
+          )) { if (-not $ps.Contains($needle)) { throw "separate r125 Energy recovery controller missing: $needle" } }
           if ($ps.Contains('IsPathFullyQualified')) { throw 'Recovery must remain compatible with Windows PowerShell 5.1 / .NET Framework.' }
           if (-not $cmd.Contains('raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/RECOVER_REVEX_ENERGY_CURRENT.ps1')) { throw 'Energy recovery launcher does not self-refresh from main.' }
-          if (-not $cmd.Contains('PASS: REVEX r125 Energy worker and broker deployment completed.')) { throw 'Launcher scope text is stale.' }
-          if ($cmd.Contains('add-in update completed')) { throw 'Energy launcher must not claim an add-in update.' }
-          if (-not $cmd.Contains('pause >nul')) { throw 'Energy launcher must remain open for readable success/failure.' }
+          if (-not $cmd.Contains('PASS: REVEX r125 Energy worker and broker deployment completed.')) { throw 'Energy recovery launcher scope text is stale.' }
+          if ($cmd.Contains('add-in update completed')) { throw 'Energy recovery launcher must not claim an add-in update.' }
+          if (-not $cmd.Contains('pause >nul')) { throw 'Energy recovery launcher must remain open for readable success/failure.' }
 
       - name: Compile complete Revit 2026 add-in
         shell: pwsh
@@ -118,10 +127,12 @@ jobs:
           dotnet restore src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -p:RevexCiRevitApi=true -p:Platform=x64
           dotnet build src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -c Release -p:RevexCiRevitApi=true -p:Platform=x64 --no-restore
 
-      - name: Preserve current viewer and Energy contracts
+      - name: Preserve current viewer Energy and r126 contracts
         shell: pwsh
         run: |
           node .github/scripts/verify-revex-current-generation-r53.js
+          node .github/scripts/verify-revex-r99-webview-root-cache.js
+          node .github/scripts/verify-revex-r126-functional-convergence.js
           node .github/scripts/verify-revex-r72-nonblocking-viewer.js
           python .github/scripts/verify-revex-r69-energy-finish.py
           node .github/scripts/verify-revex-r54-selfhost-render.js

@@ -23,7 +23,7 @@ const bridge=read('src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs');
 const placement=read('src/Liber.Revex.Revit/Services/FamilyPlacementService.cs');
 const plans=read('src/Liber.Revex.Revit/Services/AffectedPlanExportService.cs');
 
-must(index,'ui-integrity.js?v=20260817r126-functional-convergence1','root cache key');
+must(index,'ui-integrity.js?v=20260817r126-functional-convergence2','root cache key');
 must(ui,"BUILD='20260817r126-functional-convergence2'",'r126 loader');
 for(const file of ['appearance-convergence-r126.js','docs-convergence-r126.js','issues-convergence-r126.js','issues-inspector-r126.js','history-daily-r126.js','blocks-palette-r126.js','render-convergence-r126.js']) must(ui,file,'r126 loader');
 
