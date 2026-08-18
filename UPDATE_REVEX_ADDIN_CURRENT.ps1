@@ -117,14 +117,19 @@ function Assert-RevitClosed {
 function Assert-SourceContract([string]$Root) {
   $required = @(
     ".github\scripts\verify-revex-current-generation-r53.js",
-    ".github\scripts\verify-revex-r72-nonblocking-viewer.js",
-    ".github\scripts\verify-revex-r69-energy-finish.py",
-    ".github\scripts\verify-revex-r73-energy-topology-fallback.py",
-    "docs\liber-apps\apps\revex\viewer-runtime-r75.js",
-    "docs\liber-apps\apps\revex\appearance-state-r75.js",
-    "docs\liber-apps\apps\revex\companion-runtime-r75.js",
-    "docs\liber-apps\apps\revex\viewer-repair-r79.js",
-    "docs\liber-apps\apps\revex\energy-diagnostics-r68.js",
+    ".github\scripts\verify-revex-r99-webview-root-cache.js",
+    ".github\scripts\verify-revex-r126-functional-convergence.js",
+    "docs\liber-apps\apps\revex\ui-integrity.js",
+    "docs\liber-apps\apps\revex\docs-convergence-r126.js",
+    "docs\liber-apps\apps\revex\appearance-convergence-r126.js",
+    "docs\liber-apps\apps\revex\issues-convergence-r126.js",
+    "docs\liber-apps\apps\revex\issues-inspector-r126.js",
+    "docs\liber-apps\apps\revex\history-daily-r126.js",
+    "docs\liber-apps\apps\revex\blocks-palette-r126.js",
+    "docs\liber-apps\apps\revex\render-convergence-r126.js",
+    "src\Liber.Revex.Revit\Revit\RevexFamilyPlacementExternalHandler.cs",
+    "src\Liber.Revex.Revit\Services\AffectedPlanExportService.cs",
+    "src\Liber.Revex.Revit\Services\FamilyPlacementService.cs",
     "src\Liber.Revex.Revit\Services\EngineeringCompanionWebBridge.cs",
     "src\Liber.Revex.Revit\Services\EngineeringScheduleEvidenceService.cs",
     "src\Liber.Revex.Revit\Services\EngineeringSyncService.cs",
@@ -134,17 +139,21 @@ function Assert-SourceContract([string]$Root) {
   foreach ($relative in $required) {
     $path = Join-Path $Root $relative
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-      throw "Current-main source contract is incomplete: missing $relative."
+      throw "Current-main r126 source contract is incomplete: missing $relative."
     }
   }
 
   $handler = Get-Content -LiteralPath (Join-Path $Root "src\Liber.Revex.Revit\Revit\RevitRequestHandler.cs") -Raw
   $scheduleService = Get-Content -LiteralPath (Join-Path $Root "src\Liber.Revex.Revit\Services\EngineeringScheduleEvidenceService.cs") -Raw
+  $webBridge = Get-Content -LiteralPath (Join-Path $Root "src\Liber.Revex.Revit\UI\RevexWebIntegrationBridge.cs") -Raw
   if (-not $handler.Contains('new EngineeringScheduleEvidenceService().Export')) {
     throw "Current add-in source does not wire native Revit schedules into Engineering Sync."
   }
   if (-not $scheduleService.Contains('REVIT-SCHEDULE-EVIDENCE.json') -or -not $scheduleService.Contains('ScheduleSheetInstance')) {
     throw "Current add-in source does not preserve structured native Revit schedule evidence and sheet placement."
+  }
+  if (-not $webBridge.Contains('RevexFamilyPlacementExternalHandler')) {
+    throw "Current add-in source does not include the r126 Blocks family-placement ExternalEvent bridge."
   }
 }
 
@@ -173,12 +182,15 @@ function Copy-BuildPayload([string]$Root) {
   }
 
   $marker = [ordered]@{
-    schema = "liber.revex.current-addin-source.v1"
+    schema = "liber.revex.current-addin-source.v2"
     source = "github-main"
     repository = $Repository
     commit = $SourceSha
     builtAtUtc = [DateTime]::UtcNow.ToString("o")
     updater = "UPDATE_REVEX_ADDIN_CURRENT.ps1"
+    currentGenerationValidated = $true
+    currentUiRootCacheValidated = $true
+    r126FunctionalConvergenceValidated = $true
     staleR49CanonicalSourceUsed = $false
     cloudServicesChanged = $false
   } | ConvertTo-Json -Depth 8
@@ -251,8 +263,8 @@ try {
     $TranscriptStarted = $true
   } catch { }
 
-  Write-Host "REVEX current-main add-in updater" -ForegroundColor Cyan
-  Write-Host "No Firebase, Cloud Run, renderer, Energy worker or stale r49 publisher is used."
+  Write-Host "REVEX current-main r126 add-in updater" -ForegroundColor Cyan
+  Write-Host "Only the local Revit add-in is changed. No Firebase, Cloud Run, Render, Energy worker/broker, or stale publisher is invoked."
   Write-Host "Persistent log: $LogPath"
 
   Write-Step "Wait until Revit is closed before any installed-file change"
@@ -265,7 +277,6 @@ try {
   $Git = Require-Command @("git.exe", "git") "Git"
   $Dotnet = Require-Command @("dotnet.exe", "dotnet") ".NET 8 SDK"
   $Node = Require-Command @("node.exe", "node") "Node.js"
-  $Python = Require-Command @("python.exe", "python", "py.exe", "py") "Python 3"
 
   Write-Step "Clone exact current GitHub main into an isolated clean folder"
   $cloneUrl = "https://github.com/$Repository.git"
@@ -276,10 +287,8 @@ try {
 
   Assert-SourceContract $RepoRoot
   Invoke-Checked "Reject stale REVEX generation" $Node @(".github\scripts\verify-revex-current-generation-r53.js") $RepoRoot
-  Invoke-Checked "Verify current nonblocking viewer + embedded material + private Energy handoff" $Node @(".github\scripts\verify-revex-r72-nonblocking-viewer.js") $RepoRoot
-  Invoke-Checked "Verify current-project Energy identity and revision-scoped diagnostics" $Python @(".github\scripts\verify-revex-r69-energy-finish.py") $RepoRoot
-  Invoke-Checked "Verify r54 renderer/Energy/viewer integration remains preserved" $Node @(".github\scripts\verify-revex-r54-selfhost-render.js") $RepoRoot
-  Invoke-Checked "Verify r73 Revit analytical-topology fallback" $Python @(".github\scripts\verify-revex-r73-energy-topology-fallback.py") $RepoRoot
+  Invoke-Checked "Verify root cache key matches the current UI BUILD" $Node @(".github\scripts\verify-revex-r99-webview-root-cache.js") $RepoRoot
+  Invoke-Checked "Verify current r126 functional convergence" $Node @(".github\scripts\verify-revex-r126-functional-convergence.js") $RepoRoot
 
   $projectFullPath = Join-Path $RepoRoot $ProjectPath
   Invoke-Checked "Restore current add-in dependencies" $Dotnet @("restore", $projectFullPath, "-p:Platform=x64", "-p:RevitInstallDir=$RevitDir") $RepoRoot
@@ -292,16 +301,16 @@ try {
   Install-Atomically
 
   Write-Host ""
-  Write-Host "PASS: current REVEX add-in installed." -ForegroundColor Green
+  Write-Host "PASS: current r126 REVEX add-in installed." -ForegroundColor Green
   Write-Host "Source: $SourceSha" -ForegroundColor Green
   Write-Host "Assembly: $(Join-Path $InstalledRoot 'Liber.Revex.Revit.dll')"
   if ($PreviousPayloadMoved) { Write-Host "Backup: $BackupRoot" }
-  Write-Host "Reopen Revit 2026. No cloud-service redeployment is required." -ForegroundColor Green
+  Write-Host "Reopen Revit 2026. This updater did not redeploy or downgrade any cloud service." -ForegroundColor Green
   $ExitCode = 0
 }
 catch {
   Write-Host ""
-  Write-Host "REVEX current add-in update stopped safely." -ForegroundColor Red
+  Write-Host "REVEX current r126 add-in update stopped safely." -ForegroundColor Red
   Write-Host $_.Exception.Message -ForegroundColor Red
   Write-Host "Installed files were either untouched or rolled back." -ForegroundColor Yellow
   $ExitCode = 1
