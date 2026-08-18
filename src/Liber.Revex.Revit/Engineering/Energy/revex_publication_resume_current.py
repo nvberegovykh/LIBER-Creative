@@ -24,9 +24,12 @@ import json
 from typing import Any
 
 import revex_publication_resume_r124 as _r124
+import revex_energy_pipeline_guard_r118 as _r118
+import revex_final_touchups as _current_touchups
 
-VERSION = "20260818-current-publication-resume2"
+VERSION = "20260818-current-publication-resume3"
 _ORIGINAL_JSON_BLOB = _r124._json_blob
+_ORIGINAL_PIPELINE = _r124._pipeline
 
 
 def _text(value: Any) -> str:
@@ -131,9 +134,24 @@ def _json_blob(bucket, path: str):
     return _historical_reusable_manifest(bucket, path, direct)
 
 
+def _pipeline():
+    """Load the proven implementation, then apply only the canonical current publication policy."""
+    module = _ORIGINAL_PIPELINE()
+    _current_touchups.patch_pipeline(module)
+    return module
+
+
 def install_publication_resume(app) -> None:
+    # r118 owns the proven evidence/reference merge seam. Bind only its final derived-page
+    # touchup delegate to current policy so resumed publication preserves actual VT, uses
+    # exactly 0.45 only when VT is absent, and consumes current EN schedule-section orientation.
+    _r118.r125 = _current_touchups
+
+    # Keep r124's proven restore/package implementation. Replace only the admission/history
+    # seam and the post-restore publication policy; GeometryCo and EnergyPlus are untouched.
     _r124._json_blob = _json_blob
     _r124._prior_is_reusable = _prior_is_reusable
+    _r124._pipeline = _pipeline
     _r124.install_publication_resume(app)
 
 
