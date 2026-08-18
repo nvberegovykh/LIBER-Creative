@@ -1,0 +1,69 @@
+name: REVEX r127 single-source finalization
+
+on:
+  push:
+    branches: [revex-energy-r127-single-controller]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Python syntax
+        run: |
+          python -m py_compile \
+            src/Liber.Revex.Revit/Engineering/Energy/revex_energy_contracts.py \
+            src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups_r125.py \
+            src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner_r125.py \
+            .github/scripts/verify-revex-r127-single-controller.py
+      - name: Current UI and runtime convergence
+        run: |
+          node .github/scripts/verify-revex-current-generation-r53.js
+          node .github/scripts/verify-revex-r99-webview-root-cache.js
+          node .github/scripts/verify-revex-r126-functional-convergence.js
+      - name: r127 typed single-controller contract
+        run: python .github/scripts/verify-revex-r127-single-controller.py
+      - name: Preserve proven r125 Energy touchups
+        run: python src/Liber.Revex.Revit/Engineering/Energy/verify_revex_r125_touchups.py
+
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Parse the only user-facing controller
+        shell: powershell
+        run: |
+          $tokens=$null; $errors=$null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path '.\FINALIZE_REVEX.ps1'),[ref]$tokens,[ref]$errors)
+          if(@($errors).Count){ throw (@($errors | ForEach-Object {$_.Message}) -join '; ') }
+          $cmd=Get-Content -Raw '.\FINALIZE_REVEX.cmd'
+          if(-not $cmd.Contains('raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/FINALIZE_REVEX.ps1')){throw 'FINALIZE_REVEX.cmd does not self-refresh from main'}
+      - name: Compile complete Revit 2026 add-in
+        shell: pwsh
+        run: |
+          dotnet restore src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -p:RevexCiRevitApi=true -p:Platform=x64
+          dotnet build src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -c Release -p:RevexCiRevitApi=true -p:Platform=x64 --no-restore
+      - name: Re-run r127 contract on Windows
+        shell: pwsh
+        run: python .github/scripts/verify-revex-r127-single-controller.py
