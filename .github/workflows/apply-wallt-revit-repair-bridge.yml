@@ -1,0 +1,48 @@
+name: Apply WALLT Revit repair bridge
+
+on:
+  push:
+    branches:
+      - agent/revex-energy-maintainer-20260818
+    paths:
+      - .github/workflows/apply-wallt-revit-repair-bridge.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/revex-energy-maintainer-20260818
+          fetch-depth: 0
+      - name: Wire Companion WALLT repair request to fresh Engineering Sync
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path=Path('src/Liber.Revex.Revit/UI/RendairWindow.cs')
+          text=path.read_text(encoding='utf-8-sig')
+          marker='liber:revex-energy-revit-repair-request'
+          if marker in text:
+              print('WALLT Revit repair bridge already present')
+              raise SystemExit(0)
+          needle='            if (kind == "liber:revex-energy-run")\n'
+          if needle not in text:
+              raise SystemExit('Could not locate Energy message boundary in RendairWindow.cs')
+          block='''            if (kind == "liber:revex-energy-revit-repair-request")\n            {\n                string requestedProjectId = ReadString(root, "projectId", "").Trim();\n                string requestedRevision = ReadString(root, "sourceEngineeringRevision", "").Trim();\n                string repairMessage = ReadString(root, "message", "WALLT requested fresh current-Revit Energy evidence.");\n                string activeProjectId = _projectId.Text.Trim();\n                if (string.IsNullOrWhiteSpace(requestedProjectId) || !string.Equals(requestedProjectId, activeProjectId, StringComparison.Ordinal))\n                {\n                    RevexDiagnostics.Warn("WALLT-REVIT", $"Ignored Energy repair request for another project: requested={requestedProjectId}; active={activeProjectId}; sourceRevision={requestedRevision}");\n                    SetStatus("WALLT repair request belongs to a different REVEX project; open the bound Revit project first.");\n                    return;\n                }\n                if (_gbxmlAwaitingRevit || _energySyncRequested)\n                {\n                    RevexDiagnostics.Info("WALLT-REVIT", "Fresh Engineering evidence is already running; duplicate repair request ignored.");\n                    SetStatus("WALLT requested fresh Revit evidence; the Engineering Sync is already running.");\n                    return;\n                }\n                RevexDiagnostics.Info("WALLT-REVIT", $"Accepted Energy repair/evidence request for project={requestedProjectId}; priorRevision={requestedRevision}; {repairMessage}");\n                SetMode(true);\n                SetStatus("WALLT requested a fresh authoritative Revit evidence block. REVEX is running SYNC ENGINEERING now; the resulting immutable revision will continue the managed Energy chain automatically.");\n                Dispatcher.BeginInvoke(new Action(() => _ = RunEnergySyncToCompanionAsync()));\n                return;\n            }\n\n'''
+          path.write_text(text.replace(needle,block+needle,1),encoding='utf-8')
+          print('WALLT Revit repair bridge inserted')
+          PY
+      - name: Commit one-shot source patch
+        run: |
+          if git diff --quiet -- src/Liber.Revex.Revit/UI/RendairWindow.cs; then
+            echo "No patch required"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/Liber.Revex.Revit/UI/RendairWindow.cs
+          git commit -m "Wire WALLT Energy repair requests back to Revit"
+          git push origin HEAD:agent/revex-energy-maintainer-20260818
