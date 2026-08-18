@@ -171,7 +171,7 @@ function Verify-LiveUi([string]$Root) {
   $deadline = (Get-Date).AddMinutes(10)
   while ((Get-Date) -lt $deadline) {
     try {
-      $live = (Invoke-WebRequest -UseBasicParsing -Uri $uri -Headers @{"Cache-Control"="no-cache","Pragma"="no-cache"}).Content
+      $live = (Invoke-WebRequest -UseBasicParsing -Uri $uri -Headers @{"Cache-Control"="no-cache";"Pragma"="no-cache"}).Content
       if ($live.Contains("BUILD='$build'")) {
         Write-Host "PASS: live Companion UI is current ($build)." -ForegroundColor Green
         return
@@ -184,7 +184,8 @@ function Verify-LiveUi([string]$Root) {
 
 function Invoke-ReleaseController([string]$Label,[string]$Path,[string[]]$Arguments) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "$Label controller is missing: $Path" }
-  Require-Ok $Label "powershell.exe" @("-NoProfile","-ExecutionPolicy","Bypass","-File",$Path,*$Arguments)
+  $argv = @("-NoProfile","-ExecutionPolicy","Bypass","-File",$Path) + $Arguments
+  Require-Ok $Label "powershell.exe" $argv
 }
 
 function Verify-LiveSourceBindings([string]$GCloud) {
@@ -212,14 +213,13 @@ function Install-AddinAtomically {
   New-Item -ItemType Directory -Path $RevexRoot, (Split-Path -Parent $AddinPath) -Force | Out-Null
   $hadOldApp = Test-Path -LiteralPath $InstalledRoot -PathType Container
   $hadOldManifest = Test-Path -LiteralPath $AddinPath -PathType Leaf
-  $backupManifest = Join-Path $BackupRoot "LIBER.REVEX.addin"
+  $transactionManifest = Join-Path $WorkRoot "LIBER.REVEX.addin.before-finalize"
+  $shadowManifest = Join-Path $BackupRoot "LIBER.REVEX.addin"
+  if ($hadOldManifest) { Copy-Item -LiteralPath $AddinPath -Destination $transactionManifest -Force }
+
   try {
-    if ($hadOldApp) {
-      Move-Item -LiteralPath $InstalledRoot -Destination $BackupRoot
-    } else {
-      New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
-    }
-    if ($hadOldManifest) { Copy-Item -LiteralPath $AddinPath -Destination $backupManifest -Force }
+    if ($hadOldApp) { Move-Item -LiteralPath $InstalledRoot -Destination $BackupRoot }
+    else { New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null }
 
     Move-Item -LiteralPath $StagePayload -Destination $InstalledRoot
     $assembly = Join-Path $InstalledRoot "Liber.Revex.Revit.dll"
@@ -252,15 +252,23 @@ function Install-AddinAtomically {
 </RevitAddIns>
 "@
     [IO.File]::WriteAllText($AddinPath,$manifest,[Text.UTF8Encoding]::new($false))
+    if ($hadOldManifest -and (Test-Path -LiteralPath $transactionManifest -PathType Leaf)) {
+      Copy-Item -LiteralPath $transactionManifest -Destination $shadowManifest -Force
+    }
   }
   catch {
     if (Test-Path -LiteralPath $InstalledRoot -PathType Container) { Remove-Item -LiteralPath $InstalledRoot -Recurse -Force -ErrorAction SilentlyContinue }
     if ($hadOldApp -and (Test-Path -LiteralPath $BackupRoot -PathType Container)) {
-      if (Test-Path -LiteralPath $backupManifest) { Remove-Item -LiteralPath $backupManifest -Force -ErrorAction SilentlyContinue }
+      Remove-Item -LiteralPath $shadowManifest -Force -ErrorAction SilentlyContinue
       Move-Item -LiteralPath $BackupRoot -Destination $InstalledRoot -ErrorAction SilentlyContinue
+    } elseif (Test-Path -LiteralPath $BackupRoot -PathType Container) {
+      Remove-Item -LiteralPath $BackupRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
-    if ($hadOldManifest -and (Test-Path -LiteralPath $backupManifest -PathType Leaf)) { Copy-Item -LiteralPath $backupManifest -Destination $AddinPath -Force -ErrorAction SilentlyContinue }
-    elseif (-not $hadOldManifest) { Remove-Item -LiteralPath $AddinPath -Force -ErrorAction SilentlyContinue }
+    if ($hadOldManifest -and (Test-Path -LiteralPath $transactionManifest -PathType Leaf)) {
+      Copy-Item -LiteralPath $transactionManifest -Destination $AddinPath -Force -ErrorAction SilentlyContinue
+    } elseif (-not $hadOldManifest) {
+      Remove-Item -LiteralPath $AddinPath -Force -ErrorAction SilentlyContinue
+    }
     throw
   }
 }
