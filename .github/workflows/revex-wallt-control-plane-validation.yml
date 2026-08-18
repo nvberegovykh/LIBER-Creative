@@ -7,8 +7,17 @@ on:
       - 'docs/liber-apps/apps/revex/wallt-cycle-history.js'
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/store.js'
+      - 'docs/liber-apps/apps/revex/app.js'
+      - 'docs/liber-apps/apps/revex/docs-pages-r115.js'
+      - 'docs/liber-apps/apps/revex/docs-convergence-r126.js'
+      - 'docs/liber-apps/apps/revex/sync-docs-r24.js'
+      - 'docs/liber-apps/apps/revex/blocks-palette-r126.js'
       - 'docs/liber-apps/js/wallt-agent.js'
+      - 'src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs'
+      - 'src/Liber.Revex.Revit/UI/RendairWindowManager.cs'
+      - 'src/Liber.Revex.Revit/Services/FamilyPlacementService.cs'
       - '.github/scripts/verify-revex-wallt-control-plane.js'
+      - '.github/scripts/verify-revex-current-platform-connections.js'
       - '.github/workflows/revex-wallt-control-plane-validation.yml'
   workflow_dispatch:
 
@@ -26,5 +35,8 @@ jobs:
           node --check docs/liber-apps/apps/revex/wallt-cycle-history.js
           node --check docs/liber-apps/apps/revex/ui-integrity.js
           node --check .github/scripts/verify-revex-wallt-control-plane.js
+          node --check .github/scripts/verify-revex-current-platform-connections.js
       - name: Verify isolated helper and fixer channels
         run: node .github/scripts/verify-revex-wallt-control-plane.js
+      - name: Verify current Docs, Families and Chat boundaries
+        run: node .github/scripts/verify-revex-current-platform-connections.js
