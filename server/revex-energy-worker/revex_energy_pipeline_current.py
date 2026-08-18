@@ -146,20 +146,29 @@ def _verify_clean_zip(path: Path) -> None:
         raise RuntimeError("clean Energy release ZIP does not match the exact nine-file filing/review contract")
 
 
-def _review_models(output_root: Path) -> list[dict]:
+def _review_models(output_root: Path, artifact_rows: list[dict] | None = None) -> list[dict]:
     rows = []
+    artifacts = [dict(row) for row in list(artifact_rows or [])]
     for name, role in (("GEOMETRY.osm", "current-geometry"), ("BASELINE.osm", "baseline"), ("PROPOSED.osm", "proposed")):
         path = output_root / name
-        if not path.is_file():
+        if path.is_file():
+            rows.append({
+                "name": name, "role": role, "path": name, "viewer": "osm-3d",
+                "rotatable": True, "bytes": path.stat().st_size, "sha256": _sha256(path),
+            })
+            continue
+        # Full-pipeline review names are archive aliases over the real declared artifact path.
+        # Expose the real path/hash so Companion can fetch and rotate the OSM directly without
+        # manufacturing a second copy or depending on the ZIP container.
+        row = next((item for item in artifacts
+                    if str(item.get("reviewName") or "") == name
+                    or str(item.get("name") or "") == name), None)
+        if row is None:
             continue
         rows.append({
-            "name": name,
-            "role": role,
-            "path": name,
-            "viewer": "osm-3d",
-            "rotatable": True,
-            "bytes": path.stat().st_size,
-            "sha256": _sha256(path),
+            "name": name, "role": role, "path": row.get("path"), "viewer": "osm-3d",
+            "rotatable": True, "bytes": row.get("bytes"), "sha256": row.get("sha256"),
+            "artifactName": row.get("name"),
         })
     return rows
 
@@ -232,7 +241,7 @@ def _promote_clean_release_package(request_path: Path, code: int) -> int:
             "missingVtPolicy": 0.45,
             "actualVtPreserved": True,
         }
-        review_models = _review_models(output_root)
+        review_models = _review_models(output_root, result.get("artifacts") or [])
         maint = dict(result.get("maintainer") or {})
         if maint:
             maint["status"] = "REVIEW_READY"
