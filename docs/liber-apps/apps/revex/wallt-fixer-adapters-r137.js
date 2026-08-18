@@ -55,5 +55,12 @@ function install(){
  return true;
 }
 Object.assign(api,{install});
-let attempts=0;const timer=setInterval(()=>{attempts++;if(install()||attempts>200)clearInterval(timer)},25);
+let attempts=0;
+let timer=null;
+timer=setInterval(()=>{
+ attempts++;
+ if(install()||attempts>200){
+   if(timer!==null)clearInterval(timer);
+ }
+},25);
 })(window);
