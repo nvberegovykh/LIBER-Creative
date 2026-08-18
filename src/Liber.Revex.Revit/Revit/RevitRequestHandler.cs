@@ -3,6 +3,7 @@ using Autodesk.Revit.UI;
 using Liber.Revex.Revit.Models;
 using Liber.Revex.Revit.Services;
 using System.Collections.Concurrent;
+using System.Text.Json;
 
 namespace Liber.Revex.Revit.Revit;
 
@@ -183,8 +184,7 @@ public sealed class RevitRequestHandler : IExternalEventHandler
                 // Revit can throw an analytical-plan topology exception through Dynamo's
                 // ExecuteCommand before the Python engine can downgrade the affected level
                 // to preservation-gate evidence. Retry exactly once without topology
-                // mutation; a source-bound simplified serializer remains available after
-                // that if the exact/EADM publication gate still cannot clear.
+                // mutation; source-bound simplified geometry remains available afterward.
                 sourceTopologyFallback = true;
                 RevexDiagnostics.Warn("GBXML",
                     "Revit rejected automatic Space topology at an ambiguous boundary branch. " +
@@ -203,18 +203,22 @@ public sealed class RevitRequestHandler : IExternalEventHandler
             }
 
             bool ok = GbxmlEngineeringService.IsSuccessful(output!, settings.AuditOnly);
+            bool reviewQualityNeedsCompatibility = !settings.AuditOnly && ok && ExactGeometryBelowQualityTarget(output);
 
-            // The exact/EADM path is preferred, but it is not allowed to dead-end a
-            // regular SYNC ENGINEERING run. A non-publishable non-empty run already
-            // contains the current Revit Space/page evidence; simplify only geometry,
-            // preserve that same run/evidence identity, and continue with an explicit
-            // review-quality fallback marker. Ambiguous openings become opaque wall.
-            if (!settings.AuditOnly && !ok && output != null &&
+            // The exact/EADM model remains the first attempt and evidence authority.
+            // A regular SYNC ENGINEERING run must not send already review-quality
+            // geometry into a known-strict downstream compiler and then wait ~17 min to
+            // discover the same incompatibility. If exact geometry is non-publishable OR
+            // it cleared the 80% hard stop but missed the 95% quality target, serialize
+            // the same current Revit Spaces into the conservative compatibility shell.
+            // Ambiguous openings become opaque wall instead of becoming a pipeline stop.
+            if (!settings.AuditOnly && output != null && (!ok || reviewQualityNeedsCompatibility) &&
                 !string.IsNullOrWhiteSpace(output.RunFolder) && Directory.Exists(output.RunFolder))
             {
                 simplifiedGeometryFallback = true;
+                string reason = !ok ? $"normalStatus={output.Status}" : "exactQualityTargetMet=false";
                 RevexDiagnostics.Stage("GBXML", "SIMPLIFIED_GEOMETRY_FALLBACK", "STARTED",
-                    $"normalStatus={output.Status}; source=placed Revit MEP Spaces; policy=source-bound 2.5D simplification");
+                    $"{reason}; source=placed Revit MEP Spaces; policy=source-bound 2.5D compatibility simplification");
                 output = new SimplifiedGbxmlFallbackService().Run(uidoc.Document, output);
                 ok = GbxmlEngineeringService.IsSuccessful(output, auditOnly: false);
                 RevexDiagnostics.Stage("GBXML", "SIMPLIFIED_GEOMETRY_FALLBACK", ok ? "PASSED" : "FAILED",
@@ -233,7 +237,7 @@ public sealed class RevitRequestHandler : IExternalEventHandler
                 ? $"gbXML audit finished: {output?.Status ?? "UNKNOWN"}."
                 : ok
                     ? simplifiedGeometryFallback
-                        ? $"gbXML exact/EADM path could not clear publication, so REVEX exported a source-bound simplified Space geometry fallback and preserved the run for managed Energy: {output?.GbxmlPath}"
+                        ? $"gbXML exact/EADM evidence was retained, while managed Energy receives the source-bound compatibility geometry for this review-quality run: {output?.GbxmlPath}"
                         : sourceTopologyFallback
                             ? $"gbXML exported from preserved Revit spatial topology after automatic boundary-branch fallback: {output?.GbxmlPath}"
                             : $"gbXML exported: {output?.GbxmlPath}"
@@ -252,6 +256,29 @@ public sealed class RevitRequestHandler : IExternalEventHandler
                     ? "Engineering gbXML source-topology fallback failed."
                     : "Engineering gbXML execution failed.", ex);
             return RevitRequestResult.EngineeringFailed(ex.Message, output);
+        }
+    }
+
+    private static bool ExactGeometryBelowQualityTarget(GbxmlEngineeringOutput? output)
+    {
+        if (output == null || string.IsNullOrWhiteSpace(output.ReportPath) || !File.Exists(output.ReportPath))
+            return false;
+        try
+        {
+            using JsonDocument report = JsonDocument.Parse(File.ReadAllText(output.ReportPath));
+            if (!report.RootElement.TryGetProperty("preservation_gate", out JsonElement gate) ||
+                gate.ValueKind != JsonValueKind.Object)
+                return false;
+            bool publicationPassed = gate.TryGetProperty("publication_threshold_met", out JsonElement publication) &&
+                                     publication.ValueKind == JsonValueKind.True;
+            bool qualityPassed = gate.TryGetProperty("quality_target_met", out JsonElement quality) &&
+                                 quality.ValueKind == JsonValueKind.True;
+            return publicationPassed && !qualityPassed;
+        }
+        catch (Exception ex)
+        {
+            RevexDiagnostics.Warn("GBXML", "Could not read exact gbXML quality target for compatibility routing; preserving normal result: " + ex.Message);
+            return false;
         }
     }
 
