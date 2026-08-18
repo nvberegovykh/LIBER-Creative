@@ -5,6 +5,7 @@ const root = path.resolve(__dirname, '../..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 const control = read('docs/liber-apps/apps/revex/wallt-control-plane.js');
 const fixer = read('docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js');
+const walltUi = read('docs/liber-apps/apps/revex/wallt-ui-r138.js');
 const cycleHistory = read('docs/liber-apps/apps/revex/wallt-cycle-history.js');
 const ui = read('docs/liber-apps/apps/revex/ui-integrity.js');
 const store = read('docs/liber-apps/apps/revex/store.js');
@@ -61,6 +62,20 @@ must(fixer,
   'energyPipelineMutation:false'
 );
 
+must(walltUi,
+  "const BUILD='20260818r138-wallt-ui1'",
+  "controlOwner:'wallt-control-plane'",
+  'storageOwner:null',
+  "open.id='revex-wallt-open'",
+  "panel.id='revex-wallt-panel'",
+  'data-wallt-mode="helper"',
+  'data-wallt-mode="fixer"',
+  'owner[mode](request)',
+  'safe-area-inset-bottom',
+  'safe-area-inset-right',
+  'newStorageOwner:false'
+);
+
 must(cycleHistory,
   "kind:'wallt-cycle'",
   "owner:'RevexStore.appendHistory'",
@@ -83,7 +98,8 @@ must(ui,
   "loadScript('wallt-control-plane.js?v=20260818-wallt-control2','wallt-control-plane')",
   "loadScript('wallt-cycle-history.js?v=20260818-wallt-cycle-history1','wallt-cycle-history')",
   "loadScript('wallt-fixer-adapters-r137.js?v=20260818r137-fixer-adapters1','wallt-fixer-adapters-r137')",
-  "wallt:'helper+bounded-fixer-adapters+24h-history'"
+  "loadScript('wallt-ui-r138.js?v=20260818r138-wallt-ui1','wallt-ui-r138')",
+  "wallt:'visible-helper+bounded-fixer-adapters+24h-history'"
 );
 
 must(wallt,
@@ -92,7 +108,7 @@ must(wallt,
   'root.walltAgent = root.walltAgent || new WalltAgent()'
 );
 
-// The control plane is an orchestrator, not another product implementation.
+// The control plane and visible surface are orchestrators, not duplicate product implementations.
 forbid(control,
   'eval(',
   'new Function(',
@@ -111,6 +127,14 @@ forbid(fixer,
   'eval(',
   'new Function('
 );
+forbid(walltUi,
+  'firebase.firestore',
+  'localStorage.setItem',
+  'sessionStorage.setItem',
+  'walltAgent.response',
+  'runEnergyServer(',
+  'commitBimOverlay('
+);
 // The durability adapter must use the existing History owner, not Firestore directly.
 forbid(cycleHistory,
   'firebase.firestore',
@@ -125,6 +149,8 @@ if (!control.includes("old generation files are evidence/rollback shadows")) thr
 console.log(JSON.stringify({
   REVEX_WALLT_CONTROL_PLANE: 'PASSED',
   build: '20260818-wallt-control2',
+  visibleUiBuild: '20260818r138-wallt-ui1',
+  visibleEntryPoint: true,
   helperPipeline: true,
   fixerPipeline: true,
   executablePrefixedAdapters: true,
@@ -135,6 +161,8 @@ console.log(JSON.stringify({
   durableProjectHistoryMirror: true,
   historyOwnerReused: true,
   sameOriginBridge: true,
+  newAiBackend: false,
+  newStorageOwner: false,
   arbitrarySourceMutation: false,
   duplicateProductOwner: false
 }));
