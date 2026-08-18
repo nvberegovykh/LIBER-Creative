@@ -12,20 +12,21 @@ from typing import Any
 
 import revex_final_touchups_r125 as _shadow
 
-VERSION = "20260817r127-current-energy1"
+VERSION = "20260817r127-current-energy2"
 MISSING_VT = 0.45
 
 _shadow_patch_pipeline = _shadow.patch_pipeline
+_MISSING_VT_SHADOW_AUTHORITIES = {"CODE_FALLBACK_TINTED", "CODE_FALLBACK_CLEAR"}
 
 
 def _apply_current_policy() -> None:
-    # Preserve actual VT from evidence. The shadow reaches these only when VT is missing.
+    # Preserve actual VT from evidence. The shadow reaches these constants only when VT is missing.
     _shadow.VT_CLEAR_FALLBACK = MISSING_VT
     _shadow.VT_TINTED_FALLBACK = MISSING_VT
 
 
 def _normalize_touchup_outputs(request_out: Path) -> None:
-    """Make the derived audit explicit that missing VT came from the current fixed policy."""
+    """Relabel only rows that the shadow explicitly filled as missing VT."""
     try:
         request = json.loads(Path(request_out).read_text(encoding="utf-8"))
     except Exception:
@@ -37,7 +38,7 @@ def _normalize_touchup_outputs(request_out: Path) -> None:
         for page in list(facts.get("pages") or []):
             for row in list(page.get("envelope") or []):
                 authority = str(row.get("visibleTransmittanceAuthority") or "")
-                if authority and str(row.get("kind") or "").lower() in {"window", "door"}:
+                if authority in _MISSING_VT_SHADOW_AUTHORITIES and str(row.get("kind") or "").lower() in {"window", "door"}:
                     row["vt"] = MISSING_VT
                     row["visibleTransmittanceAuthority"] = "REVEX_FIXED_MISSING_VT_0_45"
                     changed = True
@@ -62,8 +63,8 @@ def _normalize_touchup_outputs(request_out: Path) -> None:
 
 def apply_request_touchups(request_path: Path, output_root: Path, reference_envelope) -> Path:
     _apply_current_policy()
-    # r125 used an approved-reference VT before its fallback. Current policy is simpler:
-    # an actual VT remains authoritative; a genuinely missing VT is always 0.45.
+    # Current filing policy: actual VT wins; if absent, insert exactly 0.45. Disable the
+    # old approved-reference VT lookup while retaining every other r125 touch-up.
     original_profiles = getattr(reference_envelope, "_approved_profiles", None) if reference_envelope is not None else None
     if reference_envelope is not None and original_profiles is not None:
         reference_envelope._approved_profiles = lambda _path: {}
