@@ -69,7 +69,6 @@ for principle in (
 ):
     assert release["principles"].get(principle) is True, principle
 
-# Versioned mechanics are shadows, not current authority, and must not be silently rewritten.
 assert git_blob_sha("src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups_r125.py") == "7e11be9fb0ef6cce2df205cb0a7827682f170735"
 assert git_blob_sha("src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner_r125.py") == "885b9fffc193671f0ed199a208fe3a3690e5a021"
 for rel in release["preservedShadows"]["energy"] + release["preservedShadows"]["deployment"]:
@@ -127,7 +126,6 @@ must(access_deploy,
      "REVEX_SOURCE_CANDIDATE=", "firestore:rules", "preserve the live ruleset",
      "allow read, write: if revexR43ProjectMember(projectId);")
 
-# Current UI/UX/BIM capabilities stay in the same release, not an Energy-only branch.
 must(ui,
      "mobile-final-r122.js", "appearance-convergence-r126.js", "docs-convergence-r126.js",
      "issues-convergence-r126.js", "issues-inspector-r126.js", "history-daily-r126.js",
@@ -139,7 +137,6 @@ must(design_versions,
      "liber.revex.design-property-versions.v1", "lightweight-property-overlay",
      "Sync to Design Book", "syncPreservesVersion:true")
 
-# Project creation, issue writes and access isolation are first-class current capabilities.
 must(store,
      "async createProject({ name, code, description, driveFileId })", "ownerId: uid", "memberIds: [uid]",
      "revexProject: true", "await this.ensureSpecProject(ref.id, null, project)",
@@ -151,7 +148,6 @@ must(rules_qa,
      "assertSucceeds(updateDoc(memberIssue", "linkedSpecAccess: true", "aclProtected: true",
      "outsiderDenied: true", "crossProjectDenied: true", "adminAccess: true")
 
-# Engineering Sync remains immutable and retains current geometry/evidence authority.
 must(engineering_sync,
      "PublicationMinimum = 0.80", "QualityTarget = 0.95", 'Artifact(gbxml, "gbxml")',
      'Artifact(weather, "weather-epw")', '"revit-project-identity"', '"revit-schedule-evidence"',
@@ -166,7 +162,6 @@ nodes = [n for n in dyn.get("Nodes", []) if "PythonNodeModels.PythonNode" in str
 assert len(nodes) == 1
 assert str(nodes[0].get("Code") or "").replace("\r\n", "\n").rstrip() == gbxml.replace("\r\n", "\n").rstrip()
 
-# Energy contracts are typed internally; public package names live at the filing boundary only.
 must(contracts,
      "class ArtifactKind", "class EvidenceBundle", "class FilingPackage",
      '"revit-project-identity": ArtifactKind.PROJECT_IDENTITY',
@@ -175,9 +170,9 @@ must(contracts,
      '"REVEX_ENERGY_RELEASE_PACKAGE.zip"')
 must(touchups,
      "MISSING_VT = 0.45", "def _actual_vt(row: dict)", "ACTIVE_ENVELOPE_EVIDENCE_VT",
+     "_NON_ACTUAL_VT_AUTHORITIES", "REVEX_FIXED_MISSING_VT_0_45",
      "_artifact_by_role", 'revit-schedule-evidence',
-     "Compatibility adapter only for previously-published revisions lacking role metadata",
-     "REVEX_FIXED_MISSING_VT_0_45")
+     "Compatibility adapter only for previously-published revisions lacking role metadata")
 must(pipeline,
      'CURRENT_RELEASE_PACKAGE = "REVEX_ENERGY_RELEASE_PACKAGE.zip"', "_verify_clean_zip",
      "en1.PUBLIC_REVIEW_NAMES", "CURRENT_FILING_PACKAGE",
@@ -191,6 +186,8 @@ import revex_final_touchups as current_touchups
 assert abs(float(current_touchups._actual_vt({"evidence": "Fenestration VT = 0.37"})) - 0.37) < 1e-9
 assert abs(float(current_touchups._actual_vt({"visibleTransmittance": "0.52"})) - 0.52) < 1e-9
 assert current_touchups._actual_vt({"evidence": "Fenestration U 0.30 SHGC 0.30"}) is None
+assert current_touchups._actual_vt({"vt": 0.45, "visibleTransmittanceAuthority": "REVEX_FIXED_MISSING_VT_0_45"}) is None
+assert current_touchups._actual_vt({"vt": 0.45, "visibleTransmittanceAuthority": "CODE_FALLBACK_CLEAR"}) is None
 assert abs(float(current_touchups.MISSING_VT) - 0.45) < 1e-9
 
 must(dev_contract,
@@ -218,6 +215,7 @@ print(json.dumps({
     "typedEvidence": True,
     "actualVtFieldPreserved": True,
     "actualVtTextEvidencePreserved": True,
+    "fallbackVtNeverRelabeledActual": True,
     "missingVt": 0.45,
     "geometryCorrectionsPreserved": True,
     "completeFilingPackageRequired": True,
