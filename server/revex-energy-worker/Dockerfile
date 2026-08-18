@@ -145,6 +145,24 @@ RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
       /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py \
       /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler_core.py
 
+# Resolve and verify the packaged protected reference before installing runtime dependencies.
+RUN cd /opt/revex/server \
+ && python3 -c "import os; from pathlib import Path; import revex_reference_envelope_projection_r118 as r; expected=Path(os.environ['REVEX_APPROVED_ENVELOPE_REFERENCE']); actual=r._reference_path(); assert actual==expected,(actual,expected); assert actual.is_file(),actual; print('REVEX_R118_PACKAGED_REFERENCE_PATH=PASSED', actual)"
+
+# Install the exact runtime dependencies used by Energy, GeometryCo and the worker facade.
+RUN python3 -m pip install --no-cache-dir \
+    -r /opt/revex/energy/requirements.txt \
+    -r /opt/revex/energy/GeometryCo/requirements.txt \
+    -r /opt/revex/server/requirements-server.txt
+
+# Import the production entry point with the same project/location binding used by deployment.
+RUN cd /opt/revex/server \
+ && REVEX_VERTEX_PROJECT=liber-apps-cca20 REVEX_VERTEX_LOCATION=global \
+    python3 -c "import os, app_entry; assert app_entry.APP is not None; assert os.environ['REVEX_VERTEX_PROJECT']=='liber-apps-cca20'; assert os.environ['REVEX_VERTEX_LOCATION']=='global'"
+
+# Prove the browser dependency COMcheck uses is runnable in the exact image.
+RUN python3 -c "from selenium import webdriver; o=webdriver.ChromeOptions(); o.binary_location='/usr/bin/google-chrome'; o.add_argument('--headless=new'); o.add_argument('--no-sandbox'); o.add_argument('--disable-dev-shm-usage'); d=webdriver.Chrome(options=o); d.get('data:text/plain,REVEX-COMCHECK-DRIVER-READY'); d.quit()"
+
 # QA must exercise the real system in the image rather than only proving files exist.
 RUN python3 /opt/revex/energy/verify_revex_r49_energy.py \
  && python3 /opt/revex/server/verify_revex_r49_worker.py \
