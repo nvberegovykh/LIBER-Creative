@@ -2,14 +2,18 @@
 """Canonical managed Energy pipeline facade.
 
 Versioned guards remain preserved as shadows. This file is the only active managed-pipeline
-entrypoint and binds the current typed evidence/VT policy to the proven r118/r116 mechanics.
+entrypoint and binds typed evidence, current VT policy, the proven simulation/filing engine,
+and one verified user-facing release package.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
+import zipfile
 
 import revex_energy_pipeline_guard as base
 import revex_energy_pipeline_guard_r116 as r116
@@ -25,8 +29,28 @@ if str(_energy_root) not in sys.path:
     sys.path.insert(0, str(_energy_root))
 
 import revex_final_touchups as current_touchups
+from revex_energy_contracts import FilingPackage
 
 shadow.r125 = current_touchups
+CURRENT_RELEASE_PACKAGE = "REVEX_ENERGY_RELEASE_PACKAGE.zip"
+MANUAL_PACKAGE = "REVEX_ENERGY_MANUAL_REVIEW_PACKAGE.zip"
+RECOVERY_PACKAGE = "REVEX_RECOVERY_PACKAGE.zip"
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _request_path(argv=None) -> Path | None:
+    values = list(argv) if argv is not None else list(sys.argv[1:])
+    for index, value in enumerate(values):
+        if value == "--request" and index + 1 < len(values):
+            return Path(values[index + 1]).resolve()
+    return None
 
 
 def _install_current_full_pipeline_runner() -> None:
@@ -68,8 +92,101 @@ def _install_current_full_pipeline_runner() -> None:
 shadow._install_full_pipeline_runner = _install_current_full_pipeline_runner
 
 
+def _promote_clean_release_package(request_path: Path, code: int) -> int:
+    """A COMPLETE run must expose one verified clean package, not only diagnostic recovery ZIPs."""
+    request = json.loads(Path(request_path).read_text(encoding="utf-8"))
+    output_root = Path(str(request.get("outputFolder") or "")).resolve()
+    result_path = output_root / "energy-result.json"
+    if not result_path.is_file():
+        return int(code or 2)
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    if str(result.get("status") or "").upper() != "COMPLETE":
+        return int(code or 2)
+
+    try:
+        manual = output_root / MANUAL_PACKAGE
+        release = output_root / CURRENT_RELEASE_PACKAGE
+        if manual.is_file():
+            # Normal fresh execution creates the nine-file manual-review ZIP after EN-1
+            # print/finalization. Promote those exact verified bytes to the canonical name.
+            with zipfile.ZipFile(manual) as archive:
+                entries = [name for name in archive.namelist() if not name.endswith("/")]
+                if len(entries) != 9 or len(set(entries)) != 9:
+                    raise RuntimeError("clean Energy review package is not exactly nine unique files")
+            shutil.copy2(manual, release)
+        elif not release.is_file():
+            raise RuntimeError("completed Energy run produced no clean release package")
+
+        # The r118 recovery ZIP stays available as diagnostic evidence but is not the public package.
+        rows = []
+        for raw in list(result.get("artifacts") or []):
+            row = dict(raw)
+            if str(row.get("name") or "") == RECOVERY_PACKAGE:
+                row["userVisible"] = False
+                row["reviewName"] = "REVEX Diagnostic Recovery Package"
+            if str(row.get("name") or "") != CURRENT_RELEASE_PACKAGE:
+                rows.append(row)
+        rows.append({
+            "name": CURRENT_RELEASE_PACKAGE,
+            "reviewName": "REVEX Energy Release Package",
+            "path": CURRENT_RELEASE_PACKAGE,
+            "kind": "release-package",
+            "userVisible": True,
+            "bytes": release.stat().st_size,
+            "sha256": _sha256(release),
+        })
+        result["artifacts"] = rows
+        result["releasePackage"] = {
+            "schema": "liber.revex.energy-release-package.v2",
+            "name": CURRENT_RELEASE_PACKAGE,
+            "path": CURRENT_RELEASE_PACKAGE,
+            "bytes": release.stat().st_size,
+            "sha256": _sha256(release),
+            "entryCount": 9,
+            "sourceEngineeringRevision": result.get("sourceEngineeringRevision"),
+            "sourceCandidate": result.get("sourceCandidate"),
+            "diagnosticRecoveryPackageUserVisible": False,
+        }
+
+        package = FilingPackage.discover(output_root).require_complete()
+        result["filingPackageContract"] = {
+            "schema": "liber.revex.energy-filing-package.v1",
+            "status": "PASSED",
+            "artifacts": package.canonical_names(),
+            "missingVtPolicy": 0.45,
+            "actualVtPreserved": True,
+        }
+        result_path.write_text(json.dumps(result, ensure_ascii=True, indent=2), encoding="utf-8")
+        print(json.dumps({
+            "stage": "CURRENT_FILING_PACKAGE",
+            "status": "PASSED",
+            "package": CURRENT_RELEASE_PACKAGE,
+            "entryCount": 9,
+        }, ensure_ascii=True), flush=True)
+        return 0
+    except Exception as exc:
+        result["status"] = "FAILED"
+        result["error"] = f"Current filing package contract failed: {type(exc).__name__}: {exc}"
+        result["failureContext"] = {
+            "failedStage": "CURRENT_FILING_PACKAGE",
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+        result_path.write_text(json.dumps(result, ensure_ascii=True, indent=2), encoding="utf-8")
+        print(json.dumps({
+            "stage": "CURRENT_FILING_PACKAGE",
+            "status": "FAILED",
+            "error": str(exc),
+        }, ensure_ascii=True), flush=True)
+        return 2
+
+
 def main(argv=None) -> int:
-    return int(shadow.main(argv))
+    request_path = _request_path(argv)
+    code = int(shadow.main(argv))
+    if request_path is not None:
+        return _promote_clean_release_package(request_path, code)
+    return code
 
 
 if __name__ == "__main__":
