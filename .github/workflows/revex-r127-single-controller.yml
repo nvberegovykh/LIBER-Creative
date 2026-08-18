@@ -25,17 +25,20 @@ jobs:
         run: |
           python -m py_compile \
             src/Liber.Revex.Revit/Engineering/Energy/revex_energy_contracts.py \
+            src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups.py \
+            src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner.py \
             src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups_r125.py \
             src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner_r125.py \
+            server/revex-energy-worker/revex_energy_pipeline_current.py \
             .github/scripts/verify-revex-r127-single-controller.py
       - name: Current UI and runtime convergence
         run: |
           node .github/scripts/verify-revex-current-generation-r53.js
           node .github/scripts/verify-revex-r99-webview-root-cache.js
           node .github/scripts/verify-revex-r126-functional-convergence.js
-      - name: r127 typed single-controller contract
+      - name: r127 canonical + shadow contract
         run: python .github/scripts/verify-revex-r127-single-controller.py
-      - name: Preserve proven r125 Energy touchups
+      - name: Preserve proven r125 Energy shadow behavior
         run: python src/Liber.Revex.Revit/Engineering/Energy/verify_revex_r125_touchups.py
 
   windows-release:
@@ -51,12 +54,14 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-      - name: Parse the only user-facing controller
+      - name: Parse current controllers
         shell: powershell
         run: |
-          $tokens=$null; $errors=$null
-          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path '.\FINALIZE_REVEX.ps1'),[ref]$tokens,[ref]$errors)
-          if(@($errors).Count){ throw (@($errors | ForEach-Object {$_.Message}) -join '; ') }
+          foreach($file in @('.\FINALIZE_REVEX.ps1','.\server\revex-energy-worker\DEPLOY_ENERGY_R127.ps1')){
+            $tokens=$null; $errors=$null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file),[ref]$tokens,[ref]$errors)
+            if(@($errors).Count){ throw "$file parser errors: $(@($errors | ForEach-Object {$_.Message}) -join '; ')" }
+          }
           $cmd=Get-Content -Raw '.\FINALIZE_REVEX.cmd'
           if(-not $cmd.Contains('raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/FINALIZE_REVEX.ps1')){throw 'FINALIZE_REVEX.cmd does not self-refresh from main'}
       - name: Compile complete Revit 2026 add-in
