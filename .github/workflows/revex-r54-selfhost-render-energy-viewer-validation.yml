@@ -11,6 +11,7 @@ on:
       - 'docs/liber-apps/apps/revex/**'
       - 'server/revex-render-worker/**'
       - 'server/revex-render-functions/**'
+      - 'server/revex-report-functions/**'
       - 'server/revex-energy-worker/**'
       - 'server/firebase-functions/**'
       - 'src/Liber.Revex.Revit/Engineering/Energy/**'
@@ -27,6 +28,7 @@ on:
       - 'docs/liber-apps/apps/revex/**'
       - 'server/revex-render-worker/**'
       - 'server/revex-render-functions/**'
+      - 'server/revex-report-functions/**'
       - 'server/revex-energy-worker/**'
       - 'server/firebase-functions/**'
       - 'src/Liber.Revex.Revit/Engineering/Energy/**'
@@ -79,34 +81,38 @@ jobs:
       - name: Inspect managed deployment scripts
         shell: pwsh
         run: |
+          # Preserve the older-named low-level broker and Energy primitives as separately
+          # regression-tested implementation assets. They are not the r126 current launcher.
           $render = Get-Content -Raw server/revex-render-worker/DEPLOY_RENDER_SERVER.ps1
-          foreach ($required in @('--gpu-type=nvidia-rtx-pro-6000','--cpu=20','--memory=80Gi','--no-allow-unauthenticated','--concurrency=1','--min-instances=0','roles/run.invoker')) {
-            if (-not $render.Contains($required)) { throw "Missing render deployment contract: $required" }
+          foreach ($required in @('--gpu-type=nvidia-rtx-pro-6000','--cpu=20','--memory=80Gi','--no-allow-unauthenticated','--concurrency=1','--min-instances=0','roles/run.invoker','[switch]$BrokerOnly')) {
+            if (-not $render.Contains($required)) { throw "Missing preserved render deployment contract: $required" }
           }
           [void][scriptblock]::Create($render)
 
           $energy = Get-Content -Raw server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1
           foreach ($required in @('REVEX_SOURCE_CANDIDATE=$SourceCandidate','verify-revex-current-generation-r53.js','--no-allow-unauthenticated','roles/run.invoker')) {
-            if (-not $energy.Contains($required)) { throw "Missing current Energy deployment contract: $required" }
+            if (-not $energy.Contains($required)) { throw "Missing preserved Energy deployment contract: $required" }
           }
-          if ($energy.Contains('CanonicalSourceCommit') -or $energy.Contains('REVEX_R49_SOURCE_')) { throw 'Current Energy deploy contains stale publisher source-restoration markers.' }
+          if ($energy.Contains('CanonicalSourceCommit') -or $energy.Contains('REVEX_R49_SOURCE_')) { throw 'Preserved Energy deploy contains stale publisher source-restoration markers.' }
           [void][scriptblock]::Create($energy)
 
+          # The operational current launcher is r126 Report + warm Render only. Energy is
+          # intentionally protected from this finalization pass rather than being redeployed.
           $launcher = Get-Content -Raw DEPLOY_REVEX_CURRENT_SERVICES.ps1
-          foreach ($required in @('DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1','Start-Transcript','deployment will resume automatically after approval')) {
-            if (-not $launcher.Contains($required)) { throw "Missing unified launcher contract: $required" }
+          foreach ($required in @('DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1','Start-Transcript','Report + warm Render only','Invoke-NativeExitCode $GCloud @("auth", "login")')) {
+            if (-not $launcher.Contains($required)) { throw "Missing current r126 launcher contract: $required" }
           }
-          $firebaseRecovery = $launcher.Contains('& $Firebase login --reauth') -or $launcher.Contains('Invoke-NativeExitCode $Firebase @("login","--reauth")')
-          $gcloudRecovery = $launcher.Contains('& $GCloud auth login') -or $launcher.Contains('Invoke-NativeExitCode $GCloud @("auth","login")')
-          if (-not $firebaseRecovery) { throw 'Unified launcher is missing Firebase interactive auth recovery.' }
-          if (-not $gcloudRecovery) { throw 'Unified launcher is missing gcloud interactive auth recovery.' }
-          if ($launcher.Contains('PUBLISH_REVEX_R49.ps1')) { throw 'Unified launcher invokes stale publisher.' }
           [void][scriptblock]::Create($launcher)
 
           $bootstrap = Get-Content -Raw DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1
-          foreach ($required in @('"clone", "--depth", "1", "--branch", "main"','"rev-parse", "HEAD"','DEPLOY_ENERGY_CURRENT.ps1','DEPLOY_RENDER_SERVER.ps1')) {
-            if (-not $bootstrap.Contains($required)) { throw "Missing unified bootstrap contract: $required" }
+          foreach ($required in @('"clone", "--depth", "1", "--branch", "main"','"rev-parse", "HEAD"','DEPLOY_REPORT_R126.ps1','DEPLOY_RENDER_R126.ps1','Verify root cache key matches the current UI BUILD','Verify r126 functional convergence')) {
+            if (-not $bootstrap.Contains($required)) { throw "Missing current r126 bootstrap contract: $required" }
           }
-          if ($bootstrap.Contains('PUBLISH_REVEX_R49.ps1')) { throw 'Unified bootstrap invokes stale publisher.' }
           [void][scriptblock]::Create($bootstrap)
-          Write-Host 'Managed deployment scripts: PASS'
+
+          foreach ($forbidden in @('DEPLOY_ENERGY_CURRENT.ps1','DEPLOY_ENERGY_WORKER_ONLY_R69.ps1','EnergyWorkerOnly','PUBLISH_REVEX_R49.ps1')) {
+            if ($launcher.Contains($forbidden) -or $bootstrap.Contains($forbidden)) {
+              throw "Current r126 operational path revives forbidden historical Energy/publisher marker: $forbidden"
+            }
+          }
+          Write-Host 'Managed deployment scripts: PASS (r126 Report + warm Render; Energy protected)'
