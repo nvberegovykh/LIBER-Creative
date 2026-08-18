@@ -16,7 +16,7 @@ if ($CandidateOnly -and $BrokerOnly) { throw "Choose CandidateOnly or BrokerOnly
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $FunctionsDir = Join-Path $Root "server\firebase-functions"
 $CloudBuild = Join-Path $PSScriptRoot "cloudbuild.yaml"
-$Verifier = Join-Path $Root ".github\scripts\verify-revex-r127-single-controller.py"
+$Verifier = Join-Path $Root ".github\scripts\verify-revex-current-release.py"
 $WorkerSa = "revex-energy-worker@$ProjectId.iam.gserviceaccount.com"
 $BrokerSa = "revex-energy-broker@$ProjectId.iam.gserviceaccount.com"
 $Short = $SourceCandidate.Substring(0,12).ToLowerInvariant()
