@@ -20,6 +20,7 @@ def forbid(text: str, *markers: str) -> None:
 
 controller = read("FINALIZE_REVEX.ps1")
 launcher = read("FINALIZE_REVEX.cmd")
+energy_deploy = read("server/revex-energy-worker/DEPLOY_ENERGY_R127.ps1")
 touchups = read("src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups_r125.py")
 runner = read("src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner_r125.py")
 contracts_path = ROOT / "src/Liber.Revex.Revit/Engineering/Energy/revex_energy_contracts.py"
@@ -34,7 +35,7 @@ require(launcher,
 require(controller,
         '"clone","--depth","1","--branch","main","--single-branch"',
         '$SourceSha = $sha.Text.ToLowerInvariant()',
-        "DEPLOY_ENERGY_CURRENT_ARGV_FIX.ps1",
+        "DEPLOY_ENERGY_R127.ps1",
         "DEPLOY_REPORT_R126.ps1",
         "DEPLOY_RENDER_R126.ps1",
         "Compile exact-source Revit 2026 add-in",
@@ -43,10 +44,27 @@ require(controller,
         "Wait-RevitClosed",
         "Reopen Revit 2026 and run one fresh SYNC ENGINEERING")
 forbid(controller,
+       "DEPLOY_ENERGY_CURRENT_ARGV_FIX.ps1",
        "RECOVER_REVEX_ENERGY_CURRENT",
        "PUBLISH_REVEX_R49",
        "CanonicalSourceCommit",
        "FINALIZE_REVEX_CURRENT")
+
+require(energy_deploy,
+        "Build exact r127 Energy worker image",
+        "Deploy private r127 Energy worker candidate",
+        "Cut authenticated Energy broker over to verified candidate",
+        "REVEX_SOURCE_CANDIDATE",
+        "roles/datastore.user",
+        "roles/storage.objectAdmin",
+        "roles/aiplatform.user")
+forbid(energy_deploy,
+       "DEPLOY_ENERGY_CURRENT.ps1",
+       "DEPLOY_ENERGY_CURRENT_ARGV_FIX.ps1",
+       ".Replace(",
+       "runtime-fixed",
+       "CanonicalSourceCommit",
+       "REVEX_R49_SOURCE_")
 
 require(controller,
         "verify-revex-current-generation-r53.js",
@@ -109,6 +127,7 @@ print(json.dumps({
     "REVEX_R127_SINGLE_CONTROLLER": "PASSED",
     "oneCommand": "FINALIZE_REVEX.cmd",
     "singleSourceSha": True,
+    "cleanEnergyDeployer": True,
     "currentUiIncluded": True,
     "typedEnergyContracts": True,
     "missingVt": 0.45,
