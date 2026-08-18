@@ -31,6 +31,10 @@ function Verify-Function([string]$GCloud,[string]$FunctionName,[switch]$Requires
   if([string]$fn.buildConfig.runtime-ne 'nodejs22'){throw "$FunctionName runtime is not nodejs22."}
   if([string]$fn.serviceConfig.environmentVariables.REVEX_SOURCE_CANDIDATE-ne $SourceCandidate){throw "$FunctionName source SHA does not match the current release."}
   if($RequiresStorage-and[string]$fn.serviceConfig.environmentVariables.REVEX_STORAGE_BUCKET-ne $Bucket){throw "$FunctionName Storage binding mismatch."}
+  if($FunctionName-eq 'ensureProjectChatHttp'){
+    if([string]$fn.serviceConfig.availableCpu-ne '1'){throw 'ensureProjectChatHttp must run with exactly 1 vCPU so concurrency > 1 is valid.'}
+    if([int]$fn.serviceConfig.maxInstanceRequestConcurrency-ne 20){throw 'ensureProjectChatHttp concurrency must remain exactly 20.'}
+  }
   return $fn
 }
 
@@ -76,11 +80,14 @@ try{
 
   # Secure Chat remains the message/storage owner. This endpoint only resolves/repairs the
   # exact active REVEX project's deterministic chat connection after Firebase bearer auth.
+  # Cloud Run requires >=1 vCPU whenever request concurrency is greater than 1, so keep the
+  # resolver at 512 MiB + exactly 1 vCPU + concurrency 20 rather than relying on a fractional
+  # CPU inferred from memory.
   $chatEnvs="REVEX_SOURCE_CANDIDATE=$SourceCandidate"
   Require-Ok 'Deploy source-bound authenticated Project Chat resolver' $GCloud @(
     'functions','deploy','ensureProjectChatHttp','--gen2','--project',$ProjectId,'--region',$Region,
     '--runtime','nodejs22','--source',$ChatSource,'--entry-point','ensureProjectChatHttp','--trigger-http','--allow-unauthenticated','--service-account',$ReportSa,
-    '--set-env-vars',$chatEnvs,'--memory','512MiB','--timeout','60s','--concurrency','20','--max-instances','4','--quiet')
+    '--set-env-vars',$chatEnvs,'--memory','512MiB','--cpu','1','--timeout','60s','--concurrency','20','--max-instances','4','--quiet')
 
   $null=Verify-Function $GCloud 'documentRevexRevision' -RequiresStorage
   $null=Verify-Function $GCloud 'finalizeRevexDailyReport' -RequiresStorage
