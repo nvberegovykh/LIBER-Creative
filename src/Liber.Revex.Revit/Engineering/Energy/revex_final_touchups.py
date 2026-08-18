@@ -12,8 +12,9 @@ import re
 from typing import Any
 
 import revex_final_touchups_r125 as _shadow
+import revex_native_schedule_envelope as _native_envelope
 
-VERSION = "20260818-current-energy5"
+VERSION = "20260818-current-energy6"
 MISSING_VT = 0.45
 
 _shadow_patch_pipeline = _shadow.patch_pipeline
@@ -123,6 +124,40 @@ def _normalize_touchup_outputs(request_out: Path) -> None:
         audit_path.write_text(json.dumps(audit, ensure_ascii=True, indent=2), encoding="utf-8")
 
 
+def _apply_native_schedule_orientation(request_out: Path) -> None:
+    """Restore exact current EN-schedule orientation before the COMcheck preflight.
+
+    The active Revit schedule snapshot is the authority. PDF/page scan geometry remains lower
+    authority and model surfaces are deliberately not consulted for filing orientation.
+    """
+    try:
+        request = json.loads(Path(request_out).read_text(encoding="utf-8"))
+    except Exception:
+        return
+    schedule_path = _current_schedule_path(request)
+    audit = _native_envelope.apply_missing_orientations(request_out, schedule_path)
+    audit_path = Path(request_out).parent / "NATIVE_EN_SCHEDULE_ORIENTATION_CURRENT.json"
+    audit_path.write_text(json.dumps(audit, ensure_ascii=True, indent=2), encoding="utf-8")
+    request = json.loads(Path(request_out).read_text(encoding="utf-8"))
+    request["nativeEnScheduleOrientation"] = {
+        "schema": audit.get("schema"),
+        "version": audit.get("version"),
+        "status": audit.get("status"),
+        "authority": audit.get("authority"),
+        "auditFile": audit_path.name,
+        "filledCount": len(list(audit.get("filled") or [])),
+        "unresolvedCount": len(list(audit.get("unresolved") or [])),
+    }
+    Path(request_out).write_text(json.dumps(request, ensure_ascii=True, indent=2), encoding="utf-8")
+    print(json.dumps({
+        "stage": "NATIVE_EN_SCHEDULE_ORIENTATION_CURRENT",
+        "status": audit.get("status"),
+        "filled": audit.get("filled") or [],
+        "unresolved": audit.get("unresolved") or [],
+        "sourceEvidenceMutated": False,
+    }, ensure_ascii=True), flush=True)
+
+
 def apply_request_touchups(request_path: Path, output_root: Path, reference_envelope) -> Path:
     _apply_current_policy()
     # Actual VT wins. For absent VT, current policy bypasses the old reference-VT branch and
@@ -137,6 +172,7 @@ def apply_request_touchups(request_path: Path, output_root: Path, reference_enve
             reference_envelope._approved_profiles = original_profiles
     if result.is_file():
         _normalize_touchup_outputs(result)
+        _apply_native_schedule_orientation(result)
     return result
 
 
