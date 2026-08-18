@@ -30,14 +30,15 @@ jobs:
             src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups_r125.py \
             src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner_r125.py \
             server/revex-energy-worker/revex_energy_pipeline_current.py \
-            .github/scripts/verify-revex-r127-single-controller.py
+            .github/scripts/verify-revex-r127-single-controller.py \
+            .github/scripts/verify-revex-current-release.py
       - name: Current UI and runtime convergence
         run: |
           node .github/scripts/verify-revex-current-generation-r53.js
           node .github/scripts/verify-revex-r99-webview-root-cache.js
           node .github/scripts/verify-revex-r126-functional-convergence.js
-      - name: Current canonical + shadow contract
-        run: python .github/scripts/verify-revex-r127-single-controller.py
+      - name: Canonical current release contract
+        run: python .github/scripts/verify-revex-current-release.py
       - name: Preserve proven r125 Energy shadow behavior
         run: python src/Liber.Revex.Revit/Engineering/Energy/verify_revex_r125_touchups.py
 
@@ -74,6 +75,6 @@ jobs:
         run: |
           dotnet restore src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -p:RevexCiRevitApi=true -p:Platform=x64
           dotnet build src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -c Release -p:RevexCiRevitApi=true -p:Platform=x64 --no-restore
-      - name: Re-run current release contract on Windows
+      - name: Re-run canonical current release contract on Windows
         shell: pwsh
-        run: python .github/scripts/verify-revex-r127-single-controller.py
+        run: python .github/scripts/verify-revex-current-release.py
