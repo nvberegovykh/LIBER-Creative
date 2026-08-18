@@ -12,7 +12,8 @@
     "immutableProjectRevisionsAreNeverRewritten": true,
     "currentRuntimeUsesCanonicalFacades": true,
     "packageFilenamesAreBoundaryAdaptersNotInternalArchitecture": true,
-    "candidateWorkersProveReadyBeforeBrokerCutover": true
+    "candidateWorkersProveReadyBeforeBrokerCutover": true,
+    "liveFirestoreRulesArePreservedBeforeRevexAccessPatch": true
   },
   "current": {
     "releaseVerifier": ".github/scripts/verify-revex-current-release.py",
@@ -26,10 +27,11 @@
     "energyRunner": "src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner.py",
     "energyDeployer": "server/revex-energy-worker/deploy-current.ps1",
     "reportDeployer": "server/revex-report-functions/deploy-current.ps1",
-    "renderDeployer": "server/revex-render-worker/deploy-current.ps1"
+    "renderDeployer": "server/revex-render-worker/deploy-current.ps1",
+    "accessDeployer": "firebase/deploy-current-access.ps1"
   },
   "requiredCapabilities": {
-    "projectIdentity": "one REVEX project identity shared by Revit, BIM, Design Book, Spec Book, Docs, Chat, History, Render and Energy",
+    "projectIdentity": "one REVEX project identity shared by Revit, BIM, Design Book, Spec Book, Docs, Chat, History, Render and Energy under project owner/member/admin access",
     "bim": [
       "exact synced Revit model",
       "persistent visible-hidden-deleted overlays",
@@ -71,7 +73,8 @@
     "issues": [
       "all active issues shown by default",
       "empty BIM selection still shows active project issues",
-      "anchored issues can navigate back to BIM elements"
+      "anchored issues can navigate back to BIM elements",
+      "project members can create and update issues under source-bound preserved Firestore access rules"
     ],
     "history": [
       "append-only technical history",
