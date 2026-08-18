@@ -36,6 +36,7 @@ function installStoreGuard(){
    const returnedProject=String(result?.projectId||result?.linkedProjectId||'').trim();
    if(returnedProject&&returnedProject!==projectId)throw new Error(`Blocked a cross-project Chat connection: expected ${projectId}, received ${returnedProject}.`);
    if(s){s.chatProjectId=projectId;s.chatConnId=connId;}
+   boundProject=projectId;
    if(frame)frame.dataset.revexProjectId=projectId;
    return {...result,connId,projectId};
  };
@@ -58,7 +59,13 @@ function installFrameGuard(){
 function bind(){
  installStoreGuard();installFrameGuard();
  const initial=String(state()?.projectId||'').trim();boundProject=initial;if(state())state().chatProjectId=initial;
- root.addEventListener('revex:authoritative-project-bound',event=>{const projectId=String(event?.detail?.projectId||'').trim();if(projectId!==boundProject)reset(projectId,'authoritative-project-bound');else{boundProject=projectId;if(state())state().chatProjectId=projectId;}});
+ root.addEventListener('revex:authoritative-project-bound',event=>{
+   const projectId=String(event?.detail?.projectId||'').trim(),s=state(),already=String(s?.chatProjectId||'').trim();
+   if(!projectId)return;
+   if(!boundProject&&already===projectId){boundProject=projectId;return;}
+   if(projectId!==boundProject)reset(projectId,'authoritative-project-bound');
+   else{boundProject=projectId;if(s)s.chatProjectId=projectId;}
+ });
  root.addEventListener('revex:native-project-binding',event=>{const projectId=String(event?.detail?.projectId||'').trim();if(projectId&&boundProject&&projectId!==boundProject)reset(projectId,'native-project-binding');});
  document.querySelector('[data-view="chat"]')?.addEventListener('click',()=>{const projectId=String(state()?.projectId||'').trim();if(projectId&&boundProject&&projectId!==boundProject)reset(projectId,'chat-open-boundary-audit');});
  diag('INFO','CHAT_R136','Project-isolated Chat boundary installed.',{secureChatStorageOwner:true,crossProjectConnection:'fail-closed',asyncResolutionGuard:true});
