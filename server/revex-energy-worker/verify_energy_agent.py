@@ -56,6 +56,9 @@ with tempfile.TemporaryDirectory(prefix="revex-wallt-agent-") as td:
     else:raise AssertionError("unresolved filing evidence did not hard-stop before expensive stages")
     state=json.loads((root/agent.STATE_NAME).read_text(encoding="utf-8"));repair=json.loads((root/agent.REPAIR_REQUEST_NAME).read_text(encoding="utf-8"))
     assert state["status"]=="WAITING_USER" and state["stage"]=="WALLT_FILING_PREFLIGHT",state
-    assert repair["preserveCompletedStages"] is True and len(repair["requests"])==1,repair
+    assert repair["preserveCompletedStages"] is True,repair
+    requests=repair["requests"]
+    assert len(requests)==2 and {row["domain"] for row in requests}=={"ENVELOPE_THERMAL","ENVELOPE_ORIENTATION"},repair
+    assert {row["code"] for row in requests}=={"G99.1"},repair
 
 print(json.dumps({"schema":"liber.revex.energy-agent-verification.v1","status":"PASSED","activeController":True,"actualFailureUniqueCodes":len(codes),"nativeScheduleResolved":len(codes),"missingVt":.45,"orientationFromNormal":True,"revisionClarification":True,"earlyWaitingUser":True,"resumableRevitRepairRequest":True},separators=(",",":")))
