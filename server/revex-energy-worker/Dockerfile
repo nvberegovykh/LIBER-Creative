@@ -161,7 +161,7 @@ RUN python3 /opt/revex/energy/verify_revex_r49_energy.py \
  && python3 /opt/revex/server/verify_geometryco_source_condition_r91.py \
  && python3 /opt/revex/server/verify_final_comcheck_recovery_r116.py \
  && cd /opt/revex/server && python3 verify_reference_envelope_r118.py \
- && python3 verify_energy_agent.py
+ && PYTHONPATH=/opt/revex/energy:/opt/revex/server python3 verify_energy_agent.py
 
 # Historical verifier shadow markers only; current runtime is the ENV directly below.
 # REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py
