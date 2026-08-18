@@ -1,0 +1,12 @@
+{
+  "name": "revex-report-functions",
+  "private": true,
+  "engines": { "node": "22" },
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "14.2.0",
+    "firebase-functions": "7.3.2",
+    "pdf-lib": "1.17.1",
+    "pdf-parse": "1.1.1"
+  }
+}
