@@ -87,7 +87,7 @@
     loadScript('viewer-interaction-r85-loader.js?v=20260817r116-final-energy1','viewer-interaction-r85-loader');
     loadScript('ui-polish-r109.js?v=20260817r110-responsive1','ui-polish-r109');
     loadScript('viewer-texture-r115.js?v=20260817r126-texture-precedence1','viewer-texture-r115');
-    loadScript('docs-pages-r115.js?v=20260818r131-docs-fullset-order2','docs-pages-r115');
+    loadScript('docs-pages-r115.js?v=20260818r134-docs-linked-pages1','docs-pages-r115');
     loadScript('render-touchups-r115.js?v=20260818r132-render-owner-guard1','render-touchups-r115');
     loadScript('mobile-final-r122.js?v=20260817r122-mobile-final1','mobile-final-r122');
     loadScript('appearance-convergence-r126.js?v=20260817r126-appearance1','appearance-convergence-r126');
@@ -101,5 +101,5 @@
   }
   function bind(){installCanonicalOverlayStore();installChatProjectGuard();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r125-preserved+wallt-review',wallt:'helper+fixer+24h-history',moduleLoad:'r126-convergence+r133-mobile-safe-last',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r122-mobile+r126-responsive+r133-safe-area-scroll',docs:'r115-full-set-page-number+r126-ownership-guard+r133-mobile-stack',texture:'instance-uv>type-texture>design-color>revit',render:'google-gemini-client+docked-owner+qwen-shadow+interaction-freeze-guard',chat:'project-boundary-connection-reset',issues:'revexIssues+all-active-default+empty-selection-inspector',history:'technical-NYC-day+wallt-24h',dailyReport:'separate-post-sync-worker',blocks:'walk-only-user-triggered-revit-family',bimProperties:'r117-preserved',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r125-preserved+wallt-review',wallt:'helper+fixer+24h-history',moduleLoad:'r126-convergence+r133-mobile-safe-last',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r122-mobile+r126-responsive+r133-safe-area-scroll',docs:'r134-full-set-linked-pages+r126-ownership-guard+r133-mobile-stack',texture:'instance-uv>type-texture>design-color>revit',render:'google-gemini-client+docked-owner+qwen-shadow+interaction-freeze-guard',chat:'project-boundary-connection-reset',issues:'revexIssues+all-active-default+empty-selection-inspector',history:'technical-NYC-day+wallt-24h',dailyReport:'separate-post-sync-worker',blocks:'walk-only-user-triggered-revit-family',bimProperties:'r117-preserved',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
 })(window);
