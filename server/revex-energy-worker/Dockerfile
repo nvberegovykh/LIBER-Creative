@@ -146,8 +146,9 @@ RUN python3 /opt/revex/energy/verify_revex_r49_energy.py \
  && python3 /opt/revex/server/verify_final_comcheck_recovery_r116.py \
  && cd /opt/revex/server && python3 verify_reference_envelope_r118.py
 
-# Historical r55/r69 verifier shadow marker only; current runtime is the ENV directly below.
+# Historical verifier shadow markers only; current runtime is the ENV directly below.
 # REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py
+# REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard_r118.py
 ENV REVEX_HEADLESS=1 \
     REVEX_CHROME_BINARY=/usr/bin/google-chrome \
     REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_current.py \
