@@ -40,6 +40,10 @@ report_deploy = read("server/revex-report-functions/deploy-current.ps1")
 contracts = read("src/Liber.Revex.Revit/Engineering/Energy/revex_energy_contracts.py")
 touchups = read("src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups.py")
 pipeline = read("server/revex-energy-worker/revex_energy_pipeline_current.py")
+store = read("docs/liber-apps/apps/revex/store.js")
+app = read("docs/liber-apps/apps/revex/app.js")
+dev_contract = read("REVEX-DEVELOPMENT-CONTRACT.md")
+rules_qa = read(".github/scripts/verify-revex-r43-rules.js")
 
 assert release["schema"] == "liber.revex.current-release.v2"
 assert release["authority"] == "canonical-current-files"
@@ -91,6 +95,46 @@ forbid(render_deploy, "DEPLOY_RENDER_SERVER.ps1")
 must(report_deploy,
      "REVEX_SOURCE_CANDIDATE", "documentRevexRevision", "finalizeRevexDailyReport")
 
+# Project creation/activation must remain a first-class Companion capability. Spec Book
+# and Chat projections can retry, but a secondary projection must never invalidate the
+# canonical REVEX project identity.
+must(store,
+     "async createProject({ name, code, description, driveFileId })",
+     "ownerId: uid",
+     "memberIds: [uid]",
+     "revexProject: true",
+     "await this.ensureSpecProject(ref.id, null, project)",
+     "Project creation must never be blocked by a secondary compatibility projection.",
+     "await this.ensureProjectChat(ref.id)",
+     "Project created · ${title}",
+     "async ensureSpecProject(projectId, preferredId, suppliedProject = null)",
+     "publishSpecScheduleSources")
+must(app,
+     "new-project-button",
+     "Store.createProject")
+
+# Access and cross-project isolation stay part of the preserved release contract.
+must(rules_qa,
+     "memberContentAccess: true",
+     "linkedSpecAccess: true",
+     "aclProtected: true",
+     "outsiderDenied: true",
+     "crossProjectDenied: true",
+     "adminAccess: true")
+
+# Permanent architectural lessons remain present so future revisions do not recreate the
+# failure classes this release removes.
+must(dev_contract,
+     "One concern = one runtime owner",
+     "BIM state lanes are separate",
+     "Docs must not block the Companion UI",
+     "Immutable Energy handoff is local data, not browser networking",
+     "Current-project identity is evidence normalization, not a template value",
+     "Every add-in source change must compile the real DLL in CI",
+     "Windows deployment rules",
+     "Diagnostics are evidence, not workload",
+     "The objective is not to accumulate fixes")
+
 # Current Energy evidence and package contracts are semantic/typed internally. Exact
 # filenames are centralized only at transfer/filing boundaries.
 must(contracts,
@@ -131,6 +175,8 @@ print(json.dumps({
     "canonicalVerifier": True,
     "versionedFilesShadowOnly": True,
     "candidateBeforeBrokerCutover": True,
+    "projectCreationPreserved": True,
+    "projectAccessIsolationPreserved": True,
     "fullUiAndBimContract": True,
     "typedEvidence": True,
     "scheduleEvidenceByRole": True,
