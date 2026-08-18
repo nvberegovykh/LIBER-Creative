@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 
 import app as base
 import render_r115 as r115
 
-BUILD = "20260817r119-durable-model-cache2"
+BUILD = "20260818-current-durable-cache-retry1"
 base.BUILD = BUILD
 CACHE_MARKER = ".revex-qwen-cache-complete.json"
 
@@ -42,6 +43,16 @@ def _mark_cache_complete(cache_root: Path) -> None:
         }, sort_keys=True),
         encoding="utf-8",
     )
+
+
+def _hub_retry_delay(message: str, attempt: int) -> int:
+    match = re.search(r"retry\s+after\s+(\d+)\s+seconds?", message or "", re.I)
+    if match:
+        # Honor upstream explicitly instead of burning the remaining quota window.
+        return max(15, min(150, int(match.group(1)) + 10))
+    if "429" in (message or "") or "rate limit" in (message or "").casefold():
+        return 60
+    return min(60, max(10, 10 * attempt))
 
 
 def _durable_public_model_pipeline():
@@ -82,7 +93,7 @@ def _durable_public_model_pipeline():
                     base._MODEL_STATE["origin"] = "public-hugging-face-persistent-cache-filling"
                     last_error: Exception | None = None
                     resolved = ""
-                    for attempt in range(1, 7):
+                    for attempt in range(1, 9):
                         try:
                             resolved = snapshot_download(
                                 repo_id=base.MODEL_ID,
@@ -90,18 +101,24 @@ def _durable_public_model_pipeline():
                                 local_dir=str(cache_root),
                                 token=False,
                                 etag_timeout=etag_timeout,
-                                max_workers=8,
+                                # Fewer concurrent Hub metadata/download requests reduce burst
+                                # pressure while the same persistent cache fills incrementally.
+                                max_workers=4,
                             )
                             break
                         except Exception as exc:
                             last_error = exc
+                            message = str(exc)
+                            delay = _hub_retry_delay(message, attempt)
                             base._MODEL_STATE.update(
                                 status="downloading",
-                                error=f"snapshot attempt {attempt}/6: {str(exc)[:900]}",
+                                error=f"snapshot attempt {attempt}/8: {message[:900]}",
+                                snapshotAttempt=attempt,
+                                nextRetrySeconds=delay,
                             )
-                            if attempt >= 6:
+                            if attempt >= 8:
                                 raise
-                            time.sleep(min(45, 5 * attempt))
+                            time.sleep(delay)
                     if not resolved:
                         raise RuntimeError(str(last_error or "Pinned Qwen snapshot could not be downloaded."))
                     if not (cache_root / "model_index.json").is_file():
