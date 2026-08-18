@@ -5,8 +5,8 @@ const BUILD = '20260818-current-workspace1';
 const state = window.__revexState;
 const $ = (selector, root = document) => root.querySelector(selector);
 
-if (!window.__revexWorkspaceCurrent) {
-  window.__revexWorkspaceCurrent = { build: BUILD };
+if (!window.__revexWorkspaceR51) {
+  window.__revexWorkspaceR51 = { build: BUILD };
 
   const diagnostic = (level, stage, message, detail = {}) => {
     try { window.__revexBrowserDiagnostics?.emit?.(level, stage, message, { initiator: 'current workspace', ...detail }); } catch (_) {}
@@ -206,8 +206,8 @@ if (!window.__revexWorkspaceCurrent) {
   }
 
   function patchViewer(v) {
-    if (!v || v.__revexWorkspaceCurrentPatched) return Boolean(v);
-    v.__revexWorkspaceCurrentPatched = true;
+    if (!v || v.__revexWorkspaceR51Patched) return Boolean(v);
+    v.__revexWorkspaceR51Patched = true;
     patchWalk(v);
     v.captureRenderReference = () => captureRenderReference(v);
     const originalLoad = typeof v.load === 'function' ? v.load.bind(v) : null;
