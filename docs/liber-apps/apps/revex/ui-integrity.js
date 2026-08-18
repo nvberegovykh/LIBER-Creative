@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260817r126-functional-convergence1';
+  const BUILD='20260817r126-functional-convergence2';
   const REVEX_R87_REPLAY_CONTRACT='energy-diagnostics-r68.js?v=20260816r87-energy-replay1';
   const REVEX_R87_REPLAY_LABEL="energyDiagnostics:'revision-scoped-replay-r87'";
   const REVEX_R92_REPLAY_COMPAT='energy-replay-r92.js?v=20260816r92-hosted-replay1';
@@ -73,11 +73,12 @@
     loadScript('appearance-convergence-r126.js?v=20260817r126-appearance1','appearance-convergence-r126');
     loadScript('docs-convergence-r126.js?v=20260817r126-docs1','docs-convergence-r126');
     loadScript('issues-convergence-r126.js?v=20260817r126-issues1','issues-convergence-r126');
+    loadScript('issues-inspector-r126.js?v=20260817r126-empty-selection-issues1','issues-inspector-r126');
     loadScript('history-daily-r126.js?v=20260817r126-daily1','history-daily-r126');
     loadScript('blocks-palette-r126.js?v=20260817r126-blocks1','blocks-palette-r126');
     loadScript('render-convergence-r126.js?v=20260817r126-render-client1','render-convergence-r126');
   }
   function bind(){installCanonicalOverlayStore();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r125-preserved',moduleLoad:'r126-convergence-last',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r122-mobile+r126-responsive-owners',docs:'r115-single-final-renderer+r126-ownership-guard',texture:'instance-uv>type-texture>design-color>revit',render:'private-warm-server-no-client-model',issues:'revexIssues+all-active-default',history:'technical-NYC-day',dailyReport:'separate-post-sync-worker',blocks:'walk-only-user-triggered-revit-family',bimProperties:'r117-preserved',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r125-preserved',moduleLoad:'r126-convergence-last',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r122-mobile+r126-responsive-owners',docs:'r115-single-final-renderer+r126-ownership-guard',texture:'instance-uv>type-texture>design-color>revit',render:'private-warm-server-no-client-model',issues:'revexIssues+all-active-default+empty-selection-inspector',history:'technical-NYC-day',dailyReport:'separate-post-sync-worker',blocks:'walk-only-user-triggered-revit-family',bimProperties:'r117-preserved',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
 })(window);
