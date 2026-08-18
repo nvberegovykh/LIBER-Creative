@@ -146,7 +146,8 @@ must(mobile,
      "function setWalk(on)", "function normalizeDocs()", "revex-r122-guide")
 must(design_versions,
      "liber.revex.design-property-versions.v1", "lightweight-property-overlay",
-     "Sync to Design Book", "syncPreservesVersion:true")
+     "Sync to Design Book", "async function syncToDesignBook",
+     "propertyVersions: rows", "Version retained.")
 
 must(store,
      "async createProject({ name, code, description, driveFileId })", "ownerId: uid", "memberIds: [uid]",
@@ -224,6 +225,7 @@ print(json.dumps({
     "liveRulesPreservedAndSourceBound": True,
     "memberIssueWriteProven": True,
     "fullUiAndBimContract": True,
+    "designVersionRetentionSemanticGate": True,
     "typedEvidence": True,
     "actualVtFieldPreserved": True,
     "actualVtTextEvidencePreserved": True,
