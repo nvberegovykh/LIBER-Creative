@@ -4,11 +4,15 @@ param(
   [string]$Repository = "revex",
   [string]$Service = "revex-energy-worker-r127",
   [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$SourceCandidate,
+  [switch]$CandidateOnly,
+  [switch]$BrokerOnly,
   [switch]$NoPause
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 3.0
+
+if ($CandidateOnly -and $BrokerOnly) { throw "Choose CandidateOnly or BrokerOnly, not both." }
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $FunctionsDir = Join-Path $Root "server\firebase-functions"
@@ -77,83 +81,103 @@ function Add-ServiceAccountUser([string]$GCloud, [string]$ServiceAccount, [strin
   Require-Ok $Label $GCloud @("iam","service-accounts","add-iam-policy-binding",$ServiceAccount,"--project",$ProjectId,"--member",$Member,"--role","roles/iam.serviceAccountUser","--quiet") -Quiet
 }
 
-try {
-  Write-Host "REVEX r127 Energy deployment - exact current source" -ForegroundColor Cyan
-  Write-Host "Source: $SourceCandidate"
-  Write-Host "Service candidate: $Service"
-  Write-Host "Policy: proven Energy engine + current geometry exporter + typed evidence boundary + missing VT 0.45" -ForegroundColor Green
+function Resolve-VerifiedCandidate([string]$GCloud) {
+  $state = Capture-Native $GCloud @("run","services","describe",$Service,"--project",$ProjectId,"--region",$Region,"--format","json")
+  if ($state.Code -ne 0 -or -not $state.Text) { throw "Energy candidate service is unavailable: $Service" }
+  $run = $state.Text | ConvertFrom-Json
+  $ready = @($run.status.conditions | Where-Object { $_.type -eq "Ready" } | Select-Object -First 1)
+  if ($ready.Count -eq 0 -or [string]$ready[0].status -ne "True") { throw "Energy candidate is not Ready; broker remains unchanged." }
+  $url = [string]$run.status.url
+  if (-not $url) { throw "Energy candidate has no ready service URL; broker remains unchanged." }
+  $liveEnv = @{}
+  foreach ($row in @($run.spec.template.spec.containers[0].env)) { $liveEnv[[string]$row.name] = [string]$row.value }
+  if ([string]$liveEnv["REVEX_SOURCE_CANDIDATE"] -ne $SourceCandidate) { throw "Energy candidate source SHA does not match the exact release source." }
+  if ([string]$liveEnv["REVEX_VERTEX_PROJECT"] -ne $ProjectId -or [string]$liveEnv["REVEX_VERTEX_LOCATION"] -ne "global") { throw "Energy candidate Vertex binding is not canonical." }
+  return $url
+}
 
-  foreach ($required in @($CloudBuild,$FunctionsDir,(Join-Path $Root ".github\scripts\verify-revex-r127-single-controller.py"))) {
+try {
+  $mode = if ($CandidateOnly) { "candidate-only" } elseif ($BrokerOnly) { "broker-only" } else { "candidate+broker" }
+  Write-Host "REVEX r127 Energy deployment - $mode" -ForegroundColor Cyan
+  Write-Host "Source: $SourceCandidate"
+  Write-Host "Candidate service: $Service"
+  Write-Host "Policy: proven Energy engine + current geometry exporter + typed evidence + missing VT 0.45" -ForegroundColor Green
+
+  foreach ($required in @(
+    $CloudBuild,
+    $FunctionsDir,
+    (Join-Path $Root "REVEX_CURRENT_RELEASE.json"),
+    (Join-Path $Root ".github\scripts\verify-revex-r127-single-controller.py"),
+    (Join-Path $Root "server\revex-energy-worker\revex_energy_pipeline_current.py"),
+    (Join-Path $Root "src\Liber.Revex.Revit\Engineering\Energy\revex_energy_contracts.py"),
+    (Join-Path $Root "src\Liber.Revex.Revit\Engineering\Energy\revex_final_touchups.py")
+  )) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Energy deployment source is incomplete: $required" }
   }
 
   $GCloud = Require-Command "gcloud"
-  $Firebase = Require-Command "firebase"
-  $Npm = Require-Command "npm"
   $Python = Require-Command "python"
-
-  Require-Ok "Validate r127 Energy/source contract before cloud changes" $Python @(".github\scripts\verify-revex-r127-single-controller.py")
+  Require-Ok "Validate full current REVEX revision before Energy cloud changes" $Python @(".github\scripts\verify-revex-r127-single-controller.py")
 
   $auth = Capture-Native $GCloud @("auth","list","--filter","status:ACTIVE","--format","value(account)")
   if ($auth.Code -ne 0 -or -not $auth.Text) { throw "Google Cloud administrator sign-in is required before Energy deployment." }
   $Deployer = ($auth.Text -split "`n")[0].Trim()
-  if (-not (Native-Ok $Firebase @("projects:list","--json"))) { throw "Firebase administrator sign-in is required before Energy deployment." }
 
-  Require-Ok "Select Google Cloud project" $GCloud @("config","set","project",$ProjectId) -Quiet
-  Require-Ok "Enable Energy infrastructure APIs" $GCloud @(
-    "services","enable","run.googleapis.com","cloudbuild.googleapis.com","artifactregistry.googleapis.com",
-    "iamcredentials.googleapis.com","cloudfunctions.googleapis.com","firebase.googleapis.com",
-    "aiplatform.googleapis.com","firestore.googleapis.com","serviceusage.googleapis.com","--project",$ProjectId
-  ) -Quiet
+  if (-not $BrokerOnly) {
+    Require-Ok "Select Google Cloud project" $GCloud @("config","set","project",$ProjectId) -Quiet
+    Require-Ok "Enable Energy infrastructure APIs" $GCloud @(
+      "services","enable","run.googleapis.com","cloudbuild.googleapis.com","artifactregistry.googleapis.com",
+      "iamcredentials.googleapis.com","cloudfunctions.googleapis.com","firebase.googleapis.com",
+      "aiplatform.googleapis.com","firestore.googleapis.com","serviceusage.googleapis.com","--project",$ProjectId
+    ) -Quiet
 
-  $null = Ensure-ServiceAccount $GCloud "revex-energy-worker" "REVEX Energy Worker"
-  $null = Ensure-ServiceAccount $GCloud "revex-energy-broker" "REVEX Energy Broker"
-  Add-ServiceAccountUser $GCloud $WorkerSa "user:$Deployer" "Allow deployer to use Energy worker identity"
-  Add-ServiceAccountUser $GCloud $BrokerSa "user:$Deployer" "Allow deployer to use Energy broker identity"
-  Add-ProjectRole $GCloud "serviceAccount:$WorkerSa" "roles/storage.objectAdmin" "Grant Energy worker Storage access"
-  Add-ProjectRole $GCloud "serviceAccount:$WorkerSa" "roles/datastore.user" "Grant Energy worker durable Firestore access"
-  Add-ProjectRole $GCloud "serviceAccount:$WorkerSa" "roles/aiplatform.user" "Grant Energy worker Vertex page-analysis access"
-  Add-ProjectRole $GCloud "serviceAccount:$BrokerSa" "roles/datastore.user" "Grant Energy broker Firestore access"
-  Add-ProjectRole $GCloud "serviceAccount:$BrokerSa" "roles/storage.objectAdmin" "Grant Energy broker Storage access"
+    $null = Ensure-ServiceAccount $GCloud "revex-energy-worker" "REVEX Energy Worker"
+    $null = Ensure-ServiceAccount $GCloud "revex-energy-broker" "REVEX Energy Broker"
+    Add-ServiceAccountUser $GCloud $WorkerSa "user:$Deployer" "Allow deployer to use Energy worker identity"
+    Add-ServiceAccountUser $GCloud $BrokerSa "user:$Deployer" "Allow deployer to use Energy broker identity"
+    Add-ProjectRole $GCloud "serviceAccount:$WorkerSa" "roles/storage.objectAdmin" "Grant Energy worker immutable Storage access"
+    Add-ProjectRole $GCloud "serviceAccount:$WorkerSa" "roles/datastore.user" "Grant Energy worker durable Firestore access"
+    Add-ProjectRole $GCloud "serviceAccount:$WorkerSa" "roles/aiplatform.user" "Grant Energy worker Vertex page-analysis access"
+    Add-ProjectRole $GCloud "serviceAccount:$BrokerSa" "roles/datastore.user" "Grant Energy broker Firestore access"
+    Add-ProjectRole $GCloud "serviceAccount:$BrokerSa" "roles/storage.objectAdmin" "Grant Energy broker Storage access"
 
-  if (-not (Native-Ok $GCloud @("artifacts","repositories","describe",$Repository,"--location",$Region,"--project",$ProjectId))) {
-    Require-Ok "Create REVEX Artifact Registry repository" $GCloud @("artifacts","repositories","create",$Repository,"--repository-format","docker","--location",$Region,"--project",$ProjectId,"--description","REVEX managed runtimes") -Quiet
+    if (-not (Native-Ok $GCloud @("artifacts","repositories","describe",$Repository,"--location",$Region,"--project",$ProjectId))) {
+      Require-Ok "Create REVEX Artifact Registry repository" $GCloud @("artifacts","repositories","create",$Repository,"--repository-format","docker","--location",$Region,"--project",$ProjectId,"--description","REVEX managed runtimes") -Quiet
+    }
+
+    $buildSa = Capture-Native $GCloud @("builds","get-default-service-account","--project",$ProjectId,"--format","value(serviceAccountEmail)")
+    if ($buildSa.Code -ne 0 -or -not $buildSa.Text) { throw "Cloud Build service account could not be resolved." }
+    $CloudBuildSa = ($buildSa.Text -split "`n")[0].Trim()
+    Add-ProjectRole $GCloud "serviceAccount:$CloudBuildSa" "roles/cloudbuild.builds.builder" "Grant Cloud Build builder role"
+    Add-ProjectRole $GCloud "serviceAccount:$CloudBuildSa" "roles/artifactregistry.writer" "Grant Cloud Build image push access"
+
+    Require-Ok "Build exact r127 Energy worker image" $GCloud @(
+      "builds","submit",$Root,"--project",$ProjectId,"--config",$CloudBuild,
+      "--substitutions","_REGION=$Region,_REPOSITORY=$Repository,_IMAGE=revex-energy-worker,_TAG=$ImageTag"
+    )
+
+    Require-Ok "Deploy private r127 Energy worker candidate" $GCloud @(
+      "run","deploy",$Service,"--project",$ProjectId,"--region",$Region,"--platform","managed",
+      "--image",$Image,"--service-account",$WorkerSa,"--no-allow-unauthenticated",
+      "--cpu=4","--memory=8Gi","--concurrency=1","--min-instances=0","--max-instances=3","--timeout=3600",
+      "--set-env-vars","REVEX_ENERGY_TIMEOUT_SECONDS=3500,REVEX_SOURCE_CANDIDATE=$SourceCandidate,REVEX_VERTEX_PROJECT=$ProjectId,REVEX_VERTEX_LOCATION=global",
+      "--quiet"
+    )
+
+    $WorkerUrl = Resolve-VerifiedCandidate $GCloud
+    Require-Ok "Allow only REVEX Energy broker to invoke candidate" $GCloud @(
+      "run","services","add-iam-policy-binding",$Service,"--project",$ProjectId,"--region",$Region,
+      "--member","serviceAccount:$BrokerSa","--role","roles/run.invoker","--quiet"
+    ) -Quiet
+    Write-Host "PASS: Energy candidate is Ready and source-bound; live broker has not changed yet." -ForegroundColor Green
+    Write-Host "Candidate: $WorkerUrl"
+    if ($CandidateOnly) { $ExitCode = 0; return }
   }
 
-  $buildSa = Capture-Native $GCloud @("builds","get-default-service-account","--project",$ProjectId,"--format","value(serviceAccountEmail)")
-  if ($buildSa.Code -ne 0 -or -not $buildSa.Text) { throw "Cloud Build service account could not be resolved." }
-  $CloudBuildSa = ($buildSa.Text -split "`n")[0].Trim()
-  Add-ProjectRole $GCloud "serviceAccount:$CloudBuildSa" "roles/cloudbuild.builds.builder" "Grant Cloud Build builder role"
-  Add-ProjectRole $GCloud "serviceAccount:$CloudBuildSa" "roles/artifactregistry.writer" "Grant Cloud Build image push access"
-
-  Require-Ok "Build exact r127 Energy worker image" $GCloud @(
-    "builds","submit",$Root,"--project",$ProjectId,"--config",$CloudBuild,
-    "--substitutions","_REGION=$Region,_REPOSITORY=$Repository,_IMAGE=revex-energy-worker,_TAG=$ImageTag"
-  )
-
-  Require-Ok "Deploy private r127 Energy worker candidate" $GCloud @(
-    "run","deploy",$Service,"--project",$ProjectId,"--region",$Region,"--platform","managed",
-    "--image",$Image,"--service-account",$WorkerSa,"--no-allow-unauthenticated",
-    "--cpu=4","--memory=8Gi","--concurrency=1","--min-instances=0","--max-instances=3","--timeout=3600",
-    "--set-env-vars","REVEX_ENERGY_TIMEOUT_SECONDS=3500,REVEX_SOURCE_CANDIDATE=$SourceCandidate,REVEX_VERTEX_PROJECT=$ProjectId,REVEX_VERTEX_LOCATION=global",
-    "--quiet"
-  )
-
-  $runState = Capture-Native $GCloud @("run","services","describe",$Service,"--project",$ProjectId,"--region",$Region,"--format","json")
-  if ($runState.Code -ne 0 -or -not $runState.Text) { throw "Energy candidate could not be verified after deployment." }
-  $run = $runState.Text | ConvertFrom-Json
-  $ready = @($run.status.conditions | Where-Object { $_.type -eq "Ready" } | Select-Object -First 1)
-  if ($ready.Count -eq 0 -or [string]$ready[0].status -ne "True") { throw "Energy candidate is not Ready; broker was not changed." }
-  $WorkerUrl = [string]$run.status.url
-  if (-not $WorkerUrl) { throw "Energy candidate has no service URL; broker was not changed." }
-  $liveEnv = @{}
-  foreach ($row in @($run.spec.template.spec.containers[0].env)) { $liveEnv[[string]$row.name] = [string]$row.value }
-  if ($liveEnv["REVEX_SOURCE_CANDIDATE"] -ne $SourceCandidate) { throw "Energy candidate source SHA does not match the exact release source." }
-
-  Require-Ok "Allow only REVEX Energy broker to invoke candidate" $GCloud @(
-    "run","services","add-iam-policy-binding",$Service,"--project",$ProjectId,"--region",$Region,
-    "--member","serviceAccount:$BrokerSa","--role","roles/run.invoker","--quiet"
-  ) -Quiet
+  $WorkerUrl = Resolve-VerifiedCandidate $GCloud
+  $Firebase = Require-Command "firebase"
+  $Npm = Require-Command "npm"
+  if (-not (Native-Ok $Firebase @("projects:list","--json"))) { throw "Firebase administrator sign-in is required before Energy broker cutover." }
 
   Push-Location $FunctionsDir
   try {
@@ -182,14 +206,14 @@ try {
   if ($brokerWorker -ne $WorkerUrl) { throw "Energy broker is not bound to the verified candidate worker." }
   if ($brokerSource -ne $SourceCandidate) { throw "Energy broker source SHA does not match the release source." }
 
-  Write-Host "PASS: r127 Energy worker + broker are source-bound and ACTIVE." -ForegroundColor Green
+  Write-Host "PASS: r127 Energy broker is ACTIVE on the verified candidate." -ForegroundColor Green
   Write-Host "Worker: $WorkerUrl"
   Write-Host "Source: $SourceCandidate"
   $ExitCode = 0
 }
 catch {
   Write-Host "REVEX r127 Energy deployment stopped safely: $($_.Exception.Message)" -ForegroundColor Red
-  Write-Host "A failed worker candidate never cuts the broker over." -ForegroundColor Yellow
+  if (-not $BrokerOnly) { Write-Host "A failed candidate never cuts the live Energy broker over." -ForegroundColor Yellow }
   $ExitCode = 1
 }
 finally {
