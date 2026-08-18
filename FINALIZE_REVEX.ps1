@@ -25,6 +25,9 @@ $TranscriptStarted = $false
 $SourceSha = ""
 $script:EnergyService = ""
 $script:RenderService = ""
+# First issuance is blocked only by issuance-critical relations. Render is explicitly deferred;
+# its existing live path is left untouched and can be converged after Energy + UI acceptance.
+$script:RenderDeferredFirstIssuance = $true
 
 New-Item -ItemType Directory -Path $LogRoot, $WorkRoot -Force | Out-Null
 
@@ -175,14 +178,18 @@ function Verify-LiveAccessSource([string]$GCloud) {
 }
 
 function Verify-LiveSourceBindings([string]$GCloud) {
-  Step "Verify every mutable live service is bound to the exact release source"
-  foreach($service in @($script:EnergyService,$script:RenderService)){
+  Step "Verify every mutable live issuance service is bound to the exact release source"
+  $services=@($script:EnergyService)
+  if(-not $script:RenderDeferredFirstIssuance){$services += $script:RenderService}
+  foreach($service in $services){
     $state=Capture-Native $GCloud @("run","services","describe",$service,"--project",$ProjectId,"--region",$Region,"--format","json")
     if($state.Code-ne 0-or-not $state.Text){throw "Live service could not be verified: $service"}
     $run=$state.Text|ConvertFrom-Json;$envs=@{};foreach($row in @($run.spec.template.spec.containers[0].env)){$envs[[string]$row.name]=[string]$row.value}
     if([string]$envs["REVEX_SOURCE_CANDIDATE"]-ne $SourceSha){throw "$service is not bound to exact source $SourceSha."}
   }
-  foreach($functionName in @("runRevexEnergy","runRevexRender","documentRevexRevision","finalizeRevexDailyReport")){
+  $functionNames=@("runRevexEnergy","documentRevexRevision","finalizeRevexDailyReport")
+  if(-not $script:RenderDeferredFirstIssuance){$functionNames += "runRevexRender"}
+  foreach($functionName in $functionNames){
     $state=Capture-Native $GCloud @("functions","describe",$functionName,"--gen2","--project",$ProjectId,"--region",$Region,"--format","json")
     if($state.Code-ne 0-or-not $state.Text){throw "Live function could not be verified: $functionName"}
     $fn=$state.Text|ConvertFrom-Json
@@ -190,7 +197,11 @@ function Verify-LiveSourceBindings([string]$GCloud) {
     if([string]$fn.serviceConfig.environmentVariables.REVEX_SOURCE_CANDIDATE-ne $SourceSha){throw "$functionName is not bound to exact source $SourceSha."}
   }
   Verify-LiveAccessSource $GCloud
-  Write-Host "PASS: Access, Energy, Render and Report are all source-bound to $SourceSha." -ForegroundColor Green
+  if($script:RenderDeferredFirstIssuance){
+    Write-Host "PASS: Access, Energy and Report are source-bound to $SourceSha. Render is deferred and untouched for first issuance." -ForegroundColor Green
+  }else{
+    Write-Host "PASS: Access, Energy, Render and Report are all source-bound to $SourceSha." -ForegroundColor Green
+  }
 }
 
 function Install-AddinAtomically {
@@ -208,7 +219,7 @@ function Install-AddinAtomically {
     $assembly=Join-Path $InstalledRoot "Liber.Revex.Revit.dll"
     $marker=[ordered]@{
       schema="liber.revex.current-release.v2";repository="nvberegovykh/LIBER-Creative";sourceCommit=$SourceSha;finalizedAtUtc=[DateTime]::UtcNow.ToString("o");
-      energyWorker=$script:EnergyService;renderWorker=$script:RenderService;missingVt=0.45;actualVtWins=$true;projectAccessSourceBound=$true;
+      energyWorker=$script:EnergyService;renderWorker=$(if($script:RenderDeferredFirstIssuance){$null}else{$script:RenderService});renderFirstIssuanceDeferred=$script:RenderDeferredFirstIssuance;missingVt=0.45;actualVtWins=$true;projectAccessSourceBound=$true;
       geometryPolicy="whole-door + curtain-panel + physical-cover corrections";uiPolicy="full current convergence";previousInstalledRevisionShadow=$BackupRoot
     }|ConvertTo-Json -Depth 8
     [IO.File]::WriteAllText((Join-Path $InstalledRoot "REVEX-CURRENT-SOURCE.json"),$marker,[Text.UTF8Encoding]::new($false))
@@ -240,7 +251,8 @@ function Install-AddinAtomically {
 try{
   try{Start-Transcript -LiteralPath $LogPath -Force|Out-Null;$TranscriptStarted=$true}catch{}
   Write-Host "REVEX one-command current release finalizer" -ForegroundColor Cyan
-  Write-Host "One exact GitHub SHA owns Companion, project access, Revit add-in, Energy, Report and Render." -ForegroundColor Green
+  Write-Host "First issuance critical path: Companion + project access + Revit add-in + Energy + Report." -ForegroundColor Green
+  Write-Host "Render is deferred for first issuance and cannot block this release." -ForegroundColor Yellow
   Write-Host "Versioned implementations stay as shadow files; current runtime uses canonical facades." -ForegroundColor Green
   Write-Host "VT policy: preserve actual VT; when absent use exactly 0.45." -ForegroundColor Green
   Write-Host "Persistent log: $LogPath"
@@ -272,14 +284,20 @@ try{
   $accessDeploy=Join-Path $SourceRoot "firebase\deploy-current-access.ps1"
 
   Invoke-ReleaseController "Stage and verify current Energy candidate without broker cutover" $energyDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:EnergyService,"-SourceCandidate",$SourceSha,"-CandidateOnly","-NoPause")
-  Invoke-ReleaseController "Stage, warm and verify current Render candidate without broker cutover" $renderDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:RenderService,"-SourceCandidate",$SourceSha,"-CandidateOnly","-NoPause")
+  if(-not $script:RenderDeferredFirstIssuance){
+    Invoke-ReleaseController "Stage, warm and verify current Render candidate without broker cutover" $renderDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:RenderService,"-SourceCandidate",$SourceSha,"-CandidateOnly","-NoPause")
+  }else{
+    Write-Host ">> Render deferred for first issuance; no Render build, warm wait, broker cutover, or Render verification will run." -ForegroundColor Yellow
+  }
 
   Step "Verify current Companion UI is live before any access or broker cutover"
   Verify-LiveUi $SourceRoot
 
   Invoke-ReleaseController "Deploy preserved source-bound project access rules" $accessDeploy @("-ProjectId",$ProjectId,"-SourceCandidate",$SourceSha,"-NoPause")
   Invoke-ReleaseController "Deploy source-bound Report and Daily Report" $reportDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-SourceCandidate",$SourceSha,"-NoPause")
-  Invoke-ReleaseController "Cut Render broker to the already-warm current candidate" $renderDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:RenderService,"-SourceCandidate",$SourceSha,"-BrokerOnly","-NoPause")
+  if(-not $script:RenderDeferredFirstIssuance){
+    Invoke-ReleaseController "Cut Render broker to the already-warm current candidate" $renderDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:RenderService,"-SourceCandidate",$SourceSha,"-BrokerOnly","-NoPause")
+  }
   Invoke-ReleaseController "Cut Energy broker to the already-verified current candidate" $energyDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:EnergyService,"-SourceCandidate",$SourceSha,"-BrokerOnly","-NoPause")
 
   Verify-LiveSourceBindings $GCloud
@@ -287,11 +305,11 @@ try{
   Install-AddinAtomically
 
   Write-Host ""
-  Write-Host "PASS: REVEX current release is converged on one exact source revision." -ForegroundColor Green
+  Write-Host "PASS: REVEX first-issuance critical release is converged on one exact source revision." -ForegroundColor Green
   Write-Host "Source: $SourceSha"
   Write-Host "Project access: owner/member/admin rules preserved and source-bound"
   Write-Host "Energy: $($script:EnergyService) · actual VT preserved · missing VT 0.45 · complete release package required"
-  Write-Host "Render: $($script:RenderService) · server-warm before broker cutover"
+  Write-Host "Render: deferred for first issuance; existing live Render remains untouched"
   Write-Host "Report/Daily Report: source-bound $SourceSha"
   Write-Host "Revit add-in: $(Join-Path $InstalledRoot 'Liber.Revex.Revit.dll')"
   Write-Host "Previous installed add-in preserved as shadow: $BackupRoot"
