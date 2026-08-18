@@ -50,28 +50,10 @@
 
   function updateProjectId(){const select=document.getElementById('project-select');if(!select)return;let badge=document.getElementById('project-id-badge');if(!badge){badge=document.createElement('button');badge.id='project-id-badge';badge.type='button';badge.className='sp-badge project-id-badge';badge.title='Copy REVEX Project ID';select.closest('.project-picker')?.insertAdjacentElement('afterend',badge);badge.addEventListener('click',async()=>{const id=String(select.value||'').trim();if(!id)return;try{await navigator.clipboard.writeText(id);badge.textContent='ID copied';setTimeout(updateProjectId,1000)}catch(_){}})}const id=String(select.value||'').trim();badge.hidden=!id;const text=id?`ID ${id}`:'';if(badge.textContent!==text)badge.textContent=text;}
   function enforceLabels(){const invite=document.getElementById('invite-project-button'),render=document.getElementById('render-button');if(invite&&invite.textContent!=='Invite')invite.textContent='Invite';if(render&&render.textContent!=='Render')render.textContent='Render';}
-  function installChatProjectGuard(){
-    if(root.__revexChatProjectGuardCurrent)return;
-    root.__revexChatProjectGuardCurrent=true;
-    let boundProject='';
-    root.addEventListener('revex:authoritative-project-bound',(event)=>{
-      const projectId=String(event?.detail?.projectId||'').trim();
-      if(!projectId)return;
-      if(!boundProject){boundProject=projectId;return;}
-      if(boundProject===projectId)return;
-      const previous=boundProject;boundProject=projectId;
-      const state=root.__revexState;
-      if(state){state.chatConnId='';state.chatLoaded=false;}
-      const frame=document.getElementById('chat-frame');
-      if(frame)frame.src='about:blank';
-      try{root.__revexBrowserDiagnostics?.emit?.('INFO','CHAT_PROJECT_BOUNDARY','Project Chat iframe reset at project boundary so connection keys cannot leak across REVEX projects.',{initiator:'ui integrity loader',previousProjectId:previous,projectId});}catch(_){}
-      const tab=document.querySelector('[data-view="chat"]');
-      if(tab?.classList.contains('active'))setTimeout(()=>tab.click(),0);
-    });
-  }
   function loadScript(src,key,type='text/javascript'){if(document.querySelector(`script[data-revex-runtime="${key}"]`))return;const script=document.createElement('script');script.dataset.revexRuntime=key;script.src=src;script.type=type;script.async=false;script.onerror=()=>root.__revexBrowserDiagnostics?.emit?.('ERROR','RUNTIME_LOAD',`Could not load ${src}.`,{initiator:'ui integrity loader'});document.head.appendChild(script);}
   function loadReviewIntegrity(){if(document.querySelector('script[data-revex-review-integrity]'))return;const script=document.createElement('script');script.type='module';script.dataset.revexReviewIntegrity='1';script.src='review-integrity-r50.js?v=20260813r49-review2';script.onerror=()=>root.__revexBrowserDiagnostics?.emit?.('ERROR','REVIEW_RUNTIME','Could not load review-integrity-r50.js.',{initiator:'ui integrity loader'});document.head.appendChild(script);}
   function loadCurrentRepairs(){
+    loadScript('chat-convergence-r136.js?v=20260818r136-project-chat1','chat-convergence-r136');
     loadScript('energy-diagnostics-r68.js?v=20260816r95-manual-identity1','energy-diagnostics-r68');
     loadScript('energy-identity-en1-r89.js?v=20260816r89-en1-identity1','energy-identity-en1-r89');
     loadScript('energy-replay-r95.js?v=20260817r116-final-energy1','energy-replay-r95');
@@ -99,7 +81,7 @@
     loadScript('render-convergence-r126.js?v=20260818r129-freeze-guard1','render-convergence-r126');
     loadScript('mobile-safe-r133.js?v=20260818r133-mobile-safe1','mobile-safe-r133');
   }
-  function bind(){installCanonicalOverlayStore();installChatProjectGuard();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
+  function bind(){installCanonicalOverlayStore();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r125-preserved+wallt-review',wallt:'helper+fixer+24h-history',moduleLoad:'r126-convergence+r133-mobile-safe-last',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r122-mobile+r126-responsive+r133-safe-area-scroll',docs:'r134-full-set-linked-pages+r126-ownership-guard+r133-mobile-stack',texture:'instance-uv>type-texture>design-color>revit',render:'google-gemini-client+docked-owner+qwen-shadow+interaction-freeze-guard',chat:'project-boundary-connection-reset',issues:'revexIssues+all-active-default+empty-selection-inspector',history:'technical-NYC-day+wallt-24h',dailyReport:'separate-post-sync-worker',blocks:'walk-only-user-triggered-revit-family',bimProperties:'r117-preserved',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r125-preserved+wallt-review',wallt:'helper+fixer+24h-history',moduleLoad:'r126-convergence+r133-mobile-safe-last',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r122-mobile+r126-responsive+r133-safe-area-scroll',docs:'r134-full-set-linked-pages+r126-ownership-guard+r133-mobile-stack',texture:'instance-uv>type-texture>design-color>revit',render:'google-gemini-client+docked-owner+qwen-shadow+interaction-freeze-guard',chat:'r136-project-isolated-secure-chat',issues:'revexIssues+all-active-default+empty-selection-inspector',history:'technical-NYC-day+wallt-24h',dailyReport:'separate-post-sync-worker',blocks:'r135-walk-target+face-host+external-event',bimProperties:'r117-preserved',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
 })(window);
