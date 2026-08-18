@@ -9,7 +9,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 3.0
 $Source = $PSScriptRoot
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$Verifier = Join-Path $Root '.github\scripts\verify-revex-r127-single-controller.py'
+$Verifier = Join-Path $Root '.github\scripts\verify-revex-current-release.py'
 $ReportSa = "revex-report-worker@$ProjectId.iam.gserviceaccount.com"
 $ExitCode = 1
 
