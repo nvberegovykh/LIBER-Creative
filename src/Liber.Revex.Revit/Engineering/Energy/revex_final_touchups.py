@@ -12,17 +12,51 @@ from typing import Any
 
 import revex_final_touchups_r125 as _shadow
 
-VERSION = "20260817r127-current-energy2"
+VERSION = "20260817r127-current-energy3"
 MISSING_VT = 0.45
 
 _shadow_patch_pipeline = _shadow.patch_pipeline
+_shadow_schedule_path = _shadow._schedule_path
 _MISSING_VT_SHADOW_AUTHORITIES = {"CODE_FALLBACK_TINTED", "CODE_FALLBACK_CLEAR"}
+
+
+def _artifact_by_role(request: dict, role: str) -> Path | None:
+    """Resolve current immutable evidence by manifest role; filename is only a transfer locator."""
+    manifest_raw = str(request.get("engineeringManifestPath") or "").strip()
+    if not manifest_raw:
+        return None
+    manifest_path = Path(manifest_raw).resolve()
+    if not manifest_path.is_file():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    wanted = next((row for row in list(manifest.get("artifacts") or [])
+                   if str(row.get("role") or "").strip().casefold() == role.casefold()), None)
+    if not wanted:
+        return None
+    declared_name = Path(str(wanted.get("name") or "")).name.casefold()
+    for raw in list(request.get("sourceArtifacts") or []):
+        path = Path(str(raw)).resolve()
+        if path.is_file() and path.name.casefold() == declared_name:
+            return path
+    return None
+
+
+def _current_schedule_path(request: dict) -> Path | None:
+    current = _artifact_by_role(request, "revit-schedule-evidence")
+    if current is not None:
+        return current
+    # Compatibility adapter only for previously-published revisions lacking role metadata.
+    return _shadow_schedule_path(request)
 
 
 def _apply_current_policy() -> None:
     # Preserve actual VT from evidence. The shadow reaches these constants only when VT is missing.
     _shadow.VT_CLEAR_FALLBACK = MISSING_VT
     _shadow.VT_TINTED_FALLBACK = MISSING_VT
+    _shadow._schedule_path = _current_schedule_path
 
 
 def _normalize_touchup_outputs(request_out: Path) -> None:
