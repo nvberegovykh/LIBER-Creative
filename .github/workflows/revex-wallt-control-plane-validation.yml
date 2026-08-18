@@ -6,6 +6,7 @@ on:
       - 'docs/liber-apps/apps/revex/wallt-control-plane.js'
       - 'docs/liber-apps/apps/revex/wallt-cycle-history.js'
       - 'docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js'
+      - 'docs/liber-apps/apps/revex/wallt-ui-r138.js'
       - 'docs/liber-apps/apps/revex/chat-convergence-r136.js'
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/store.js'
@@ -30,6 +31,7 @@ on:
       - '.github/scripts/verify-revex-r135-blocks-placement.js'
       - '.github/scripts/verify-revex-r136-project-chat.js'
       - '.github/scripts/verify-revex-r137-wallt-fixer-adapters.js'
+      - '.github/scripts/verify-revex-r138-wallt-ui.js'
       - '.github/workflows/revex-wallt-control-plane-validation.yml'
   workflow_dispatch:
 
@@ -46,6 +48,7 @@ jobs:
           node --check docs/liber-apps/apps/revex/wallt-control-plane.js
           node --check docs/liber-apps/apps/revex/wallt-cycle-history.js
           node --check docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js
+          node --check docs/liber-apps/apps/revex/wallt-ui-r138.js
           node --check docs/liber-apps/apps/revex/chat-convergence-r136.js
           node --check docs/liber-apps/apps/revex/ui-integrity.js
           node --check docs/liber-apps/apps/revex/docs-pages-r115.js
@@ -58,10 +61,12 @@ jobs:
           node --check .github/scripts/verify-revex-r135-blocks-placement.js
           node --check .github/scripts/verify-revex-r136-project-chat.js
           node --check .github/scripts/verify-revex-r137-wallt-fixer-adapters.js
-      - name: Verify isolated Helper and bounded Fixer channels
+          node --check .github/scripts/verify-revex-r138-wallt-ui.js
+      - name: Verify visible Helper and bounded Fixer channels
         run: |
           node .github/scripts/verify-revex-wallt-control-plane.js
           node .github/scripts/verify-revex-r137-wallt-fixer-adapters.js
+          node .github/scripts/verify-revex-r138-wallt-ui.js
       - name: Verify current Docs Families and Chat boundaries
         run: |
           node .github/scripts/verify-revex-current-platform-connections.js
