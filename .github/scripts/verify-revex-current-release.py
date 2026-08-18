@@ -26,7 +26,6 @@ def forbid(text: str, *markers: str) -> None:
 
 
 def git_index_blob_sha(rel: str) -> str:
-    """Read the committed/index blob id, not checkout bytes altered by core.autocrlf."""
     result = subprocess.run(
         ["git", "ls-files", "--stage", "--", rel],
         cwd=ROOT,
@@ -55,6 +54,9 @@ dyn = json.loads(read("src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Prefl
 ui = read("docs/liber-apps/apps/revex/ui-integrity.js")
 mobile = read("docs/liber-apps/apps/revex/mobile-final-r122.js")
 design_versions = read("docs/liber-apps/apps/revex/design-versions-r52.js")
+workspace = read("docs/liber-apps/apps/revex/workspace-r51.js")
+render_agent = read("docs/liber-apps/apps/revex/render-agent.js")
+render_client = read("docs/liber-apps/apps/revex/render-convergence-r126.js")
 engineering_sync = read("src/Liber.Revex.Revit/Services/EngineeringSyncService.cs")
 store = read("docs/liber-apps/apps/revex/store.js")
 app = read("docs/liber-apps/apps/revex/app.js")
@@ -67,7 +69,6 @@ assert release["operatorEntrypoint"] == "FINALIZE_REVEX.cmd"
 assert release["acceptanceAction"] == "one fresh SYNC ENGINEERING after successful finalization"
 assert release["current"]["releaseVerifier"] == ".github/scripts/verify-revex-current-release.py"
 assert release["current"]["energyDeployer"] == "server/revex-energy-worker/deploy-current.ps1"
-assert release["current"]["renderDeployer"] == "server/revex-render-worker/deploy-current.ps1"
 assert release["current"]["reportDeployer"] == "server/revex-report-functions/deploy-current.ps1"
 assert release["current"]["accessDeployer"] == "firebase/deploy-current-access.ps1"
 for principle in (
@@ -79,7 +80,6 @@ for principle in (
 ):
     assert release["principles"].get(principle) is True, principle
 
-# Compare committed blob identities so Windows CRLF checkout conversion cannot create a false failure.
 assert git_index_blob_sha("src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups_r125.py") == "7e11be9fb0ef6cce2df205cb0a7827682f170735"
 assert git_index_blob_sha("src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner_r125.py") == "885b9fffc193671f0ed199a208fe3a3690e5a021"
 for rel in release["preservedShadows"]["energy"] + release["preservedShadows"]["deployment"]:
@@ -93,53 +93,46 @@ must(finalizer,
      '$SourceSha=$sha.Text.ToLowerInvariant()',
      ".github\\scripts\\verify-revex-current-release.py",
      "server\\revex-energy-worker\\deploy-current.ps1",
-     "server\\revex-render-worker\\deploy-current.ps1",
      "server\\revex-report-functions\\deploy-current.ps1",
      "firebase\\deploy-current-access.ps1",
-     "$script:RenderDeferredFirstIssuance = $true",
-     "Render is deferred for first issuance and cannot block this release.",
+     "REVEX one-command full current release finalizer",
+     "Scope: Companion + BIM + Design Book + Spec Book + Docs + Issues + History + Blocks + Render + Revit add-in + Energy + Report + access.",
+     "Verify canonical Google Render provider",
+     "gemini-3.1-flash-image",
      "Stage and verify current Energy candidate without broker cutover",
-     "Render deferred for first issuance; no Render build, warm wait, broker cutover, or Render verification will run.",
-     "Verify current Companion UI is live before any access or broker cutover",
+     "Verify current Companion UI and Render runtime are live before access/Energy cutover",
      "Deploy preserved source-bound project access rules",
      "Deploy source-bound Report and Daily Report",
      "Cut Energy broker to the already-verified current candidate",
-     "Verify live project access rules are bound to the exact release source",
      "Install-AddinAtomically",
      "previousInstalledRevisionShadow",
      "run ONE fresh SYNC ENGINEERING")
-assert finalizer.index("Stage and verify current Energy candidate") < finalizer.index("Verify current Companion UI is live before any access or broker cutover")
+forbid(finalizer,
+       "RenderDeferredFirstIssuance", "Render is deferred", "Stage, warm and verify current Render candidate",
+       "Cut Render broker", "DEPLOY_ENERGY_R127.ps1", "DEPLOY_RENDER_R126.ps1", "DEPLOY_REPORT_R126.ps1",
+       "RECOVER_REVEX_ENERGY_CURRENT", "FINALIZE_REVEX_CURRENT", "PUBLISH_REVEX_R49")
+assert finalizer.index("Stage and verify current Energy candidate") < finalizer.index("Verify current Companion UI and Render runtime")
 assert finalizer.index("Deploy preserved source-bound project access rules") < finalizer.index("Cut Energy broker to the already-verified current candidate")
 assert finalizer.index("Cut Energy broker to the already-verified current candidate") < finalizer.index("Install the exact same source revision into Revit")
-# First issuance must never execute the Render candidate/cutover branch while the deferred gate is true.
-must(finalizer,
-     "if(-not $script:RenderDeferredFirstIssuance){",
-     "renderFirstIssuanceDeferred=$script:RenderDeferredFirstIssuance")
-forbid(finalizer,
-       "DEPLOY_ENERGY_R127.ps1", "DEPLOY_RENDER_R126.ps1", "DEPLOY_REPORT_R126.ps1",
-       "RECOVER_REVEX_ENERGY_CURRENT", "FINALIZE_REVEX_CURRENT", "PUBLISH_REVEX_R49")
 
-for deployer in (energy_deploy, render_deploy, report_deploy, access_deploy):
+for deployer in (energy_deploy, report_deploy, access_deploy):
     must(deployer, "$Verifier = Join-Path $Root", "verify-revex-current-release.py", "Validate full current REVEX revision")
     forbid(deployer, "PUBLISH_REVEX_R49")
-
 must(energy_deploy,
      "CandidateOnly", "BrokerOnly", "REVEX_SOURCE_CANDIDATE",
      "Energy candidate is not Ready; broker remains unchanged.",
      "Build exact current Energy worker image",
      "Cut authenticated Energy broker over to verified candidate")
-# Render implementation remains validated as a preserved capability, but it is not a first-issuance gate.
-must(render_deploy,
-     "CandidateOnly", "BrokerOnly", "REVEX_SOURCE_CANDIDATE", "REVEX_WARM_TOKEN",
-     "Assert-Warm", "--min-instances=1", "Build exact current Render worker image",
-     "Cut authenticated Render broker over to verified candidate")
-forbid(render_deploy, "DEPLOY_RENDER_SERVER.ps1")
 must(report_deploy,
      "REVEX_SOURCE_CANDIDATE", "documentRevexRevision", "finalizeRevexDailyReport", "nodejs22")
 must(access_deploy,
      "firebaserules.googleapis.com", "patch-live-firestore-rules.js", "revex-project-access-r43.rules",
      "REVEX_SOURCE_CANDIDATE=", "firestore:rules", "preserve the live ruleset",
      "allow read, write: if revexR43ProjectMember(projectId);")
+# The self-hosted Qwen implementation remains preserved and independently valid, but is not a release owner.
+must(render_deploy,
+     "CandidateOnly", "BrokerOnly", "REVEX_SOURCE_CANDIDATE", "REVEX_WARM_TOKEN",
+     "Assert-Warm", "Build exact current Render worker image")
 
 must(ui,
      "mobile-final-r122.js", "appearance-convergence-r126.js", "docs-convergence-r126.js",
@@ -152,6 +145,18 @@ must(design_versions,
      "liber.revex.design-property-versions.v1", "lightweight-property-overlay",
      "Sync to Design Book", "async function syncToDesignBook",
      "propertyVersions: rows", "Version retained.")
+
+# One current Render owner: the existing Google image client. Qwen remains a shadow enhancement.
+forbid(workspace, "render-selfhost-r54.js")
+must(workspace, "captureRenderReference", "googleRender: true", "selfHostedRender: false")
+must(render_agent,
+     "gemini-3.1-flash-image", "generativelanguage.googleapis.com/v1/models/${MODEL}:generateContent",
+     "Authorization", "x-goog-user-project", "responseModalities: ['TEXT', 'IMAGE']",
+     "captureRenderReference", "saveResultToDesignBook", "Connect Google AI")
+must(render_client,
+     "providerOwner:'render-agent.js'", "browserInference:false", "localModelCache:false",
+     "legacyIframe:false", "selfHostedEnhancementOptional:true")
+forbid(render_client, "google-ai-connect')?.setAttribute('hidden'", "REVEX GPU · server warm")
 
 must(store,
      "async createProject({ name, code, description, driveFileId })", "ownerId: uid", "memberIds: [uid]",
@@ -225,11 +230,10 @@ print(json.dumps({
     "canonicalVerifierIndependentOfVersionShadows": True,
     "versionedFilesShadowOnly": True,
     "shadowIntegrityCheckoutLineEndingInvariant": True,
-    "candidateBeforeBrokerCutover": True,
-    "renderDeferredFirstIssuance": True,
-    "liveRulesPreservedAndSourceBound": True,
-    "memberIssueWriteProven": True,
     "fullUiAndBimContract": True,
+    "googleRenderCanonical": True,
+    "selfHostedRenderShadowOnly": True,
+    "memberIssueWriteProven": True,
     "designVersionRetentionSemanticGate": True,
     "typedEvidence": True,
     "actualVtFieldPreserved": True,
