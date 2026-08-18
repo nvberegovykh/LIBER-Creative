@@ -40,8 +40,10 @@ jobs:
           node --check .github/scripts/verify-revex-r43-rules.js
           node --check .github/scripts/verify-revex-r134-docs-linked-pages.js
           node --check .github/scripts/verify-revex-r135-blocks-placement.js
+          node --check .github/scripts/verify-revex-r136-project-chat.js
           node --check docs/liber-apps/apps/revex/docs-pages-r115.js
           node --check docs/liber-apps/apps/revex/blocks-palette-r126.js
+          node --check docs/liber-apps/apps/revex/chat-convergence-r136.js
       - name: Current UI and runtime convergence
         run: |
           node .github/scripts/verify-revex-current-generation-r53.js
@@ -49,6 +51,7 @@ jobs:
           node .github/scripts/verify-revex-r126-functional-convergence.js
           node .github/scripts/verify-revex-r134-docs-linked-pages.js
           node .github/scripts/verify-revex-r135-blocks-placement.js
+          node .github/scripts/verify-revex-r136-project-chat.js
       - name: Canonical current release contract
         run: python .github/scripts/verify-revex-current-release.py
       - name: Preserve proven r125 Energy shadow behavior
@@ -109,9 +112,11 @@ jobs:
         run: |
           dotnet restore src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -p:RevexCiRevitApi=true -p:Platform=x64
           dotnet build src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -c Release -p:RevexCiRevitApi=true -p:Platform=x64 --no-restore
-      - name: Re-run Blocks placement contract on Windows
+      - name: Re-run Blocks and Chat contracts on Windows
         shell: pwsh
-        run: node .github/scripts/verify-revex-r135-blocks-placement.js
+        run: |
+          node .github/scripts/verify-revex-r135-blocks-placement.js
+          node .github/scripts/verify-revex-r136-project-chat.js
       - name: Re-run canonical current release contract on Windows
         shell: pwsh
         run: python .github/scripts/verify-revex-current-release.py
