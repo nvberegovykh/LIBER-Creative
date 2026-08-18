@@ -25,10 +25,9 @@ import zipfile
 import xml.etree.ElementTree as ET
 from typing import Any
 
-VERSION = "20260817r127-fixed-vt0451"
-MISSING_VT = 0.45
-VT_CLEAR_FALLBACK = MISSING_VT
-VT_TINTED_FALLBACK = MISSING_VT
+VERSION = "20260817r125-final-touchups1"
+VT_CLEAR_FALLBACK = 0.60
+VT_TINTED_FALLBACK = 0.30
 TOTAL_MARKER = re.compile(r"\b(?:grand\s+total|total(?:s)?|sum)\b", re.I)
 ROOF_TOKEN = re.compile(r"(?<![A-Z0-9])R\d+(?:\.\d+)?(?![A-Z0-9.])", re.I)
 
@@ -272,10 +271,14 @@ def apply_request_touchups(request_path: Path, output_root: Path, reference_enve
             kind = _text(row.get("kind")).lower()
             if kind not in {"window", "door"} or _row_has_vt(row):
                 continue
-            # r127 filing policy: preserve an actual VT when supplied; if VT is absent,
-            # insert one deterministic project-wide value. Do not branch on tint/reference.
-            value = MISSING_VT
-            authority = "REVEX_FIXED_MISSING_VT_0_45"
+            cls = reference_envelope._class_for_row(row)
+            profile = profiles.get(cls) if reference_proven else None
+            value = _number(profile.get("vt")) if isinstance(profile, dict) else None
+            if value is not None:
+                authority = "APPROVED_SAME_ENVELOPE_REFERENCE_VT"
+            else:
+                value = VT_TINTED_FALLBACK if _tinted(row) else VT_CLEAR_FALLBACK
+                authority = "CODE_FALLBACK_TINTED" if _tinted(row) else "CODE_FALLBACK_CLEAR"
             row["vt"] = round(float(value), 3)
             row["visibleTransmittanceAuthority"] = authority
             vt_filled.append({
@@ -299,7 +302,7 @@ def apply_request_touchups(request_path: Path, output_root: Path, reference_enve
         "vtFallbacks": vt_filled,
         "referenceFamilyCorroborated": reference_proven,
         "sourceEvidenceMutated": False,
-        "policy": "NATIVE_SCHEDULE_TOTAL_OVER_REGION_RESUM; ACTUAL_VT_ELSE_FIXED_0_45",
+        "policy": "NATIVE_SCHEDULE_TOTAL_OVER_REGION_RESUM; ACTUAL_VT_OVER_REFERENCE_OVER_CODE_FALLBACK",
     }
     audit_path = output_root / "ENERGY_FINAL_TOUCHUPS_R125.json"
     audit_path.write_text(json.dumps(audit, ensure_ascii=True, indent=2), encoding="utf-8")
@@ -412,8 +415,18 @@ def patch_pipeline(module, reference_envelope=None) -> None:
         current = original_vt(row)
         if current is not None:
             return current
-        # r127 filing policy: all genuinely missing VT resolves to one stable value.
-        return MISSING_VT
+        # Same-envelope approved VT is the first non-current fallback.
+        if reference_envelope is not None:
+            try:
+                profiles = reference_envelope._approved_profiles(reference_envelope._reference_path())
+                cls = reference_envelope._class_for_row(row)
+                profile = profiles.get(cls)
+                value = _number(profile.get("vt")) if isinstance(profile, dict) else None
+                if value is not None:
+                    return float(value)
+            except Exception:
+                pass
+        return VT_TINTED_FALLBACK if _tinted(row) else VT_CLEAR_FALLBACK
     module._row_visible_transmittance = visible_transmittance
 
     original_prepare = module.prepare_project_comcheck
