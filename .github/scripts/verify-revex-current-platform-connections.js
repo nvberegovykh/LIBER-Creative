@@ -24,6 +24,7 @@ const projectAccess = read('server/firebase-functions/project-access.js');
 const projectChat = read('server/firebase-functions/project-chat.js');
 const functionsMain = read('server/firebase-functions/main.js');
 const functionsPackage = JSON.parse(read('server/firebase-functions/package.json'));
+const projectRuntimeDeploy = read('server/revex-report-functions/deploy-current.ps1');
 
 // DOCS: one Full Set library object owns ordered linked sheet pages, including legacy projection.
 must(docsPages,
@@ -175,6 +176,17 @@ forbid(projectChat,
   "collection('chatMessages')"
 );
 
+// The one-command release must deploy that exact source-bound resolver; browser isolation alone is not enough.
+must(projectRuntimeDeploy,
+  "$ChatSource = Join-Path $Root 'server\\firebase-functions'",
+  "Deploy source-bound authenticated Project Chat resolver",
+  "'functions','deploy','ensureProjectChatHttp'",
+  "'--source',$ChatSource",
+  "REVEX_SOURCE_CANDIDATE=$SourceCandidate",
+  "Verify-Function $GCloud 'ensureProjectChatHttp'",
+  "Daily Report + revision documentation + Project Chat resolver are ACTIVE and source-bound"
+);
+
 // WALLT operates existing owners and exposes only bounded registered Fixer actions.
 must(wallt,
   "const BUILD = '20260818-wallt-control2'",
@@ -227,6 +239,7 @@ console.log(JSON.stringify({
     projectScoped: true,
     asyncRaceBlocked: true,
     serverMismatchFailsClosed: true,
+    sourceBoundDeploymentRequired: true,
     existingHistoryPreserved: true,
     deterministicRepair: true,
     regions: ['us-central1','europe-west1']
