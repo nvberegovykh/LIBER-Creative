@@ -1,16 +1,15 @@
 import * as THREE from 'three';
 import './design-versions-r52.js';
-import './render-selfhost-r54.js?v=20260817r110-selfhost-render2';
 
-const BUILD = '20260817r110-workspace4';
+const BUILD = '20260818-current-workspace1';
 const state = window.__revexState;
 const $ = (selector, root = document) => root.querySelector(selector);
 
-if (!window.__revexWorkspaceR51) {
-  window.__revexWorkspaceR51 = { build: BUILD };
+if (!window.__revexWorkspaceCurrent) {
+  window.__revexWorkspaceCurrent = { build: BUILD };
 
   const diagnostic = (level, stage, message, detail = {}) => {
-    try { window.__revexBrowserDiagnostics?.emit?.(level, stage, message, { initiator: 'workspace r51', ...detail }); } catch (_) {}
+    try { window.__revexBrowserDiagnostics?.emit?.(level, stage, message, { initiator: 'current workspace', ...detail }); } catch (_) {}
   };
 
   function activeViewer() {
@@ -207,8 +206,8 @@ if (!window.__revexWorkspaceR51) {
   }
 
   function patchViewer(v) {
-    if (!v || v.__revexWorkspaceR51Patched) return Boolean(v);
-    v.__revexWorkspaceR51Patched = true;
+    if (!v || v.__revexWorkspaceCurrentPatched) return Boolean(v);
+    v.__revexWorkspaceCurrentPatched = true;
     patchWalk(v);
     v.captureRenderReference = () => captureRenderReference(v);
     const originalLoad = typeof v.load === 'function' ? v.load.bind(v) : null;
@@ -220,7 +219,7 @@ if (!window.__revexWorkspaceR51) {
       };
     }
     applyPresentation(v);
-    diagnostic('INFO', 'WORKSPACE_R51', 'Viewer function preserved: source geometry, lightweight presentation, clean render capture, ACC-like Walk, Design Book Property versions, and off-device rendering are installed.');
+    diagnostic('INFO', 'WORKSPACE_CURRENT', 'Viewer function preserved: source geometry, lightweight presentation, clean render capture, ACC-like Walk, Design Book Property versions, and Google rendering are installed.');
     return true;
   }
 
@@ -237,7 +236,8 @@ if (!window.__revexWorkspaceR51) {
     cleanRenderReference: true,
     accLikeWalk: true,
     designPropertyVersions: true,
-    selfHostedRender: true,
+    googleRender: true,
+    selfHostedRender: false,
     browserInference: false,
     spatialObjectsVisible: false
   });
