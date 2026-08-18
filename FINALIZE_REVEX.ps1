@@ -178,7 +178,7 @@ function Verify-LiveUi([string]$Root) {
     @{Rel="ui-integrity.js"; Marker="chat-convergence-r136.js?v=20260818r136-project-chat1"},
     @{Rel="ui-integrity.js"; Marker="wallt-control-plane.js?v=20260818-wallt-control2"},
     @{Rel="ui-integrity.js"; Marker="wallt-fixer-adapters-r137.js?v=20260818r137-fixer-adapters1"},
-    @{Rel="docs-pages-r115.js"; Marker="BUILD='20260818r134-docs-fullset-order2'"},
+    @{Rel="docs-pages-r115.js"; Marker="BUILD='20260818r134-docs-linked-pages1'"},
     @{Rel="chat-convergence-r136.js"; Marker="BUILD='20260818r136-project-chat1'"},
     @{Rel="wallt-control-plane.js"; Marker="BUILD = '20260818-wallt-control2'"},
     @{Rel="wallt-cycle-history.js"; Marker="BUILD='20260818-wallt-cycle-history1'"},
