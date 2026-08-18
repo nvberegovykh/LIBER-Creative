@@ -88,6 +88,9 @@ function Assert-CurrentSource([string]$Root,[string]$Node,[string]$Python) {
     ".github\scripts\verify-revex-current-generation-r53.js",
     ".github\scripts\verify-revex-r99-webview-root-cache.js",
     ".github\scripts\verify-revex-r126-functional-convergence.js",
+    ".github\scripts\patch-live-firestore-rules.js",
+    "firebase\revex-project-access-r43.rules",
+    "firebase\deploy-current-access.ps1",
     "src\Liber.Revex.Revit\Engineering\Energy\revex_energy_contracts.py",
     "src\Liber.Revex.Revit\Engineering\Energy\revex_final_touchups.py",
     "src\Liber.Revex.Revit\Engineering\Energy\revex_pipeline_runner.py",
@@ -107,7 +110,8 @@ function Assert-CurrentSource([string]$Root,[string]$Node,[string]$Python) {
   if([string]$release.current.releaseVerifier-ne ".github/scripts/verify-revex-current-release.py" -or
      [string]$release.current.energyDeployer-ne "server/revex-energy-worker/deploy-current.ps1" -or
      [string]$release.current.renderDeployer-ne "server/revex-render-worker/deploy-current.ps1" -or
-     [string]$release.current.reportDeployer-ne "server/revex-report-functions/deploy-current.ps1"){
+     [string]$release.current.reportDeployer-ne "server/revex-report-functions/deploy-current.ps1" -or
+     [string]$release.current.accessDeployer-ne "firebase/deploy-current-access.ps1"){
     throw "REVEX current release manifest does not point to canonical current controllers."
   }
 
@@ -143,13 +147,31 @@ function Verify-LiveUi([string]$Root) {
     try{$live=(Invoke-WebRequest -UseBasicParsing -Uri $uri -Headers @{"Cache-Control"="no-cache";"Pragma"="no-cache"}).Content;if($live.Contains("BUILD='$build'")){Write-Host "PASS: live Companion UI is current ($build)." -ForegroundColor Green;return}}catch{}
     Start-Sleep -Seconds 10
   }
-  throw "Live REVEX Companion did not expose the exact current UI build within 10 minutes. No broker cutover or local add-in install was started."
+  throw "Live REVEX Companion did not expose the exact current UI build within 10 minutes. No access/broker cutover or local add-in install was started."
 }
 
 function Invoke-ReleaseController([string]$Label,[string]$Path,[string[]]$Arguments) {
   if(-not(Test-Path -LiteralPath $Path -PathType Leaf)){throw "$Label controller is missing: $Path"}
   $argv=@("-NoProfile","-ExecutionPolicy","Bypass","-File",$Path)+$Arguments
   Require-Ok $Label "powershell.exe" $argv
+}
+
+function Verify-LiveAccessSource([string]$GCloud) {
+  Step "Verify live project access rules are bound to the exact release source"
+  $token=Capture-Native $GCloud @("auth","print-access-token")
+  if($token.Code-ne 0-or-not $token.Text){throw "Google Cloud could not issue an access token for final Firestore rules verification."}
+  $headers=@{Authorization="Bearer $($token.Text.Trim())";"x-goog-user-project"=$ProjectId}
+  $release=Invoke-RestMethod -Method Get -Uri "https://firebaserules.googleapis.com/v1/projects/$ProjectId/releases/cloud.firestore" -Headers $headers -TimeoutSec 30
+  $rulesetName=[string]$release.rulesetName
+  if(-not $rulesetName.StartsWith("projects/$ProjectId/rulesets/")){throw "Live Firestore release has no deterministic active ruleset."}
+  $ruleset=Invoke-RestMethod -Method Get -Uri ("https://firebaserules.googleapis.com/v1/"+$rulesetName) -Headers $headers -TimeoutSec 30
+  $files=@($ruleset.source.files)
+  if($files.Count-ne 1){throw "Live Firestore ruleset has $($files.Count) files; expected one preserved source."}
+  $source=[string]$files[0].content
+  foreach($marker in @("REVEX_PROJECT_ACCESS_R43_BEGIN","REVEX_PROJECT_ACCESS_R43_END","REVEX_SOURCE_CANDIDATE=$SourceSha","allow read, write: if revexR43ProjectMember(projectId);")){
+    if(-not $source.Contains($marker)){throw "Live project access binding is missing: $marker"}
+  }
+  Write-Host "PASS: Firestore project access is source-bound to $SourceSha." -ForegroundColor Green
 }
 
 function Verify-LiveSourceBindings([string]$GCloud) {
@@ -167,7 +189,8 @@ function Verify-LiveSourceBindings([string]$GCloud) {
     if([string]$fn.state-ne "ACTIVE"){throw "$functionName is not ACTIVE."}
     if([string]$fn.serviceConfig.environmentVariables.REVEX_SOURCE_CANDIDATE-ne $SourceSha){throw "$functionName is not bound to exact source $SourceSha."}
   }
-  Write-Host "PASS: Energy, Render and Report are all source-bound to $SourceSha." -ForegroundColor Green
+  Verify-LiveAccessSource $GCloud
+  Write-Host "PASS: Access, Energy, Render and Report are all source-bound to $SourceSha." -ForegroundColor Green
 }
 
 function Install-AddinAtomically {
@@ -185,7 +208,7 @@ function Install-AddinAtomically {
     $assembly=Join-Path $InstalledRoot "Liber.Revex.Revit.dll"
     $marker=[ordered]@{
       schema="liber.revex.current-release.v2";repository="nvberegovykh/LIBER-Creative";sourceCommit=$SourceSha;finalizedAtUtc=[DateTime]::UtcNow.ToString("o");
-      energyWorker=$script:EnergyService;renderWorker=$script:RenderService;missingVt=0.45;actualVtWins=$true;
+      energyWorker=$script:EnergyService;renderWorker=$script:RenderService;missingVt=0.45;actualVtWins=$true;projectAccessSourceBound=$true;
       geometryPolicy="whole-door + curtain-panel + physical-cover corrections";uiPolicy="full current convergence";previousInstalledRevisionShadow=$BackupRoot
     }|ConvertTo-Json -Depth 8
     [IO.File]::WriteAllText((Join-Path $InstalledRoot "REVEX-CURRENT-SOURCE.json"),$marker,[Text.UTF8Encoding]::new($false))
@@ -217,7 +240,7 @@ function Install-AddinAtomically {
 try{
   try{Start-Transcript -LiteralPath $LogPath -Force|Out-Null;$TranscriptStarted=$true}catch{}
   Write-Host "REVEX one-command current release finalizer" -ForegroundColor Cyan
-  Write-Host "One exact GitHub SHA owns Companion, Revit add-in, Energy, Report and Render." -ForegroundColor Green
+  Write-Host "One exact GitHub SHA owns Companion, project access, Revit add-in, Energy, Report and Render." -ForegroundColor Green
   Write-Host "Versioned implementations stay as shadow files; current runtime uses canonical facades." -ForegroundColor Green
   Write-Host "VT policy: preserve actual VT; when absent use exactly 0.45." -ForegroundColor Green
   Write-Host "Persistent log: $LogPath"
@@ -246,13 +269,15 @@ try{
   $energyDeploy=Join-Path $SourceRoot "server\revex-energy-worker\deploy-current.ps1"
   $renderDeploy=Join-Path $SourceRoot "server\revex-render-worker\deploy-current.ps1"
   $reportDeploy=Join-Path $SourceRoot "server\revex-report-functions\deploy-current.ps1"
+  $accessDeploy=Join-Path $SourceRoot "firebase\deploy-current-access.ps1"
 
   Invoke-ReleaseController "Stage and verify current Energy candidate without broker cutover" $energyDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:EnergyService,"-SourceCandidate",$SourceSha,"-CandidateOnly","-NoPause")
   Invoke-ReleaseController "Stage, warm and verify current Render candidate without broker cutover" $renderDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:RenderService,"-SourceCandidate",$SourceSha,"-CandidateOnly","-NoPause")
 
-  Step "Verify current Companion UI is live before any broker cutover"
+  Step "Verify current Companion UI is live before any access or broker cutover"
   Verify-LiveUi $SourceRoot
 
+  Invoke-ReleaseController "Deploy preserved source-bound project access rules" $accessDeploy @("-ProjectId",$ProjectId,"-SourceCandidate",$SourceSha,"-NoPause")
   Invoke-ReleaseController "Deploy source-bound Report and Daily Report" $reportDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-SourceCandidate",$SourceSha,"-NoPause")
   Invoke-ReleaseController "Cut Render broker to the already-warm current candidate" $renderDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:RenderService,"-SourceCandidate",$SourceSha,"-BrokerOnly","-NoPause")
   Invoke-ReleaseController "Cut Energy broker to the already-verified current candidate" $energyDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:EnergyService,"-SourceCandidate",$SourceSha,"-BrokerOnly","-NoPause")
@@ -264,6 +289,7 @@ try{
   Write-Host ""
   Write-Host "PASS: REVEX current release is converged on one exact source revision." -ForegroundColor Green
   Write-Host "Source: $SourceSha"
+  Write-Host "Project access: owner/member/admin rules preserved and source-bound"
   Write-Host "Energy: $($script:EnergyService) · actual VT preserved · missing VT 0.45 · complete release package required"
   Write-Host "Render: $($script:RenderService) · server-warm before broker cutover"
   Write-Host "Report/Daily Report: source-bound $SourceSha"
