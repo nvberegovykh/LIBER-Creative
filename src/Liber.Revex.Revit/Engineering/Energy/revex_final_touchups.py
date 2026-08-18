@@ -13,16 +13,25 @@ from typing import Any
 
 import revex_final_touchups_r125 as _shadow
 
-VERSION = "20260817r127-current-energy4"
+VERSION = "20260818-current-energy5"
 MISSING_VT = 0.45
 
 _shadow_patch_pipeline = _shadow.patch_pipeline
 _shadow_schedule_path = _shadow._schedule_path
 _MISSING_VT_SHADOW_AUTHORITIES = {"CODE_FALLBACK_TINTED", "CODE_FALLBACK_CLEAR"}
+_NON_ACTUAL_VT_AUTHORITIES = {
+    "CODE_FALLBACK_TINTED",
+    "CODE_FALLBACK_CLEAR",
+    "REVEX_FIXED_MISSING_VT_0_45",
+    "APPROVED_SAME_ENVELOPE_REFERENCE_VT",
+}
 
 
 def _actual_vt(row: dict) -> float | None:
-    """Read only project evidence VT; never return a fallback/reference value."""
+    """Read only project-evidenced VT; never reinterpret a derived fallback as actual."""
+    authority = str(row.get("visibleTransmittanceAuthority") or "").strip().upper()
+    if authority in _NON_ACTUAL_VT_AUTHORITIES:
+        return None
     for key in ("vt", "vlt", "visibleTransmittance"):
         value = row.get(key)
         if value not in (None, ""):
@@ -73,7 +82,6 @@ def _current_schedule_path(request: dict) -> Path | None:
 
 
 def _apply_current_policy() -> None:
-    # Preserve actual VT from evidence. The shadow reaches these constants only when VT is missing.
     _shadow.VT_CLEAR_FALLBACK = MISSING_VT
     _shadow.VT_TINTED_FALLBACK = MISSING_VT
     _shadow._schedule_path = _current_schedule_path
@@ -117,8 +125,8 @@ def _normalize_touchup_outputs(request_out: Path) -> None:
 
 def apply_request_touchups(request_path: Path, output_root: Path, reference_envelope) -> Path:
     _apply_current_policy()
-    # Current filing policy: actual VT wins; if absent, insert exactly 0.45. Disable the
-    # old approved-reference VT lookup while retaining every other r125 touch-up.
+    # Actual VT wins. For absent VT, current policy bypasses the old reference-VT branch and
+    # inserts exactly 0.45 in a derived page-facts copy; immutable Engineering evidence is untouched.
     original_profiles = getattr(reference_envelope, "_approved_profiles", None) if reference_envelope is not None else None
     if reference_envelope is not None and original_profiles is not None:
         reference_envelope._approved_profiles = lambda _path: {}
@@ -136,9 +144,8 @@ def patch_pipeline(module, reference_envelope=None) -> None:
     if getattr(module, "__revex_current_patched__", False):
         return
     _apply_current_policy()
-    # Passing no reference is intentional: old approved-reference VT is not current policy.
-    # The r125 shadow retains proven merge/COMcheck/EN-1 mechanics; this current wrapper
-    # additionally carries actual VT when it exists only in text evidence.
+    # The r125 shadow retains proven merge/COMcheck/EN-1 mechanics. Passing no reference
+    # disables the retired reference-VT fallback while leaving all non-VT mechanics intact.
     _shadow_patch_pipeline(module, None)
     shadow_merge = module._merge_diagram_geometry_with_thermal
 
@@ -168,8 +175,6 @@ def patch_pipeline(module, reference_envelope=None) -> None:
 
 def _bind_shadow_runtime() -> None:
     _apply_current_policy()
-    # r125's resume/install helpers resolve this global at runtime. Redirect them to the
-    # canonical current policy while keeping the historical shadow file unchanged.
     _shadow.patch_pipeline = patch_pipeline
 
 
