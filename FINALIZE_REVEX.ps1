@@ -159,7 +159,7 @@ function Verify-GoogleRenderApi([string]$GCloud) {
 
 function Verify-LiveUi([string]$Root) {
   $checks=@(
-    @{Rel="ui-integrity.js"; Marker="BUILD='20260817r126-functional-convergence2'"},
+    @{Rel="ui-integrity.js"; Marker="BUILD='20260818r128-full-convergence1'"},
     @{Rel="workspace-r51.js"; Marker="const BUILD = '20260818-current-workspace1'"},
     @{Rel="render-agent.js"; Marker="const MODEL = 'gemini-3.1-flash-image'"},
     @{Rel="render-convergence-r126.js"; Marker="providerOwner:'render-agent.js'"}
