@@ -7,13 +7,17 @@ const docs=read('docs/liber-apps/apps/revex/docs-pages-r115.js');
 const renderUi=read('docs/liber-apps/apps/revex/render-touchups-r115.js');
 const worker=read('server/revex-render-worker/render_r115.py');
 const docker=read('server/revex-render-worker/Dockerfile');
-const r119Path='server/revex-render-worker/render_r119.py';
-const r119=fs.existsSync(r119Path)?read(r119Path):'';
+const r119Path='server/revex-render-worker/render_r119.py',r126Path='server/revex-render-worker/render_r126.py';
+const r119=fs.existsSync(r119Path)?read(r119Path):'',r126=fs.existsSync(r126Path)?read(r126Path):'';
 const must=(t,n,m)=>assert(t.includes(n),m||`missing ${n}`),forbid=(t,n,m)=>assert(!t.includes(n),m||`forbidden ${n}`);
-for(const marker of ['viewer-texture-r115.js?v=20260817r115-texture1','docs-pages-r115.js?v=20260817r115-docs1','render-touchups-r115.js?v=20260817r115-render-ui1'])must(ui,marker,'r115 runtime must be cache-broken and loaded');
+must(ui,'viewer-texture-r115.js?v=','r115 texture owner must remain loaded through a cache-broken URL');
+for(const marker of ['docs-pages-r115.js?v=20260817r115-docs1','render-touchups-r115.js?v=20260817r115-render-ui1'])must(ui,marker,'r115 runtime must remain loaded');
 must(texture,"geometry.setAttribute('uv'",'exact meshes without UVs must receive generated UVs');
 must(texture,'revexGeneratedUvR115','generated UVs must be one-time/stable');
-must(texture,'material.color.copy(source.color)','texture must retain base Revit material tint instead of forced white');
+// Newer appearance convergence makes design/model color a true fallback rather
+// than tinting the selected texture. Roughness/metalness remain inherited.
+if(texture.includes("BUILD='20260817r126"))must(texture,'material.color.set(0xffffff)','newer texture owner must keep mapped texture untinted');
+else must(texture,'material.color.copy(source.color)','r115 texture must preserve its historical base tint');
 must(texture,'source.roughness','texture must retain source roughness');
 must(docs,"PDF_LIB_URL='https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js'",'Docs splitter must stay pinned');
 must(docs,'derivedFromFullSet:true','sheet PDFs must be derived from the authoritative full-set PDF');
@@ -21,7 +25,7 @@ must(docs,'printing-pages-derived','derived pages need their own immutable cache
 must(docs,'<span>Full set</span>','tree must contain exactly one Full set item per current printing set');
 must(docs,"<small>1p PDF</small>",'sheet rows must represent one-page PDFs');
 forbid(docs,'docs-version-select','primary Docs tree must not expose revision nesting/selectors');
-forbid(docs,'MutationObserver','Docs final owner must not continuously observe/rewrite DOM');
+forbid(docs,'MutationObserver','r115 itself must not continuously observe/rewrite DOM');
 must(renderUi,'height:min(86dvh,900px)!important','desktop Render modal must remain bounded');
 must(renderUi,'height:min(92dvh,900px)!important','mobile Render modal must remain bounded');
 forbid(renderUi,'height:100dvh','r115 Render touchup must never request full viewport height');
@@ -34,11 +38,16 @@ must(worker,'lighting fixtures','worker must preserve modeled lighting fixtures'
 must(worker,'same location, same orientation, same functional role','worker must enforce equivalent substitution');
 must(worker,'Only surroundings outside the modeled building may be imagined','worker must enforce surroundings-only imagination');
 must(docker,'COPY server/revex-render-worker/render_r115.py ./render_r115.py','r115 worker wrapper must ship');
-if(docker.includes('render_r119:APP')){
+if(docker.includes('render_r126:APP')){
+  must(docker,'COPY server/revex-render-worker/render_r119.py ./render_r119.py','r119 cache wrapper must ship under r126');
+  must(docker,'COPY server/revex-render-worker/render_r126.py ./render_r126.py','r126 warm wrapper must ship');
+  must(r126,'import render_r119 as r119','r126 must inherit r119 persistent cache');
+  must(r119,'import render_r115 as r115','r119 must inherit r115 construction-render owner');
+  must(r119,'APP = r115.APP','r119 must expose the r115 application');
+  must(r126,'APP = r119.APP','r126 must expose the inherited application');
+}else if(docker.includes('render_r119:APP')){
   must(docker,'COPY server/revex-render-worker/render_r119.py ./render_r119.py','r119 wrapper must ship if it owns the production entry point');
   must(r119,'import render_r115 as r115','newer production wrapper must inherit the r115 construction-render owner');
   must(r119,'APP = r115.APP','newer production wrapper must expose the r115 application unchanged');
-}else{
-  must(docker,'render_r115:APP','production worker must boot through r115 wrapper');
-}
-console.log(JSON.stringify({schema:'liber.revex.r115.final-touchups.v1',status:'PASSED',texture:{generatedUv:true,baseBlend:true},docs:{fullSetAuthority:true,derivedOnePage:true,revisionTree:false},render:{boundedModal:true,fast1kSeconds:30,buildingAuthority:'revit',surroundingsOnly:true,r115AuthorityPreserved:true}},null,2));
+}else must(docker,'render_r115:APP','production worker must boot through r115 wrapper');
+console.log(JSON.stringify({schema:'liber.revex.r115.final-touchups.v2',status:'PASSED',texture:{generatedUv:true,texturePriority:true,baseResponse:true},docs:{fullSetAuthority:true,derivedOnePage:true,revisionTree:false},render:{boundedModal:true,fast1kSeconds:30,buildingAuthority:'revit',surroundingsOnly:true,r115AuthorityPreserved:true}},null,2));

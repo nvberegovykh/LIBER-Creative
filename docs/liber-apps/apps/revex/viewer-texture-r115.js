@@ -1,12 +1,12 @@
 (function(root){
 'use strict';
-const BUILD='20260817r115-texture1';
+const BUILD='20260817r126-texture-precedence1';
 if(root.__revexViewerTextureR115)return;
 root.__revexViewerTextureR115={build:BUILD};
 let threePromise=null,patched=null,generation=0;
 const getThree=()=>threePromise||(threePromise=import('three'));
 const text=v=>String(v??'').trim();
-function diag(level,stage,message,detail={}){try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'viewer texture r115',...detail})}catch(_){}}
+function diag(level,stage,message,detail={}){try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'viewer texture r115/r126',...detail})}catch(_){}}
 function baseMaterials(node){return (node?.userData?.r75BaseMaterials?.length?node.userData.r75BaseMaterials:node?.userData?.revexBaseMaterials?.length?node.userData.revexBaseMaterials:(Array.isArray(node?.material)?node.material:[node?.material])).filter(Boolean)}
 async function ensureUv(node){
   const geometry=node?.geometry,position=geometry?.attributes?.position;
@@ -40,7 +40,9 @@ function blendMappedMaterials(v,token,attempt=0){
     for(let i=0;i<mats.length;i++){
       const material=mats[i],source=base[i]||base[0];
       if(!material?.map){waiting=true;continue;}
-      if(source?.color&&material.color){material.color.copy(source.color);changed=true;}
+      // A user texture is the visible finish. Revit/model color is preserved only
+      // as the fallback when no texture exists; it must never tint an active map.
+      if(material.color){material.color.set(0xffffff);changed=true;}
       if(Number.isFinite(source?.roughness)&&Number.isFinite(material.roughness))material.roughness=source.roughness;
       if(Number.isFinite(source?.metalness)&&Number.isFinite(material.metalness))material.metalness=source.metalness;
       material.needsUpdate=true;
@@ -63,7 +65,7 @@ function patch(v){
   };
   if(originalApply)v.applyAppearances=function(){const token=++generation;void ensureAllUv(this).then(()=>{originalApply();blendMappedMaterials(this,token)})};
   if(originalDetailed)v.loadDetailed=async function(...args){const result=await originalDetailed(...args);if(result){await ensureAllUv(this);this.applyAppearances?.();}return result};
-  void ensureAllUv(v).then(()=>{v.applyAppearances?.();diag('INFO','BIM_TEXTURE_R115','Generated stable planar UVs for exact meshes that lacked Revit UV coordinates; finish textures retain base material response.',{viewerBuild:text(v?.constructor?.name)})});
+  void ensureAllUv(v).then(()=>{v.applyAppearances?.();diag('INFO','BIM_TEXTURE_R126','Stable planar UVs enabled; texture > design color fallback > Revit/model color.',{viewerBuild:text(v?.constructor?.name)})});
   return true;
 }
 let attempts=0;const timer=setInterval(()=>{attempts++;if(patch(root.__revexViewerR26Instance)||attempts>200)clearInterval(timer)},50);

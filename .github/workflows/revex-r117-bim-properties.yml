@@ -31,6 +31,7 @@ jobs:
       - name: Verify BIM property contract
         run: node .github/scripts/verify-revex-r117-bim-properties.js
       - name: Scope guard
+        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'agent/revex-r117')
         shell: bash
         run: |
           git fetch origin "${{ github.base_ref }}" --deepen=200

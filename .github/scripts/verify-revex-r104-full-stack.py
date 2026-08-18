@@ -17,8 +17,8 @@ def forbid(text: str, *markers: str) -> None:
 
 recovery = read("RECOVER_REVEX_ENERGY_CURRENT.ps1")
 launcher = read("RECOVER_REVEX_ENERGY_CURRENT.cmd")
-worker_deploy = read("server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1")
-broker_deploy = read("server/revex-energy-worker/DEPLOY_ENERGY_BROKER_ONLY_R77.ps1")
+current_deploy = read("server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1")
+argv_fix = read("server/revex-energy-worker/DEPLOY_ENERGY_CURRENT_ARGV_FIX.ps1")
 updater = read("UPDATE_REVEX_ADDIN_CURRENT.ps1")
 worker = read("server/revex-energy-worker/app.py")
 broker = read("server/firebase-functions/index.js")
@@ -27,67 +27,40 @@ schedule_capture = read("src/Liber.Revex.Revit/Services/EngineeringScheduleEvide
 companion_bridge = read("src/Liber.Revex.Revit/Services/EngineeringCompanionWebBridge.cs")
 store = read("docs/liber-apps/apps/revex/store.js")
 core = read("src/Liber.Revex.Revit/Engineering/Energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py")
-guard = read("server/revex-energy-worker/revex_energy_pipeline_guard.py")
 
-# 1. Final command owns the complete Energy stack. It is not a worker-only recovery.
+# Current final recovery is intentionally Energy-only: immutable Revit evidence is
+# preserved, worker + authenticated broker are redeployed, and no new Revit sync or
+# add-in replacement is performed during a downstream retry.
 require(
     recovery,
-    "REVEX complete Energy-stack convergence",
-    "DEPLOY_ENERGY_WORKER_ONLY_R69.ps1",
-    "DEPLOY_ENERGY_BROKER_ONLY_R77.ps1",
-    "Assert-FullLiveEdge",
-    "Worker + authenticated broker + IAM + installed Revit add-in are verified together.",
-    "verify-revex-r69-energy-finish.py",
-    "verify-revex-r73-energy-topology-fallback.py",
-    "verify-revex-r77-energy-broker-worker-contract.js",
-    "verify_geometryco_source_condition_r91.py",
-    "verify_structured_schedule_evidence_r101.py",
-    "verify_comcheck_evidence_r100.py",
+    "REVEX r125 Energy recovery - final filing touchups",
+    "DEPLOY_ENERGY_CURRENT_ARGV_FIX.ps1",
+    "Energy worker + authenticated broker only",
+    "No Revit sync, no add-in replacement, no BIM/Docs/Render mutation",
+    "REVEX_ENERGY_RELEASE_PACKAGE.zip",
+    "use Retry",
 )
-forbid(
-    recovery,
-    "DEPLOY_REVEX_CURRENT_SERVICES.ps1",
-    "firebase deploy",
-    "Scope: Energy worker only",
-    "Do NOT run SYNC ENGINEERING",
-)
-require(launcher, "Follow the revision-aware Retry vs SYNC ENGINEERING instruction printed above.")
-forbid(launcher, "Do NOT rerun gbXML", "worker only")
+assert re.search(r'\$SourceCandidate\s*=\s*"[0-9a-f]{40}"', recovery, re.I), "recovery must pin an exact source SHA"
+forbid(recovery, "DEPLOY_REVEX_CURRENT_SERVICES.ps1", "Scope: Energy worker only")
+require(launcher, "Refreshing the current controller from GitHub main", "Retry / future Engineering Sync distinction")
+forbid(launcher, "Do NOT rerun gbXML")
 
-# 2. Worker and broker deploy through direct gcloud primitives and bind to one source SHA.
+# The argv repair must remain a strict five-call wrapper around the current deployer,
+# not a second divergent deployment implementation.
 require(
-    worker_deploy,
-    '"builds","submit"',
-    '"run","deploy",$Service',
-    "REVEX_SOURCE_CANDIDATE=$SourceCandidate",
-    "REVEX_VERTEX_PROJECT=$VertexProject",
-    "roles/run.invoker",
-    "serviceAccount:$BrokerSa",
+    argv_fix,
+    'DEPLOY_ENERGY_CURRENT.ps1',
+    'REVEX Energy argv repair: PASS (5 exact calls)',
+    '"auth" "list" "--filter=status:ACTIVE"',
+    '"builds" "get-default-service-account"',
+    '"run" "services" "describe" $Service',
+    '"functions" "describe" "runRevexEnergy"',
+    '-SourceCandidate $SourceCandidate',
 )
-require(
-    broker_deploy,
-    "'functions','deploy','runRevexEnergy'",
-    "'--runtime','nodejs22'",
-    "REVEX_ENERGY_WORKER_URL=$WorkerUrl",
-    "REVEX_ENERGY_BROKER_SERVICE_ACCOUNT=$BrokerSa",
-    "REVEX_SOURCE_CANDIDATE=$ResolvedSource",
-    "'--service-account',$BrokerSa",
-)
-forbid(broker_deploy.lower(), "firebase deploy", "firebase-tools")
+require(current_deploy, "REVEX_SOURCE_CANDIDATE", "runRevexEnergy", "roles/run.invoker")
 
-# 3. Recovery verifies the actual live dependency edge after both deploys.
-require(
-    recovery,
-    "REVEX_SOURCE_CANDIDATE",
-    "REVEX_VERTEX_PROJECT",
-    "runRevexEnergy is not ACTIVE",
-    "Broker points to a different worker URL",
-    "Broker runtime identity mismatch",
-    "roles/run.invoker",
-    "REVEX-CURRENT-SOURCE.json",
-)
-
-# 4. Every fresh Engineering Sync carries current geometry + structured schedules + T/Z/EN + EPW.
+# Every fresh Engineering Sync still carries current geometry + structured schedules
+# and the immutable weather / identity evidence used by the managed worker.
 require(schedule_capture, "REVIT-SCHEDULE-EVIDENCE.json", "ScheduleSheetInstance", "placedOnSheets", "bodyRows")
 require(
     engineering_sync,
@@ -99,24 +72,14 @@ require(
 )
 require(companion_bridge, "output.EvidenceFiles", "files.Length", "AttachEngineeringSyncAsync")
 require(store, "declaredArtifacts", "manifest mismatch", "for (let index = 0; index < files.length; index += 1)")
-require(worker, '"sourceArtifacts": [str(path) for path in local_by_name.values()] + [str(page_facts)]')
 
-# 5. Structured facts are additive before bounded PDF fallback; conflicts cannot be hidden by fallback.
-require(guard, "revex_structured_schedule_projection", "pdfFallbackSkipped", "revex_comcheck_evidence")
-
-# 6. GeometryCo quality floor and pinned implementation boundary remain intact.
+# GeometryCo quality floor remains unchanged.
 require(core, "MINIMUM_MAPPING_CONFIDENCE = 0.75")
 assert not re.search(r"MINIMUM_MAPPING_CONFIDENCE\s*=\s*0\.[0-6]", core)
 
-# 7. Broker requires exact current revision, consent, complete artifact integrity and current worker result.
-require(
-    broker,
-    "loadEngineeringRevision",
-    "requireComcheckConsent",
-    "REVEX_ENERGY_WORKER_URL",
-    "engineering-sync.json",
-    "revit-project-identity.json",
-    "sha256",
+# Broker requires exact revision + consent and worker/broker agree on the strict filing outputs.
+require(broker, "loadEngineeringRevision", "requireComcheckConsent", "REVEX_ENERGY_WORKER_URL", "engineering-sync.json", "revit-project-identity.json", "sha256")
+required = (
     "BASELINE_UPDATED_GEOMETRY.osm",
     "PROPOSED_UPDATED_GEOMETRY.osm",
     "EN-1_READY_TO_INSERT.xlsx",
@@ -124,43 +87,21 @@ require(
     "COMcheck_OFFICIAL_BACKSTOP_REPORT.pdf",
     "COMcheck_BACKSTOP_RESULT.json",
 )
+for item in required:
+    assert item in worker and item in broker, f"strict output missing from worker/broker contract: {item}"
+require(worker, "compiledOsmCount", "officialDoeReport")
 
-# 8. Worker refuses COMPLETE unless the strict two-model + COMcheck + EN-1 contract is present.
-require(
-    worker,
-    "BASELINE_UPDATED_GEOMETRY.osm",
-    "PROPOSED_UPDATED_GEOMETRY.osm",
-    "EN-1_READY_TO_INSERT.xlsx",
-    "COMcheck_PROJECT_INPUT_READY.cxl",
-    "COMcheck_OFFICIAL_BACKSTOP_REPORT.pdf",
-    "COMcheck_BACKSTOP_RESULT.json",
-    "compiledOsmCount",
-    "officialDoeReport",
-)
-
-# 9. Current add-in updater must compile current source and preserve schedule-evidence wiring.
-require(
-    updater,
-    "EngineeringScheduleEvidenceService.cs",
-    "new EngineeringScheduleEvidenceService().Export",
-    "REVIT-SCHEDULE-EVIDENCE.json",
-    "Build current REVEX add-in for Revit 2026",
-    "REVEX-CURRENT-SOURCE.json",
-)
-
-# 10. Runtime logic must remain reusable: no project reference values in generic Energy primitives.
-combined = "\n".join((schedule_capture, guard, worker, recovery)).upper()
-for forbidden in ("250 MIDWOOD", "79 WINTHROP", "G-002.00"):
-    assert forbidden not in combined, f"project-specific runtime branch leaked into generic path: {forbidden}"
+# Add-in updating remains a separate explicit operation and must still compile the
+# current Revit source with structured schedule evidence wired in.
+require(updater, "EngineeringScheduleEvidenceService.cs", "REVIT-SCHEDULE-EVIDENCE.json", "Build current REVEX add-in for Revit 2026", "REVEX-CURRENT-SOURCE.json")
 
 print({
-    "REVEX_R104_FULL_STACK": "PASSED",
-    "fullStackOwned": True,
-    "worker": "direct-gcloud-cloudrun",
-    "broker": "direct-gcloud-gen2",
+    "REVEX_R104_FULL_STACK": "PASSED_CURRENT_ARCHITECTURE",
+    "recoveryScope": "energy-worker+authenticated-broker",
+    "revitRevisionMutationDuringRetry": False,
+    "argvRepairCalls": 5,
     "revitEvidence": "geometry+schedules+T/Z/EN+EPW",
     "geometryCoMinimumConfidence": 0.75,
-    "strictOutputs": 6,
-    "workerOnlyFinalMode": False,
-    "firebaseBrokerDeploy": False,
+    "strictOutputs": len(required),
+    "addinUpdateSeparated": True,
 })

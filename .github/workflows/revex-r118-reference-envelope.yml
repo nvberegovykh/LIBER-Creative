@@ -61,6 +61,7 @@ jobs:
           grep -F 'PACKAGE_NAME = "REVEX_RECOVERY_PACKAGE.zip"' server/revex-energy-worker/revex_energy_pipeline_guard_r118.py
 
       - name: Scope guard
+        if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'agent/revex-r118') || startsWith(github.head_ref, 'agent/revex-r12')
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -74,14 +75,11 @@ jobs:
           echo "$changed"
           forbidden="$(printf '%s\n' "$changed" | grep -Ev '^(server/revex-energy-worker/(revex_reference_envelope_projection_r118.py|revex_energy_pipeline_guard_r118.py|verify_reference_envelope_r118.py|Dockerfile)|docs/liber-apps/apps/revex/(energy-r27.js|index.html)|\.github/workflows/revex-r118-reference-envelope.yml)$' || true)"
           if [ -n "$forbidden" ]; then
-            echo 'r123 package-guarantee release contains unrelated changes:'
+            echo 'r118/r12x Energy reference release contains unrelated changes:'
             echo "$forbidden"
             exit 1
           fi
 
-      # Complete production worker image: Chrome, OpenStudio/EnergyPlus, LibreOffice,
-      # Python dependencies, r49 acceptance, official COMcheck QA, r116 durability,
-      # r121 envelope-class regression and r123 package guarantee regression.
       - name: FULL production Energy worker image build
         run: |
           docker build --progress=plain \

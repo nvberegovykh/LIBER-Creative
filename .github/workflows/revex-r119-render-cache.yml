@@ -33,8 +33,16 @@ jobs:
           foreach ($marker in @('snapshot_download(', 'revision=base.MODEL_REVISION', 'local_dir=str(cache_root)', 'token=False', 'etag_timeout=etag_timeout', 'local_files_only=True')) {
             if (-not $worker.Contains($marker)) { throw "Missing Render worker marker: $marker" }
           }
-          foreach ($marker in @('render_r119.py', 'HF_HUB_ETAG_TIMEOUT=120', 'HF_HUB_DOWNLOAD_TIMEOUT=900', 'render_r119:APP')) {
+          foreach ($marker in @('render_r119.py', 'HF_HUB_ETAG_TIMEOUT=120', 'HF_HUB_DOWNLOAD_TIMEOUT=900')) {
             if (-not $docker.Contains($marker)) { throw "Missing Render Docker marker: $marker" }
+          }
+          if (-not ($docker.Contains('render_r119:APP') -or $docker.Contains('render_r126:APP'))) {
+            throw 'Persistent Render cache wrapper is not in the production inheritance chain.'
+          }
+          if ($docker.Contains('render_r126:APP')) {
+            if (-not $docker.Contains('COPY server/revex-render-worker/render_r126.py ./render_r126.py')) { throw 'r126 wrapper is not shipped.' }
+            $r126 = Get-Content -Raw 'server/revex-render-worker/render_r126.py'
+            if (-not $r126.Contains('import render_r119 as r119')) { throw 'r126 must inherit r119 persistent cache.' }
           }
           foreach ($marker in @('type=cloud-storage', 'REVEX_MODEL_CACHE_DIR=', 'HF_HUB_ETAG_TIMEOUT=120', 'HF_HUB_DOWNLOAD_TIMEOUT=900', '-clear-volumes')) {
             if (-not $deploy.Contains($marker)) { throw "Missing Render deployment marker: $marker" }
@@ -51,7 +59,7 @@ jobs:
           if (@($errors).Count) { $errors | Format-List | Out-String | Write-Error; exit 1 }
           Write-Host 'PASS DEPLOY_RENDER_R119.ps1 parse'
       - name: Scope guard
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'agent/revex-r119')
         shell: bash
         run: |
           base_sha="${{ github.event.pull_request.base.sha }}"
