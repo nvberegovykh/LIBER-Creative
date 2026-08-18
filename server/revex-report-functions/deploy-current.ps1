@@ -9,6 +9,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 3.0
 $Source = $PSScriptRoot
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$Verifier = Join-Path $Root '.github\scripts\verify-revex-r127-single-controller.py'
 $ReportSa = "revex-report-worker@$ProjectId.iam.gserviceaccount.com"
 $ExitCode = 1
 
@@ -28,10 +29,10 @@ try{
   Write-Host 'REVEX current revision-documentation + Daily Report deployment' -ForegroundColor Cyan
   Write-Host "Source: $SourceCandidate"
   Write-Host 'Authority: deterministic revision diff + native affected plans + active issues; technical history remains separate.' -ForegroundColor Green
-  foreach($required in @((Join-Path $Root 'REVEX_CURRENT_RELEASE.json'),(Join-Path $Root '.github\scripts\verify-revex-r127-single-controller.py'),(Join-Path $Source 'index.js'),(Join-Path $Source 'package.json'))){if(-not(Test-Path -LiteralPath $required)){throw "Report deployment source is incomplete: $required"}}
+  foreach($required in @((Join-Path $Root 'REVEX_CURRENT_RELEASE.json'),$Verifier,(Join-Path $Source 'index.js'),(Join-Path $Source 'package.json'))){if(-not(Test-Path -LiteralPath $required)){throw "Report deployment source is incomplete: $required"}}
 
   $GCloud=Require-Command 'gcloud';$Npm=Require-Command 'npm';$Node=Require-Command 'node';$Python=Require-Command 'python'
-  Require-Ok 'Validate full current REVEX revision before Report cloud changes' $Python @('.github\scripts\verify-revex-r127-single-controller.py')
+  Require-Ok 'Validate full current REVEX revision before Report cloud changes' $Python @($Verifier)
   $auth=Capture-Native $GCloud @('auth','list','--filter','status:ACTIVE','--format','value(account)');if($auth.Code-ne 0-or-not $auth.Text){throw 'Google Cloud administrator sign-in is required.'};$Deployer=($auth.Text -split "`n")[0].Trim()
   Require-Ok 'Select Google Cloud project' $GCloud @('config','set','project',$ProjectId) -Quiet
   Require-Ok 'Enable Report infrastructure APIs' $GCloud @('services','enable','cloudfunctions.googleapis.com','run.googleapis.com','eventarc.googleapis.com','firestore.googleapis.com','cloudbuild.googleapis.com','artifactregistry.googleapis.com','--project',$ProjectId) -Quiet
