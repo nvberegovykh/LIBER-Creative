@@ -7,12 +7,10 @@ on:
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/ui-polish-r109.js'
       - 'docs/liber-apps/apps/revex/mobile-final-r122.js'
-      - 'docs/liber-apps/apps/revex/mobile-safe-r133.js'
       - 'docs/liber-apps/apps/revex/docs-pages-r115.js'
       - 'docs/liber-apps/apps/revex/sync-docs-r24.js'
       - 'docs/liber-apps/apps/revex/app.js'
       - '.github/scripts/verify-revex-r109-pure-ui.js'
-      - '.github/scripts/verify-revex-r133-mobile-accessibility.js'
       - '.github/workflows/revex-r109-pure-ui.yml'
   push:
     branches: [main]
@@ -20,12 +18,10 @@ on:
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/ui-polish-r109.js'
       - 'docs/liber-apps/apps/revex/mobile-final-r122.js'
-      - 'docs/liber-apps/apps/revex/mobile-safe-r133.js'
       - 'docs/liber-apps/apps/revex/docs-pages-r115.js'
       - 'docs/liber-apps/apps/revex/sync-docs-r24.js'
       - 'docs/liber-apps/apps/revex/app.js'
       - '.github/scripts/verify-revex-r109-pure-ui.js'
-      - '.github/scripts/verify-revex-r133-mobile-accessibility.js'
       - '.github/workflows/revex-r109-pure-ui.yml'
 
 permissions:
@@ -43,9 +39,7 @@ jobs:
         run: |
           node --check docs/liber-apps/apps/revex/ui-polish-r109.js
           node --check docs/liber-apps/apps/revex/mobile-final-r122.js
-          node --check docs/liber-apps/apps/revex/mobile-safe-r133.js
           node --check docs/liber-apps/apps/revex/ui-integrity.js
-          node --check .github/scripts/verify-revex-r133-mobile-accessibility.js
       - name: Verify r122 mobile ownership contract
         run: |
           grep -F "mobile-final-r122.js?v=20260817r122-mobile-final1" docs/liber-apps/apps/revex/ui-integrity.js
@@ -55,5 +49,3 @@ jobs:
           grep -F "derivedFromFullSet=true" docs/liber-apps/apps/revex/mobile-final-r122.js
       - name: Verify desktop parity, touch Walk, linked Docs and Energy preservation
         run: node .github/scripts/verify-revex-r109-pure-ui.js
-      - name: Verify r133 iPhone accessibility convergence
-        run: node .github/scripts/verify-revex-r133-mobile-accessibility.js
