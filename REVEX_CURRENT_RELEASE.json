@@ -11,7 +11,8 @@
     "installedPreviousAddinBecomesTimestampedShadow": true,
     "immutableProjectRevisionsAreNeverRewritten": true,
     "currentRuntimeUsesCanonicalFacades": true,
-    "packageFilenamesAreBoundaryAdaptersNotInternalArchitecture": true
+    "packageFilenamesAreBoundaryAdaptersNotInternalArchitecture": true,
+    "candidateWorkersProveReadyBeforeBrokerCutover": true
   },
   "current": {
     "companionRoot": "docs/liber-apps/apps/revex/index.html",
@@ -22,9 +23,9 @@
     "energyContracts": "src/Liber.Revex.Revit/Engineering/Energy/revex_energy_contracts.py",
     "energyPublicationPolicy": "src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups.py",
     "energyRunner": "src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner.py",
-    "energyDeployer": "server/revex-energy-worker/DEPLOY_ENERGY_R127.ps1",
-    "reportDeployer": "server/revex-report-functions/DEPLOY_REPORT_R126.ps1",
-    "renderDeployer": "server/revex-render-worker/DEPLOY_RENDER_R126.ps1"
+    "energyDeployer": "server/revex-energy-worker/deploy-current.ps1",
+    "reportDeployer": "server/revex-report-functions/deploy-current.ps1",
+    "renderDeployer": "server/revex-render-worker/deploy-current.ps1"
   },
   "requiredCapabilities": {
     "projectIdentity": "one REVEX project identity shared by Revit, BIM, Design Book, Spec Book, Docs, Chat, History, Render and Energy",
@@ -87,6 +88,7 @@
       "current BIM viewport and camera authority",
       "private authenticated off-device worker",
       "warm model before broker cutover",
+      "source-bound candidate service and broker",
       "no client model cache",
       "no external Rendair routing",
       "saved results attach to Design Book and project render history"
@@ -107,6 +109,7 @@
       "panel-by-panel multi-floor curtain wall mapping",
       "actual Levels and physical upper-envelope covers",
       "durable lease heartbeat and resumable publication",
+      "source-bound candidate service and broker",
       "applicant, modeler, signature and seal never fabricated"
     ]
   },
@@ -119,6 +122,9 @@
       "server/revex-energy-worker/revex_energy_pipeline_r69.py"
     ],
     "deployment": [
+      "server/revex-energy-worker/DEPLOY_ENERGY_R127.ps1",
+      "server/revex-render-worker/DEPLOY_RENDER_R126.ps1",
+      "server/revex-report-functions/DEPLOY_REPORT_R126.ps1",
       "RECOVER_REVEX_ENERGY_CURRENT.cmd",
       "RECOVER_REVEX_ENERGY_CURRENT.ps1",
       "DEPLOY_REVEX_CURRENT_SERVICES.cmd",
@@ -127,7 +133,7 @@
       "UPDATE_REVEX_ADDIN_CURRENT.ps1"
     ],
     "ui": "Version-suffixed UI modules remain preserved behind the canonical index/ui-integrity authority and are guarded by current convergence QA.",
-    "cloud": "Previous Cloud Run/Functions revisions are not deleted by FINALIZE_REVEX; candidate workers cut over only after readiness proof."
+    "cloud": "Previous Cloud Run/Functions revisions are not deleted by FINALIZE_REVEX; source-bound candidate workers cut over only after readiness proof."
   },
   "energyPolicy": {
     "actualVtWins": true,
