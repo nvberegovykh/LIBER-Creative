@@ -2,9 +2,12 @@
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 
-const palette=fs.readFileSync('docs/liber-apps/apps/revex/blocks-palette-r126.js','utf8');
-const bridge=fs.readFileSync('src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs','utf8');
-const placement=fs.readFileSync('src/Liber.Revex.Revit/Services/FamilyPlacementService.cs','utf8');
+// A normal Windows git clone may materialize tracked text as CRLF while Actions
+// checkout keeps LF. Verify source semantics, not checkout line-ending policy.
+const read=(file)=>fs.readFileSync(file,'utf8').replace(/\r\n?/g,'\n');
+const palette=read('docs/liber-apps/apps/revex/blocks-palette-r126.js');
+const bridge=read('src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs');
+const placement=read('src/Liber.Revex.Revit/Services/FamilyPlacementService.cs');
 
 const must=(text,needle,label)=>assert.ok(text.includes(needle),`${label}: missing ${needle}`);
 const forbid=(text,needle,label)=>assert.ok(!text.includes(needle),`${label}: forbidden ${needle}`);
@@ -40,6 +43,7 @@ forbid(placement,'ZipFile.ExtractToDirectory(path, extractedFolder)','unbounded 
 
 console.log(JSON.stringify({
   REVEX_R135_BLOCKS_PLACEMENT:'PASSED',
+  lineEndingInvariant:true,
   walkPlacementFt:3,
   exactWalkZ:true,
   opaqueToken:true,
