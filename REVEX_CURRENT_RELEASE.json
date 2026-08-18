@@ -19,6 +19,7 @@
     "releaseVerifier": ".github/scripts/verify-revex-current-release.py",
     "companionRoot": "docs/liber-apps/apps/revex/index.html",
     "companionIntegrityOwner": "docs/liber-apps/apps/revex/ui-integrity.js",
+    "chatBoundaryRuntime": "docs/liber-apps/apps/revex/chat-convergence-r136.js",
     "renderRuntime": "docs/liber-apps/apps/revex/render-agent.js",
     "revitAddinProject": "src/Liber.Revex.Revit/Liber.Revex.Revit.csproj",
     "engineeringSync": "src/Liber.Revex.Revit/Services/EngineeringSyncService.cs",
@@ -67,8 +68,18 @@
     "docs": [
       "one current Full Set owner",
       "linked ordered one-page sheet PDFs derived from that exact Full Set",
+      "legacy detached printing-sheet records fold into the matching Full Set revision instead of becoming standalone documents",
       "sheets are linked pages not detached standalone documents",
-      "manual project documents remain in the same library"
+      "manual Record In and Record Out documents remain in the same project library",
+      "affected native Revit plan PDFs remain synchronized with their authoritative source revision"
+    ],
+    "chat": [
+      "Secure Chat remains the message and storage owner",
+      "Chat connection identity is scoped to the exact active REVEX project",
+      "a stale asynchronous connection from a previous project cannot enter the new project state or iframe",
+      "a server response naming a different project fails closed",
+      "project changes clear stale iframe state and draft context before reconnecting",
+      "BIM and Design Book context is delivered only to the iframe bound to the active project"
     ],
     "issues": [
       "all active issues shown by default",
@@ -84,9 +95,13 @@
     ],
     "blocks": [
       "Walk-only placement UI",
-      "three-foot intended placement distance",
+      "three-foot intended placement distance from the active Walk camera",
+      "exact Walk target elevation survives the Three-to-Revit coordinate conversion",
+      "provider file path remains local and browser JavaScript receives only an opaque placement token",
       "Revit ExternalEvent placement",
-      "unsupported family placement fails closed"
+      "bounded nearest face-host and element-host fallback for supported hosted/work-plane families",
+      "downloaded ZIP families use bounded entry, expansion and path-containment checks",
+      "unsupported adaptive, detail, view and curve family placement fails closed"
     ],
     "render": [
       "current BIM viewport and camera authority",
