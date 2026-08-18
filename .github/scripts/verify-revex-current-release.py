@@ -58,6 +58,7 @@ chat_boundary = read("docs/liber-apps/apps/revex/chat-convergence-r136.js")
 wallt_control = read("docs/liber-apps/apps/revex/wallt-control-plane.js")
 wallt_fixer = read("docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js")
 wallt_cycle = read("docs/liber-apps/apps/revex/wallt-cycle-history.js")
+wallt_ui = read("docs/liber-apps/apps/revex/wallt-ui-r138.js")
 blocks_palette = read("docs/liber-apps/apps/revex/blocks-palette-r126.js")
 blocks_bridge = read("src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs")
 family_placement = read("src/Liber.Revex.Revit/Services/FamilyPlacementService.cs")
@@ -79,6 +80,7 @@ assert release["current"]["releaseVerifier"] == ".github/scripts/verify-revex-cu
 assert release["current"]["walltControlRuntime"] == "docs/liber-apps/apps/revex/wallt-control-plane.js"
 assert release["current"]["walltFixerAdaptersRuntime"] == "docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js"
 assert release["current"]["walltCycleHistoryRuntime"] == "docs/liber-apps/apps/revex/wallt-cycle-history.js"
+assert release["current"]["walltUiRuntime"] == "docs/liber-apps/apps/revex/wallt-ui-r138.js"
 assert release["current"]["chatBoundaryRuntime"] == "docs/liber-apps/apps/revex/chat-convergence-r136.js"
 assert release["current"]["energyDeployer"] == "server/revex-energy-worker/deploy-current.ps1"
 assert release["current"]["reportDeployer"] == "server/revex-report-functions/deploy-current.ps1"
@@ -157,6 +159,7 @@ must(ui,
      "wallt-control-plane.js?v=20260818-wallt-control2",
      "wallt-cycle-history.js?v=20260818-wallt-cycle-history1",
      "wallt-fixer-adapters-r137.js?v=20260818r137-fixer-adapters1",
+     "wallt-ui-r138.js?v=20260818r138-wallt-ui1",
      "mobile-final-r122.js", "appearance-convergence-r126.js", "docs-convergence-r126.js",
      "docs-pages-r115.js?v=20260818r134-docs-linked-pages1",
      "issues-convergence-r126.js", "issues-inspector-r126.js", "history-daily-r126.js",
@@ -184,6 +187,14 @@ must(wallt_fixer,
 must(wallt_cycle,
      "owner:'RevexStore.appendHistory'", "kind:'wallt-cycle'", "windowHours:24",
      "Store.appendHistory(projectId,historyEvent(row))", "newDatabaseOwner:false")
+must(wallt_ui,
+     "const BUILD='20260818r138-wallt-ui1'", "controlOwner:'wallt-control-plane'", "storageOwner:null",
+     "open.id='revex-wallt-open'", "panel.id='revex-wallt-panel'",
+     'data-wallt-mode="helper"', 'data-wallt-mode="fixer"', "owner[mode](request)",
+     "safe-area-inset-bottom", "safe-area-inset-right", "newStorageOwner:false")
+forbid(wallt_ui,
+       "firebase.firestore", "localStorage.setItem", "sessionStorage.setItem",
+       "walltAgent.response", "runEnergyServer(", "commitBimOverlay(")
 must(blocks_palette,
      "placementDistanceFt:3", "viewer.camera.position.clone().addScaledVector(dir,3)",
      "return{x:target.x,y:-target.z,z:target.y", "type:'liber:revex-family-place-r126'")
@@ -288,6 +299,7 @@ print(json.dumps({
     "fullUiAndBimContract": True,
     "walltHelperFixerRequired": True,
     "walltBoundedFixerAdaptersRequired": True,
+    "walltVisibleUiRequired": True,
     "wallt24hHistoryRequired": True,
     "docsLinkedPageRuntimeRequired": True,
     "projectIsolatedSecureChatRequired": True,
