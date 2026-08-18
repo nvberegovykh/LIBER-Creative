@@ -23,8 +23,8 @@ const bridge=read('src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs');
 const placement=read('src/Liber.Revex.Revit/Services/FamilyPlacementService.cs');
 const plans=read('src/Liber.Revex.Revit/Services/AffectedPlanExportService.cs');
 
-must(index,'ui-integrity.js?v=20260817r126-functional-convergence2','root cache key');
-must(ui,"BUILD='20260817r126-functional-convergence2'",'r126 loader');
+must(index,'ui-integrity.js?v=20260818r128-full-convergence1','root cache key');
+must(ui,"BUILD='20260818r128-full-convergence1'",'current loader');
 for(const file of ['appearance-convergence-r126.js','docs-convergence-r126.js','issues-convergence-r126.js','issues-inspector-r126.js','history-daily-r126.js','blocks-palette-r126.js','render-convergence-r126.js']) must(ui,file,'r126 loader');
 
 must(pages,'fullSetAuthority:true','Docs canonical owner');
@@ -70,6 +70,7 @@ must(bridge,'RevexFamilyPlacementExternalHandler','Revit ExternalEvent placement
 must(placement,'MaxHostDistanceFt = 8.0','bounded hosted placement');
 must(placement,'unsupported placement type','unsupported family fail-closed');
 
+// Preserve and validate the Qwen enhancement implementation without making it the current Render owner.
 must(renderWorker,'ensure_server_warm()','server boot warm');
 must(renderWorker,'REVEX_WARM_TOKEN','warm proof token');
 must(renderWorker,'_WARM_MAX_SECONDS = 32 * 60','bounded persistent warm retry');
@@ -82,6 +83,7 @@ must(renderDeploy,'revex-render-worker-r126','parallel safe cutover service');
 must(renderDeploy,'server model warm failed','warm fail closed');
 must(renderDeploy,'-BrokerOnly','broker cutover after proof');
 must(docker,'render_r126:APP','r126 worker entrypoint');
+must(renderClient,"providerOwner:'render-agent.js'",'canonical Google Render owner');
 must(renderClient,'localModelCache:false','no client model cache');
 must(renderClient,"frame.setAttribute('src','about:blank')",'legacy iframe suppressed');
 
@@ -90,4 +92,4 @@ if(tabs<7)throw new Error(`main module tabs missing: ${tabs}`);
 for(const forbidden of ['runRevexEnergy','GeometryCo','COMcheck']){
   mustNot(blocks,forbidden,'Blocks scope');mustNot(docs,forbidden,'Docs scope');mustNot(issues,forbidden,'Issues scope');mustNot(renderClient,forbidden,'Render client scope');
 }
-console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',docs:'single-final-owner',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active+empty-selection-inspector',history:'NYC-day-technical',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'server-warm-min1-retry',energy:'scope-preserved'}));
+console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',docs:'single-final-owner',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active+empty-selection-inspector',history:'NYC-day-technical',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'google-current+qwen-shadow',energy:'scope-preserved'}));
