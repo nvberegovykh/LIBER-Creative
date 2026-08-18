@@ -4,6 +4,7 @@ const path = require('path');
 const root = path.resolve(__dirname, '../..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 const control = read('docs/liber-apps/apps/revex/wallt-control-plane.js');
+const fixer = read('docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js');
 const cycleHistory = read('docs/liber-apps/apps/revex/wallt-cycle-history.js');
 const ui = read('docs/liber-apps/apps/revex/ui-integrity.js');
 const store = read('docs/liber-apps/apps/revex/store.js');
@@ -17,6 +18,7 @@ function forbid(text, ...markers) {
 }
 
 must(control,
+  "const BUILD = '20260818-wallt-control2'",
   "const CHANNEL_HELPER = 'helper'",
   "const CHANNEL_FIXER = 'fixer'",
   'const CYCLE_MS = 24 * 60 * 60 * 1000',
@@ -34,11 +36,29 @@ must(control,
   'function registerAdapter(name, adapter = {})',
   'helperActions:',
   'fixerActions:',
+  'const adapterName = type.slice(0, separator)',
+  'Registered fixer actions (use the exact adapter:action type)',
   "data.type !== 'liber:wallt-control'",
   "event.origin !== location.origin",
   'root.__revexWalltControl = Object.freeze',
   "arbitraryDomMutation: false",
   "sourceMutation: false"
+);
+
+must(fixer,
+  "const BUILD='20260818r137-fixer-adapters1'",
+  "adapter:'current'",
+  'reversibleLocalOnly:true',
+  'sourceMutation:false',
+  "registerAdapter('current'",
+  'docs_reassert_owner',
+  'chat_reset_active_project',
+  'bim_reapply_overlays',
+  'bim_refit_view',
+  'ui_reopen_active_view',
+  'mobile_reapply_constraints',
+  'energy_reopen_review',
+  'energyPipelineMutation:false'
 );
 
 must(cycleHistory,
@@ -60,9 +80,10 @@ must(store,
 );
 
 must(ui,
-  "loadScript('wallt-control-plane.js?v=20260818-wallt-control1','wallt-control-plane')",
+  "loadScript('wallt-control-plane.js?v=20260818-wallt-control2','wallt-control-plane')",
   "loadScript('wallt-cycle-history.js?v=20260818-wallt-cycle-history1','wallt-cycle-history')",
-  "wallt:'helper+fixer+24h-history'"
+  "loadScript('wallt-fixer-adapters-r137.js?v=20260818r137-fixer-adapters1','wallt-fixer-adapters-r137')",
+  "wallt:'helper+bounded-fixer-adapters+24h-history'"
 );
 
 must(wallt,
@@ -83,6 +104,13 @@ forbid(control,
   'EnergyPlus',
   'GeometryCo'
 );
+forbid(fixer,
+  'firebase.firestore',
+  'runEnergyServer(',
+  'commitBimOverlay(',
+  'eval(',
+  'new Function('
+);
 // The durability adapter must use the existing History owner, not Firestore directly.
 forbid(cycleHistory,
   'firebase.firestore',
@@ -91,17 +119,18 @@ forbid(cycleHistory,
   'localStorage.setItem'
 );
 
-// Fixer cannot invent arbitrary DOM/source mutations; deeper abilities arrive only through registered owners.
 if (!control.includes("A local fix may execute only a registered fixer adapter")) throw new Error('fixer adapter boundary missing');
 if (!control.includes("old generation files are evidence/rollback shadows")) throw new Error('generation ownership boundary missing');
 
 console.log(JSON.stringify({
   REVEX_WALLT_CONTROL_PLANE: 'PASSED',
+  build: '20260818-wallt-control2',
   helperPipeline: true,
   fixerPipeline: true,
+  executablePrefixedAdapters: true,
+  boundedCurrentOwnerRepairs: true,
   exactPanelNavigation: true,
   explicitIssueCommit: true,
-  deeperAdapters: true,
   rolling24hLocalLedger: true,
   durableProjectHistoryMirror: true,
   historyOwnerReused: true,
