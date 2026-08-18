@@ -65,15 +65,23 @@ jobs:
         run: docker build --pull -f server/revex-energy-worker/Dockerfile -t revex-wallt-energy:${{ github.sha }} .
 
       - name: Re-run WALLT verifier inside exact production image
-        run: docker run --rm --entrypoint python3 revex-wallt-energy:${{ github.sha }} /opt/revex/server/verify_energy_agent.py
+        run: |
+          docker run --rm \
+            -e PYTHONPATH=/opt/revex/energy:/opt/revex/server \
+            --entrypoint python3 revex-wallt-energy:${{ github.sha }} \
+            /opt/revex/server/verify_energy_agent.py
 
       - name: Verify user-confirmed 17-sheet EN-1 at 63 percent inside image
         run: |
           docker run --rm \
+            -e PYTHONPATH=/opt/revex/energy:/opt/revex/server \
             -v "$PWD/server/revex-energy-worker/verify_en1_print_contract.py:/opt/revex/server/verify_en1_print_contract.py:ro" \
             --entrypoint python3 revex-wallt-energy:${{ github.sha }} \
             /opt/revex/server/verify_en1_print_contract.py
 
       - name: Verify active current runner and print policy imports inside image
         run: |
-          docker run --rm --entrypoint python3 revex-wallt-energy:${{ github.sha }} -c "import sys; sys.path[:0]=['/opt/revex/energy','/opt/revex/server']; import revex_energy_agent as a, revex_energy_agent_evidence as e, revex_energy_agent_filing as f, revex_energy_agent_context as c, revex_en1_print_contract as pc, revex_user_identity_en1 as en1, revex_energy_pipeline_current as p; pc.install(en1); assert a.MISSING_VT == 0.45; assert e.MISSING_VT == 0.45; assert f.MISSING_VT == 0.45; assert c.SCHEMA == 'liber.revex.energy-agent-context.v1'; assert pc.PRINT_SCALE == 63 and len(pc.PRINT_SHEETS) == 17 and pc.PRINT_SHEETS[0] == 'Color legend'; assert en1._print_en1_pdf is pc._print_pdf; assert p.maintainer is a; print('WALLT_PRODUCTION_IMAGE=PASSED')"
+          docker run --rm \
+            -e PYTHONPATH=/opt/revex/energy:/opt/revex/server \
+            --entrypoint python3 revex-wallt-energy:${{ github.sha }} \
+            -c "import revex_energy_agent as a, revex_energy_agent_evidence as e, revex_energy_agent_filing as f, revex_energy_agent_context as c, revex_en1_print_contract as pc, revex_user_identity_en1 as en1, revex_energy_pipeline_current as p; pc.install(en1); assert a.MISSING_VT == 0.45; assert e.MISSING_VT == 0.45; assert f.MISSING_VT == 0.45; assert c.SCHEMA == 'liber.revex.energy-agent-context.v1'; assert pc.PRINT_SCALE == 63 and len(pc.PRINT_SHEETS) == 17 and pc.PRINT_SHEETS[0] == 'Color legend'; assert en1._print_en1_pdf is pc._print_pdf; assert p.maintainer is a; print('WALLT_PRODUCTION_IMAGE=PASSED')"
