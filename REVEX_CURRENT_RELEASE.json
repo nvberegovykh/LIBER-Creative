@@ -19,6 +19,9 @@
     "releaseVerifier": ".github/scripts/verify-revex-current-release.py",
     "companionRoot": "docs/liber-apps/apps/revex/index.html",
     "companionIntegrityOwner": "docs/liber-apps/apps/revex/ui-integrity.js",
+    "walltControlRuntime": "docs/liber-apps/apps/revex/wallt-control-plane.js",
+    "walltFixerAdaptersRuntime": "docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js",
+    "walltCycleHistoryRuntime": "docs/liber-apps/apps/revex/wallt-cycle-history.js",
     "chatBoundaryRuntime": "docs/liber-apps/apps/revex/chat-convergence-r136.js",
     "renderRuntime": "docs/liber-apps/apps/revex/render-agent.js",
     "revitAddinProject": "src/Liber.Revex.Revit/Liber.Revex.Revit.csproj",
@@ -33,6 +36,15 @@
   },
   "requiredCapabilities": {
     "projectIdentity": "one REVEX project identity shared by Revit, BIM, Design Book, Spec Book, Docs, Chat, History, Render and Energy under project owner/member/admin access",
+    "wallt": [
+      "Helper operates the existing current REVEX owners through explicit navigate, focus, search, selection, control, issue and Chat actions instead of inventing duplicate implementations",
+      "Fixer diagnoses from current runtime state and diagnostics and may execute only registered bounded reversible current-owner repair adapters",
+      "planner-advertised adapter:action names are executable by the same control-plane router",
+      "bounded Fixer repairs cover Docs owner reassertion, active-project Chat reset, BIM overlay reapplication/refit, active-view reopen, mobile constraint reapply and Energy review reopen",
+      "Fixer cannot perform arbitrary DOM mutation, source mutation, deployment, database ownership changes or immutable Revit/Engineering revision rewrites",
+      "when no registered repair applies the Fixer requests a source candidate change instead of fabricating a runtime patch",
+      "Helper and Fixer evidence is kept in a rolling 24-hour cycle ledger and meaningful events mirror into the existing project History owner without creating another database lane"
+    ],
     "bim": [
       "exact synced Revit model",
       "persistent visible-hidden-deleted overlays",
@@ -119,6 +131,7 @@
       "native Revit schedule evidence",
       "current gbXML plus EPW evidence",
       ">=80% publication hard stop and >=95% visible review target",
+      "WALLT active Energy maintainer preflights filing-critical facts, repairs only from current evidence/tools and emits resumable Revit repair requests when facts remain underdetermined",
       "GeometryCo Baseline and Proposed compilation",
       "two EnergyPlus runs",
       "official PNNL COMcheck Backstop",
