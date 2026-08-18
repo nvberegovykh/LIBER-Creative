@@ -55,6 +55,12 @@ const projectId = 'demo-revex-r43';
   await assertSucceeds(updateDoc(doc(member, 'projects', 'alpha'), { status: 'Review' }));
   await assertSucceeds(getDocs(query(collection(member, 'projects'), where('memberIds', 'array-contains', 'member'))));
 
+  const memberIssue = doc(member, 'projects', 'alpha', 'revexIssues', 'member_issue');
+  await assertSucceeds(setDoc(memberIssue, { title: 'Member issue', status: 'open', createdBy: 'member' }));
+  await assertSucceeds(updateDoc(memberIssue, { status: 'review', dueDate: '2026-08-31' }));
+  const memberIssueRead = await getDoc(memberIssue);
+  assert.equal(memberIssueRead.data().status, 'review');
+
   await assertSucceeds(getDoc(doc(member, 'specProjects', 'spec_alpha')));
   await assertSucceeds(getDocs(query(collection(member, 'specProjects'), where('linkedProjectId', '==', 'alpha'))));
   await assertSucceeds(setDoc(doc(member, 'specProjects', 'spec_alpha', 'items', 'window'), { finish: 'bronze' }));
@@ -78,6 +84,7 @@ const projectId = 'demo-revex-r43';
 
   console.log('REVEX r43 project-member security rules QA passed:', {
     memberContentAccess: true,
+    memberIssueWrite: true,
     linkedSpecAccess: true,
     aclProtected: true,
     outsiderDenied: true,
