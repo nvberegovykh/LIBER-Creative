@@ -38,10 +38,14 @@ jobs:
             src/Liber.Revex.Revit/Engineering/Energy/revex_energy_agent_context.py \
             src/Liber.Revex.Revit/Engineering/Energy/revex_energy_maintainer.py \
             src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner.py \
+            server/revex-energy-worker/app_entry.py \
+            server/revex-energy-worker/durable_execution.py \
             server/revex-energy-worker/revex_energy_pipeline_current.py \
             server/revex-energy-worker/revex_en1_print_contract.py \
             server/revex-energy-worker/verify_energy_agent.py \
             server/revex-energy-worker/verify_en1_print_contract.py
+          grep -F 'if _pipeline_status(body) != "COMPLETE"' server/revex-energy-worker/durable_execution.py
+          grep -F 'revision-scoped clarification' server/revex-energy-worker/durable_execution.py
 
       - name: Verify WALLT Companion review and Revit return bridge
         shell: bash
