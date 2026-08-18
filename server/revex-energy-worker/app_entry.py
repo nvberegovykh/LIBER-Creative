@@ -19,10 +19,10 @@ energy_module_root = packaged_energy if packaged_energy.is_dir() else source_ene
 if str(energy_module_root) not in sys.path:
     sys.path.insert(0, str(energy_module_root))
 
-# Current runtime imports canonical modules. Versioned r124/r125 files stay preserved as
-# shadow implementations behind those facades and are not operator-facing authorities.
+# Current runtime imports canonical overlays. Versioned r124/r125 files remain preserved
+# as proven shadow implementations behind these narrow current policies.
 from revex_final_touchups import install_worker_touchups  # noqa: E402
-from revex_publication_resume_r124 import install_publication_resume  # noqa: E402
+from revex_publication_resume_current import install_publication_resume  # noqa: E402
 from durable_execution import install_durable_energy_execution  # noqa: E402
 
 install_worker_touchups()
