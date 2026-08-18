@@ -114,7 +114,7 @@ function Assert-CurrentSource([string]$Root, [string]$Node, [string]$Python) {
     "src\Liber.Revex.Revit\Engineering\Energy\revex_pipeline_runner_r125.py",
     "src\Liber.Revex.Revit\Engineering\Gbxml\LIBER_gbXML_Preflight_and_Export.py",
     "src\Liber.Revex.Revit\Engineering\Gbxml\LIBER_gbXML_Preflight_and_Export.dyn",
-    "server\revex-energy-worker\DEPLOY_ENERGY_CURRENT_ARGV_FIX.ps1",
+    "server\revex-energy-worker\DEPLOY_ENERGY_R127.ps1",
     "server\revex-report-functions\DEPLOY_REPORT_R126.ps1",
     "server\revex-render-worker\DEPLOY_RENDER_R126.ps1",
     $ProjectPath
@@ -248,7 +248,7 @@ try {
   Ensure-FirebaseAuth $Firebase
   $env:REVEX_FIREBASE_AUTH_VERIFIED = "1"
 
-  $energyDeploy = Join-Path $SourceRoot "server\revex-energy-worker\DEPLOY_ENERGY_CURRENT_ARGV_FIX.ps1"
+  $energyDeploy = Join-Path $SourceRoot "server\revex-energy-worker\DEPLOY_ENERGY_R127.ps1"
   Step "Deploy proven current Energy worker/broker from the same exact source"
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $energyDeploy -ProjectId $ProjectId -Region $Region -Service $script:EnergyService -SourceCandidate $SourceSha -NoPause
   if ($LASTEXITCODE -ne 0) { throw "Energy deployment failed. Existing Energy authority remains; Revit add-in was not installed." }
