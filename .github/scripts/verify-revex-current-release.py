@@ -25,8 +25,6 @@ def forbid(text: str, *markers: str) -> None:
             raise AssertionError(f"forbidden current-release marker: {marker}")
 
 
-# Preserve the deep r127 convergence suite as a version-shadow regression; current
-# authority is this non-versioned verifier and the release manifest below.
 shadow_verifier = ROOT / ".github/scripts/verify-revex-r127-single-controller.py"
 completed = subprocess.run([sys.executable, str(shadow_verifier)], cwd=ROOT)
 if completed.returncode != 0:
@@ -37,6 +35,7 @@ finalizer = read("FINALIZE_REVEX.ps1")
 energy_deploy = read("server/revex-energy-worker/deploy-current.ps1")
 render_deploy = read("server/revex-render-worker/deploy-current.ps1")
 report_deploy = read("server/revex-report-functions/deploy-current.ps1")
+access_deploy = read("firebase/deploy-current-access.ps1")
 contracts = read("src/Liber.Revex.Revit/Engineering/Energy/revex_energy_contracts.py")
 touchups = read("src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups.py")
 pipeline = read("server/revex-energy-worker/revex_energy_pipeline_current.py")
@@ -53,19 +52,22 @@ assert release["current"]["releaseVerifier"] == ".github/scripts/verify-revex-cu
 assert release["current"]["energyDeployer"] == "server/revex-energy-worker/deploy-current.ps1"
 assert release["current"]["renderDeployer"] == "server/revex-render-worker/deploy-current.ps1"
 assert release["current"]["reportDeployer"] == "server/revex-report-functions/deploy-current.ps1"
+assert release["current"]["accessDeployer"] == "firebase/deploy-current-access.ps1"
+assert release["principles"]["liveFirestoreRulesArePreservedBeforeRevexAccessPatch"] is True
 
-# One canonical controller may call only canonical deployers. Versioned/recovery scripts
-# continue to exist as shadows but cannot become operational dependencies again.
 must(finalizer,
      ".github\\scripts\\verify-revex-current-release.py",
      "server\\revex-energy-worker\\deploy-current.ps1",
      "server\\revex-render-worker\\deploy-current.ps1",
      "server\\revex-report-functions\\deploy-current.ps1",
+     "firebase\\deploy-current-access.ps1",
      "Stage and verify current Energy candidate without broker cutover",
      "Stage, warm and verify current Render candidate without broker cutover",
-     "Verify current Companion UI is live before any broker cutover",
+     "Verify current Companion UI is live before any access or broker cutover",
+     "Deploy preserved source-bound project access rules",
      "Cut Render broker to the already-warm current candidate",
      "Cut Energy broker to the already-verified current candidate",
+     "Verify live project access rules are bound to the exact release source",
      "previousInstalledRevisionShadow",
      "run ONE fresh SYNC ENGINEERING")
 forbid(finalizer,
@@ -76,12 +78,9 @@ forbid(finalizer,
        "FINALIZE_REVEX_CURRENT",
        "PUBLISH_REVEX_R49")
 
-for deployer in (energy_deploy, render_deploy, report_deploy):
-    must(deployer,
-         "$Verifier = Join-Path $Root",
-         "verify-revex-current-release.py",
-         "Validate full current REVEX revision")
-    forbid(deployer, "@('.github\\scripts\\verify-revex")
+for deployer in (energy_deploy, render_deploy, report_deploy, access_deploy):
+    must(deployer, "$Verifier = Join-Path $Root", "verify-revex-current-release.py", "Validate full current REVEX revision")
+    forbid(deployer, "PUBLISH_REVEX_R49")
 
 must(energy_deploy,
      "CandidateOnly", "BrokerOnly", "REVEX_SOURCE_CANDIDATE",
@@ -94,10 +93,15 @@ must(render_deploy,
 forbid(render_deploy, "DEPLOY_RENDER_SERVER.ps1")
 must(report_deploy,
      "REVEX_SOURCE_CANDIDATE", "documentRevexRevision", "finalizeRevexDailyReport")
+must(access_deploy,
+     "firebaserules.googleapis.com",
+     "patch-live-firestore-rules.js",
+     "revex-project-access-r43.rules",
+     "REVEX_SOURCE_CANDIDATE=",
+     "firestore:rules",
+     "preserve the live ruleset",
+     "allow read, write: if revexR43ProjectMember(projectId);")
 
-# Project creation/activation must remain a first-class Companion capability. Spec Book
-# and Chat projections can retry, but a secondary projection must never invalidate the
-# canonical REVEX project identity.
 must(store,
      "async createProject({ name, code, description, driveFileId })",
      "ownerId: uid",
@@ -109,21 +113,19 @@ must(store,
      "Project created · ${title}",
      "async ensureSpecProject(projectId, preferredId, suppliedProject = null)",
      "publishSpecScheduleSources")
-must(app,
-     "new-project-button",
-     "Store.createProject")
+must(app, "new-project-button", "Store.createProject")
 
-# Access and cross-project isolation stay part of the preserved release contract.
 must(rules_qa,
      "memberContentAccess: true",
+     "memberIssueWrite: true",
+     "revexIssues', 'member_issue'",
+     "assertSucceeds(updateDoc(memberIssue",
      "linkedSpecAccess: true",
      "aclProtected: true",
      "outsiderDenied: true",
      "crossProjectDenied: true",
      "adminAccess: true")
 
-# Permanent architectural lessons remain present so future revisions do not recreate the
-# failure classes this release removes.
 must(dev_contract,
      "One concern = one runtime owner",
      "BIM state lanes are separate",
@@ -135,8 +137,6 @@ must(dev_contract,
      "Diagnostics are evidence, not workload",
      "The objective is not to accumulate fixes")
 
-# Current Energy evidence and package contracts are semantic/typed internally. Exact
-# filenames are centralized only at transfer/filing boundaries.
 must(contracts,
      "class ArtifactKind", "class EvidenceBundle", "class FilingPackage",
      '"revit-project-identity": ArtifactKind.PROJECT_IDENTITY',
@@ -162,8 +162,6 @@ must(pipeline,
      '"kind": "release-package"',
      '"entryCount": 9')
 
-# Execute the actual-evidence VT parser too: a value present only in evidence text must
-# remain the actual value, while missing evidence reaches the fixed 0.45 policy later.
 energy_root = ROOT / "src/Liber.Revex.Revit/Engineering/Energy"
 if str(energy_root) not in sys.path:
     sys.path.insert(0, str(energy_root))
@@ -173,8 +171,6 @@ assert abs(float(current_touchups._actual_vt({"visibleTransmittance": "0.52"})) 
 assert current_touchups._actual_vt({"evidence": "Fenestration U 0.30 SHGC 0.30"}) is None
 assert abs(float(current_touchups.MISSING_VT) - 0.45) < 1e-9
 
-# Current release must retain every capability category recovered from the actual project
-# conversation, not merely Energy.
 expected_capabilities = {
     "projectIdentity", "bim", "mobile", "designBook", "specBook", "docs",
     "issues", "history", "blocks", "render", "energy",
@@ -190,6 +186,8 @@ print(json.dumps({
     "candidateBeforeBrokerCutover": True,
     "projectCreationPreserved": True,
     "projectAccessIsolationPreserved": True,
+    "memberIssueWriteProven": True,
+    "liveRulesPreservedAndSourceBound": True,
     "fullUiAndBimContract": True,
     "typedEvidence": True,
     "scheduleEvidenceByRole": True,
