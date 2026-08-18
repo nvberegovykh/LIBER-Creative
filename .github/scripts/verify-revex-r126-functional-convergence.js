@@ -8,6 +8,7 @@ const index=read('docs/liber-apps/apps/revex/index.html');
 const ui=read('docs/liber-apps/apps/revex/ui-integrity.js');
 const docs=read('docs/liber-apps/apps/revex/docs-convergence-r126.js');
 const pages=read('docs/liber-apps/apps/revex/docs-pages-r115.js');
+const walltUi=read('docs/liber-apps/apps/revex/wallt-ui-r138.js');
 const appearance=read('docs/liber-apps/apps/revex/appearance-convergence-r126.js');
 const texture=read('docs/liber-apps/apps/revex/viewer-texture-r115.js');
 const issues=read('docs/liber-apps/apps/revex/issues-convergence-r126.js');
@@ -29,7 +30,12 @@ if(!uiBuild)throw new Error('current loader BUILD marker is missing');
 if(!rootBuild)throw new Error('root cache key is missing');
 if(rootBuild!==uiBuild)throw new Error(`current UI owner mismatch: index=${rootBuild} ui=${uiBuild}`);
 must(ui,'mobile-safe-r133.js','current mobile safety owner');
+must(ui,"wallt-ui-r138.js?v=20260818r138-wallt-ui1",'visible WALLT loader');
 for(const file of ['appearance-convergence-r126.js','docs-convergence-r126.js','issues-convergence-r126.js','issues-inspector-r126.js','history-daily-r126.js','blocks-palette-r126.js','render-convergence-r126.js']) must(ui,file,'r126 loader');
+must(walltUi,"const BUILD='20260818r138-wallt-ui1'",'visible WALLT build');
+must(walltUi,"controlOwner:'wallt-control-plane'",'visible WALLT control owner');
+must(walltUi,'storageOwner:null','visible WALLT no storage owner');
+require('./verify-revex-r138-wallt-ui.js');
 
 must(pages,'fullSetAuthority:true','Docs canonical owner');
 must(pages,'derivedFromFullSet:true','Docs linked sheet authority');
@@ -95,6 +101,6 @@ must(renderClient,"frame.setAttribute('src','about:blank')",'legacy iframe suppr
 const tabs=(index.match(/data-view="(?:bim|design|spec|docs|energy|chat|history)"/g)||[]).length;
 if(tabs<7)throw new Error(`main module tabs missing: ${tabs}`);
 for(const forbidden of ['runRevexEnergy','GeometryCo','COMcheck']){
-  mustNot(blocks,forbidden,'Blocks scope');mustNot(docs,forbidden,'Docs scope');mustNot(issues,forbidden,'Issues scope');mustNot(renderClient,forbidden,'Render client scope');
+  mustNot(blocks,forbidden,'Blocks scope');mustNot(docs,forbidden,'Docs scope');mustNot(issues,forbidden,'Issues scope');mustNot(renderClient,forbidden,'Render client scope');mustNot(walltUi,forbidden,'WALLT UI scope');
 }
-console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',uiOwner:uiBuild,docs:'single-final-owner+linked-page-runtime',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active+empty-selection-inspector',history:'NYC-day-technical',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'google-current+qwen-shadow',energy:'scope-preserved'}));
+console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',uiOwner:uiBuild,wallt:'visible-helper-fixer-current-control',docs:'single-final-owner+linked-page-runtime',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active+empty-selection-inspector',history:'NYC-day-technical',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'google-current+qwen-shadow',energy:'scope-preserved'}));
