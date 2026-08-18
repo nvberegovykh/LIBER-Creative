@@ -5,6 +5,8 @@ on:
     paths:
       - 'docs/liber-apps/apps/revex/wallt-control-plane.js'
       - 'docs/liber-apps/apps/revex/wallt-cycle-history.js'
+      - 'docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js'
+      - 'docs/liber-apps/apps/revex/chat-convergence-r136.js'
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'docs/liber-apps/apps/revex/store.js'
       - 'docs/liber-apps/apps/revex/app.js'
@@ -24,6 +26,10 @@ on:
       - 'server/firebase-functions/package.json'
       - '.github/scripts/verify-revex-wallt-control-plane.js'
       - '.github/scripts/verify-revex-current-platform-connections.js'
+      - '.github/scripts/verify-revex-r134-docs-linked-pages.js'
+      - '.github/scripts/verify-revex-r135-blocks-placement.js'
+      - '.github/scripts/verify-revex-r136-project-chat.js'
+      - '.github/scripts/verify-revex-r137-wallt-fixer-adapters.js'
       - '.github/workflows/revex-wallt-control-plane-validation.yml'
   workflow_dispatch:
 
@@ -39,12 +45,26 @@ jobs:
         run: |
           node --check docs/liber-apps/apps/revex/wallt-control-plane.js
           node --check docs/liber-apps/apps/revex/wallt-cycle-history.js
+          node --check docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js
+          node --check docs/liber-apps/apps/revex/chat-convergence-r136.js
           node --check docs/liber-apps/apps/revex/ui-integrity.js
+          node --check docs/liber-apps/apps/revex/docs-pages-r115.js
+          node --check docs/liber-apps/apps/revex/blocks-palette-r126.js
           node --check server/firebase-functions/main.js
           node --check server/firebase-functions/project-chat.js
           node --check .github/scripts/verify-revex-wallt-control-plane.js
           node --check .github/scripts/verify-revex-current-platform-connections.js
-      - name: Verify isolated helper and fixer channels
-        run: node .github/scripts/verify-revex-wallt-control-plane.js
-      - name: Verify current Docs, Families and Chat boundaries
-        run: node .github/scripts/verify-revex-current-platform-connections.js
+          node --check .github/scripts/verify-revex-r134-docs-linked-pages.js
+          node --check .github/scripts/verify-revex-r135-blocks-placement.js
+          node --check .github/scripts/verify-revex-r136-project-chat.js
+          node --check .github/scripts/verify-revex-r137-wallt-fixer-adapters.js
+      - name: Verify isolated Helper and bounded Fixer channels
+        run: |
+          node .github/scripts/verify-revex-wallt-control-plane.js
+          node .github/scripts/verify-revex-r137-wallt-fixer-adapters.js
+      - name: Verify current Docs Families and Chat boundaries
+        run: |
+          node .github/scripts/verify-revex-current-platform-connections.js
+          node .github/scripts/verify-revex-r134-docs-linked-pages.js
+          node .github/scripts/verify-revex-r135-blocks-placement.js
+          node .github/scripts/verify-revex-r136-project-chat.js
