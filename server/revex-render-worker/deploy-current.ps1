@@ -16,6 +16,7 @@ if ($CandidateOnly -and $BrokerOnly) { throw "Choose CandidateOnly or BrokerOnly
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $FunctionsDir = Join-Path $Root "server\revex-render-functions"
 $CloudBuild = Join-Path $PSScriptRoot "cloudbuild.yaml"
+$Verifier = Join-Path $Root '.github\scripts\verify-revex-r127-single-controller.py'
 $WorkerSa = "revex-render-worker@$ProjectId.iam.gserviceaccount.com"
 $BrokerSa = "revex-render-broker@$ProjectId.iam.gserviceaccount.com"
 $Short = $SourceCandidate.Substring(0,12).ToLowerInvariant()
@@ -117,10 +118,10 @@ try {
   Write-Host "Candidate service: $Service"
   Write-Host "Contract: private persistent GPU, source-bound image, server warm proof before broker cutover." -ForegroundColor Green
 
-  foreach($required in @($FunctionsDir,$CloudBuild,(Join-Path $Root 'REVEX_CURRENT_RELEASE.json'),(Join-Path $Root '.github\scripts\verify-revex-r127-single-controller.py'))){if(-not(Test-Path -LiteralPath $required)){throw "Render deployment source is incomplete: $required"}}
+  foreach($required in @($FunctionsDir,$CloudBuild,(Join-Path $Root 'REVEX_CURRENT_RELEASE.json'),$Verifier)){if(-not(Test-Path -LiteralPath $required)){throw "Render deployment source is incomplete: $required"}}
   $GCloud=Require-Command 'gcloud'
   $Python=Require-Command 'python'
-  Require-Ok "Validate full current REVEX revision before Render cloud changes" $Python @('.github\scripts\verify-revex-r127-single-controller.py')
+  Require-Ok "Validate full current REVEX revision before Render cloud changes" $Python @($Verifier)
   $auth=Capture-Native $GCloud @('auth','list','--filter','status:ACTIVE','--format','value(account)')
   if($auth.Code-ne 0-or-not $auth.Text){throw 'Google Cloud administrator sign-in is required before Render deployment.'}
   $Deployer=($auth.Text -split "`n")[0].Trim()
