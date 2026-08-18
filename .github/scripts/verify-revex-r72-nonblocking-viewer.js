@@ -10,6 +10,7 @@ const repair=read('docs/liber-apps/apps/revex/viewer-repair-r79.js');
 const ui=read('docs/liber-apps/apps/revex/ui-integrity.js');
 const oldViewer=read('docs/liber-apps/apps/revex/viewer-r26.js');
 const bridge=read('src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs');
+const appearance126=fs.existsSync(path.join(root,'docs/liber-apps/apps/revex/appearance-convergence-r126.js'))?read('docs/liber-apps/apps/revex/appearance-convergence-r126.js'):'';
 const energyBridge=read('src/Liber.Revex.Revit/Services/EngineeringCompanionWebBridge.cs');
 const managed=read('src/Liber.Revex.Revit/Engineering/Companion/native-managed-energy-bridge.js');
 const diagnostics=read('docs/liber-apps/apps/revex/diagnostics-r29.js');
@@ -35,14 +36,21 @@ must(repair,'if(!proxyMode&&slow>=3)','proxy fallback must be adaptive rather th
 
 must(runtime,'r75-provider-frame','material provider must be embedded in Properties');
 must(runtime,"type:'liber:revex-integration-arm'",'embedded provider must arm user download interception');
-assert(!runtime.includes('liber:revex-integration-open'),'separate provider browser window must not be used');
+assert(!runtime.includes('liber:revex-integration-open'),'legacy material runtime must not spawn its own provider window');
 must(runtime,'Restore all hidden / deleted','unhide/restore-all control must be visible');
 must(repair,"f.setDoc(f.doc(Store.db,'projects',projectId,'revexBimOverlays',row.id)",'legacy restore compatibility must use Store-supported writes');
 assert(!repair.includes('writeBatch'),'legacy Restore All compatibility must not require unavailable Firestore writeBatch');
 
 must(bridge,'DownloadStarting','native bridge must still intercept the user-triggered provider download');
-must(bridge,'liber:revex-integration-file','download must return to originating Companion');
-assert(!bridge.includes('ExecuteScriptAsync'),'provider bridge must never automate or scrape Architextures');
+must(bridge,'ReturnTarget','provider handoff must retain the originating Companion target');
+const modernMaterial=bridge.includes('liber:revex-integration-material-r126');
+const legacyMaterial=bridge.includes('liber:revex-integration-file');
+assert(modernMaterial||legacyMaterial,'download must return to originating Companion');
+if(modernMaterial){
+  must(appearance126,'liber:revex-integration-material-r126','r126 material download must have a Companion consumer');
+  must(appearance126,'toFirestorePlain','r126 appearance persistence must serialize through the Firestore realm');
+}
+assert(!bridge.includes('ExecuteScriptAsync'),'provider bridge must never automate or scrape provider websites');
 
 must(energyBridge,"input[data-liber-revex-native-managed-energy='1']",'managed Energy must own a private native-only FileList');
 must(energyBridge,'DOM.setFileInputFiles','native host must bind exact immutable local files into the private input');
@@ -83,4 +91,4 @@ assert(!ui.includes("loadScript('docs-pages-r68.js"),'main-thread PDF splitter m
 
 must(oldViewer,'this.model=this.proxy(rows)','base viewer must retain immediate metadata fallback while exact geometry builds');
 must(oldViewer,'if(state?.modelUrl)setTimeout','base auto detail call remains intercepted by r75 wrapper');
-console.log(JSON.stringify({schema:'liber.revex.r87-viewer-energy-qa.v1',status:'PASSED',viewer:{targetFps:30,interactionPreemptsDetail:true,adaptiveProxy:true,exactSwapOnlyAfterComplete:true,incrementalAppearance:true,hiddenRestorable:true},materials:{embeddedProperties:true,userDownloadAutoApply:true,separateWindow:false},energy:{privateManagedFileList:true,cloudAuthGated:true,virtualHostFetchRemoved:true,deadUrlPathRemoved:true,entryInitializationOnly:true,publishedRevisionReplay:true,staleFailureRevisionScoped:true},diagnostics:{deduplicated:true},docs:{mainThreadSplitterDisabled:true}},null,2));
+console.log(JSON.stringify({schema:'liber.revex.viewer-energy-qa.v2',status:'PASSED',viewer:{targetFps:30,interactionPreemptsDetail:true,adaptiveProxy:true,exactSwapOnlyAfterComplete:true,incrementalAppearance:true,hiddenRestorable:true},materials:{embeddedProperties:true,userDownloadAutoApply:true,providerAutomation:false,realmSafe:modernMaterial},energy:{privateManagedFileList:true,cloudAuthGated:true,virtualHostFetchRemoved:true,deadUrlPathRemoved:true,entryInitializationOnly:true,publishedRevisionReplay:true,staleFailureRevisionScoped:true},diagnostics:{deduplicated:true},docs:{mainThreadSplitterDisabled:true}},null,2));
