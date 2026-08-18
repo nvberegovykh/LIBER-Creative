@@ -76,9 +76,9 @@
     loadScript('issues-inspector-r126.js?v=20260817r126-empty-selection-issues1','issues-inspector-r126');
     loadScript('history-daily-r126.js?v=20260817r126-daily1','history-daily-r126');
     loadScript('blocks-palette-r126.js?v=20260817r126-blocks1','blocks-palette-r126');
-    loadScript('render-convergence-r126.js?v=20260818r128-render-owner1','render-convergence-r126');
+    loadScript('render-convergence-r126.js?v=20260818r129-freeze-guard1','render-convergence-r126');
   }
   function bind(){installCanonicalOverlayStore();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r125-preserved',moduleLoad:'r126-convergence-last',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r122-mobile+r126-responsive-owners',docs:'r115-single-final-renderer+r126-ownership-guard',texture:'instance-uv>type-texture>design-color>revit',render:'google-gemini-client+qwen-shadow',issues:'revexIssues+all-active-default+empty-selection-inspector',history:'technical-NYC-day',dailyReport:'separate-post-sync-worker',blocks:'walk-only-user-triggered-revit-family',bimProperties:'r117-preserved',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r125-preserved',moduleLoad:'r126-convergence-last',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r122-mobile+r126-responsive-owners',docs:'r115-single-final-renderer+r126-ownership-guard',texture:'instance-uv>type-texture>design-color>revit',render:'google-gemini-client+qwen-shadow+interaction-freeze-guard',issues:'revexIssues+all-active-default+empty-selection-inspector',history:'technical-NYC-day',dailyReport:'separate-post-sync-worker',blocks:'walk-only-user-triggered-revit-family',bimProperties:'r117-preserved',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
 })(window);
