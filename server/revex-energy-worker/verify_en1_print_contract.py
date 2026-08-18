@@ -13,6 +13,7 @@ assert len(current.PRINT_SHEETS) == 17, current.PRINT_SHEETS
 assert current.PRINT_SHEETS[0] == "Color legend"
 assert current.PRINT_SHEETS[-1] == "HVAC Air-side"
 assert current.PRINT_SCALE == 63
+assert current.PAPER_SIZE == "LETTER"
 assert en1.EN1_PRINT_SHEETS == current.PRINT_SHEETS
 assert en1._print_en1_pdf is current._print_pdf
 
@@ -36,18 +37,21 @@ if reference.is_file():
         assert audit["pageCount"] == 17
         assert audit["expectedPageCount"] == 17
         assert audit["printScalePercent"] == 63
+        assert audit["paperSize"] == "LETTER"
         assert audit["fitToPage"] is False
         assert audit["selectedSheets"] == list(current.PRINT_SHEETS)
         assert all(row.get("passed") is True for row in audit["pageMarkers"])
+        assert all(row.get("paperSize") == "LETTER" for row in audit["pageBoxes"])
         exported = True
 
 print(json.dumps({
-    "schema": "liber.revex.en1-print-contract-verification.v1",
+    "schema": "liber.revex.en1-print-contract-verification.v2",
     "status": "PASSED",
     "selectedSheets": len(current.PRINT_SHEETS),
     "colorLegendFirst": True,
     "hvacAirSideLast": True,
     "printScalePercent": current.PRINT_SCALE,
+    "paperSize": current.PAPER_SIZE,
     "fitToPage": False,
     "productionPdfExportVerified": exported,
 }, separators=(",", ":")))
