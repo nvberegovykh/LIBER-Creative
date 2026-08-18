@@ -15,6 +15,7 @@
     "candidateWorkersProveReadyBeforeBrokerCutover": true
   },
   "current": {
+    "releaseVerifier": ".github/scripts/verify-revex-current-release.py",
     "companionRoot": "docs/liber-apps/apps/revex/index.html",
     "companionIntegrityOwner": "docs/liber-apps/apps/revex/ui-integrity.js",
     "revitAddinProject": "src/Liber.Revex.Revit/Liber.Revex.Revit.csproj",
