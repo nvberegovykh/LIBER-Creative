@@ -23,6 +23,8 @@ $ProjectPath = "src\Liber.Revex.Revit\Liber.Revex.Revit.csproj"
 $ExitCode = 1
 $TranscriptStarted = $false
 $SourceSha = ""
+$script:EnergyService = ""
+$script:RenderService = ""
 
 New-Item -ItemType Directory -Path $LogRoot, $WorkRoot -Force | Out-Null
 
@@ -50,7 +52,10 @@ function Invoke-Native([string]$Command, [string[]]$Arguments, [string]$WorkingD
     }
     finally { if ($WorkingDirectory) { Pop-Location } }
   }
-  catch { Write-Host $_.Exception.Message -ForegroundColor Red; return 1 }
+  catch {
+    if (-not $Quiet) { Write-Host $_.Exception.Message -ForegroundColor Red }
+    return 1
+  }
   finally { $ErrorActionPreference = $previous }
 }
 
@@ -86,10 +91,10 @@ function Ensure-GCloudAuth([string]$GCloud) {
 }
 
 function Ensure-FirebaseAuth([string]$Firebase) {
-  if ((Invoke-Native $Firebase @("projects:list","--json") "" -Quiet) -eq 0) { return }
+  if ((Invoke-Native $Firebase @("projects:list","--json") -Quiet) -eq 0) { return }
   Write-Host "Firebase authorization is required once. Opening sign-in..." -ForegroundColor Yellow
   if ((Invoke-Native $Firebase @("login","--reauth")) -ne 0) { throw "Firebase sign-in failed." }
-  if ((Invoke-Native $Firebase @("projects:list","--json") "" -Quiet) -ne 0) { throw "Firebase sign-in did not complete." }
+  if ((Invoke-Native $Firebase @("projects:list","--json") -Quiet) -ne 0) { throw "Firebase sign-in did not complete." }
 }
 
 function Wait-RevitClosed {
@@ -105,28 +110,39 @@ function Wait-RevitClosed {
 
 function Assert-CurrentSource([string]$Root, [string]$Node, [string]$Python) {
   $required = @(
+    "REVEX_CURRENT_RELEASE.json",
     ".github\scripts\verify-revex-current-generation-r53.js",
     ".github\scripts\verify-revex-r99-webview-root-cache.js",
     ".github\scripts\verify-revex-r126-functional-convergence.js",
     ".github\scripts\verify-revex-r127-single-controller.py",
     "src\Liber.Revex.Revit\Engineering\Energy\revex_energy_contracts.py",
+    "src\Liber.Revex.Revit\Engineering\Energy\revex_final_touchups.py",
+    "src\Liber.Revex.Revit\Engineering\Energy\revex_pipeline_runner.py",
     "src\Liber.Revex.Revit\Engineering\Energy\revex_final_touchups_r125.py",
     "src\Liber.Revex.Revit\Engineering\Energy\revex_pipeline_runner_r125.py",
     "src\Liber.Revex.Revit\Engineering\Gbxml\LIBER_gbXML_Preflight_and_Export.py",
     "src\Liber.Revex.Revit\Engineering\Gbxml\LIBER_gbXML_Preflight_and_Export.dyn",
-    "server\revex-energy-worker\DEPLOY_ENERGY_R127.ps1",
-    "server\revex-report-functions\DEPLOY_REPORT_R126.ps1",
-    "server\revex-render-worker\DEPLOY_RENDER_R126.ps1",
+    "server\revex-energy-worker\deploy-current.ps1",
+    "server\revex-render-worker\deploy-current.ps1",
+    "server\revex-report-functions\deploy-current.ps1",
     $ProjectPath
   )
   foreach ($relative in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $Root $relative) -PathType Leaf)) { throw "Current REVEX source is incomplete: $relative" }
   }
 
+  $release = Get-Content -Raw -LiteralPath (Join-Path $Root "REVEX_CURRENT_RELEASE.json") | ConvertFrom-Json
+  if ([string]$release.authority -ne "canonical-current-files") { throw "REVEX current release manifest has no canonical authority." }
+  if ([string]$release.current.energyDeployer -ne "server/revex-energy-worker/deploy-current.ps1" -or
+      [string]$release.current.renderDeployer -ne "server/revex-render-worker/deploy-current.ps1" -or
+      [string]$release.current.reportDeployer -ne "server/revex-report-functions/deploy-current.ps1") {
+    throw "REVEX current release manifest does not point to canonical service deployers."
+  }
+
   Require-Ok "Current-generation regression guard" $Node @(".github\scripts\verify-revex-current-generation-r53.js") $Root
   Require-Ok "Current WebView/UI root cache guard" $Node @(".github\scripts\verify-revex-r99-webview-root-cache.js") $Root
-  Require-Ok "Full r126 UI/Docs/Issues/History/Render convergence" $Node @(".github\scripts\verify-revex-r126-functional-convergence.js") $Root
-  Require-Ok "r127 typed Energy + fixed VT + geometry + controller guard" $Python @(".github\scripts\verify-revex-r127-single-controller.py") $Root
+  Require-Ok "Full UI/Docs/Issues/History/Blocks/Render convergence" $Node @(".github\scripts\verify-revex-r126-functional-convergence.js") $Root
+  Require-Ok "Full current REVEX release contract" $Python @(".github\scripts\verify-revex-r127-single-controller.py") $Root
 }
 
 function Build-Addin([string]$Root, [string]$Dotnet) {
@@ -152,10 +168,10 @@ function Verify-LiveUi([string]$Root) {
   if (-not $match.Success) { throw "Current UI BUILD marker could not be resolved." }
   $build = $match.Groups[1].Value
   $uri = "https://liberpict.com/liber-apps/apps/revex/ui-integrity.js?revex_source=$($SourceSha.Substring(0,12))"
-  $deadline = (Get-Date).AddMinutes(6)
+  $deadline = (Get-Date).AddMinutes(10)
   while ((Get-Date) -lt $deadline) {
     try {
-      $live = (Invoke-WebRequest -UseBasicParsing -Uri $uri -Headers @{"Cache-Control"="no-cache"}).Content
+      $live = (Invoke-WebRequest -UseBasicParsing -Uri $uri -Headers @{"Cache-Control"="no-cache","Pragma"="no-cache"}).Content
       if ($live.Contains("BUILD='$build'")) {
         Write-Host "PASS: live Companion UI is current ($build)." -ForegroundColor Green
         return
@@ -163,35 +179,65 @@ function Verify-LiveUi([string]$Root) {
     } catch { }
     Start-Sleep -Seconds 10
   }
-  throw "Live REVEX Companion did not expose the same current UI BUILD within 6 minutes. Local add-in was not installed."
+  throw "Live REVEX Companion did not expose the exact current UI build within 10 minutes. No broker cutover or local add-in install was started."
+}
+
+function Invoke-ReleaseController([string]$Label,[string]$Path,[string[]]$Arguments) {
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "$Label controller is missing: $Path" }
+  Require-Ok $Label "powershell.exe" @("-NoProfile","-ExecutionPolicy","Bypass","-File",$Path,*$Arguments)
+}
+
+function Verify-LiveSourceBindings([string]$GCloud) {
+  Step "Verify every mutable live service is bound to the exact release source"
+  foreach ($service in @($script:EnergyService,$script:RenderService)) {
+    $state = Capture-Native $GCloud @("run","services","describe",$service,"--project",$ProjectId,"--region",$Region,"--format","json")
+    if ($state.Code -ne 0 -or -not $state.Text) { throw "Live service could not be verified: $service" }
+    $run = $state.Text | ConvertFrom-Json
+    $envs = @{}; foreach ($row in @($run.spec.template.spec.containers[0].env)) { $envs[[string]$row.name] = [string]$row.value }
+    if ([string]$envs["REVEX_SOURCE_CANDIDATE"] -ne $SourceSha) { throw "$service is not bound to exact source $SourceSha." }
+  }
+  foreach ($functionName in @("runRevexEnergy","runRevexRender","documentRevexRevision","finalizeRevexDailyReport")) {
+    $state = Capture-Native $GCloud @("functions","describe",$functionName,"--gen2","--project",$ProjectId,"--region",$Region,"--format","json")
+    if ($state.Code -ne 0 -or -not $state.Text) { throw "Live function could not be verified: $functionName" }
+    $fn = $state.Text | ConvertFrom-Json
+    if ([string]$fn.state -ne "ACTIVE") { throw "$functionName is not ACTIVE." }
+    if ([string]$fn.serviceConfig.environmentVariables.REVEX_SOURCE_CANDIDATE -ne $SourceSha) { throw "$functionName is not bound to exact source $SourceSha." }
+  }
+  Write-Host "PASS: Energy, Render and Report are all source-bound to $SourceSha." -ForegroundColor Green
 }
 
 function Install-AddinAtomically {
   Wait-RevitClosed
   if (-not (Test-Path -LiteralPath $StagePayload -PathType Container)) { throw "Staged Revit payload disappeared before install." }
   New-Item -ItemType Directory -Path $RevexRoot, (Split-Path -Parent $AddinPath) -Force | Out-Null
-  $oldManifest = $AddinPath + ".before-finalize"
-  if (Test-Path -LiteralPath $AddinPath) { Copy-Item -LiteralPath $AddinPath -Destination $oldManifest -Force }
-  $movedOld = $false
+  $hadOldApp = Test-Path -LiteralPath $InstalledRoot -PathType Container
+  $hadOldManifest = Test-Path -LiteralPath $AddinPath -PathType Leaf
+  $backupManifest = Join-Path $BackupRoot "LIBER.REVEX.addin"
   try {
-    if (Test-Path -LiteralPath $InstalledRoot -PathType Container) {
+    if ($hadOldApp) {
       Move-Item -LiteralPath $InstalledRoot -Destination $BackupRoot
-      $movedOld = $true
+    } else {
+      New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
     }
+    if ($hadOldManifest) { Copy-Item -LiteralPath $AddinPath -Destination $backupManifest -Force }
+
     Move-Item -LiteralPath $StagePayload -Destination $InstalledRoot
     $assembly = Join-Path $InstalledRoot "Liber.Revex.Revit.dll"
     $marker = [ordered]@{
-      schema = "liber.revex.current-release.v1"
+      schema = "liber.revex.current-release.v2"
       repository = "nvberegovykh/LIBER-Creative"
       sourceCommit = $SourceSha
       finalizedAtUtc = [DateTime]::UtcNow.ToString("o")
       energyWorker = $script:EnergyService
       renderWorker = $script:RenderService
       missingVt = 0.45
-      geometryPolicy = "r125 whole-door + curtain-panel + physical-cover corrections"
-      uiPolicy = "current r126 convergence"
+      actualVtWins = $true
+      geometryPolicy = "whole-door + curtain-panel + physical-cover corrections"
+      uiPolicy = "full current convergence"
+      previousInstalledRevisionShadow = $BackupRoot
     } | ConvertTo-Json -Depth 8
     [IO.File]::WriteAllText((Join-Path $InstalledRoot "REVEX-CURRENT-SOURCE.json"),$marker,[Text.UTF8Encoding]::new($false))
+
     $manifest = @"
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <RevitAddIns>
@@ -209,18 +255,22 @@ function Install-AddinAtomically {
   }
   catch {
     if (Test-Path -LiteralPath $InstalledRoot -PathType Container) { Remove-Item -LiteralPath $InstalledRoot -Recurse -Force -ErrorAction SilentlyContinue }
-    if ($movedOld -and (Test-Path -LiteralPath $BackupRoot -PathType Container)) { Move-Item -LiteralPath $BackupRoot -Destination $InstalledRoot -ErrorAction SilentlyContinue }
-    if (Test-Path -LiteralPath $oldManifest -PathType Leaf) { Copy-Item -LiteralPath $oldManifest -Destination $AddinPath -Force -ErrorAction SilentlyContinue }
+    if ($hadOldApp -and (Test-Path -LiteralPath $BackupRoot -PathType Container)) {
+      if (Test-Path -LiteralPath $backupManifest) { Remove-Item -LiteralPath $backupManifest -Force -ErrorAction SilentlyContinue }
+      Move-Item -LiteralPath $BackupRoot -Destination $InstalledRoot -ErrorAction SilentlyContinue
+    }
+    if ($hadOldManifest -and (Test-Path -LiteralPath $backupManifest -PathType Leaf)) { Copy-Item -LiteralPath $backupManifest -Destination $AddinPath -Force -ErrorAction SilentlyContinue }
+    elseif (-not $hadOldManifest) { Remove-Item -LiteralPath $AddinPath -Force -ErrorAction SilentlyContinue }
     throw
   }
-  finally { Remove-Item -LiteralPath $oldManifest -Force -ErrorAction SilentlyContinue }
 }
 
 try {
   try { Start-Transcript -LiteralPath $LogPath -Force | Out-Null; $TranscriptStarted = $true } catch { }
-  Write-Host "REVEX single-source full finalizer" -ForegroundColor Cyan
-  Write-Host "One exact GitHub revision will own Companion UI, Revit add-in, Energy, Report and Render." -ForegroundColor Green
-  Write-Host "Missing VT policy: preserve actual VT; otherwise 0.45." -ForegroundColor Green
+  Write-Host "REVEX one-command current release finalizer" -ForegroundColor Cyan
+  Write-Host "One exact GitHub SHA owns Companion, Revit add-in, Energy, Report and Render." -ForegroundColor Green
+  Write-Host "Versioned implementations stay as shadow files; current runtime uses canonical facades." -ForegroundColor Green
+  Write-Host "VT policy: preserve actual VT; when absent use exactly 0.45." -ForegroundColor Green
   Write-Host "Persistent log: $LogPath"
 
   $Git = Require-Command @("git.exe","git") "Git"
@@ -236,53 +286,61 @@ try {
   $sha = Capture-Native $Git @("rev-parse","HEAD") $SourceRoot
   if ($sha.Code -ne 0 -or $sha.Text -notmatch '^[0-9a-fA-F]{40}$') { throw "Exact current source SHA could not be resolved." }
   $SourceSha = $sha.Text.ToLowerInvariant()
-  $short = $SourceSha.Substring(0,8)
-  $script:EnergyService = "revex-energy-r127-$short"
-  $script:RenderService = "revex-render-r127-$short"
+  $short = $SourceSha.Substring(0,12)
+  $script:EnergyService = "revex-energy-$short"
+  $script:RenderService = "revex-render-$short"
   Write-Host "Exact release source: $SourceSha" -ForegroundColor Green
 
   Assert-CurrentSource $SourceRoot $Node $Python
   Build-Addin $SourceRoot $Dotnet
-
   Ensure-GCloudAuth $GCloud
   Ensure-FirebaseAuth $Firebase
   $env:REVEX_FIREBASE_AUTH_VERIFIED = "1"
 
-  $energyDeploy = Join-Path $SourceRoot "server\revex-energy-worker\DEPLOY_ENERGY_R127.ps1"
-  Step "Deploy proven current Energy worker/broker from the same exact source"
-  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $energyDeploy -ProjectId $ProjectId -Region $Region -Service $script:EnergyService -SourceCandidate $SourceSha -NoPause
-  if ($LASTEXITCODE -ne 0) { throw "Energy deployment failed. Existing Energy authority remains; Revit add-in was not installed." }
+  $energyDeploy = Join-Path $SourceRoot "server\revex-energy-worker\deploy-current.ps1"
+  $renderDeploy = Join-Path $SourceRoot "server\revex-render-worker\deploy-current.ps1"
+  $reportDeploy = Join-Path $SourceRoot "server\revex-report-functions\deploy-current.ps1"
 
-  $reportDeploy = Join-Path $SourceRoot "server\revex-report-functions\DEPLOY_REPORT_R126.ps1"
-  Step "Deploy current post-sync Report/Daily Report"
-  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $reportDeploy -ProjectId $ProjectId -Region $Region -NoPause
-  if ($LASTEXITCODE -ne 0) { throw "Report deployment failed. Revit add-in was not installed." }
+  Invoke-ReleaseController "Stage and verify current Energy candidate without broker cutover" $energyDeploy @(
+    "-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:EnergyService,"-SourceCandidate",$SourceSha,"-CandidateOnly","-NoPause")
 
-  $renderDeploy = Join-Path $SourceRoot "server\revex-render-worker\DEPLOY_RENDER_R126.ps1"
-  Step "Deploy and warm current private Render before broker cutover"
-  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $renderDeploy -ProjectId $ProjectId -Region $Region -Service $script:RenderService -NoPause
-  if ($LASTEXITCODE -ne 0) { throw "Render deployment/warm proof failed. Revit add-in was not installed." }
+  Invoke-ReleaseController "Stage, warm and verify current Render candidate without broker cutover" $renderDeploy @(
+    "-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:RenderService,"-SourceCandidate",$SourceSha,"-CandidateOnly","-NoPause")
 
-  Step "Verify current Companion UI is live"
+  Step "Verify current Companion UI is live before any broker cutover"
   Verify-LiveUi $SourceRoot
+
+  Invoke-ReleaseController "Deploy source-bound Report and Daily Report" $reportDeploy @(
+    "-ProjectId",$ProjectId,"-Region",$Region,"-SourceCandidate",$SourceSha,"-NoPause")
+
+  Invoke-ReleaseController "Cut Render broker to the already-warm current candidate" $renderDeploy @(
+    "-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:RenderService,"-SourceCandidate",$SourceSha,"-BrokerOnly","-NoPause")
+
+  Invoke-ReleaseController "Cut Energy broker to the already-verified current candidate" $energyDeploy @(
+    "-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:EnergyService,"-SourceCandidate",$SourceSha,"-BrokerOnly","-NoPause")
+
+  Verify-LiveSourceBindings $GCloud
 
   Step "Install the exact same source revision into Revit"
   Install-AddinAtomically
 
   Write-Host ""
-  Write-Host "PASS: REVEX is converged on one exact source revision." -ForegroundColor Green
+  Write-Host "PASS: REVEX current release is converged on one exact source revision." -ForegroundColor Green
   Write-Host "Source: $SourceSha"
-  Write-Host "Energy: $($script:EnergyService) · actual VT preserved, missing VT = 0.45"
-  Write-Host "Render: $($script:RenderService) · warm proof required before cutover"
+  Write-Host "Energy: $($script:EnergyService) · actual VT preserved · missing VT 0.45"
+  Write-Host "Render: $($script:RenderService) · server-warm before broker cutover"
+  Write-Host "Report/Daily Report: source-bound $SourceSha"
   Write-Host "Revit add-in: $(Join-Path $InstalledRoot 'Liber.Revex.Revit.dll')"
+  Write-Host "Previous installed add-in preserved as shadow: $BackupRoot"
   Write-Host ""
-  Write-Host "Reopen Revit 2026 and run one fresh SYNC ENGINEERING. That new immutable revision is the acceptance run." -ForegroundColor Yellow
+  Write-Host "Reopen Revit 2026 and run ONE fresh SYNC ENGINEERING. That immutable revision is the acceptance run." -ForegroundColor Yellow
   $ExitCode = 0
 }
 catch {
   Write-Host ""
   Write-Host "REVEX finalization stopped safely." -ForegroundColor Red
   Write-Host $_.Exception.Message -ForegroundColor Red
+  Write-Host "Do not run any legacy/recovery controller. Rerun this same FINALIZE_REVEX command after correcting the reported dependency." -ForegroundColor Yellow
   Write-Host "Persistent log: $LogPath" -ForegroundColor Yellow
   $ExitCode = 1
 }
