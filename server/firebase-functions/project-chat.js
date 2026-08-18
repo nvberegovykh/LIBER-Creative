@@ -9,8 +9,10 @@ const { projectAccessRole } = require('./project-access');
 if (!getApps().length) initializeApp();
 const db = getFirestore();
 const PROJECT_ID_RE = /^[A-Za-z0-9._-]{1,160}$/;
+const SOURCE_RE = /^[0-9a-f]{40}$/i;
 const CHAT_SCHEMA = 'liber.revex.project-chat.v1';
-const BUILD = '20260818-project-chat1';
+const BUILD = '20260818-project-chat2';
+const SOURCE_CANDIDATE = String(process.env.REVEX_SOURCE_CANDIDATE || '').trim();
 
 function fail(status, code, message) {
   const error = new Error(message);
@@ -101,6 +103,8 @@ async function resolveExistingChat(projectId, project) {
     if (snap.exists) {
       const data = snap.data() || {};
       const linkedProject = String(data.projectId || '').trim();
+      // An explicit project->chat link is preserved for backwards-compatible project
+      // rooms even when old room records predate projectId. We never delete its messages.
       if (!linkedProject || linkedProject === projectId) return { ref, snap, data, linked: true };
     }
   }
@@ -122,6 +126,8 @@ async function resolveExistingChat(projectId, project) {
 }
 
 async function ensureProjectChat(projectId, uid) {
+  if (!SOURCE_RE.test(SOURCE_CANDIDATE))
+    throw fail(503, 'failed-precondition', 'REVEX Project Chat is not bound to an exact release source.');
   const access = await loadProjectAccess(projectId, uid);
   const admins = unique(await adminUids());
   const participants = projectParticipants(access.project, admins);
@@ -143,7 +149,8 @@ async function ensureProjectChat(projectId, uid) {
     Boolean(existing.archived) ||
     !sameArray(existing.participants || existing.memberIds || [], participants) ||
     !sameArray(existing.memberIds || existing.participants || [], participants) ||
-    !sameArray(existing.admins || [], chatAdmins);
+    !sameArray(existing.admins || [], chatAdmins) ||
+    String(existing.sourceCandidate || '') !== SOURCE_CANDIDATE;
 
   const chatPatch = {
     schema: CHAT_SCHEMA,
@@ -157,6 +164,7 @@ async function ensureProjectChat(projectId, uid) {
     archived: false,
     source: 'revex-project-chat',
     sourceBuild: BUILD,
+    sourceCandidate: SOURCE_CANDIDATE,
     updatedAt: now
   };
   if (created) {
@@ -170,6 +178,7 @@ async function ensureProjectChat(projectId, uid) {
   batch.set(access.projectRef, {
     chatConnId: connId,
     chatProjectSchema: CHAT_SCHEMA,
+    chatSourceCandidate: SOURCE_CANDIDATE,
     chatUpdatedAt: now
   }, { merge: true });
   await batch.commit();
@@ -178,6 +187,7 @@ async function ensureProjectChat(projectId, uid) {
     ok: true,
     schema: CHAT_SCHEMA,
     build: BUILD,
+    sourceCandidate: SOURCE_CANDIDATE,
     projectId,
     connId,
     repaired,
@@ -208,6 +218,7 @@ exports.ensureProjectChatHttp = onRequest({
     console.error('[REVEX PROJECT CHAT]', JSON.stringify({
       at: new Date().toISOString(),
       build: BUILD,
+      sourceCandidate: SOURCE_CANDIDATE || null,
       status,
       code: error?.code || 'internal',
       message
