@@ -28,6 +28,7 @@ jobs:
             'docs/liber-apps/apps/revex/docs-convergence-r126.js',
             'docs/liber-apps/apps/revex/appearance-convergence-r126.js',
             'docs/liber-apps/apps/revex/issues-convergence-r126.js',
+            'docs/liber-apps/apps/revex/issues-inspector-r126.js',
             'docs/liber-apps/apps/revex/history-daily-r126.js',
             'docs/liber-apps/apps/revex/blocks-palette-r126.js',
             'docs/liber-apps/apps/revex/render-convergence-r126.js',
