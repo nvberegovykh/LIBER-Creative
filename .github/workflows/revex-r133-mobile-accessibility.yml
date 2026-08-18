@@ -1,0 +1,36 @@
+name: REVEX r133 mobile accessibility
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/liber-apps/apps/revex/mobile-safe-r133.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - '.github/scripts/verify-revex-r133-mobile-accessibility.js'
+      - '.github/workflows/revex-r133-mobile-accessibility.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'docs/liber-apps/apps/revex/mobile-safe-r133.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - '.github/scripts/verify-revex-r133-mobile-accessibility.js'
+      - '.github/workflows/revex-r133-mobile-accessibility.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  mobile-r133:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax
+        run: |
+          node --check docs/liber-apps/apps/revex/mobile-safe-r133.js
+          node --check docs/liber-apps/apps/revex/ui-integrity.js
+          node --check .github/scripts/verify-revex-r133-mobile-accessibility.js
+      - name: Mobile accessibility contract
+        run: node .github/scripts/verify-revex-r133-mobile-accessibility.js
