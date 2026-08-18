@@ -49,10 +49,13 @@ def main() -> int:
 
     import revex_final_touchups as touchups
     import revex_energy_agent as maintainer
+    import revex_energy_agent_filing as filing
     from revex_energy_contracts import DEFAULT_MISSING_VT, EvidenceBundle
 
     if abs(float(touchups.MISSING_VT) - DEFAULT_MISSING_VT) > 1e-9:
         raise RuntimeError("REVEX Energy VT policy drifted from the typed current contract")
+    if abs(float(filing.MISSING_VT) - DEFAULT_MISSING_VT) > 1e-9:
+        raise RuntimeError("WALLT filing VT policy drifted from the typed current contract")
 
     request_path = _request_from_args(remaining)
     if request_path is not None:
@@ -62,6 +65,7 @@ def main() -> int:
     module = _load(impl)
     touchups.patch_pipeline(module)
     maintainer.install(module)
+    filing.install(module)
 
     sys.argv = [str(impl), *remaining]
     return int(module.main())
