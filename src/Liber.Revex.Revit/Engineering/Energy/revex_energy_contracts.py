@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Mapping
 import hashlib
 import json
 
@@ -39,25 +39,37 @@ class ArtifactSpec:
         return (self.canonical_name, *self.aliases)
 
 
+# Output filenames are a public package boundary only. Internal evidence is resolved by role/capability.
 SPECS: tuple[ArtifactSpec, ...] = (
-    ArtifactSpec(ArtifactKind.PROJECT_IDENTITY, "REVIT-PROJECT-IDENTITY.json", ("revit-project-identity.json",), True),
-    ArtifactSpec(ArtifactKind.PAGE_FACTS, "00_PAGE_FACTS.json", ("page-facts.json", "00_PAGE_FACTS_FINAL_TOUCHUPS_R125.json"), True),
-    ArtifactSpec(ArtifactKind.SCHEDULE_EVIDENCE, "REVIT-SCHEDULE-EVIDENCE.json", (), True),
-    ArtifactSpec(ArtifactKind.GBXML, "revit-energy.xml", ("energy.xml",), True),
-    ArtifactSpec(ArtifactKind.WEATHER, "weather.epw", (), True),
-    ArtifactSpec(ArtifactKind.BASELINE_OSM, "BASELINE_UPDATED_GEOMETRY.osm", (), required_for_complete=True),
-    ArtifactSpec(ArtifactKind.PROPOSED_OSM, "PROPOSED_UPDATED_GEOMETRY.osm", (), required_for_complete=True),
-    ArtifactSpec(ArtifactKind.EN1_WORKBOOK, "EN-1_READY_TO_INSERT.xlsx", (), required_for_complete=True),
+    ArtifactSpec(ArtifactKind.PROJECT_IDENTITY, "REVIT-PROJECT-IDENTITY.json", required_for_sync=True),
+    ArtifactSpec(ArtifactKind.PAGE_FACTS, "00_PAGE_FACTS.json", required_for_sync=True),
+    ArtifactSpec(ArtifactKind.SCHEDULE_EVIDENCE, "REVIT-SCHEDULE-EVIDENCE.json", required_for_sync=True),
+    ArtifactSpec(ArtifactKind.GBXML, "revit-energy.xml", required_for_sync=True),
+    ArtifactSpec(ArtifactKind.WEATHER, "weather.epw", required_for_sync=True),
+    ArtifactSpec(ArtifactKind.BASELINE_OSM, "BASELINE_UPDATED_GEOMETRY.osm", required_for_complete=True),
+    ArtifactSpec(ArtifactKind.PROPOSED_OSM, "PROPOSED_UPDATED_GEOMETRY.osm", required_for_complete=True),
+    ArtifactSpec(ArtifactKind.EN1_WORKBOOK, "EN-1_READY_TO_INSERT.xlsx", required_for_complete=True),
     ArtifactSpec(ArtifactKind.EN1_PDF, "EN-1_READY_TO_INSERT.pdf"),
-    ArtifactSpec(ArtifactKind.COMCHECK_CXL, "COMcheck_PROJECT_INPUT_READY.cxl", (), required_for_complete=True),
-    ArtifactSpec(ArtifactKind.COMCHECK_REPORT, "COMcheck_OFFICIAL_BACKSTOP_REPORT.pdf", (), required_for_complete=True),
-    ArtifactSpec(ArtifactKind.COMCHECK_RESULT, "COMcheck_BACKSTOP_RESULT.json", (), required_for_complete=True),
+    ArtifactSpec(ArtifactKind.COMCHECK_CXL, "COMcheck_PROJECT_INPUT_READY.cxl", required_for_complete=True),
+    ArtifactSpec(ArtifactKind.COMCHECK_REPORT, "COMcheck_OFFICIAL_BACKSTOP_REPORT.pdf", required_for_complete=True),
+    ArtifactSpec(ArtifactKind.COMCHECK_RESULT, "COMcheck_BACKSTOP_RESULT.json", required_for_complete=True),
     ArtifactSpec(ArtifactKind.PIPELINE_RESULT, "energy-result.json"),
     ArtifactSpec(ArtifactKind.RELEASE_PACKAGE, "REVEX_ENERGY_RELEASE_PACKAGE.zip", ("REVEX_RECOVERY_PACKAGE.zip",)),
 )
-
 SPEC_BY_KIND = {spec.kind: spec for spec in SPECS}
-NAME_TO_KIND = {name.lower(): spec.kind for spec in SPECS for name in spec.accepted_names}
+PACKAGE_NAME_TO_KIND = {name.lower(): spec.kind for spec in SPECS for name in spec.accepted_names}
+
+ROLE_TO_KIND = {
+    "revit-project-identity": ArtifactKind.PROJECT_IDENTITY,
+    "revit-schedule-evidence": ArtifactKind.SCHEDULE_EVIDENCE,
+    "gbxml": ArtifactKind.GBXML,
+    "weather-epw": ArtifactKind.WEATHER,
+}
+REQUEST_PATH_TO_KIND = {
+    "pageFactsPath": ArtifactKind.PAGE_FACTS,
+    "gbxmlPath": ArtifactKind.GBXML,
+    "weatherFile": ArtifactKind.WEATHER,
+}
 
 
 class ContractError(RuntimeError):
@@ -78,13 +90,14 @@ class ArtifactRef:
     path: Path
     bytes: int
     sha256: str
+    role: str = ""
 
     @classmethod
-    def from_path(cls, kind: ArtifactKind, path: Path) -> "ArtifactRef":
+    def from_path(cls, kind: ArtifactKind, path: Path, role: str = "") -> "ArtifactRef":
         path = Path(path).resolve()
         if not path.is_file():
             raise ContractError(f"{kind.value} artifact is missing: {path}")
-        return cls(kind=kind, path=path, bytes=path.stat().st_size, sha256=_sha256(path))
+        return cls(kind=kind, path=path, bytes=path.stat().st_size, sha256=_sha256(path), role=role)
 
 
 @dataclass
@@ -101,37 +114,59 @@ class EvidenceBundle:
             revision=str(payload.get("revision") or payload.get("sourceEngineeringRevision") or "").strip(),
             project_id=str(payload.get("projectId") or payload.get("project") or "").strip(),
         )
-        candidates: list[Path] = []
+
+        local_paths: list[Path] = []
         for raw in payload.get("sourceArtifacts") or []:
             try:
-                candidates.append(Path(str(raw)).resolve())
+                local_paths.append(Path(str(raw)).resolve())
             except Exception:
                 continue
-        for key in ("pageFactsPath", "weatherPath", "gbxmlPath", "projectIdentityPath"):
+        by_name = {path.name.casefold(): path for path in local_paths if path.is_file()}
+
+        # Direct request fields are typed capabilities produced by the worker boundary.
+        for key, kind in REQUEST_PATH_TO_KIND.items():
             raw = payload.get(key)
             if raw:
-                candidates.append(Path(str(raw)).resolve())
-        bundle._index(candidates)
+                bundle._add(kind, Path(str(raw)), role=f"request:{key}")
+
+        # Immutable Engineering manifest declares source evidence by semantic role.
+        manifest_raw = payload.get("engineeringManifestPath")
+        if manifest_raw:
+            manifest_path = Path(str(manifest_raw)).resolve()
+            if not manifest_path.is_file():
+                raise ContractError(f"Engineering manifest is missing: {manifest_path}")
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_revision = str(manifest.get("revision") or "").strip()
+            manifest_project = str(manifest.get("projectId") or "").strip()
+            if manifest_revision and manifest_revision != bundle.revision:
+                raise ContractError("Engineering manifest revision does not match the Energy request")
+            if manifest_project and manifest_project != bundle.project_id:
+                raise ContractError("Engineering manifest project does not match the Energy request")
+            for row in manifest.get("artifacts") or []:
+                role = str(row.get("role") or "").strip().casefold()
+                kind = ROLE_TO_KIND.get(role)
+                if kind is None:
+                    continue
+                declared_name = Path(str(row.get("name") or "")).name.casefold()
+                local = by_name.get(declared_name)
+                if local is None:
+                    raise ContractError(f"Engineering capability {role} is declared but its local artifact is missing")
+                ref = bundle._add(kind, local, role=role)
+                expected_bytes = int(row.get("bytes") or 0)
+                expected_hash = str(row.get("sha256") or "").strip().casefold()
+                if expected_bytes and ref.bytes != expected_bytes:
+                    raise ContractError(f"Engineering capability {role} failed byte-count integrity")
+                if expected_hash and ref.sha256.casefold() != expected_hash:
+                    raise ContractError(f"Engineering capability {role} failed SHA-256 integrity")
         return bundle
 
-    def _index(self, paths: Iterable[Path]) -> None:
-        for path in paths:
-            if not path.is_file():
-                continue
-            kind = NAME_TO_KIND.get(path.name.lower())
-            if kind is None:
-                suffix = path.suffix.lower()
-                if suffix == ".epw":
-                    kind = ArtifactKind.WEATHER
-                elif suffix in {".xml", ".gbxml"} and "energy" in path.name.lower():
-                    kind = ArtifactKind.GBXML
-            if kind is None:
-                continue
-            ref = ArtifactRef.from_path(kind, path)
-            prior = self.artifacts.get(kind)
-            if prior and prior.sha256 != ref.sha256:
-                raise ContractError(f"multiple conflicting {kind.value} artifacts in one Engineering revision")
-            self.artifacts[kind] = ref
+    def _add(self, kind: ArtifactKind, path: Path, role: str = "") -> ArtifactRef:
+        ref = ArtifactRef.from_path(kind, path, role=role)
+        prior = self.artifacts.get(kind)
+        if prior and prior.sha256 != ref.sha256:
+            raise ContractError(f"conflicting {kind.value} capabilities in one Engineering revision")
+        self.artifacts[kind] = ref
+        return ref
 
     def require_sync_evidence(self) -> "EvidenceBundle":
         missing = [spec.kind.value for spec in SPECS if spec.required_for_sync and spec.kind not in self.artifacts]
@@ -139,6 +174,8 @@ class EvidenceBundle:
             raise ContractError("Engineering evidence bundle is incomplete: " + ", ".join(missing))
         if not self.revision:
             raise ContractError("Engineering evidence bundle has no immutable revision id")
+        if not self.project_id:
+            raise ContractError("Engineering evidence bundle has no project id")
         return self
 
 
@@ -156,10 +193,10 @@ class FilingPackage:
         for path in root.rglob("*"):
             if not path.is_file():
                 continue
-            kind = NAME_TO_KIND.get(path.name.lower())
+            kind = PACKAGE_NAME_TO_KIND.get(path.name.casefold())
             if kind is None:
                 continue
-            package.artifacts[kind] = ArtifactRef.from_path(kind, path)
+            package.artifacts[kind] = ArtifactRef.from_path(kind, path, role="package-output")
         return package
 
     def require_complete(self) -> "FilingPackage":
