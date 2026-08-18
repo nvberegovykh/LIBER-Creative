@@ -168,6 +168,7 @@ public sealed class RevitRequestHandler : IExternalEventHandler
         RevexDiagnostics.Info("GBXML", "Engineering gbXML request entered.");
         GbxmlEngineeringOutput? output = null;
         bool sourceTopologyFallback = false;
+        bool simplifiedGeometryFallback = false;
         try
         {
             try
@@ -181,18 +182,16 @@ public sealed class RevitRequestHandler : IExternalEventHandler
             {
                 // Revit can throw an analytical-plan topology exception through Dynamo's
                 // ExecuteCommand before the Python engine can downgrade the affected level
-                // to preservation-gate evidence. Do not ask the user to redraw a valid
-                // architectural T-junction merely to make Energy Sync run. Retry exactly
-                // once with topology mutation disabled: existing Rooms/Spaces remain the
-                // source, native EADM can still retry its tiers, and the existing direct-
-                // Revit geometry serializer remains the final deterministic fallback.
+                // to preservation-gate evidence. Retry exactly once without topology
+                // mutation; a source-bound simplified serializer remains available after
+                // that if the exact/EADM publication gate still cannot clear.
                 sourceTopologyFallback = true;
                 RevexDiagnostics.Warn("GBXML",
                     "Revit rejected automatic Space topology at an ambiguous boundary branch. " +
                     "Retrying once from existing source spatial elements without NewSpace/NewSpaces2 mutation. " +
-                    "No boundary geometry will be guessed. Original error: " + ex.Message);
+                    "Original error: " + ex.Message);
                 RevexDiagnostics.Stage("GBXML", "SOURCE_TOPOLOGY_FALLBACK", "STARTED",
-                    "automatic topology mutation disabled; source Rooms/Spaces + EADM/direct-Revit fallback remain authoritative");
+                    "automatic topology mutation disabled; existing source Rooms/Spaces remain authoritative");
 
                 GbxmlEngineeringSettings fallbackSettings = settings with
                 {
@@ -203,7 +202,25 @@ public sealed class RevitRequestHandler : IExternalEventHandler
                     $"status={output.Status}; gbxml={output.GbxmlPath ?? "<none>"}");
             }
 
-            bool ok = GbxmlEngineeringService.IsSuccessful(output, settings.AuditOnly);
+            bool ok = GbxmlEngineeringService.IsSuccessful(output!, settings.AuditOnly);
+
+            // The exact/EADM path is preferred, but it is not allowed to dead-end a
+            // regular SYNC ENGINEERING run. A non-publishable non-empty run already
+            // contains the current Revit Space/page evidence; simplify only geometry,
+            // preserve that same run/evidence identity, and continue with an explicit
+            // review-quality fallback marker. Ambiguous openings become opaque wall.
+            if (!settings.AuditOnly && !ok && output != null &&
+                !string.IsNullOrWhiteSpace(output.RunFolder) && Directory.Exists(output.RunFolder))
+            {
+                simplifiedGeometryFallback = true;
+                RevexDiagnostics.Stage("GBXML", "SIMPLIFIED_GEOMETRY_FALLBACK", "STARTED",
+                    $"normalStatus={output.Status}; source=placed Revit MEP Spaces; policy=source-bound 2.5D simplification");
+                output = new SimplifiedGbxmlFallbackService().Run(uidoc.Document, output);
+                ok = GbxmlEngineeringService.IsSuccessful(output, auditOnly: false);
+                RevexDiagnostics.Stage("GBXML", "SIMPLIFIED_GEOMETRY_FALLBACK", ok ? "PASSED" : "FAILED",
+                    $"status={output.Status}; gbxml={output.GbxmlPath ?? "<none>"}; ambiguous openings remain opaque");
+            }
+
             if (ok && !settings.AuditOnly)
             {
                 if (output == null || string.IsNullOrWhiteSpace(output.RunFolder))
@@ -213,23 +230,27 @@ public sealed class RevitRequestHandler : IExternalEventHandler
             }
 
             string detail = settings.AuditOnly
-                ? $"gbXML audit finished: {output.Status}."
+                ? $"gbXML audit finished: {output?.Status ?? "UNKNOWN"}."
                 : ok
-                    ? sourceTopologyFallback
-                        ? $"gbXML exported from preserved Revit spatial topology after automatic boundary-branch fallback: {output.GbxmlPath}"
-                        : $"gbXML exported: {output.GbxmlPath}"
+                    ? simplifiedGeometryFallback
+                        ? $"gbXML exact/EADM path could not clear publication, so REVEX exported a source-bound simplified Space geometry fallback and preserved the run for managed Energy: {output?.GbxmlPath}"
+                        : sourceTopologyFallback
+                            ? $"gbXML exported from preserved Revit spatial topology after automatic boundary-branch fallback: {output?.GbxmlPath}"
+                            : $"gbXML exported: {output?.GbxmlPath}"
                     : sourceTopologyFallback
-                        ? $"gbXML source-topology fallback finished but remained below the publication gate: {output.Status}. See the report and REVEX diagnostics."
-                        : $"gbXML export blocked: {output.Status}. See the report and REVEX diagnostics.";
+                        ? $"gbXML source-topology fallback finished but remained non-publishable: {output?.Status}. See the report and REVEX diagnostics."
+                        : $"gbXML export blocked: {output?.Status}. See the report and REVEX diagnostics.";
             return ok
-                ? RevitRequestResult.Engineered(detail, output)
+                ? RevitRequestResult.Engineered(detail, output!)
                 : RevitRequestResult.EngineeringFailed(detail, output);
         }
         catch (Exception ex)
         {
-            RevexDiagnostics.Error("GBXML", sourceTopologyFallback
-                ? "Engineering gbXML source-topology fallback failed."
-                : "Engineering gbXML execution failed.", ex);
+            RevexDiagnostics.Error("GBXML", simplifiedGeometryFallback
+                ? "Engineering simplified geometry fallback failed."
+                : sourceTopologyFallback
+                    ? "Engineering gbXML source-topology fallback failed."
+                    : "Engineering gbXML execution failed.", ex);
             return RevitRequestResult.EngineeringFailed(ex.Message, output);
         }
     }
