@@ -27,6 +27,9 @@ RUN curl -fL --retry 4 "https://github.com/NatLabRockies/OpenStudio/releases/dow
  && soffice --version
 
 WORKDIR /opt/revex
+# Canonical Energy modules live beside the managed server facade. Keep both roots
+# importable during image QA and at runtime so the exact packaged environment is exercised.
+ENV PYTHONPATH=/opt/revex/energy:/opt/revex/server
 # The Energy folder carries canonical current modules plus preserved version-shadow files.
 COPY src/Liber.Revex.Revit/Engineering/Energy /opt/revex/energy
 ENV REVEX_APPROVED_ENVELOPE_REFERENCE=/opt/revex/energy/References/79_WINTHROP_APPROVED_PROPOSED.osm
