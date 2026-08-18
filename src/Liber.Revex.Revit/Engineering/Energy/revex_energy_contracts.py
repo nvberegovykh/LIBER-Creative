@@ -49,12 +49,17 @@ SPECS: tuple[ArtifactSpec, ...] = (
     ArtifactSpec(ArtifactKind.BASELINE_OSM, "BASELINE_UPDATED_GEOMETRY.osm", required_for_complete=True),
     ArtifactSpec(ArtifactKind.PROPOSED_OSM, "PROPOSED_UPDATED_GEOMETRY.osm", required_for_complete=True),
     ArtifactSpec(ArtifactKind.EN1_WORKBOOK, "EN-1_READY_TO_INSERT.xlsx", required_for_complete=True),
-    ArtifactSpec(ArtifactKind.EN1_PDF, "EN-1_READY_TO_INSERT.pdf"),
+    ArtifactSpec(ArtifactKind.EN1_PDF, "EN-1_READY_TO_INSERT.pdf", required_for_complete=True),
     ArtifactSpec(ArtifactKind.COMCHECK_CXL, "COMcheck_PROJECT_INPUT_READY.cxl", required_for_complete=True),
     ArtifactSpec(ArtifactKind.COMCHECK_REPORT, "COMcheck_OFFICIAL_BACKSTOP_REPORT.pdf", required_for_complete=True),
     ArtifactSpec(ArtifactKind.COMCHECK_RESULT, "COMcheck_BACKSTOP_RESULT.json", required_for_complete=True),
     ArtifactSpec(ArtifactKind.PIPELINE_RESULT, "energy-result.json"),
-    ArtifactSpec(ArtifactKind.RELEASE_PACKAGE, "REVEX_ENERGY_RELEASE_PACKAGE.zip", ("REVEX_RECOVERY_PACKAGE.zip",)),
+    ArtifactSpec(
+        ArtifactKind.RELEASE_PACKAGE,
+        "REVEX_ENERGY_RELEASE_PACKAGE.zip",
+        ("REVEX_ENERGY_MANUAL_REVIEW_PACKAGE.zip", "REVEX_RECOVERY_PACKAGE.zip"),
+        required_for_complete=True,
+    ),
 )
 SPEC_BY_KIND = {spec.kind: spec for spec in SPECS}
 PACKAGE_NAME_TO_KIND = {name.lower(): spec.kind for spec in SPECS for name in spec.accepted_names}
@@ -195,6 +200,11 @@ class FilingPackage:
                 continue
             kind = PACKAGE_NAME_TO_KIND.get(path.name.casefold())
             if kind is None:
+                continue
+            # Canonical output wins if both a current public package and a shadow/recovery
+            # alias are present. This prevents diagnostic ZIPs from becoming the user package.
+            prior = package.artifacts.get(kind)
+            if prior is not None and prior.path.name.casefold() == SPEC_BY_KIND[kind].canonical_name.casefold():
                 continue
             package.artifacts[kind] = ArtifactRef.from_path(kind, path, role="package-output")
         return package
