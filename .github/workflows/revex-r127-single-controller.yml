@@ -2,7 +2,7 @@ name: REVEX current single-source finalization
 
 on:
   push:
-    branches: [revex-energy-r127-single-controller]
+    branches: [main, revex-energy-r127-single-controller]
   pull_request:
     branches: [main]
   workflow_dispatch:
