@@ -2,6 +2,8 @@
 """Current REVEX Energy runner.
 
 The proven engine remains version-shadowed; this canonical runner owns current contracts.
+WALLT Energy Maintainer is an observer/repair overlay inserted between proven blocks; it
+never becomes a second Energy engine and never mutates immutable Revit evidence in place.
 """
 from __future__ import annotations
 
@@ -45,6 +47,7 @@ def main() -> int:
             sys.path.insert(0, str(server_root))
 
     import revex_final_touchups as touchups
+    import revex_energy_maintainer as maintainer
     from revex_energy_contracts import DEFAULT_MISSING_VT, EvidenceBundle
 
     if abs(float(touchups.MISSING_VT) - DEFAULT_MISSING_VT) > 1e-9:
@@ -53,9 +56,11 @@ def main() -> int:
     request_path = _request_from_args(remaining)
     if request_path is not None:
         EvidenceBundle.from_request(request_path).require_sync_evidence()
+    maintainer.bind_request(request_path)
 
     module = _load(impl)
     touchups.patch_pipeline(module)
+    maintainer.install(module)
 
     # The proven implementation's main() parses sys.argv itself.
     sys.argv = [str(impl), *remaining]

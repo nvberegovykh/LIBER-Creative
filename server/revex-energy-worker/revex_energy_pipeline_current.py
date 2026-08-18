@@ -3,7 +3,7 @@
 
 Versioned guards remain preserved as shadows. This file is the only active managed-pipeline
 entrypoint and binds typed evidence, current VT policy, the proven simulation/filing engine,
-and one verified user-facing release package.
+one verified user-facing release package, and the non-owning WALLT maintainer shadow.
 """
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ if str(_energy_root) not in sys.path:
     sys.path.insert(0, str(_energy_root))
 
 import revex_final_touchups as current_touchups
+import revex_energy_maintainer as maintainer
 from revex_energy_contracts import FilingPackage
 
 shadow.r125 = current_touchups
@@ -52,6 +53,48 @@ def _request_path(argv=None) -> Path | None:
         if value == "--request" and index + 1 < len(values):
             return Path(values[index + 1]).resolve()
     return None
+
+
+def _request_output_root(request_path: Path, request: dict) -> Path:
+    raw = str(request.get("outputFolder") or "").strip()
+    if raw:
+        return Path(raw).resolve()
+    parent = Path(request_path).resolve().parent
+    return parent.parent if parent.name.lower() in {"work", "_input", "input"} else parent
+
+
+def _attach_maintainer_state(output_root: Path, result: dict) -> dict:
+    """Expose maintainer state as derived diagnostics without changing pipeline authority."""
+    state_path = output_root / maintainer.STATE_NAME
+    events_path = output_root / maintainer.EVENTS_NAME
+    state = None
+    if state_path.is_file():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception:
+            state = None
+    if state is not None:
+        result["maintainer"] = state
+
+    rows = [dict(row) for row in list(result.get("artifacts") or [])]
+    existing = {str(row.get("name") or "") for row in rows}
+    for path, kind, visible, review_name in (
+        (state_path, "maintainer-state", True, "WALLT Energy Maintainer State"),
+        (events_path, "maintainer-events", False, "WALLT Energy Maintainer Event Trace"),
+    ):
+        if not path.is_file() or path.name in existing:
+            continue
+        rows.append({
+            "name": path.name,
+            "reviewName": review_name,
+            "path": path.name,
+            "kind": kind,
+            "userVisible": visible,
+            "bytes": path.stat().st_size,
+            "sha256": _sha256(path),
+        })
+    result["artifacts"] = rows
+    return result
 
 
 def _install_current_full_pipeline_runner() -> None:
@@ -104,12 +147,15 @@ def _verify_clean_zip(path: Path) -> None:
 def _promote_clean_release_package(request_path: Path, code: int) -> int:
     """A COMPLETE run must expose one verified clean package, not only diagnostic recovery ZIPs."""
     request = json.loads(Path(request_path).read_text(encoding="utf-8"))
-    output_root = Path(str(request.get("outputFolder") or "")).resolve()
+    output_root = _request_output_root(Path(request_path), request)
     result_path = output_root / "energy-result.json"
     if not result_path.is_file():
         return int(code or 2)
     result = json.loads(result_path.read_text(encoding="utf-8"))
+    result = _attach_maintainer_state(output_root, result)
+    # Failed/waiting runs still publish the maintainer state and exact diagnostic artifacts.
     if str(result.get("status") or "").upper() != "COMPLETE":
+        result_path.write_text(json.dumps(result, ensure_ascii=True, indent=2), encoding="utf-8")
         return int(code or 2)
 
     try:
@@ -168,12 +214,29 @@ def _promote_clean_release_package(request_path: Path, code: int) -> int:
             "missingVtPolicy": 0.45,
             "actualVtPreserved": True,
         }
+        maint = dict(result.get("maintainer") or {})
+        if maint:
+            maint["status"] = "REVIEW_READY"
+            maint["stage"] = "PACKAGE_REVIEW"
+            maint["message"] = "All internal filing/package integrity checks passed. Package is ready for user review and approval."
+            maint["packageApprovalRequired"] = True
+            result["maintainer"] = maint
+            state_path = output_root / maintainer.STATE_NAME
+            if state_path.is_file():
+                state_path.write_text(json.dumps(maint, ensure_ascii=True, indent=2), encoding="utf-8")
+                # State bytes changed after it was first attached; refresh diagnostic metadata.
+                for row in result["artifacts"]:
+                    if str(row.get("name") or "") == maintainer.STATE_NAME:
+                        row["bytes"] = state_path.stat().st_size
+                        row["sha256"] = _sha256(state_path)
+
         result_path.write_text(json.dumps(result, ensure_ascii=True, indent=2), encoding="utf-8")
         print(json.dumps({
             "stage": "CURRENT_FILING_PACKAGE",
             "status": "PASSED",
             "package": CURRENT_RELEASE_PACKAGE,
             "entryCount": 9,
+            "maintainer": "REVIEW_READY" if result.get("maintainer") else "NOT_PRESENT",
         }, ensure_ascii=True), flush=True)
         return 0
     except Exception as exc:
