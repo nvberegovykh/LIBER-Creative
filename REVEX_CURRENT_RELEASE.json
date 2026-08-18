@@ -19,6 +19,7 @@
     "releaseVerifier": ".github/scripts/verify-revex-current-release.py",
     "companionRoot": "docs/liber-apps/apps/revex/index.html",
     "companionIntegrityOwner": "docs/liber-apps/apps/revex/ui-integrity.js",
+    "renderRuntime": "docs/liber-apps/apps/revex/render-agent.js",
     "revitAddinProject": "src/Liber.Revex.Revit/Liber.Revex.Revit.csproj",
     "engineeringSync": "src/Liber.Revex.Revit/Services/EngineeringSyncService.cs",
     "energyPipeline": "server/revex-energy-worker/revex_energy_pipeline_current.py",
@@ -27,7 +28,6 @@
     "energyRunner": "src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner.py",
     "energyDeployer": "server/revex-energy-worker/deploy-current.ps1",
     "reportDeployer": "server/revex-report-functions/deploy-current.ps1",
-    "renderDeployer": "server/revex-render-worker/deploy-current.ps1",
     "accessDeployer": "firebase/deploy-current-access.ps1"
   },
   "requiredCapabilities": {
@@ -90,12 +90,13 @@
     ],
     "render": [
       "current BIM viewport and camera authority",
-      "private authenticated off-device worker",
-      "warm model before broker cutover",
-      "source-bound candidate service and broker",
+      "canonical Google Gemini 3.1 Flash Image client through the existing authenticated Google user session",
+      "OAuth token remains session-local and no API key is embedded in the browser",
+      "geometry and camera lock applied to every render request",
       "no client model cache",
       "no external Rendair routing",
-      "saved results attach to Design Book and project render history"
+      "saved results attach to Design Book and project render history",
+      "self-hosted Qwen remains a preserved optional enhancement and never becomes a competing runtime owner"
     ],
     "energy": [
       "immutable Engineering revision",
@@ -127,6 +128,7 @@
     ],
     "deployment": [
       "server/revex-energy-worker/DEPLOY_ENERGY_R127.ps1",
+      "server/revex-render-worker/deploy-current.ps1",
       "server/revex-render-worker/DEPLOY_RENDER_R126.ps1",
       "server/revex-report-functions/DEPLOY_REPORT_R126.ps1",
       "RECOVER_REVEX_ENERGY_CURRENT.cmd",
@@ -137,7 +139,7 @@
       "UPDATE_REVEX_ADDIN_CURRENT.ps1"
     ],
     "ui": "Version-suffixed UI modules remain preserved behind the canonical index/ui-integrity authority and are guarded by current convergence QA.",
-    "cloud": "Previous Cloud Run/Functions revisions are not deleted by FINALIZE_REVEX; source-bound candidate workers cut over only after readiness proof."
+    "cloud": "Previous Cloud Run/Functions revisions are not deleted by FINALIZE_REVEX. The Qwen Render worker remains preserved as a non-owning enhancement; the canonical Render path is the Companion Google client."
   },
   "energyPolicy": {
     "actualVtWins": true,
