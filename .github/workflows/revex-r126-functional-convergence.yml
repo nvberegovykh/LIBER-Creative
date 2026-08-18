@@ -12,6 +12,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
       - uses: actions/setup-python@v5
@@ -42,7 +44,7 @@ jobs:
         working-directory: server/revex-report-functions
         shell: node {0}
         run: |
-          const t=require('./index.js')._test;
+          const t=require(process.cwd()+'/index.js')._test;
           const assert=require('node:assert/strict');
           assert.equal(t.nycDay('2026-08-17T03:59:59Z'),'2026-08-16');
           assert.equal(t.nycDay('2026-08-17T04:00:00Z'),'2026-08-17');
@@ -57,15 +59,16 @@ jobs:
       - name: Preserve r125 Energy filing touchups
         working-directory: src/Liber.Revex.Revit/Engineering/Energy
         run: python verify_revex_r125_touchups.py
-      - name: Preserve existing REVEX full-stack guards
-        shell: powershell
-        run: |
-          node .github/scripts/verify-revex-r104-full-stack.py 2>$null
-          if($LASTEXITCODE-ne 0){python .github/scripts/verify-revex-r104-full-stack.py}
-          node .github/scripts/verify-revex-r109-pure-ui.js
-          node .github/scripts/verify-revex-r115-final-touchups.js
-          node .github/scripts/verify-revex-r116-energy-finalization.js
-          node .github/scripts/verify-revex-r117-bim-properties.js
+      - name: Preserve r104 full-stack guard
+        run: python .github/scripts/verify-revex-r104-full-stack.py
+      - name: Preserve r109 responsive UI guard
+        run: node .github/scripts/verify-revex-r109-pure-ui.js
+      - name: Preserve r115 final touchups guard
+        run: node .github/scripts/verify-revex-r115-final-touchups.js
+      - name: Preserve r116 Energy guard
+        run: node .github/scripts/verify-revex-r116-energy-finalization.js
+      - name: Preserve r117 BIM properties guard
+        run: node .github/scripts/verify-revex-r117-bim-properties.js
       - name: Parse r126 PowerShell deployment controllers
         shell: powershell
         run: |
@@ -81,8 +84,7 @@ jobs:
       - name: Energy scope preservation
         shell: bash
         run: |
-          base="$(git merge-base HEAD origin/main 2>/dev/null || true)"
-          if [ -z "$base" ]; then git fetch origin main --depth=1; base="$(git merge-base HEAD origin/main)"; fi
+          base="$(git merge-base HEAD origin/main)"
           changed="$(git diff --name-only "$base" HEAD)"
           echo "$changed"
           forbidden="$(printf '%s\n' "$changed" | grep -E '^(server/revex-energy-worker/|src/Liber.Revex.Revit/Engineering/Energy/|RECOVER_REVEX_ENERGY_CURRENT\.|RUN_REVEX_ENERGY_NOW\.)' || true)"
