@@ -36,6 +36,7 @@ must(pages,'derivedFromFullSet:true','Docs linked sheet authority');
 must(docs,"owner:'docs-pages-r115'",'Docs ownership guard');
 must(docs,".docs-group.printing-set details",'Docs legacy renderer detection');
 must(docs,"dispatchEvent(new Event('input'",'Docs canonical re-render');
+require('./verify-revex-r134-docs-linked-pages.js');
 
 must(appearance,"precedence:['instance-uv','type-texture','design-color-fallback','revit-material']",'appearance precedence');
 must(appearance,'uv.repeatX','instance UV overlay');
@@ -96,4 +97,4 @@ if(tabs<7)throw new Error(`main module tabs missing: ${tabs}`);
 for(const forbidden of ['runRevexEnergy','GeometryCo','COMcheck']){
   mustNot(blocks,forbidden,'Blocks scope');mustNot(docs,forbidden,'Docs scope');mustNot(issues,forbidden,'Issues scope');mustNot(renderClient,forbidden,'Render client scope');
 }
-console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',uiOwner:uiBuild,docs:'single-final-owner',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active+empty-selection-inspector',history:'NYC-day-technical',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'google-current+qwen-shadow',energy:'scope-preserved'}));
+console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',uiOwner:uiBuild,docs:'single-final-owner+linked-page-runtime',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active+empty-selection-inspector',history:'NYC-day-technical',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'google-current+qwen-shadow',energy:'scope-preserved'}));
