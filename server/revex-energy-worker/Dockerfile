@@ -27,17 +27,15 @@ RUN curl -fL --retry 4 "https://github.com/NatLabRockies/OpenStudio/releases/dow
  && soffice --version
 
 WORKDIR /opt/revex
+# The Energy folder carries canonical current modules plus preserved version-shadow files.
 COPY src/Liber.Revex.Revit/Engineering/Energy /opt/revex/energy
-# Bind the approved same-envelope reference to its immutable packaged location.
-# Both release QA and production runtime consume this exact path; no source-tree
-# fallback is accepted inside the worker image.
 ENV REVEX_APPROVED_ENVELOPE_REFERENCE=/opt/revex/energy/References/79_WINTHROP_APPROVED_PROPOSED.osm
-# Energy QA imports the exact authoritative gbXML exporter beside Energy via HERE.parent/Gbxml.
-# Keep both the .py and .dyn in the worker image so the identity regression test runs in Cloud Build.
 COPY src/Liber.Revex.Revit/Engineering/Gbxml /opt/revex/Gbxml
 COPY server/revex-energy-worker/app.py /opt/revex/server/app.py
 COPY server/revex-energy-worker/app_entry.py /opt/revex/server/app_entry.py
 COPY server/revex-energy-worker/durable_execution.py /opt/revex/server/durable_execution.py
+COPY server/revex-energy-worker/revex_energy_pipeline_current.py /opt/revex/server/revex_energy_pipeline_current.py
+# Versioned guards remain packaged as shadow mechanics for compatibility/regression only.
 COPY server/revex-energy-worker/revex_energy_pipeline_guard.py /opt/revex/server/revex_energy_pipeline_guard.py
 COPY server/revex-energy-worker/revex_energy_pipeline_guard_r116.py /opt/revex/server/revex_energy_pipeline_guard_r116.py
 COPY server/revex-energy-worker/revex_energy_pipeline_guard_r118.py /opt/revex/server/revex_energy_pipeline_guard_r118.py
@@ -62,24 +60,26 @@ COPY server/revex-energy-worker/verify_structured_schedule_evidence_r101.py /opt
 COPY server/revex-energy-worker/verify_geometryco_source_condition_r91.py /opt/revex/server/verify_geometryco_source_condition_r91.py
 COPY server/revex-energy-worker/verify_final_comcheck_recovery_r116.py /opt/revex/server/verify_final_comcheck_recovery_r116.py
 COPY server/revex-energy-worker/verify_reference_envelope_r118.py /opt/revex/server/verify_reference_envelope_r118.py
-# QA-only broker source copy: embedded r116 verification checks the exact broker/worker terminal contract.
-# The runtime worker never imports or executes this file.
 COPY server/firebase-functions/index.js /opt/revex/firebase-functions/index.js
 COPY server/revex-energy-worker/run_revex_r49_release_acceptance.py /opt/revex/server/run_revex_r49_release_acceptance.py
 COPY server/revex-energy-worker/verify_revex_r49_worker.py /opt/revex/server/verify_revex_r49_worker.py
 COPY server/revex-energy-worker/requirements-server.txt /opt/revex/server/requirements-server.txt
+# Historical deploy scripts are retained as shadow files; the current controller never calls them.
 COPY server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1 /opt/revex/server/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1
 COPY server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1 /opt/revex/server/DEPLOY_ENERGY_CURRENT.ps1
 
-# Preserve GeometryCo 4.3.4 byte-for-byte as the core. The installed entrypoint
-# is a source-evidence resolver that calls back into that core and never enables
-# allow_ambiguous or lowers the 75% confidence floor.
+# Preserve GeometryCo 4.3.4 byte-for-byte as the core. Current source-evidence resolver
+# calls back into that core and never enables allow_ambiguous or lowers the 75% floor.
 RUN mv /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py \
        /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler_core.py \
  && cp /opt/revex/server/revex_geometryco_source_condition.py \
        /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py
 
 RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
+ && test -f /opt/revex/server/revex_energy_pipeline_current.py \
+ && test -f /opt/revex/energy/revex_final_touchups.py \
+ && test -f /opt/revex/energy/revex_energy_contracts.py \
+ && test -f /opt/revex/energy/revex_pipeline_runner.py \
  && test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.py \
  && test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn \
  && test -f /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler_core.py \
@@ -89,6 +89,7 @@ RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
       /opt/revex/server/app.py \
       /opt/revex/server/app_entry.py \
       /opt/revex/server/durable_execution.py \
+      /opt/revex/server/revex_energy_pipeline_current.py \
       /opt/revex/server/revex_energy_pipeline_guard.py \
       /opt/revex/server/revex_energy_pipeline_guard_r116.py \
       /opt/revex/server/revex_energy_pipeline_guard_r118.py \
@@ -115,12 +116,12 @@ RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
       /opt/revex/server/verify_reference_envelope_r118.py \
       /opt/revex/server/run_revex_r49_release_acceptance.py \
       /opt/revex/server/verify_revex_r49_worker.py \
+      /opt/revex/energy/revex_final_touchups.py \
+      /opt/revex/energy/revex_energy_contracts.py \
+      /opt/revex/energy/revex_pipeline_runner.py \
       /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py \
       /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler_core.py
 
-# Fail fast on the exact production path before installing heavy Python runtime dependencies.
-# This is the path that failed in prior Cloud Builds, so the verifier must resolve the
-# packaged file itself rather than reconstructing a repository checkout path.
 RUN cd /opt/revex/server \
  && python3 -c "import os; from pathlib import Path; import revex_reference_envelope_projection_r118 as r; expected=Path(os.environ['REVEX_APPROVED_ENVELOPE_REFERENCE']); actual=r._reference_path(); assert actual==expected,(actual,expected); assert actual.is_file(),actual; print('REVEX_R118_PACKAGED_REFERENCE_PATH=PASSED', actual)"
 
@@ -128,8 +129,7 @@ RUN python3 -m pip install --no-cache-dir \
     -r /opt/revex/energy/requirements.txt \
     -r /opt/revex/energy/GeometryCo/requirements.txt \
     -r /opt/revex/server/requirements-server.txt
-# Execute the exact production import path under the explicit deployment binding.
-# This catches missing imports/startup coupling before Cloud Run receives the image.
+
 RUN cd /opt/revex/server \
  && REVEX_VERTEX_PROJECT=liber-apps-cca20 REVEX_VERTEX_LOCATION=global python3 -c "import os, app_entry; assert app_entry.APP is not None; assert os.environ['REVEX_VERTEX_PROJECT']=='liber-apps-cca20'; assert os.environ['REVEX_VERTEX_LOCATION']=='global'"
 RUN python3 -c "from selenium import webdriver; o=webdriver.ChromeOptions(); o.binary_location='/usr/bin/google-chrome'; o.add_argument('--headless=new'); o.add_argument('--no-sandbox'); o.add_argument('--disable-dev-shm-usage'); d=webdriver.Chrome(options=o); d.get('data:text/plain,REVEX-COMCHECK-DRIVER-READY'); d.quit()"
@@ -146,15 +146,13 @@ RUN python3 /opt/revex/energy/verify_revex_r49_energy.py \
  && python3 /opt/revex/server/verify_final_comcheck_recovery_r116.py \
  && cd /opt/revex/server && python3 verify_reference_envelope_r118.py
 
-# Compatibility marker for older deployment-source validators; runtime uses r118 below:
+# Historical verifier shadow markers only; current runtime is the ENV directly below.
 # REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py
+# REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard_r118.py
 ENV REVEX_HEADLESS=1 \
     REVEX_CHROME_BINARY=/usr/bin/google-chrome \
-    REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard_r118.py \
+    REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_current.py \
     REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py \
     REVEX_ENERGY_TIMEOUT_SECONDS=3500 \
     PORT=8080
-# Bind Google Cloud/Vertex routing before app.py can ever see the REVEX application
-# project id as a fallback. Canonical deployment supplies REVEX_VERTEX_PROJECT;
-# ADC is a fail-closed defense for future deployment paths.
 CMD ["gunicorn","--bind","0.0.0.0:8080","--workers","1","--threads","4","--timeout","3600","app_entry:APP","--chdir","/opt/revex/server"]

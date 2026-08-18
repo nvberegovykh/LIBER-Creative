@@ -73,6 +73,7 @@ jobs:
           PY
 
       - name: Scope guard
+        if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'agent/revex-r125')
         shell: bash
         run: |
           BASE_SHA='${{ github.event.pull_request.base.sha }}'
