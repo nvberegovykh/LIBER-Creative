@@ -27,6 +27,7 @@ jobs:
           python -m py_compile \
             src/Liber.Revex.Revit/Engineering/Energy/revex_energy_agent.py \
             src/Liber.Revex.Revit/Engineering/Energy/revex_energy_agent_evidence.py \
+            src/Liber.Revex.Revit/Engineering/Energy/revex_energy_agent_filing.py \
             src/Liber.Revex.Revit/Engineering/Energy/revex_energy_maintainer.py \
             src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner.py \
             server/revex-energy-worker/revex_energy_pipeline_current.py \
@@ -43,4 +44,4 @@ jobs:
 
       - name: Verify active current runner imports inside image
         run: |
-          docker run --rm --entrypoint python3 revex-wallt-energy:${{ github.sha }} -c "import sys; sys.path[:0]=['/opt/revex/energy','/opt/revex/server']; import revex_energy_agent as a, revex_energy_agent_evidence as e, revex_energy_pipeline_current as p; assert a.MISSING_VT == 0.45; assert e.MISSING_VT == 0.45; assert p.maintainer is a; print('WALLT_PRODUCTION_IMAGE=PASSED')"
+          docker run --rm --entrypoint python3 revex-wallt-energy:${{ github.sha }} -c "import sys; sys.path[:0]=['/opt/revex/energy','/opt/revex/server']; import revex_energy_agent as a, revex_energy_agent_evidence as e, revex_energy_agent_filing as f, revex_energy_pipeline_current as p; assert a.MISSING_VT == 0.45; assert e.MISSING_VT == 0.45; assert f.MISSING_VT == 0.45; assert p.maintainer is a; print('WALLT_PRODUCTION_IMAGE=PASSED')"
