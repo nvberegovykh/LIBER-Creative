@@ -1,0 +1,46 @@
+name: REVEX WALLT Energy production image acceptance
+
+on:
+  pull_request:
+    paths:
+      - 'src/Liber.Revex.Revit/Engineering/Energy/**'
+      - 'server/revex-energy-worker/**'
+      - '.github/workflows/revex-wallt-energy-production-image.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wallt-production-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Compile active WALLT runtime and verifier
+        run: |
+          python -m py_compile \
+            src/Liber.Revex.Revit/Engineering/Energy/revex_energy_agent.py \
+            src/Liber.Revex.Revit/Engineering/Energy/revex_energy_agent_evidence.py \
+            src/Liber.Revex.Revit/Engineering/Energy/revex_energy_maintainer.py \
+            src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner.py \
+            server/revex-energy-worker/revex_energy_pipeline_current.py \
+            server/revex-energy-worker/verify_energy_agent.py
+
+      - name: Run isolated WALLT one-shot contract
+        run: python server/revex-energy-worker/verify_energy_agent.py
+
+      - name: Build exact production Energy image
+        run: docker build --pull -f server/revex-energy-worker/Dockerfile -t revex-wallt-energy:${{ github.sha }} .
+
+      - name: Re-run WALLT verifier inside exact production image
+        run: docker run --rm --entrypoint python3 revex-wallt-energy:${{ github.sha }} /opt/revex/server/verify_energy_agent.py
+
+      - name: Verify active current runner imports inside image
+        run: |
+          docker run --rm --entrypoint python3 revex-wallt-energy:${{ github.sha }} -c "import sys; sys.path[:0]=['/opt/revex/energy','/opt/revex/server']; import revex_energy_agent as a, revex_energy_agent_evidence as e, revex_energy_pipeline_current as p; assert a.MISSING_VT == 0.45; assert e.MISSING_VT == 0.45; assert p.maintainer is a; print('WALLT_PRODUCTION_IMAGE=PASSED')"
