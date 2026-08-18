@@ -9,6 +9,9 @@ from pathlib import Path
 import sys
 
 
+FIXED_MISSING_VT = 0.45
+
+
 def _load(path: Path):
     parent = str(path.parent)
     if parent not in sys.path:
@@ -34,13 +37,16 @@ def main() -> int:
             sys.path.insert(0, str(server_root))
 
     import revex_final_touchups_r125 as r125
-    try:
-        import revex_reference_envelope_projection_r118 as reference_envelope
-    except Exception:
-        reference_envelope = None
+
+    # Missing VT is deliberately deterministic for the filing path. Preserve any VT
+    # already present in current evidence; only an absent value falls back to 0.45.
+    r125.VT_CLEAR_FALLBACK = FIXED_MISSING_VT
+    r125.VT_TINTED_FALLBACK = FIXED_MISSING_VT
 
     module = _load(impl)
-    r125.patch_pipeline(module, reference_envelope)
+    # Thermal same-envelope projection is completed by the r118 guard before this runner.
+    # Passing no reference here prevents VT from being silently replaced by another value.
+    r125.patch_pipeline(module, None)
 
     # The pinned implementation's main() parses sys.argv itself.
     sys.argv = [str(impl), *remaining]
