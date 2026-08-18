@@ -9,7 +9,7 @@ This file is the durable resume point for the current REVEX finalization session
 - Draft PR: #125 — `WALLT active Energy repair controller`
 - Base: `main`
 - Base SHA at this checkpoint: `00817045c4fdade8f80e0afa34c081189997cb9b`
-- Checkpoint-parent head before this file was committed: `58bf9a3d372b36dbf6eaa096852a669789cfe35c`
+- Checkpoint-parent head before this update was committed: `5cec4845e80ab06d91a149335205b929dd93566d`
 - This checkpoint commit advances the branch head; always fetch the branch/PR again rather than assuming the parent SHA is still current.
 
 ## Non-negotiable architecture
@@ -45,15 +45,22 @@ The Fixer receives a current runtime snapshot: project, revision, active view, s
 
 A fix may execute only through a **registered local fixer adapter**. Domain agents (Energy, Docs, Families/Blocks, Chat, BIM/viewer, Render, etc.) expose bounded helper/fixer actions to this control plane. If no safe adapter exists, WALLT diagnoses the likely owner and requests a source-candidate repair; it does not arbitrarily rewrite the DOM or production source.
 
-### 3. 24-hour cycle ledger
+### 3. 24-hour cycle ledger — durable now
 
-The control plane currently records request → snapshot → plan → action outcome → completion/failure into a rolling 24-hour local ledger and exposes `cycleReport()`.
+The control plane records request → snapshot → plan → action outcome → completion/failure into a rolling 24-hour local ledger and exposes `cycleReport()`.
 
-**Important remaining durability fix:** mirror meaningful cycle events through the existing project History persistence (`RevexStore.appendHistory` / `projects/{projectId}/revexHistory`) so the fix library survives browser/device/session boundaries. Keep localStorage as the immediate/offline cache; do not create a second database owner.
+`docs/liber-apps/apps/revex/wallt-cycle-history.js` now mirrors meaningful phases (`REQUEST`, `PLAN`, `COMPLETE`, `FAILED`, `ACTION_FAILED`) through the **existing** `RevexStore.appendHistory` boundary using `kind: wallt-cycle`. It does not call Firestore directly and creates no new database owner. LocalStorage remains the immediate/offline cache. The adapter also exposes an async durable 24-hour report sourced from existing project History.
+
+Relevant commits after the first checkpoint:
+
+- `ae1e7d64ecd93206fbf38f812711e54ad3dc1e45` — add project-history persistence adapter;
+- `ac866365c2540b9b71cd93af41d6a5cfe2efe673` — load it through current UI integrity;
+- `dbc7f8d10c6e9fbaea848933eabd4535df458f2e` — verify existing History ownership / no direct DB mutation;
+- `5cec4845e80ab06d91a149335205b929dd93566d` — gate the adapter in the WALLT control-plane workflow.
 
 ### WALLT control-plane QA
 
-Workflow `REVEX WALLT helper + fixer control plane`, run `32149213885`, completed successfully on the first control-plane candidate: JavaScript syntax and isolated Helper/Fixer contract both passed.
+The first Helper/Fixer workflow run `32149213885` passed syntax and isolated channel contracts. A fresh run for the durable History mirror is queued from the current candidate and must pass before promotion.
 
 ## Energy — current state
 
@@ -78,17 +85,18 @@ Current verification proves:
 
 ## Exact Energy production-image stop / fix
 
-The previous exact production-image acceptance run built the Docker image successfully and the WALLT verifier passed **inside the Dockerfile build**, but the workflow's later `docker run` verifier failed with:
+A prior exact production-image acceptance built successfully and the WALLT verifier passed **inside the Dockerfile build**, but the workflow's later `docker run` verifier failed with:
 
 `ModuleNotFoundError: No module named 'revex_energy_agent_evidence'`
 
 Cause: the post-build verifier process did not inherit `/opt/revex/energy` and `/opt/revex/server` on `PYTHONPATH`. The application entrypoint itself already resolves the packaged Energy module root; this was a verifier/container invocation mismatch, not an Energy modeling failure.
 
-Fix committed immediately before this checkpoint:
+Fix:
 
 - `.github/workflows/revex-wallt-energy-production-image.yml` now runs **all post-build container acceptance checks** with `PYTHONPATH=/opt/revex/energy:/opt/revex/server`.
-- Commit containing that correction: `58bf9a3d372b36dbf6eaa096852a669789cfe35c`.
-- Fresh workflow: `REVEX WALLT Energy production image acceptance`, run `32150201938`, was queued when this checkpoint was written.
+- Import-path correction commit: `58bf9a3d372b36dbf6eaa096852a669789cfe35c`.
+- Run `32150201938` from that correction had reached the exact Docker image build and was still in progress at the latest direct check.
+- Because later WALLT History/UI commits also touch `ui-integrity.js`, the current head has a newer production-image run; at this checkpoint the current-head run is `32150630530` and is queued. Always use the latest run attached to the latest head for final acceptance.
 
 ### EN-1 print contract that must survive
 
@@ -102,6 +110,38 @@ User-confirmed current output contract:
 - instruction/helper/unused tabs excluded from the filing PDF, while the full workbook remains intact.
 
 `verify_en1_print_contract.py` explicitly asserts 17 pages, 63%, `fitToPage == False`, sheet order and page markers. The production-image workflow must reach and pass this step after the import-path correction. Older r89 verifier output mentioning a 16-page Fit-to-One-Page contract is historical/shadow behavior and must **not** overwrite this current user-confirmed contract.
+
+## Read-only current-owner audit already started
+
+### Docs
+
+Current intended final renderer is `docs-pages-r115.js`:
+
+- one latest Full Set per printing set;
+- sheet order follows authoritative Full Set page number;
+- each visible sheet is a derived one-page PDF linked through the parent printing-set `sheetIndex`, not a detached top-level document;
+- derived page storage sits under a printing-set/revision lane;
+- Full Set and page links remain in one printing-set group.
+
+`docs-convergence-r126.js` currently declares `docs-pages-r115` as owner and reasserts it only when a legacy renderer rewrites the Docs tree. No Docs mutation has been made during this audit yet.
+
+### Families / Blocks
+
+The current path exists end-to-end and is being inspected, not rewritten:
+
+`blocks-palette-r126.js` → WebView2 provider bridge → opaque family token → `RevexFamilyPlacementExternalHandler` → `FamilyPlacementService` → Revit transaction.
+
+Current safeguards observed:
+
+- only available in Revit host and Walk mode;
+- intended placement ~3 ft ahead of the Walk camera;
+- `.rfa` / `.zip` family handoff through the native bridge;
+- unsupported curve/adaptive/view-based/detail families fail visibly;
+- hosted placement is bounded to nearby physical Revit hosts;
+- Revit ExternalEvent owns mutation;
+- next BIM Sync becomes authoritative after placement.
+
+No Families fix has been applied yet; exact provider-download/placement connection still needs final contract QA before promotion.
 
 ## Known unrelated / historical red CI
 
@@ -128,12 +168,12 @@ Later convergence work demoted it and made Gemini/Nano Banana the canonical clie
 
 ## Remaining finalization order
 
-1. **Energy production image:** wait only for current run result; if red, inspect the exact failing step. Do not use the real Revit Sync to debug container packaging.
+1. **Energy production image:** get the latest current-head run to completion; if red, inspect only its exact failing step. Do not use real Revit Sync for container/debug packaging.
 2. **Confirm 17-sheet / 63% EN-1 acceptance inside the exact image.**
-3. **Persist WALLT 24-hour cycle events through existing project History** while retaining local cache.
+3. **Confirm durable WALLT Helper/Fixer History mirror workflow is green.**
 4. **Connection/owner audit:** current Revit bridge ↔ Companion ↔ Store/Firestore/Storage and each module owner.
-5. **Docs:** one Full Set owner; ordered linked one-page sheets from that exact set; no detached sheet objects; non-blocking mobile/desktop UI.
-6. **Families / Blocks:** current library/placement connection, Revit ExternalEvent boundary, unsupported placement fails closed, no competing legacy owner.
+5. **Docs:** validate one Full Set owner and linked per-page group behavior in the current runtime; add a regression probe before changing code.
+6. **Families / Blocks:** validate provider-download → opaque token → ExternalEvent → FamilyPlacementService end-to-end and add a regression probe; repair only the broken boundary if found.
 7. **Chat:** exact current project connection; cross-project reset/isolation; Helper can navigate/pass context without becoming chat storage owner.
 8. **Render:** verify current path only; do not redesign yet.
 9. Add local domain Helper/Fixer adapters as each owner is proven.
@@ -146,11 +186,13 @@ When resuming this work:
 
 1. Fetch PR #125 and latest branch head.
 2. Read this checkpoint.
-3. Fetch workflow run `32150201938` (`REVEX WALLT Energy production image acceptance`).
-4. If it is green, explicitly inspect that both post-build steps passed:
+3. Fetch the **latest** `REVEX WALLT Energy production image acceptance` run attached to that head (checkpoint current-head run: `32150630530`).
+4. Require all three post-build acceptance steps to pass:
    - WALLT verifier inside exact image;
-   - **17-sheet / 63% EN-1 PDF export verification inside exact image**.
-5. Then implement the next bounded fix: mirror meaningful WALLT 24-hour cycle events into the existing `RevexStore.appendHistory` project-history boundary; add a regression verifier for that behavior.
-6. After that, proceed with current-owner connection audit and Docs → Families/Blocks → Chat in that order.
+   - **17-sheet / 63% EN-1 PDF export verification inside exact image**;
+   - active current runner / print-policy import binding.
+5. Fetch the latest `REVEX WALLT helper + fixer control plane` run (checkpoint current-head run: `32150630648`) and require the durable existing-History ownership checks to pass.
+6. If both gates are green, continue the current-owner audit at **Docs runtime verification**, then **Families/Blocks provider/ExternalEvent contract**, then Chat.
+7. If either gate is red, inspect that exact job/step and repair only that boundary; do not roll back the established architecture.
 
 Do not spend the real Engineering Sync merely to discover a packaging/import mistake.
