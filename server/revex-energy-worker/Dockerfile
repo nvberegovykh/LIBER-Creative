@@ -60,6 +60,7 @@ COPY server/revex-energy-worker/verify_structured_schedule_evidence_r101.py /opt
 COPY server/revex-energy-worker/verify_geometryco_source_condition_r91.py /opt/revex/server/verify_geometryco_source_condition_r91.py
 COPY server/revex-energy-worker/verify_final_comcheck_recovery_r116.py /opt/revex/server/verify_final_comcheck_recovery_r116.py
 COPY server/revex-energy-worker/verify_reference_envelope_r118.py /opt/revex/server/verify_reference_envelope_r118.py
+COPY server/revex-energy-worker/verify_energy_agent.py /opt/revex/server/verify_energy_agent.py
 COPY server/firebase-functions/index.js /opt/revex/firebase-functions/index.js
 COPY server/revex-energy-worker/run_revex_r49_release_acceptance.py /opt/revex/server/run_revex_r49_release_acceptance.py
 COPY server/revex-energy-worker/verify_revex_r49_worker.py /opt/revex/server/verify_revex_r49_worker.py
@@ -77,9 +78,13 @@ RUN mv /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py
 
 RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
  && test -f /opt/revex/server/revex_energy_pipeline_current.py \
+ && test -f /opt/revex/server/verify_energy_agent.py \
  && test -f /opt/revex/energy/revex_final_touchups.py \
  && test -f /opt/revex/energy/revex_energy_contracts.py \
  && test -f /opt/revex/energy/revex_pipeline_runner.py \
+ && test -f /opt/revex/energy/revex_energy_agent.py \
+ && test -f /opt/revex/energy/revex_energy_agent_evidence.py \
+ && test -f /opt/revex/energy/revex_energy_maintainer.py \
  && test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.py \
  && test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn \
  && test -f /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler_core.py \
@@ -114,11 +119,15 @@ RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
       /opt/revex/server/verify_geometryco_source_condition_r91.py \
       /opt/revex/server/verify_final_comcheck_recovery_r116.py \
       /opt/revex/server/verify_reference_envelope_r118.py \
+      /opt/revex/server/verify_energy_agent.py \
       /opt/revex/server/run_revex_r49_release_acceptance.py \
       /opt/revex/server/verify_revex_r49_worker.py \
       /opt/revex/energy/revex_final_touchups.py \
       /opt/revex/energy/revex_energy_contracts.py \
       /opt/revex/energy/revex_pipeline_runner.py \
+      /opt/revex/energy/revex_energy_agent.py \
+      /opt/revex/energy/revex_energy_agent_evidence.py \
+      /opt/revex/energy/revex_energy_maintainer.py \
       /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py \
       /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler_core.py
 
@@ -144,7 +153,8 @@ RUN python3 /opt/revex/energy/verify_revex_r49_energy.py \
  && python3 /opt/revex/server/verify_structured_schedule_evidence_r101.py \
  && python3 /opt/revex/server/verify_geometryco_source_condition_r91.py \
  && python3 /opt/revex/server/verify_final_comcheck_recovery_r116.py \
- && cd /opt/revex/server && python3 verify_reference_envelope_r118.py
+ && cd /opt/revex/server && python3 verify_reference_envelope_r118.py \
+ && python3 verify_energy_agent.py
 
 # Historical verifier shadow markers only; current runtime is the ENV directly below.
 # REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py
