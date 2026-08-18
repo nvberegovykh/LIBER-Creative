@@ -4,7 +4,9 @@ const path = require('path');
 const root = path.resolve(__dirname, '../..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 const control = read('docs/liber-apps/apps/revex/wallt-control-plane.js');
+const cycleHistory = read('docs/liber-apps/apps/revex/wallt-cycle-history.js');
 const ui = read('docs/liber-apps/apps/revex/ui-integrity.js');
+const store = read('docs/liber-apps/apps/revex/store.js');
 const wallt = read('docs/liber-apps/js/wallt-agent.js');
 
 function must(text, ...markers) {
@@ -39,9 +41,28 @@ must(control,
   "sourceMutation: false"
 );
 
+must(cycleHistory,
+  "kind:'wallt-cycle'",
+  "owner:'RevexStore.appendHistory'",
+  "root.addEventListener('revex:wallt-cycle-event'",
+  "Store.appendHistory(projectId,historyEvent(row))",
+  "Store.listHistory(projectId)",
+  "liber.revex.wallt-durable-24h-cycle-report.v1",
+  "const WINDOW_MS=24*60*60*1000",
+  "PERSIST_PHASES=new Set(['REQUEST','PLAN','COMPLETE','FAILED','ACTION_FAILED'])",
+  "newDatabaseOwner:false"
+);
+
+must(store,
+  "async appendHistory(projectId, event)",
+  "'projects', projectId, 'revexHistory'",
+  "async listHistory(projectId)"
+);
+
 must(ui,
   "loadScript('wallt-control-plane.js?v=20260818-wallt-control1','wallt-control-plane')",
-  "wallt:'helper+fixer+24h-cycle'"
+  "loadScript('wallt-cycle-history.js?v=20260818-wallt-cycle-history1','wallt-cycle-history')",
+  "wallt:'helper+fixer+24h-history'"
 );
 
 must(wallt,
@@ -62,6 +83,13 @@ forbid(control,
   'EnergyPlus',
   'GeometryCo'
 );
+// The durability adapter must use the existing History owner, not Firestore directly.
+forbid(cycleHistory,
+  'firebase.firestore',
+  'setDoc(',
+  'collection(',
+  'localStorage.setItem'
+);
 
 // Fixer cannot invent arbitrary DOM/source mutations; deeper abilities arrive only through registered owners.
 if (!control.includes("A local fix may execute only a registered fixer adapter")) throw new Error('fixer adapter boundary missing');
@@ -74,7 +102,9 @@ console.log(JSON.stringify({
   exactPanelNavigation: true,
   explicitIssueCommit: true,
   deeperAdapters: true,
-  rolling24hLedger: true,
+  rolling24hLocalLedger: true,
+  durableProjectHistoryMirror: true,
+  historyOwnerReused: true,
   sameOriginBridge: true,
   arbitrarySourceMutation: false,
   duplicateProductOwner: false
