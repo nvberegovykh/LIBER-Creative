@@ -22,6 +22,7 @@
     "walltControlRuntime": "docs/liber-apps/apps/revex/wallt-control-plane.js",
     "walltFixerAdaptersRuntime": "docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js",
     "walltCycleHistoryRuntime": "docs/liber-apps/apps/revex/wallt-cycle-history.js",
+    "walltUiRuntime": "docs/liber-apps/apps/revex/wallt-ui-r138.js",
     "chatBoundaryRuntime": "docs/liber-apps/apps/revex/chat-convergence-r136.js",
     "renderRuntime": "docs/liber-apps/apps/revex/render-agent.js",
     "revitAddinProject": "src/Liber.Revex.Revit/Liber.Revex.Revit.csproj",
@@ -37,6 +38,7 @@
   "requiredCapabilities": {
     "projectIdentity": "one REVEX project identity shared by Revit, BIM, Design Book, Spec Book, Docs, Chat, History, Render and Energy under project owner/member/admin access",
     "wallt": [
+      "REVEX exposes one visible compact WALLT surface with Helper and Fixer modes on desktop, installed PWA and Revit WebView without creating another AI backend or storage owner",
       "Helper operates the existing current REVEX owners through explicit navigate, focus, search, selection, control, issue and Chat actions instead of inventing duplicate implementations",
       "Fixer diagnoses from current runtime state and diagnostics and may execute only registered bounded reversible current-owner repair adapters",
       "planner-advertised adapter:action names are executable by the same control-plane router",
