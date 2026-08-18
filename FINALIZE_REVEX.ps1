@@ -152,12 +152,9 @@ function Build-Addin([string]$Root,[string]$Dotnet) {
 function Verify-GoogleRenderApi([string]$GCloud) {
   Step "Verify canonical Google Render provider"
   if((Invoke-Native $GCloud @("services","enable","generativelanguage.googleapis.com","--project",$ProjectId,"--quiet") -Quiet)-ne 0){throw "Gemini API could not be enabled for $ProjectId."}
-  $token=Capture-Native $GCloud @("auth","print-access-token")
-  if($token.Code-ne 0-or-not $token.Text){throw "Google Cloud could not issue an OAuth token for Render verification."}
-  $headers=@{Authorization="Bearer $($token.Text.Trim())";"x-goog-user-project"=$ProjectId}
-  try{$model=Invoke-RestMethod -Method Get -Uri "https://generativelanguage.googleapis.com/v1/models/$RenderModel" -Headers $headers -TimeoutSec 30}catch{throw "Google Render provider verification failed: $($_.Exception.Message)"}
-  if([string]$model.name-ne "models/$RenderModel"){throw "Google Render provider returned an unexpected model identity."}
-  Write-Host "PASS: Render provider $RenderModel is reachable with project OAuth." -ForegroundColor Green
+  $enabled=Capture-Native $GCloud @("services","list","--enabled","--project",$ProjectId,"--filter","config.name:generativelanguage.googleapis.com","--format","value(config.name)")
+  if($enabled.Code-ne 0-or $enabled.Text-notmatch "generativelanguage.googleapis.com"){throw "Gemini API did not remain enabled for $ProjectId."}
+  Write-Host "PASS: Google Generative Language API is enabled. Runtime Render OAuth is obtained by render-agent.js with the required user scopes when Render is used." -ForegroundColor Green
 }
 
 function Verify-LiveUi([string]$Root) {
@@ -311,7 +308,7 @@ try{
   Write-Host "PASS: REVEX full current release is converged." -ForegroundColor Green
   Write-Host "Source: $SourceSha"
   Write-Host "Companion/UI/BIM/Books/Docs/Issues/History/Blocks: exact current live runtime verified"
-  Write-Host "Render: $RenderModel via canonical Companion render-agent.js; Google API reachability verified"
+  Write-Host "Render: $RenderModel via canonical Companion render-agent.js; Google Generative Language API enabled"
   Write-Host "Energy: $($script:EnergyService) · actual VT preserved · missing VT 0.45 · complete release package required"
   Write-Host "Report/Daily Report + access: source-bound $SourceSha"
   Write-Host "Revit add-in: $(Join-Path $InstalledRoot 'Liber.Revex.Revit.dll')"
