@@ -8,7 +8,7 @@
 (function (root) {
   'use strict';
 
-  const BUILD = '20260818-wallt-control1';
+  const BUILD = '20260818-wallt-control2';
   const CYCLE_MS = 24 * 60 * 60 * 1000;
   const LEDGER_KEY = 'liber.revex.wallt.fix-cycle.v1';
   const MAX_LEDGER = 1000;
@@ -288,6 +288,14 @@
   function actionHandler(channel, type) {
     const builtin = channel === CHANNEL_HELPER ? BUILTIN_HELPER[type] : null;
     if (builtin) return builtin;
+    const separator = type.indexOf(':');
+    if (separator > 0) {
+      const adapterName = type.slice(0, separator);
+      const actionName = type.slice(separator + 1);
+      const adapter = adapters.get(adapterName);
+      const table = channel === CHANNEL_HELPER ? adapter?.helperActions : adapter?.fixerActions;
+      if (typeof table?.[actionName] === 'function') return table[actionName];
+    }
     for (const adapter of adapters.values()) {
       const table = channel === CHANNEL_HELPER ? adapter.helperActions : adapter.fixerActions;
       if (typeof table?.[type] === 'function') return table[type];
@@ -299,7 +307,7 @@
     const rows = Array.isArray(actions) ? actions : [];
     const results = [];
     for (const action of rows) {
-      const type = clean(action?.type, 80);
+      const type = clean(action?.type, 120);
       const handler = actionHandler(channel, type);
       if (!handler) throw new Error(`WALLT ${channel} action is not registered: ${type || 'blank'}`);
       const started = performance.now();
@@ -328,6 +336,13 @@
     return null;
   }
 
+  function adapterActionNames(channel) {
+    return [...adapters.entries()].flatMap(([name, value]) => {
+      const table = channel === CHANNEL_HELPER ? value.helperActions : value.fixerActions;
+      return Object.keys(table || {}).map((action) => `${name}:${action}`);
+    });
+  }
+
   async function planHelper(request) {
     const agent = root.walltAgent;
     if (!agent?.response) throw new Error('WALLT text service is not ready.');
@@ -342,7 +357,7 @@
       'Views: bim, design, spec, docs, energy, chat, history.',
       `Named focus targets: ${Object.keys(TARGETS).join(', ')}.`,
       `Named controls: ${Object.keys(CONTROLS).join(', ')}.`,
-      `Registered helper adapters: ${[...adapters.entries()].flatMap(([name, value]) => Object.keys(value.helperActions || {}).map((action) => `${name}:${action}`)).join(', ') || 'none'}.`,
+      `Registered helper adapter actions (use the exact adapter:action type): ${adapterActionNames(CHANNEL_HELPER).join(', ') || 'none'}.`,
       'Return ONLY JSON: {"assistant":"short explanation","actions":[{...}],"needsUser":false}.',
       'Use issue.commit=true only when the user explicitly asked to create/save/add the issue; otherwise open and prefill it for review.',
       `Current REVEX runtime snapshot: ${JSON.stringify(snapshot)}`
@@ -357,7 +372,7 @@
     const agent = root.walltAgent;
     if (!agent?.response) throw new Error('WALLT text service is not ready.');
     const snapshot = runtimeSnapshot();
-    const fixerActions = [...adapters.entries()].flatMap(([name, value]) => Object.keys(value.fixerActions || {}).map((action) => `${name}:${action}`));
+    const fixerActions = adapterActionNames(CHANNEL_FIXER);
     const instructions = [
       'You are WALLT Fixer inside REVEX Companion.',
       'Diagnose the CURRENT runtime from supplied evidence. Do not create a second BIM/Docs/Chat/Render/Energy engine.',
@@ -365,7 +380,7 @@
       'Every attempted fix is recorded in the rolling 24-hour cycle ledger with evidence and outcome.',
       'Prefer current-owner repair; old generation files are evidence/rollback shadows, not new runtime owners.',
       'Never rewrite immutable Revit/Engineering revisions. Never fabricate project or filing facts.',
-      `Registered fixer actions: ${fixerActions.join(', ') || 'none'}.`,
+      `Registered fixer actions (use the exact adapter:action type): ${fixerActions.join(', ') || 'none'}.`,
       'Return ONLY JSON: {"assistant":"short diagnosis","suspectedOwner":"runtime/file/module","evidence":["..."],"actions":[{...}],"needsSourceChange":true,"needsUser":false,"confidence":0.0}.',
       `Current REVEX runtime snapshot: ${JSON.stringify(snapshot)}`
     ].join('\n');
@@ -461,6 +476,6 @@
 
   record(CHANNEL_HELPER, 'BOOT', 'WALLT control plane initialized.', { build: BUILD, channels: [CHANNEL_HELPER, CHANNEL_FIXER] });
   diagnostic('INFO', 'WALLT_CONTROL_READY', 'WALLT Helper + Fixer control plane initialized.', {
-    channels: [CHANNEL_HELPER, CHANNEL_FIXER], cycleHours: 24, arbitraryDomMutation: false, sourceMutation: false
+    channels: [CHANNEL_HELPER, CHANNEL_FIXER], cycleHours: 24, arbitraryDomMutation: false, sourceMutation: false, adapterActionRouting: 'adapter:action'
   });
 })(window);
