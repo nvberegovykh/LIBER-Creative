@@ -32,7 +32,9 @@ def sha256(p: Path) -> str:
 release = json.loads(read("REVEX_CURRENT_RELEASE.json"))
 controller = read("FINALIZE_REVEX.ps1")
 launcher = read("FINALIZE_REVEX.cmd")
-energy_deploy = read("server/revex-energy-worker/DEPLOY_ENERGY_R127.ps1")
+energy_deploy = read("server/revex-energy-worker/deploy-current.ps1")
+render_deploy = read("server/revex-render-worker/deploy-current.ps1")
+report_deploy = read("server/revex-report-functions/deploy-current.ps1")
 docker = read("server/revex-energy-worker/Dockerfile")
 app_entry = read("server/revex-energy-worker/app_entry.py")
 current_guard = read("server/revex-energy-worker/revex_energy_pipeline_current.py")
@@ -47,10 +49,9 @@ mobile = read("docs/liber-apps/apps/revex/mobile-final-r122.js")
 design_versions = read("docs/liber-apps/apps/revex/design-versions-r52.js")
 engineering_sync = read("src/Liber.Revex.Revit/Services/EngineeringSyncService.cs")
 
-# ---------------------------------------------------------------------------
 # Release authority: one current surface, prior versions preserved as shadows.
-# ---------------------------------------------------------------------------
 assert release["schema"] == "liber.revex.current-release.v2"
+assert release["authority"] == "canonical-current-files"
 assert release["operatorEntrypoint"] == "FINALIZE_REVEX.cmd"
 assert release["acceptanceAction"] == "one fresh SYNC ENGINEERING after successful finalization"
 for principle in (
@@ -62,21 +63,22 @@ for principle in (
     "immutableProjectRevisionsAreNeverRewritten",
     "currentRuntimeUsesCanonicalFacades",
     "packageFilenamesAreBoundaryAdaptersNotInternalArchitecture",
+    "candidateWorkersProveReadyBeforeBrokerCutover",
 ):
     assert release["principles"].get(principle) is True, principle
-
+assert release["current"]["energyDeployer"] == "server/revex-energy-worker/deploy-current.ps1"
+assert release["current"]["renderDeployer"] == "server/revex-render-worker/deploy-current.ps1"
+assert release["current"]["reportDeployer"] == "server/revex-report-functions/deploy-current.ps1"
 for category in ("projectIdentity","bim","mobile","designBook","specBook","docs","issues","history","blocks","render","energy"):
     assert category in release["requiredCapabilities"], f"release contract lost capability category {category}"
 
-# Historical r125 implementations must remain byte-identical shadows.
+# Historical implementations and deployment entrypoints remain shadows, never current authority.
 assert git_blob_sha("src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups_r125.py") == "7e11be9fb0ef6cce2df205cb0a7827682f170735"
 assert git_blob_sha("src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner_r125.py") == "885b9fffc193671f0ed199a208fe3a3690e5a021"
 for rel in release["preservedShadows"]["energy"] + release["preservedShadows"]["deployment"]:
     assert path(rel).is_file(), f"shadow file was removed: {rel}"
 
-# ---------------------------------------------------------------------------
-# One controller: fresh main -> exact SHA -> validate -> cloud -> UI -> add-in.
-# ---------------------------------------------------------------------------
+# One operator command: fresh main -> exact SHA -> validate -> stage candidates -> UI -> cutover -> add-in.
 require(launcher,
         "raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/FINALIZE_REVEX.ps1",
         "REVEX one-command current release finalizer",
@@ -84,29 +86,48 @@ require(launcher,
 require(controller,
         '"clone","--depth","1","--branch","main","--single-branch"',
         '$SourceSha = $sha.Text.ToLowerInvariant()',
-        "DEPLOY_ENERGY_R127.ps1",
-        "DEPLOY_REPORT_R126.ps1",
-        "DEPLOY_RENDER_R126.ps1",
+        "server\\revex-energy-worker\\deploy-current.ps1",
+        "server\\revex-render-worker\\deploy-current.ps1",
+        "server\\revex-report-functions\\deploy-current.ps1",
+        "Stage and verify current Energy candidate without broker cutover",
+        "Stage, warm and verify current Render candidate without broker cutover",
+        "Verify current Companion UI is live before any broker cutover",
+        "Deploy source-bound Report and Daily Report",
+        "Cut Render broker to the already-warm current candidate",
+        "Cut Energy broker to the already-verified current candidate",
+        "Verify every mutable live service is bound to the exact release source",
         "Compile exact-source Revit 2026 add-in",
         "Install-AddinAtomically",
-        "Verify-LiveUi",
         "Wait-RevitClosed",
         "App.before-finalize.",
-        "Reopen Revit 2026 and run one fresh SYNC ENGINEERING")
+        "previousInstalledRevisionShadow",
+        "run ONE fresh SYNC ENGINEERING")
+# Energy is intentionally the final broker cutover because a failed candidate never touches live Energy.
+assert controller.index("Stage and verify current Energy candidate") < controller.index("Verify current Companion UI is live before any broker cutover")
+assert controller.index("Stage, warm and verify current Render candidate") < controller.index("Verify current Companion UI is live before any broker cutover")
+assert controller.index("Deploy source-bound Report and Daily Report") < controller.index("Cut Render broker to the already-warm current candidate")
+assert controller.index("Cut Render broker to the already-warm current candidate") < controller.index("Cut Energy broker to the already-verified current candidate")
+assert controller.index("Cut Energy broker to the already-verified current candidate") < controller.index("Install the exact same source revision into Revit")
 forbid(controller,
+       "DEPLOY_ENERGY_R127.ps1",
+       "DEPLOY_RENDER_R126.ps1",
+       "DEPLOY_REPORT_R126.ps1",
        "DEPLOY_ENERGY_CURRENT_ARGV_FIX.ps1",
        "RECOVER_REVEX_ENERGY_CURRENT",
        "PUBLISH_REVEX_R49",
        "CanonicalSourceCommit",
        "FINALIZE_REVEX_CURRENT")
 
-# Candidate Energy worker is built and proven before the authenticated broker cutover.
+# Canonical Energy deployer is source-bound and supports candidate-only / broker-only phases.
 require(energy_deploy,
-        "Build exact r127 Energy worker image",
-        "Deploy private r127 Energy worker candidate",
-        "Energy candidate is not Ready; broker was not changed.",
+        "Build exact current Energy worker image",
+        "Deploy private current Energy candidate",
+        "Energy candidate is not Ready; broker remains unchanged.",
         "Cut authenticated Energy broker over to verified candidate",
+        "CandidateOnly",
+        "BrokerOnly",
         "REVEX_SOURCE_CANDIDATE",
+        "REVEX_VERTEX_PROJECT",
         "roles/datastore.user",
         "roles/storage.objectAdmin",
         "roles/aiplatform.user")
@@ -118,9 +139,31 @@ forbid(energy_deploy,
        "CanonicalSourceCommit",
        "REVEX_R49_SOURCE_")
 
-# ---------------------------------------------------------------------------
+# Canonical Render deployer owns worker build, warm proof and source-bound broker directly.
+require(render_deploy,
+        "Build exact current Render worker image",
+        "Deploy private warm Render candidate",
+        "CandidateOnly",
+        "BrokerOnly",
+        "REVEX_SOURCE_CANDIDATE",
+        "REVEX_WARM_TOKEN",
+        "--min-instances=1",
+        "Assert-Warm",
+        "Cut authenticated Render broker over to verified candidate",
+        "REVEX_RENDER_WORKER_URL",
+        "nodejs22")
+forbid(render_deploy, "DEPLOY_RENDER_SERVER.ps1")
+
+# Report/Daily Report is current-source bound and verifies both deployed functions.
+require(report_deploy,
+        "REVEX_SOURCE_CANDIDATE",
+        "Deploy source-bound post-sync revision documentation trigger",
+        "Deploy source-bound authenticated Daily Report finalizer",
+        "documentRevexRevision",
+        "finalizeRevexDailyReport",
+        "nodejs22")
+
 # Current Companion revision: preserve every recent UI/UX/BIM concept.
-# ---------------------------------------------------------------------------
 require(controller,
         "verify-revex-current-generation-r53.js",
         "verify-revex-r99-webview-root-cache.js",
@@ -135,8 +178,6 @@ require(ui,
         "blocks-palette-r126.js",
         "render-convergence-r126.js",
         "bim-properties-r117.js")
-
-# Mobile: seven icon tabs, viewport containment, touch Walk split, linked Docs and guide.
 require(mobile,
         "repeat(7,minmax(0,1fr))",
         "max-width:100vw",
@@ -144,10 +185,7 @@ require(mobile,
         "r122-move",
         "function setWalk(on)",
         "function normalizeDocs()",
-        "revex-r122-guide",
-        "first")
-
-# Design versions remain lightweight position-property overlays, not book-release clones.
+        "revex-r122-guide")
 require(design_versions,
         "liber.revex.design-property-versions.v1",
         "lightweight-property-overlay",
@@ -155,8 +193,7 @@ require(design_versions,
         "syncPreservesVersion:true")
 forbid(design_versions, "versionKind: 'design-book-release'", "immutable: true")
 
-# r126 verifier is itself part of this gate and covers appearance, Docs, Issues,
-# daily/history, Blocks, Render and affected-plan behaviors. Make loss of that coverage fail.
+# r126 convergence coverage must remain part of current acceptance.
 r126 = read(".github/scripts/verify-revex-r126-functional-convergence.js")
 for marker in (
     "fullSetAuthority:true", "derivedFromFullSet:true",
@@ -181,9 +218,7 @@ require(engineering_sync,
         "writeBackToRevitAfterExport = false",
         "pdfInsertion = false")
 
-# ---------------------------------------------------------------------------
-# Energy: canonical current facades + typed evidence + proven mechanics shadows.
-# ---------------------------------------------------------------------------
+# Energy current runtime uses canonical facades; proven versioned mechanics stay shadows.
 require(docker,
         "COPY server/revex-energy-worker/revex_energy_pipeline_current.py",
         "REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_current.py",
@@ -220,8 +255,7 @@ embedded = str(nodes[0].get("Code") or "").replace("\r\n", "\n").rstrip()
 external = gbxml.replace("\r\n", "\n").rstrip()
 assert embedded == external, "Dynamo embedded gbXML source drifted from external exporter"
 
-# Load typed contracts once. Internal evidence is role/capability based; exact names are
-# retained only for immutable transfer lookup and external filing-package compatibility.
+# Typed evidence accepts semantic roles independent of local filenames.
 spec = importlib.util.spec_from_file_location("revex_energy_contracts", contracts_path)
 assert spec and spec.loader
 contracts = importlib.util.module_from_spec(spec)
@@ -237,8 +271,7 @@ require(contracts_text,
         '"weather-epw": ArtifactKind.WEATHER')
 require(runner, "EvidenceBundle.from_request(request_path).require_sync_evidence()", "DEFAULT_MISSING_VT")
 
-# Prove role-based evidence accepts arbitrary local filenames.
-with tempfile.TemporaryDirectory(prefix="revex-r127-evidence-") as tmp:
+with tempfile.TemporaryDirectory(prefix="revex-current-evidence-") as tmp:
     root = Path(tmp)
     identity = root / "identity-any-name.json"; identity.write_text("{}", encoding="utf-8")
     schedule = root / "schedule-any-name.json"; schedule.write_text("{}", encoding="utf-8")
@@ -252,8 +285,7 @@ with tempfile.TemporaryDirectory(prefix="revex-r127-evidence-") as tmp:
     manifest.write_text(json.dumps({"projectId":"p1","revision":"eng_1","artifacts":rows}), encoding="utf-8")
     request = root / "request.json"
     request.write_text(json.dumps({
-        "projectId":"p1","revision":"eng_1",
-        "engineeringManifestPath":str(manifest),
+        "projectId":"p1","revision":"eng_1","engineeringManifestPath":str(manifest),
         "pageFactsPath":str(page),"gbxmlPath":str(model),"weatherFile":str(weather),
         "sourceArtifacts":[str(identity),str(schedule),str(model),str(weather),str(manifest),str(page)]
     }), encoding="utf-8")
@@ -263,7 +295,7 @@ with tempfile.TemporaryDirectory(prefix="revex-r127-evidence-") as tmp:
         contracts.ArtifactKind.GBXML, contracts.ArtifactKind.WEATHER, contracts.ArtifactKind.PAGE_FACTS,
     }
 
-# Prove the canonical policy preserves actual VT and inserts exactly 0.45 only when absent.
+# Canonical policy preserves actual VT and inserts exactly 0.45 only when absent.
 energy_root = path("src/Liber.Revex.Revit/Engineering/Energy")
 if str(energy_root) not in sys.path:
     sys.path.insert(0, str(energy_root))
@@ -281,7 +313,7 @@ class FakeReference:
     def _profile_matches_row(_profile,_row): return False
     @staticmethod
     def _row_code(row): return str(row.get("assemblyType") or ""), str(row.get("assemblyType") or "")
-with tempfile.TemporaryDirectory(prefix="revex-r127-vt-") as tmp:
+with tempfile.TemporaryDirectory(prefix="revex-current-vt-") as tmp:
     root = Path(tmp)
     facts = root / "facts.json"
     facts.write_text(json.dumps({"pages":[{"pageType":"EN","envelope":[
@@ -299,7 +331,7 @@ with tempfile.TemporaryDirectory(prefix="revex-r127-vt-") as tmp:
     assert missing["visibleTransmittanceAuthority"] == "REVEX_FIXED_MISSING_VT_0_45", missing
 
 # External filing package remains deliberately named and complete.
-with tempfile.TemporaryDirectory(prefix="revex-r127-package-") as tmp:
+with tempfile.TemporaryDirectory(prefix="revex-current-package-") as tmp:
     root = Path(tmp)
     for spec_row in contracts.SPECS:
         if spec_row.required_for_complete:
@@ -308,9 +340,11 @@ with tempfile.TemporaryDirectory(prefix="revex-r127-package-") as tmp:
     assert len(package.artifacts) >= 6
 
 print(json.dumps({
-    "REVEX_R127_CURRENT_REVISION": "PASSED",
+    "REVEX_CURRENT_RELEASE": "PASSED",
     "oneCommand": "FINALIZE_REVEX.cmd",
     "singleSourceSha": True,
+    "canonicalDeployers": True,
+    "candidateBeforeCutover": True,
     "versionedImplementationsShadowOnly": True,
     "currentUiIncluded": True,
     "mobileR122Preserved": True,
