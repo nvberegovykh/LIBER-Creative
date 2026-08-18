@@ -1,0 +1,27 @@
+name: REVEX r127 apply typed package boundary
+on:
+  push:
+    branches: [revex-energy-r127-single-controller]
+    paths:
+      - 'tools/patch_r127_app_contract.py'
+      - '.github/workflows/revex-r127-patch-app-contract.yml'
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: revex-energy-r127-single-controller
+          fetch-depth: 0
+      - run: python tools/patch_r127_app_contract.py
+      - run: python -m py_compile server/revex-energy-worker/app.py
+      - run: |
+          grep -q 'FilingPackage.discover(run_dir).require_complete()' server/revex-energy-worker/app.py
+          if git diff --quiet -- server/revex-energy-worker/app.py; then exit 0; fi
+          git config user.name 'revex-release-bot'
+          git config user.email 'revex-release-bot@users.noreply.github.com'
+          git add server/revex-energy-worker/app.py
+          git commit -m 'REVEX r127: validate typed FilingPackage before publish'
+          git push origin HEAD:revex-energy-r127-single-controller
