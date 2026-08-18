@@ -40,15 +40,24 @@ const document={
   createElement(){return makeNode('created');},
   addEventListener(){}
 };
-const context={window:root,document,navigator:{onLine:true},location:{origin:'https://liberpict.com'},localStorage:{getItem(k){return local[k]??null;},setItem(k,v){local[k]=v;},removeItem(k){delete local[k];}},sessionStorage:{removeItem(){}},console,CSS:{escape:v=>String(v)},performance:{now:()=>1},CustomEvent:class CustomEvent{constructor(type,init={}){this.type=type;this.detail=init.detail;}},Event:class Event{constructor(type,init={}){this.type=type;this.bubbles=!!init.bubbles;}},setTimeout(fn){fn();return 1;},clearTimeout(){},setInterval(fn){fn();return 1;},clearInterval(){}};
+// Do not execute interval callbacks synchronously: browsers schedule them after the
+// current script finishes. The verifier calls the exported install() explicitly below,
+// which is the supported deterministic initialization path for tests and recovery.
+const context={window:root,document,navigator:{onLine:true},location:{origin:'https://liberpict.com'},localStorage:{getItem(k){return local[k]??null;},setItem(k,v){local[k]=v;},removeItem(k){delete local[k];}},sessionStorage:{removeItem(){}},console,CSS:{escape:v=>String(v)},performance:{now:()=>1},CustomEvent:class CustomEvent{constructor(type,init={}){this.type=type;this.detail=init.detail;}},Event:class Event{constructor(type,init={}){this.type=type;this.bubbles=!!init.bubbles;}},setTimeout(fn){fn();return 1;},clearTimeout(){},setInterval(){return 1;},clearInterval(){}};
 root.Event=context.Event;
 vm.runInNewContext(controlSource,context,{filename:'wallt-control-plane.js'});
 vm.runInNewContext(adapterSource,context,{filename:'wallt-fixer-adapters-r137.js'});
 
 (async()=>{
   assert.equal(root.__revexWalltControl.build,'20260818-wallt-control2');
-  assert.equal(root.__revexWalltFixerAdaptersR137.registered,true);
-  const actions=root.__revexWalltFixerAdaptersR137.actions;
+  const adapter=root.__revexWalltFixerAdaptersR137;
+  assert.equal(adapter.registered,undefined,'adapter should not pretend to be registered before install');
+  assert.equal(adapter.install(),true,'explicit adapter install failed');
+  assert.equal(adapter.registered,true);
+  const firstUnregister=adapter.unregister;
+  assert.equal(adapter.install(),true,'idempotent adapter install failed');
+  assert.equal(adapter.unregister,firstUnregister,'second install replaced the registered adapter');
+  const actions=adapter.actions;
   assert.ok(actions.includes('current:docs_reassert_owner'));
   assert.ok(actions.includes('current:chat_reset_active_project'));
   assert.ok(actions.includes('current:bim_reapply_overlays'));
@@ -67,5 +76,5 @@ vm.runInNewContext(adapterSource,context,{filename:'wallt-fixer-adapters-r137.js
 
   const report=root.__revexWalltControl.cycleReport();
   assert.equal(report.windowHours,24);assert.ok(report.events.some(r=>r.channel==='fixer'&&r.phase==='ACTION_OK'));
-  console.log(JSON.stringify({REVEX_R137_WALLT_FIXER_ADAPTERS:'PASSED',adapterRouting:'adapter:action',boundedCurrentOwnerRepairs:true,arbitraryMutationRejected:true,cycleLedgerHours:24}));
+  console.log(JSON.stringify({REVEX_R137_WALLT_FIXER_ADAPTERS:'PASSED',adapterRouting:'adapter:action',boundedCurrentOwnerRepairs:true,idempotentInstall:true,arbitraryMutationRejected:true,cycleLedgerHours:24}));
 })().catch(error=>{console.error(error);process.exitCode=1;});
