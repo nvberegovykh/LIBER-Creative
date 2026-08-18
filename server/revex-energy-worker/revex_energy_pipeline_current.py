@@ -18,6 +18,7 @@ import zipfile
 import revex_energy_pipeline_guard as base
 import revex_energy_pipeline_guard_r116 as r116
 import revex_energy_pipeline_guard_r118 as shadow
+import revex_user_identity_en1 as en1
 
 _impl_hint = str(os.environ.get("REVEX_PIPELINE_IMPL") or "").strip()
 if _impl_hint:
@@ -92,6 +93,14 @@ def _install_current_full_pipeline_runner() -> None:
 shadow._install_full_pipeline_runner = _install_current_full_pipeline_runner
 
 
+def _verify_clean_zip(path: Path) -> None:
+    expected = set(en1.PUBLIC_REVIEW_NAMES)
+    with zipfile.ZipFile(path) as archive:
+        entries = [name for name in archive.namelist() if not name.endswith("/")]
+    if len(entries) != 9 or len(set(entries)) != 9 or set(entries) != expected:
+        raise RuntimeError("clean Energy release ZIP does not match the exact nine-file filing/review contract")
+
+
 def _promote_clean_release_package(request_path: Path, code: int) -> int:
     """A COMPLETE run must expose one verified clean package, not only diagnostic recovery ZIPs."""
     request = json.loads(Path(request_path).read_text(encoding="utf-8"))
@@ -107,14 +116,13 @@ def _promote_clean_release_package(request_path: Path, code: int) -> int:
         manual = output_root / MANUAL_PACKAGE
         release = output_root / CURRENT_RELEASE_PACKAGE
         if manual.is_file():
-            # Normal fresh execution creates the nine-file manual-review ZIP after EN-1
-            # print/finalization. Promote those exact verified bytes to the canonical name.
-            with zipfile.ZipFile(manual) as archive:
-                entries = [name for name in archive.namelist() if not name.endswith("/")]
-                if len(entries) != 9 or len(set(entries)) != 9:
-                    raise RuntimeError("clean Energy review package is not exactly nine unique files")
+            _verify_clean_zip(manual)
             shutil.copy2(manual, release)
-        elif not release.is_file():
+            if _sha256(manual) != _sha256(release):
+                raise RuntimeError("canonical release package bytes differ from the verified clean source package")
+        elif release.is_file():
+            _verify_clean_zip(release)
+        else:
             raise RuntimeError("completed Energy run produced no clean release package")
 
         # The r118 recovery ZIP stays available as diagnostic evidence but is not the public package.
@@ -126,6 +134,7 @@ def _promote_clean_release_package(request_path: Path, code: int) -> int:
                 row["reviewName"] = "REVEX Diagnostic Recovery Package"
             if str(row.get("name") or "") != CURRENT_RELEASE_PACKAGE:
                 rows.append(row)
+        release_sha = _sha256(release)
         rows.append({
             "name": CURRENT_RELEASE_PACKAGE,
             "reviewName": "REVEX Energy Release Package",
@@ -133,16 +142,18 @@ def _promote_clean_release_package(request_path: Path, code: int) -> int:
             "kind": "release-package",
             "userVisible": True,
             "bytes": release.stat().st_size,
-            "sha256": _sha256(release),
+            "sha256": release_sha,
         })
         result["artifacts"] = rows
+        result["sourceCandidate"] = str(os.environ.get("REVEX_SOURCE_CANDIDATE") or result.get("sourceCandidate") or "unbound")
         result["releasePackage"] = {
             "schema": "liber.revex.energy-release-package.v2",
             "name": CURRENT_RELEASE_PACKAGE,
             "path": CURRENT_RELEASE_PACKAGE,
             "bytes": release.stat().st_size,
-            "sha256": _sha256(release),
+            "sha256": release_sha,
             "entryCount": 9,
+            "entries": sorted(en1.PUBLIC_REVIEW_NAMES),
             "sourceEngineeringRevision": result.get("sourceEngineeringRevision"),
             "sourceCandidate": result.get("sourceCandidate"),
             "diagnosticRecoveryPackageUserVisible": False,
@@ -153,6 +164,7 @@ def _promote_clean_release_package(request_path: Path, code: int) -> int:
             "schema": "liber.revex.energy-filing-package.v1",
             "status": "PASSED",
             "artifacts": package.canonical_names(),
+            "releasePackage": CURRENT_RELEASE_PACKAGE,
             "missingVtPolicy": 0.45,
             "actualVtPreserved": True,
         }
