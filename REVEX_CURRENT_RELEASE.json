@@ -1,0 +1,53 @@
+{
+  "schema": "liber.revex.current-release.v1",
+  "authority": "canonical-current-files",
+  "operatorEntrypoint": "FINALIZE_REVEX.cmd",
+  "principles": {
+    "oneSourceCommitPerRelease": true,
+    "versionedImplementationsAreShadows": true,
+    "shadowFilesAreNeverDeletedByFinalization": true,
+    "shadowControllersAreNeverInvokedByFinalization": true,
+    "installedPreviousAddinBecomesTimestampedShadow": true,
+    "immutableProjectRevisionsAreNeverRewritten": true
+  },
+  "current": {
+    "companionRoot": "docs/liber-apps/apps/revex/index.html",
+    "companionIntegrityOwner": "docs/liber-apps/apps/revex/ui-integrity.js",
+    "revitAddinProject": "src/Liber.Revex.Revit/Liber.Revex.Revit.csproj",
+    "energyPipeline": "server/revex-energy-worker/revex_energy_pipeline_current.py",
+    "energyContracts": "src/Liber.Revex.Revit/Engineering/Energy/revex_energy_contracts.py",
+    "energyPublicationPolicy": "src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups.py",
+    "energyRunner": "src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner.py",
+    "energyDeployer": "server/revex-energy-worker/DEPLOY_ENERGY_R127.ps1",
+    "reportDeployer": "server/revex-report-functions/DEPLOY_REPORT_R126.ps1",
+    "renderDeployer": "server/revex-render-worker/DEPLOY_RENDER_R126.ps1"
+  },
+  "preservedShadows": {
+    "energy": [
+      "src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups_r125.py",
+      "src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner_r125.py",
+      "server/revex-energy-worker/revex_energy_pipeline_guard_r118.py",
+      "server/revex-energy-worker/revex_energy_pipeline_guard_r116.py",
+      "server/revex-energy-worker/revex_energy_pipeline_r69.py"
+    ],
+    "deployment": [
+      "RECOVER_REVEX_ENERGY_CURRENT.cmd",
+      "RECOVER_REVEX_ENERGY_CURRENT.ps1",
+      "DEPLOY_REVEX_CURRENT_SERVICES.cmd",
+      "DEPLOY_REVEX_CURRENT_SERVICES.ps1",
+      "UPDATE_REVEX_ADDIN_CURRENT.cmd",
+      "UPDATE_REVEX_ADDIN_CURRENT.ps1"
+    ],
+    "ui": "Version-suffixed UI modules remain preserved behind the canonical index/ui-integrity authority and are guarded by r126 convergence QA."
+  },
+  "energyPolicy": {
+    "actualVtWins": true,
+    "missingVt": 0.45,
+    "geometryExporter": "current external Python equals Dynamo embedded Python",
+    "geometryFixesPreserved": [
+      "whole-glass-door openings",
+      "panel-by-panel multi-floor curtain-wall mapping",
+      "actual Levels and physical upper-envelope covers"
+    ]
+  }
+}
