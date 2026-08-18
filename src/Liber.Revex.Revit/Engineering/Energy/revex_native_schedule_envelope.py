@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Project exact native Revit EN schedules into missing COMcheck envelope orientation.
+"""Project exact native Revit EN schedule sections into missing COMcheck orientation.
 
-This is a narrow current-runtime repair. The immutable Engineering schedule snapshot is
-already captured from the active Revit document with exact visible cells and sheet
-placements. This module consumes only schedules placed on EN sheets and fills only a
-missing wall/window/door orientation in the derived Energy facts when one unambiguous
-current-schedule row matches the existing current EN envelope row.
+REVEX EN envelope schedules do not need an Orientation column. Their direction is normally
+owned by the schedule/section heading itself, e.g. "EN Envelope Calculation North", followed
+by Tag / Description / Area / Count / Total Area rows. This module preserves that native Revit
+presentation semantic and fills only a missing wall/window/door orientation in derived Energy
+facts when one current-schedule row proves a unique match.
 
-It never reads model surfaces, never imports reference-project orientation/geometry, and
-never mutates the immutable Engineering evidence artifact.
+Authority and safety:
+- only the same immutable REVIT-SCHEDULE-EVIDENCE.json is read;
+- only schedules placed on EN sheets are considered;
+- orientation comes from exact schedule/section heading semantics, never model surfaces;
+- code + current total area (and thermal values when present) identify a row;
+- ambiguous matches remain unresolved;
+- immutable Engineering evidence is never mutated.
 """
 from __future__ import annotations
 
@@ -18,7 +23,7 @@ import re
 from typing import Any
 
 SCHEMA = "liber.revex.native-en-schedule-orientation.v1"
-VERSION = "20260818-current-orientation1"
+VERSION = "20260818-current-orientation2"
 SCHEDULE_SCHEMA = "liber.revex.engineering-schedule-evidence.v1"
 SCHEDULE_AUTHORITY = "active-revit-document-native-schedules"
 
@@ -48,7 +53,7 @@ def _code(value: Any) -> str:
     return match.group(1) if match else ""
 
 
-def _orientation(value: Any) -> str:
+def _orientation_token(value: Any) -> str:
     token = re.sub(r"[^A-Z]", "", _text(value).upper())
     return {
         "N": "NORTH", "NORTH": "NORTH",
@@ -56,6 +61,17 @@ def _orientation(value: Any) -> str:
         "E": "EAST", "EAST": "EAST",
         "W": "WEST", "WEST": "WEST",
     }.get(token, "")
+
+
+def _section_orientation(value: Any) -> str:
+    """Read cardinal direction only from an EN envelope-calculation heading semantic."""
+    source = _text(value)
+    match = re.search(r"\bEN\s+Envelope\s+Calculation\s+(North|South|East|West)\b", source, re.I)
+    if match:
+        return _orientation_token(match.group(1))
+    # Some native schedules are named just "Envelope Calculation - North".
+    match = re.search(r"\bEnvelope\s+Calculation\s*[-–—:]?\s*(North|South|East|West)\b", source, re.I)
+    return _orientation_token(match.group(1)) if match else ""
 
 
 def _headings(schedule: dict) -> list[str]:
@@ -106,50 +122,85 @@ def _en_placements(schedule: dict) -> list[dict]:
     ]
 
 
-def _schedule_kind(schedule: dict, headings: list[str]) -> str:
-    placement_text = " ".join(
-        f"{_text(row.get('sheetNumber'))} {_text(row.get('sheetName'))}"
-        for row in _en_placements(schedule)
-    )
-    context = _norm(f"{_text(schedule.get('name'))} {' '.join(headings)} {placement_text}")
-    if "shgc" in context or "fenestration" in context or "window" in context:
+def _row_kind(row_text: str, code: str) -> str:
+    source = _norm(row_text)
+    if "window" in source:
         return "window"
-    if "door" in context:
+    if "door" in source:
         return "door"
-    if "wall" in context:
+    if "wall" in source:
+        return "wall"
+    # Tag families are only a bounded fallback when the visible description was split
+    # across cells and did not survive in row_text.
+    if code.startswith("G"):
+        return "window"
+    if code.startswith("D"):
+        return "door"
+    if code.startswith("W") or code.startswith("F"):
         return "wall"
     return ""
 
 
+def _row_total_area(row: list[str], headings: list[str], row_text: str) -> float | None:
+    # Filing geometry uses the Total Area column, not the single-instance Area column.
+    total_cols = _columns(headings, lambda h: "total area" in h or "total sf" in h)
+    area = _first_number(row, total_cols)
+    if area is not None and area > 0:
+        return area
+    area_cols = _columns(headings, lambda h: "area" in h and "total" not in h and not any(t in h for t in ("percent", "%")))
+    area = _first_number(row, area_cols)
+    if area is not None and area > 0:
+        # If count > 1 and Total Area is not exposed as a distinct field, prefer the last
+        # visible `N SF` token; Revit schedule text retains the presented total.
+        sf = [float(v.replace(",", "")) for v in re.findall(r"(?<![\d.])(\d[\d,]*(?:\.\d+)?)\s*SF\b", row_text, re.I)]
+        return sf[-1] if sf else area
+    sf = [float(v.replace(",", "")) for v in re.findall(r"(?<![\d.])(\d[\d,]*(?:\.\d+)?)\s*SF\b", row_text, re.I)]
+    return sf[-1] if sf else None
+
+
 def _schedule_candidates(evidence: dict) -> list[dict]:
-    rows: list[dict] = []
+    candidates: list[dict] = []
     for schedule in list(evidence.get("schedules") or []):
         placements = _en_placements(schedule)
         if not placements:
             continue
         headings = _headings(schedule)
-        orientation_cols = _columns(headings, lambda h: any(token in h for token in ("orientation", "direction", "exposure")))
-        if not orientation_cols:
-            continue
-        area_cols = _columns(headings, lambda h: "area" in h and not any(token in h for token in ("percent", "%")))
+        code_cols = _columns(headings, lambda h: any(token in h for token in ("tag", "type mark", "assembly type", "assembly", "mark", "type")))
         u_cols = _columns(headings, lambda h: "u factor" in h or "u value" in h or "ufactor" in h or "uvalue" in h)
         shgc_cols = _columns(headings, lambda h: "shgc" in h)
-        code_cols = _columns(headings, lambda h: any(token in h for token in ("type mark", "assembly type", "assembly", "mark", "tag", "type")))
-        kind = _schedule_kind(schedule, headings)
+        schedule_context = " ".join([
+            _text(schedule.get("name")),
+            " ".join(" ".join(_text(cell) for cell in row) for row in list(schedule.get("headerRows") or [])),
+        ])
+        current_orientation = _section_orientation(schedule_context)
+
         for row_index, raw in enumerate(list(schedule.get("bodyRows") or [])):
             row = [_text(value) for value in list(raw or [])]
-            orientation = _orientation(_first_text(row, orientation_cols))
-            if not orientation:
-                continue
             row_text = " | ".join(value for value in row if value)
+            section = _section_orientation(row_text)
+            if section:
+                current_orientation = section
+                # A section-heading row carries no filing geometry itself.
+                if not _code(row_text) and not re.search(r"\b(?:window|door|wall)\b", row_text, re.I):
+                    continue
+            if not current_orientation:
+                continue
             if re.search(r"\bgrand\s+total\b|^\s*total(?:s)?\s*$", row_text, re.I):
                 continue
             label = _first_text(row, code_cols) or row_text
-            rows.append({
+            code = _code(label) or _code(row_text)
+            kind = _row_kind(row_text, code)
+            if kind not in {"wall", "window", "door"}:
+                continue
+            area = _row_total_area(row, headings, row_text)
+            if area is None or area <= 0:
+                # Group subtotal rows like `G11 185 SF` are not component rows.
+                continue
+            candidates.append({
                 "kind": kind,
-                "orientation": orientation,
-                "code": _code(label) or _code(row_text),
-                "area": _first_number(row, area_cols),
+                "orientation": current_orientation,
+                "code": code,
+                "area": area,
                 "uFactor": _first_number(row, u_cols),
                 "shgc": _first_number(row, shgc_cols),
                 "scheduleName": _text(schedule.get("name")),
@@ -158,8 +209,9 @@ def _schedule_candidates(evidence: dict) -> list[dict]:
                 "label": label,
                 "cellText": row_text,
                 "placements": placements,
+                "orientationSemantic": "EN_ENVELOPE_CALCULATION_SECTION",
             })
-    return rows
+    return candidates
 
 
 def _close(actual: float | None, expected: float | None, *, absolute: float, relative: float = 0.0) -> bool:
@@ -176,7 +228,7 @@ def _match(row: dict, candidates: list[dict]) -> tuple[str, dict | None]:
     u_factor = _number(row.get("uFactor"))
     shgc = _number(row.get("shgc"))
 
-    pool = [candidate for candidate in candidates if not candidate.get("kind") or candidate.get("kind") == kind]
+    pool = [candidate for candidate in candidates if candidate.get("kind") == kind]
     if code:
         same_code = [candidate for candidate in pool if candidate.get("code") == code]
         if same_code:
@@ -190,8 +242,7 @@ def _match(row: dict, candidates: list[dict]) -> tuple[str, dict | None]:
         return "", None
     orientation = orientations[0]
     proof_rows = [candidate for candidate in pool if candidate.get("orientation") == orientation]
-    proof = proof_rows[0] if proof_rows else None
-    return orientation, proof
+    return orientation, (proof_rows[0] if proof_rows else None)
 
 
 def apply_missing_orientations(request_path: Path, schedule_path: Path | None) -> dict:
@@ -202,6 +253,7 @@ def apply_missing_orientations(request_path: Path, schedule_path: Path | None) -
         "status": "NO_CHANGE",
         "sourceEvidenceMutated": False,
         "authority": SCHEDULE_AUTHORITY,
+        "orientationSemantic": "EN Envelope Calculation <North|South|East|West> section heading",
         "scheduleArtifact": schedule_path.name if schedule_path else None,
         "filled": [],
         "unresolved": [],
@@ -222,33 +274,41 @@ def apply_missing_orientations(request_path: Path, schedule_path: Path | None) -
     candidates = _schedule_candidates(evidence)
     audit["candidateRows"] = len(candidates)
     changed = False
+
     for page in list(facts.get("pages") or []):
         if _text(page.get("pageType")).upper() != "EN":
             continue
         for row_index, row in enumerate(list(page.get("envelope") or []), start=1):
             kind = _text(row.get("kind")).lower()
-            if kind not in {"wall", "window", "door"} or _orientation(row.get("orientation")):
+            if kind not in {"wall", "window", "door"} or _orientation_token(row.get("orientation")):
                 continue
             orientation, proof = _match(row, candidates)
             label = _code(" ".join(_text(row.get(key)) for key in ("assemblyType", "description", "evidence"))) or f"{kind} row {row_index}"
             if not orientation or proof is None:
-                audit["unresolved"].append({"sheetNumber": page.get("sheetNumber"), "kind": kind, "row": row_index, "label": label})
+                audit["unresolved"].append({
+                    "sheetNumber": page.get("sheetNumber"), "kind": kind, "row": row_index,
+                    "label": label, "grossAreaFt2": row.get("grossAreaFt2"),
+                })
                 continue
             row["orientation"] = orientation
             row["orientationAuthority"] = SCHEDULE_AUTHORITY
             row["orientationEvidence"] = {
+                "semantic": proof.get("orientationSemantic"),
                 "scheduleName": proof.get("scheduleName"),
                 "scheduleUniqueId": proof.get("scheduleUniqueId"),
                 "rowIndex": proof.get("rowIndex"),
                 "label": proof.get("label"),
+                "cellText": proof.get("cellText"),
                 "placements": proof.get("placements"),
             }
             audit["filled"].append({
                 "sheetNumber": page.get("sheetNumber"), "kind": kind, "row": row_index,
                 "label": label, "orientation": orientation,
                 "scheduleName": proof.get("scheduleName"), "scheduleRow": proof.get("rowIndex"),
+                "areaFt2": proof.get("area"),
             })
             changed = True
+
     if changed:
         facts_path.write_text(json.dumps(facts, ensure_ascii=True, indent=2), encoding="utf-8")
         audit["status"] = "APPLIED"
