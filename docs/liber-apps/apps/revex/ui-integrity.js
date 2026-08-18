@@ -75,6 +75,7 @@
     loadScript('energy-diagnostics-r68.js?v=20260816r95-manual-identity1','energy-diagnostics-r68');
     loadScript('energy-identity-en1-r89.js?v=20260816r89-en1-identity1','energy-identity-en1-r89');
     loadScript('energy-replay-r95.js?v=20260817r116-final-energy1','energy-replay-r95');
+    loadScript('energy-agent-review.js?v=20260818-wallt-energy-review2','energy-agent-review','module');
     loadScript('critical-controls-r93.js?v=20260816r93-critical-controls3','critical-controls-r93');
     loadScript('viewer-polish-r68.js?v=20260816r68-viewer-polish1','viewer-polish-r68','module');
     loadScript('appearance-state-r75.js?v=20260816r75-appearance1','appearance-state-r75');
@@ -97,5 +98,5 @@
   }
   function bind(){installCanonicalOverlayStore();installChatProjectGuard();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r125-preserved',moduleLoad:'r126-convergence-last',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r122-mobile+r126-responsive-owners',docs:'r115-full-set-page-number+r126-ownership-guard',texture:'instance-uv>type-texture>design-color>revit',render:'google-gemini-client+docked-owner+qwen-shadow+interaction-freeze-guard',chat:'project-boundary-connection-reset',issues:'revexIssues+all-active-default+empty-selection-inspector',history:'technical-NYC-day',dailyReport:'separate-post-sync-worker',blocks:'walk-only-user-triggered-revit-family',bimProperties:'r117-preserved',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r125-preserved+wallt-review',moduleLoad:'r126-convergence-last',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r122-mobile+r126-responsive-owners',docs:'r115-full-set-page-number+r126-ownership-guard',texture:'instance-uv>type-texture>design-color>revit',render:'google-gemini-client+docked-owner+qwen-shadow+interaction-freeze-guard',chat:'project-boundary-connection-reset',issues:'revexIssues+all-active-default+empty-selection-inspector',history:'technical-NYC-day',dailyReport:'separate-post-sync-worker',blocks:'walk-only-user-triggered-revit-family',bimProperties:'r117-preserved',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
 })(window);
