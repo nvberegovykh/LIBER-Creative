@@ -17,14 +17,12 @@ const blocks=read('docs/liber-apps/apps/revex/blocks-palette-r126.js');
 const renderClient=read('docs/liber-apps/apps/revex/render-convergence-r126.js');
 const renderWorker=read('server/revex-render-worker/render_r126.py');
 const renderDeploy=read('server/revex-render-worker/DEPLOY_RENDER_R126.ps1');
+const docker=read('server/revex-render-worker/Dockerfile');
 const report=read('server/revex-report-functions/index.js');
 const bridge=read('src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs');
 const placement=read('src/Liber.Revex.Revit/Services/FamilyPlacementService.cs');
 const plans=read('src/Liber.Revex.Revit/Services/AffectedPlanExportService.cs');
 
-// The query token is the first live r126 deployment token. The internal build can
-// advance during pre-merge QA without creating a stale live asset because r126 has
-// never been served from main under this token yet.
 must(index,'ui-integrity.js?v=20260817r126-functional-convergence1','root cache key');
 must(ui,"BUILD='20260817r126-functional-convergence2'",'r126 loader');
 for(const file of ['appearance-convergence-r126.js','docs-convergence-r126.js','issues-convergence-r126.js','issues-inspector-r126.js','history-daily-r126.js','blocks-palette-r126.js','render-convergence-r126.js']) must(ui,file,'r126 loader');
