@@ -1,0 +1,35 @@
+# REVEX release validation compares source semantics across Windows workstations and CI.
+# Keep source/config files byte-stable at LF even when a user's global core.autocrlf=true.
+* text=auto
+
+*.cs   text eol=lf
+*.js   text eol=lf
+*.mjs  text eol=lf
+*.py   text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.xml  text eol=lf
+*.html text eol=lf
+*.css  text eol=lf
+
+# Native Windows operator entrypoints remain conventional Windows text.
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Do not reinterpret binary/model artifacts.
+*.dll binary
+*.exe binary
+*.zip binary
+*.rvt binary
+*.rfa binary
+*.osm binary
+*.epw binary
+*.pdf binary
+*.xlsx binary
+*.xlsm binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
