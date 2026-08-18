@@ -96,22 +96,25 @@ must(finalizer,
      "server\\revex-render-worker\\deploy-current.ps1",
      "server\\revex-report-functions\\deploy-current.ps1",
      "firebase\\deploy-current-access.ps1",
+     "$script:RenderDeferredFirstIssuance = $true",
+     "Render is deferred for first issuance and cannot block this release.",
      "Stage and verify current Energy candidate without broker cutover",
-     "Stage, warm and verify current Render candidate without broker cutover",
+     "Render deferred for first issuance; no Render build, warm wait, broker cutover, or Render verification will run.",
      "Verify current Companion UI is live before any access or broker cutover",
      "Deploy preserved source-bound project access rules",
      "Deploy source-bound Report and Daily Report",
-     "Cut Render broker to the already-warm current candidate",
      "Cut Energy broker to the already-verified current candidate",
      "Verify live project access rules are bound to the exact release source",
      "Install-AddinAtomically",
      "previousInstalledRevisionShadow",
      "run ONE fresh SYNC ENGINEERING")
 assert finalizer.index("Stage and verify current Energy candidate") < finalizer.index("Verify current Companion UI is live before any access or broker cutover")
-assert finalizer.index("Stage, warm and verify current Render candidate") < finalizer.index("Verify current Companion UI is live before any access or broker cutover")
-assert finalizer.index("Deploy preserved source-bound project access rules") < finalizer.index("Cut Render broker to the already-warm current candidate")
-assert finalizer.index("Cut Render broker to the already-warm current candidate") < finalizer.index("Cut Energy broker to the already-verified current candidate")
+assert finalizer.index("Deploy preserved source-bound project access rules") < finalizer.index("Cut Energy broker to the already-verified current candidate")
 assert finalizer.index("Cut Energy broker to the already-verified current candidate") < finalizer.index("Install the exact same source revision into Revit")
+# First issuance must never execute the Render candidate/cutover branch while the deferred gate is true.
+must(finalizer,
+     "if(-not $script:RenderDeferredFirstIssuance){",
+     "renderFirstIssuanceDeferred=$script:RenderDeferredFirstIssuance")
 forbid(finalizer,
        "DEPLOY_ENERGY_R127.ps1", "DEPLOY_RENDER_R126.ps1", "DEPLOY_REPORT_R126.ps1",
        "RECOVER_REVEX_ENERGY_CURRENT", "FINALIZE_REVEX_CURRENT", "PUBLISH_REVEX_R49")
@@ -125,6 +128,7 @@ must(energy_deploy,
      "Energy candidate is not Ready; broker remains unchanged.",
      "Build exact current Energy worker image",
      "Cut authenticated Energy broker over to verified candidate")
+# Render implementation remains validated as a preserved capability, but it is not a first-issuance gate.
 must(render_deploy,
      "CandidateOnly", "BrokerOnly", "REVEX_SOURCE_CANDIDATE", "REVEX_WARM_TOKEN",
      "Assert-Warm", "--min-instances=1", "Build exact current Render worker image",
@@ -222,6 +226,7 @@ print(json.dumps({
     "versionedFilesShadowOnly": True,
     "shadowIntegrityCheckoutLineEndingInvariant": True,
     "candidateBeforeBrokerCutover": True,
+    "renderDeferredFirstIssuance": True,
     "liveRulesPreservedAndSourceBound": True,
     "memberIssueWriteProven": True,
     "fullUiAndBimContract": True,
