@@ -6,6 +6,16 @@ from pathlib import Path
 import revex_energy_maintainer as legacy_tools
 import revex_energy_agent_evidence as ev
 
+# The canonical server imports revex_user_identity_en1 before importing WALLT. When that
+# parent module is available, install the current user-confirmed 17-sheet / 63% EN-1 PDF
+# contract immediately. Standalone Revit-side/unit-test imports remain independent.
+try:
+    import revex_user_identity_en1 as _en1
+    import revex_en1_print_contract as _en1_print
+    _en1_print.install(_en1)
+except ImportError:
+    pass
+
 SCHEMA="liber.revex.energy-agent.v1";VERSION="20260818-wallt-active1"
 STATE_NAME="REVEX_ENERGY_MAINTAINER_STATE.json";EVENTS_NAME="REVEX_ENERGY_MAINTAINER_EVENTS.jsonl";REPAIR_REQUEST_NAME="REVEX_ENERGY_REVIT_REPAIR_REQUEST.json";MISSING_VT=ev.MISSING_VT
 _req={};_root=None;_pages=None;_repairs=[];_preflight=False;_busy=False
