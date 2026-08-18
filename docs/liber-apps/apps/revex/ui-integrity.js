@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260818r132-priority-fixes2';
+  const BUILD='20260818r133-mobile-accessibility1';
   const REVEX_R87_REPLAY_CONTRACT='energy-diagnostics-r68.js?v=20260816r87-energy-replay1';
   const REVEX_R87_REPLAY_LABEL="energyDiagnostics:'revision-scoped-replay-r87'";
   const REVEX_R92_REPLAY_COMPAT='energy-replay-r92.js?v=20260816r92-hosted-replay1';
@@ -94,8 +94,9 @@
     loadScript('history-daily-r126.js?v=20260817r126-daily1','history-daily-r126');
     loadScript('blocks-palette-r126.js?v=20260817r126-blocks1','blocks-palette-r126');
     loadScript('render-convergence-r126.js?v=20260818r129-freeze-guard1','render-convergence-r126');
+    loadScript('mobile-safe-r133.js?v=20260818r133-mobile-safe1','mobile-safe-r133');
   }
   function bind(){installCanonicalOverlayStore();installChatProjectGuard();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r125-preserved',moduleLoad:'r126-convergence-last',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r122-mobile+r126-responsive-owners',docs:'r115-full-set-page-number+r126-ownership-guard',texture:'instance-uv>type-texture>design-color>revit',render:'google-gemini-client+docked-owner+qwen-shadow+interaction-freeze-guard',chat:'project-boundary-connection-reset',issues:'revexIssues+all-active-default+empty-selection-inspector',history:'technical-NYC-day',dailyReport:'separate-post-sync-worker',blocks:'walk-only-user-triggered-revit-family',bimProperties:'r117-preserved',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r125-preserved',moduleLoad:'r126-convergence+r133-mobile-safe-last',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r122-mobile+r126-responsive+r133-safe-area-scroll',docs:'r115-full-set-page-number+r126-ownership-guard+r133-mobile-stack',texture:'instance-uv>type-texture>design-color>revit',render:'google-gemini-client+docked-owner+qwen-shadow+interaction-freeze-guard',chat:'project-boundary-connection-reset',issues:'revexIssues+all-active-default+empty-selection-inspector',history:'technical-NYC-day',dailyReport:'separate-post-sync-worker',blocks:'walk-only-user-triggered-revit-family',bimProperties:'r117-preserved',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
 })(window);
