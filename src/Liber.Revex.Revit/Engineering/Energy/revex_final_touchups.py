@@ -8,16 +8,36 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 import revex_final_touchups_r125 as _shadow
 
-VERSION = "20260817r127-current-energy3"
+VERSION = "20260817r127-current-energy4"
 MISSING_VT = 0.45
 
 _shadow_patch_pipeline = _shadow.patch_pipeline
 _shadow_schedule_path = _shadow._schedule_path
 _MISSING_VT_SHADOW_AUTHORITIES = {"CODE_FALLBACK_TINTED", "CODE_FALLBACK_CLEAR"}
+
+
+def _actual_vt(row: dict) -> float | None:
+    """Read only project evidence VT; never return a fallback/reference value."""
+    for key in ("vt", "vlt", "visibleTransmittance"):
+        value = row.get(key)
+        if value not in (None, ""):
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                continue
+            if 0.0 <= number <= 1.0:
+                return number
+    text = " ".join(str(row.get(key) or "") for key in ("evidence", "description", "assemblyType", "product"))
+    match = re.search(r"\bV(?:T|LT)\s*[:=]?\s*(0?(?:\.\d+)|1(?:\.0+)?)", text, re.I)
+    if not match:
+        return None
+    number = float(match.group(1))
+    return number if 0.0 <= number <= 1.0 else None
 
 
 def _artifact_by_role(request: dict, role: str) -> Path | None:
@@ -113,10 +133,37 @@ def apply_request_touchups(request_path: Path, output_root: Path, reference_enve
 
 
 def patch_pipeline(module, reference_envelope=None) -> None:
+    if getattr(module, "__revex_current_patched__", False):
+        return
     _apply_current_policy()
-    # Passing no reference is intentional: actual VT is already carried by the proven
-    # merge logic; only the missing-VT branch reaches the fixed 0.45 fallback.
+    # Passing no reference is intentional: old approved-reference VT is not current policy.
+    # The r125 shadow retains proven merge/COMcheck/EN-1 mechanics; this current wrapper
+    # additionally carries actual VT when it exists only in text evidence.
     _shadow_patch_pipeline(module, None)
+    shadow_merge = module._merge_diagram_geometry_with_thermal
+
+    def merge(diagram_row, thermal_rows):
+        merged, error = shadow_merge(diagram_row, thermal_rows)
+        if merged is None:
+            return merged, error
+        actual = _actual_vt(diagram_row)
+        if actual is None:
+            kind = str(merged.get("kind") or diagram_row.get("kind") or "").lower()
+            code, base_code = module._comcheck_row_code(diagram_row)
+            same = [r for r in thermal_rows if str(r.get("kind") or "").lower() == kind]
+            exact = [r for r in same if code and module._comcheck_row_code(r)[0] == code]
+            base = [r for r in same if base_code and module._comcheck_row_code(r)[1] == base_code]
+            for candidate in exact or base or same:
+                actual = _actual_vt(candidate)
+                if actual is not None:
+                    break
+        if actual is not None:
+            merged["vt"] = round(float(actual), 3)
+            merged["visibleTransmittanceAuthority"] = "ACTIVE_ENVELOPE_EVIDENCE_VT"
+        return merged, error
+
+    module._merge_diagram_geometry_with_thermal = merge
+    module.__revex_current_patched__ = True
 
 
 def _bind_shadow_runtime() -> None:
