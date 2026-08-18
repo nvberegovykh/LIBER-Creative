@@ -2,8 +2,9 @@
 """Current WALLT EN-1 print contract.
 
 The visual/reference contract is the previously working EN-1 export: 17 selected sheets,
-Color legend first, 63% print scale, no Version Control / project-description / instructions /
-unused system tabs. The source workbook is never altered; only a disposable print copy is used.
+Color legend first, 63% print scale, US Letter filing pages, no Version Control /
+project-description / instructions / unused system tabs. The source workbook is never altered;
+only a disposable print copy is used.
 """
 from __future__ import annotations
 
@@ -14,8 +15,11 @@ import subprocess
 import tempfile
 import uuid
 
-VERSION = "20260818-wallt-en1-print63"
+VERSION = "20260818-wallt-en1-print63-letter"
 PRINT_SCALE = 63
+PAPER_SIZE = "LETTER"
+LETTER_WIDTH_PT = 612.0
+LETTER_HEIGHT_PT = 792.0
 PRINT_SHEETS = (
     "Color legend",
     "1,2,3 Information",
@@ -37,7 +41,7 @@ PRINT_SHEETS = (
 )
 PAGE_MARKERS = (
     "WORKBOOK COLOR LEGEND",
-    "1 Location Information",
+    "Enter information for sections 1, 2 and 3",
     "Carbon Emissions",
     "Energy Modeling Protocol",
     "Baseline Rotations",
@@ -60,6 +64,11 @@ def _page_text(page) -> str:
     return " ".join((page.extract_text() or "").split())
 
 
+def _letter_box(width: float, height: float, tolerance: float = 3.0) -> bool:
+    short, long = sorted((float(width), float(height)))
+    return abs(short - LETTER_WIDTH_PT) <= tolerance and abs(long - LETTER_HEIGHT_PT) <= tolerance
+
+
 def _spill_diagnostic(reader, source_layout: list[dict], output_root: Path) -> dict:
     pages = []
     for index, page in enumerate(reader.pages, start=1):
@@ -78,12 +87,13 @@ def _spill_diagnostic(reader, source_layout: list[dict], output_root: Path) -> d
             "heightPt": round(float(page.mediabox.height), 2),
         })
     diagnostic = {
-        "schema": "liber.revex.en1-print-spill-diagnostic.v1",
+        "schema": "liber.revex.en1-print-spill-diagnostic.v2",
         "version": VERSION,
         "status": "PAGE_COUNT_MISMATCH",
         "pageCount": len(reader.pages),
         "expectedPageCount": len(PRINT_SHEETS),
         "printScalePercent": PRINT_SCALE,
+        "paperSize": PAPER_SIZE,
         "fitToPage": False,
         "selectedSheets": list(PRINT_SHEETS),
         "sourceLayout": source_layout,
@@ -95,12 +105,15 @@ def _spill_diagnostic(reader, source_layout: list[dict], output_root: Path) -> d
         "stage": "EN1_PRINT_SPILL_DIAGNOSTIC",
         "pageCount": diagnostic["pageCount"],
         "expectedPageCount": diagnostic["expectedPageCount"],
+        "paperSize": PAPER_SIZE,
         "pages": [
             {
                 "page": row["page"],
                 "characters": row["characters"],
                 "markers": [item["sheet"] for item in row["matchedExpectedMarkers"]],
                 "textStart": row["textStart"][:120],
+                "widthPt": row["widthPt"],
+                "heightPt": row["heightPt"],
             }
             for row in pages
         ],
@@ -112,6 +125,7 @@ def _spill_diagnostic(reader, source_layout: list[dict], output_root: Path) -> d
 def _print_pdf(xlsx: Path, pdf: Path, output_root: Path) -> dict:
     from openpyxl import load_workbook
     from openpyxl.worksheet.properties import PageSetupProperties
+    from openpyxl.worksheet.worksheet import Worksheet
     from pypdf import PdfReader
 
     xlsx = Path(xlsx)
@@ -134,6 +148,7 @@ def _print_pdf(xlsx: Path, pdf: Path, output_root: Path) -> dict:
                 "maxColumn": sheet.max_column,
                 "printAreaBefore": str(sheet.print_area or ""),
                 "scaleBefore": sheet.page_setup.scale,
+                "paperSizeBefore": sheet.page_setup.paperSize,
                 "fitToWidthBefore": sheet.page_setup.fitToWidth,
                 "fitToHeightBefore": sheet.page_setup.fitToHeight,
                 "orientation": sheet.page_setup.orientation,
@@ -148,6 +163,10 @@ def _print_pdf(xlsx: Path, pdf: Path, output_root: Path) -> dict:
             sheet.page_setup.fitToWidth = None
             sheet.page_setup.fitToHeight = None
             sheet.page_setup.scale = PRINT_SCALE
+            # Never leave paper size to LibreOffice/printer/locale defaults. The filing reference
+            # and NYC drawing-set insertion target are US Letter; LO 7.3 otherwise defaults to
+            # A4 in the production image and spills 5a Baseline Rotations onto a second page.
+            sheet.page_setup.paperSize = Worksheet.PAPERSIZE_LETTER
         else:
             sheet.sheet_state = "hidden"
     workbook.active = workbook.sheetnames.index(PRINT_SHEETS[0])
@@ -190,16 +209,19 @@ def _print_pdf(xlsx: Path, pdf: Path, output_root: Path) -> dict:
             raise ValueError(f"EN-1 PDF page {index} has an invalid/cut page box")
         if crop_width > width + 1 or crop_height > height + 1:
             raise ValueError(f"EN-1 PDF page {index} crop box exceeds media box")
+        if not _letter_box(width, height):
+            raise ValueError(f"EN-1 PDF page {index} is not US Letter: {width:.2f} x {height:.2f} pt")
         text = _page_text(page)
         marker_ok = marker.lower() in text.lower()
         if not marker_ok:
             raise ValueError(f"EN-1 PDF page {index} does not match expected sheet {PRINT_SHEETS[index-1]!r}; missing marker {marker!r}")
         page_boxes.append({"page": index, "widthPt": round(width, 2), "heightPt": round(height, 2),
-                           "cropWidthPt": round(crop_width, 2), "cropHeightPt": round(crop_height, 2)})
+                           "cropWidthPt": round(crop_width, 2), "cropHeightPt": round(crop_height, 2),
+                           "paperSize": PAPER_SIZE})
         marker_audit.append({"page": index, "sheet": PRINT_SHEETS[index-1], "marker": marker, "passed": True})
 
     audit = {
-        "schema": "liber.revex.en1-print-audit.v2",
+        "schema": "liber.revex.en1-print-audit.v3",
         "version": VERSION,
         "status": "PASSED",
         "sourceWorkbook": xlsx.name,
@@ -207,11 +229,12 @@ def _print_pdf(xlsx: Path, pdf: Path, output_root: Path) -> dict:
         "pageCount": len(reader.pages),
         "expectedPageCount": len(PRINT_SHEETS),
         "printScalePercent": PRINT_SCALE,
+        "paperSize": PAPER_SIZE,
         "fitToPage": False,
         "selectedSheets": list(PRINT_SHEETS),
         "hiddenNonFilingSheetsInPrintCopy": True,
         "sourceWorkbookSheetVisibilityPreserved": True,
-        "referenceContract": "USER_CONFIRMED_PREVIOUSLY_WORKING_EN1_EXPORT_63_PERCENT",
+        "referenceContract": "USER_CONFIRMED_PREVIOUSLY_WORKING_EN1_EXPORT_63_PERCENT_US_LETTER",
         "pageMarkers": marker_audit,
         "pageBoxes": page_boxes,
     }
