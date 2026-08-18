@@ -1,12 +1,11 @@
 (function (root) {
   'use strict';
 
-  const BUILD = '20260815r49-google-render1';
+  const BUILD = '20260818r132-render-dock-auth-location1';
   const MODEL = 'gemini-3.1-flash-image';
   const Store = root.RevexStore;
   const state = root.__revexState;
   const $ = (selector, base = document) => base.querySelector(selector);
-  const $$ = (selector, base = document) => [...base.querySelectorAll(selector)];
   let initialized = false;
   let accessToken = '';
   let tokenExpiresAt = 0;
@@ -14,18 +13,24 @@
   let resultObjectUrl = '';
   let activeJob = null;
   let generationAbort = null;
+  let locationAbort = null;
+  let locationTimer = 0;
+  let selectedLocation = null;
 
   const GOOGLE_SCOPES = [
     'https://www.googleapis.com/auth/cloud-platform',
     'https://www.googleapis.com/auth/generative-language.retriever'
   ];
+  const GOOGLE_REDIRECT_PENDING = 'liber.revex.google-ai.redirect.pending.v1';
+  const GOOGLE_PROJECT_KEY = 'liber.revex.google-ai.project-id.v1';
+  const LOCATION_KEY = 'liber.revex.render.location.v1';
 
   const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[char]));
   const diagnostic = (level, stage, message, detail = {}) => {
-    try { root.__revexBrowserDiagnostics?.emit?.(level, stage, message, { initiator: 'google render r51', ...detail }); } catch (_) {}
+    try { root.__revexBrowserDiagnostics?.emit?.(level, stage, message, { initiator: 'google render current', build: BUILD, ...detail }); } catch (_) {}
   };
   const activeViewer = () => root.__revexViewerR26Instance || null;
-  const googleProjectKey = 'liber.revex.google-ai.project-id.v1';
+  const constrainedAuthHost = () => Boolean(root.chrome?.webview) || (() => { try { return root.self !== root.top; } catch (_) { return true; } })();
 
   function toast(message, bad = false) {
     const node = $('#toast');
@@ -46,18 +51,65 @@
 
   function connectedProjectId() {
     const field = $('#google-ai-project');
-    const local = String(field?.value || localStorage.getItem(googleProjectKey) || '').trim();
+    const local = String(field?.value || localStorage.getItem(GOOGLE_PROJECT_KEY) || '').trim();
     return local || root.firebaseService?.app?.options?.projectId || 'liber-apps-cca20';
   }
 
   function rememberProjectId() {
     const value = connectedProjectId();
-    if (value) localStorage.setItem(googleProjectKey, value);
+    if (value) localStorage.setItem(GOOGLE_PROJECT_KEY, value);
     return value;
   }
 
   function tokenReady() {
     return Boolean(accessToken && Date.now() < tokenExpiresAt - 60_000);
+  }
+
+  function adoptGoogleCredential(result) {
+    const f = root.firebaseModular || root.firebase;
+    const credential = f?.GoogleAuthProvider?.credentialFromResult?.(result);
+    if (!credential?.accessToken) return false;
+    accessToken = credential.accessToken;
+    const expiresIn = Number(result?._tokenResponse?.oauthExpireIn || result?._tokenResponse?.expiresIn || 3300);
+    tokenExpiresAt = Date.now() + Math.max(600, expiresIn) * 1000;
+    localStorage.removeItem(GOOGLE_REDIRECT_PENDING);
+    rememberProjectId();
+    updateConnectionUi();
+    diagnostic('INFO', 'GOOGLE_AI_CONNECTED', 'Google AI OAuth access granted for this REVEX session.', { projectId: connectedProjectId(), operationType: result?.operationType || null });
+    return true;
+  }
+
+  async function restoreRedirectCredential() {
+    const auth = root.firebaseService?.auth;
+    const f = root.firebaseModular || root.firebase;
+    if (!auth || typeof f?.getRedirectResult !== 'function') return false;
+    try {
+      const result = await f.getRedirectResult(auth);
+      if (!result) return false;
+      const adopted = adoptGoogleCredential(result);
+      if (adopted) setStatus(`Google AI connected · ${connectedProjectId()}`, 'good');
+      return adopted;
+    } catch (error) {
+      localStorage.removeItem(GOOGLE_REDIRECT_PENDING);
+      diagnostic('WARN', 'GOOGLE_AI_REDIRECT', error?.message || String(error));
+      return false;
+    }
+  }
+
+  async function startGoogleRedirect(current, provider, alreadyGoogle) {
+    const f = root.firebaseModular || root.firebase;
+    localStorage.setItem(GOOGLE_REDIRECT_PENDING, '1');
+    setStatus('Opening Google permission in this window; REVEX returns here automatically…', 'busy');
+    if (alreadyGoogle && typeof f?.reauthenticateWithRedirect === 'function') {
+      await f.reauthenticateWithRedirect(current, provider);
+      return;
+    }
+    if (!alreadyGoogle && typeof f?.linkWithRedirect === 'function') {
+      await f.linkWithRedirect(current, provider);
+      return;
+    }
+    localStorage.removeItem(GOOGLE_REDIRECT_PENDING);
+    throw new Error('Google redirect authorization is unavailable in this Firebase runtime.');
   }
 
   async function connectGoogle(forceConsent = false) {
@@ -73,32 +125,40 @@
     const current = auth.currentUser;
     if (!current) throw new Error('Sign in to LIBER Apps first, then connect Google AI.');
     const alreadyGoogle = (current.providerData || []).some((row) => row.providerId === 'google.com');
-    let result;
-    if (alreadyGoogle) {
-      if (typeof f.reauthenticateWithPopup !== 'function') throw new Error('REVEX Google authorization runtime needs the current auth-loader update.');
-      result = await f.reauthenticateWithPopup(current, provider);
-    } else {
-      result = await f.linkWithPopup(current, provider);
+
+    // WebView2 and embedded shells are hostile to popup ownership. Use the Firebase
+    // redirect flow there; normal standalone browsers keep the faster popup path.
+    if (constrainedAuthHost()) {
+      await startGoogleRedirect(current, provider, alreadyGoogle);
+      return '';
     }
-    const credential = f.GoogleAuthProvider.credentialFromResult?.(result);
-    if (!credential?.accessToken) throw new Error('Google approved the account but did not return a usable Gemini OAuth access token.');
-    accessToken = credential.accessToken;
-    const expiresIn = Number(result?._tokenResponse?.oauthExpireIn || result?._tokenResponse?.expiresIn || 3300);
-    tokenExpiresAt = Date.now() + Math.max(600, expiresIn) * 1000;
-    rememberProjectId();
-    updateConnectionUi();
-    diagnostic('INFO', 'GOOGLE_AI_CONNECTED', 'Google AI OAuth access granted for this browser session.', { projectId: connectedProjectId() });
-    return accessToken;
+
+    try {
+      const result = alreadyGoogle
+        ? await f.reauthenticateWithPopup(current, provider)
+        : await f.linkWithPopup(current, provider);
+      if (!adoptGoogleCredential(result)) throw new Error('Google approved the account but did not return a usable Gemini OAuth access token.');
+      return accessToken;
+    } catch (error) {
+      const text = `${error?.code || ''} ${error?.message || error}`;
+      if (/popup-blocked|cancelled-popup|pending promise|internal assertion|web-storage-unsupported/i.test(text) &&
+          (f?.linkWithRedirect || f?.reauthenticateWithRedirect)) {
+        await startGoogleRedirect(current, provider, alreadyGoogle);
+        return '';
+      }
+      throw error;
+    }
   }
 
   function updateConnectionUi() {
     const chip = $('#render-agent-capability');
     const button = $('#google-ai-connect');
+    const redirectPending = localStorage.getItem(GOOGLE_REDIRECT_PENDING) === '1';
     if (chip) {
-      chip.textContent = tokenReady() ? `Google AI · ${connectedProjectId()}` : 'Google AI · permission required';
+      chip.textContent = tokenReady() ? `Google AI · ${connectedProjectId()}` : redirectPending ? 'Google AI · returning…' : 'Google AI · permission required';
       chip.dataset.tone = tokenReady() ? 'good' : 'quiet';
     }
-    if (button) button.textContent = tokenReady() ? 'Reconnect Google' : 'Connect Google AI';
+    if (button) button.textContent = tokenReady() ? 'Reconnect Google' : redirectPending ? 'Connecting…' : 'Connect Google AI';
   }
 
   function cameraContext(reference) {
@@ -116,6 +176,14 @@
     return `Current Revit view: ${state?.viewerData?.source?.viewName || '3D'}.`;
   }
 
+  function locationContext() {
+    const typed = String($('#render-location')?.value || '').trim();
+    const label = String(selectedLocation?.label || typed || '').trim();
+    if (!label) return 'Location/environment context: unspecified; do not invent a distinctive city identity.';
+    const coordinates = selectedLocation?.lat && selectedLocation?.lon ? ` (${selectedLocation.lat}, ${selectedLocation.lon})` : '';
+    return `Location/environment context: ${label}${coordinates}. Use this only for plausible sky, climate, vegetation, distant context and surrounding public realm outside the modeled architecture.`;
+  }
+
   function refinedPrompt(userPrompt, reference) {
     const environment = $('#render-environment')?.value || 'Natural daylight';
     const staging = $('#render-staging')?.value || 'Preserve modeled objects only';
@@ -126,6 +194,7 @@
       `Create one realistic architectural visualization for ${project} by editing the attached REVEX BIM viewport image.`,
       'GEOMETRY LOCK — treat the attached image as a strict image-space geometry reference. Preserve camera projection, crop, silhouette, wall positions, openings, windows, doors, curtain-wall grids and panels, floor/ceiling lines, object positions, dimensions and proportions exactly. Do not add, delete, move, resize or redesign architectural geometry.',
       cameraContext(reference),
+      locationContext(),
       'Remove viewer UI, annotations, tags, selection helpers, technical overlays and temporary linework from the final image. Do not add labels, text, logos or watermarks.',
       useMaterials ? 'Preserve the visible Revit material/color/texture intent. Improve only physically plausible texture scale, reflectance and micro-detail; do not substitute a different design material.' : 'Use physically plausible finishes while keeping all modeled geometry unchanged.',
       `Lighting/environment: ${environment}. Staging rule: ${staging}. People: ${people}.`,
@@ -178,6 +247,7 @@
     resultObjectUrl = URL.createObjectURL(blob);
     const stage = $('#render-ai-stage');
     if (!stage) return;
+    stage.classList.add('has-result');
     stage.innerHTML = `<div class="render-ai-compare">
       ${sourceUrl ? `<img class="render-ai-source" src="${esc(sourceUrl)}" alt="REVEX viewport source" />` : ''}
       <img class="render-ai-result" src="${esc(resultObjectUrl)}" alt="Generated architectural render" />
@@ -200,6 +270,7 @@
 
   async function callGemini(reference, prompt, resolution) {
     await connectGoogle(false);
+    if (!tokenReady()) throw new Error('Google AI permission is still being established. Return to REVEX after authorization, then render.');
     const { mimeType, data } = cleanBase64(reference.imageDataUrl);
     const projectId = rememberProjectId();
     generationAbort?.abort?.();
@@ -264,9 +335,12 @@
     const resolution = $('#google-ai-resolution')?.value || '1K';
     const button = $('#render-google-generate');
     if (button) { button.disabled = true; button.textContent = 'Rendering…'; }
-    setStatus('Sending the clean current viewport + geometry/camera lock to Nano Banana 2…', 'busy');
+    setStatus('Sending the current viewport + geometry/camera lock to Nano Banana 2…', 'busy');
     const sourceStage = $('#render-ai-stage');
-    if (sourceStage) sourceStage.innerHTML = `<div class="render-ai-loading"><img src="${esc(reference.imageDataUrl)}" alt="Current BIM viewport" /><div><strong>Nano Banana 2</strong><span>Preserving geometry and camera…</span></div></div>`;
+    if (sourceStage) {
+      sourceStage.classList.add('has-result');
+      sourceStage.innerHTML = `<div class="render-ai-loading"><img src="${esc(reference.imageDataUrl)}" alt="Current BIM viewport" /><div><strong>Nano Banana 2</strong><span>Preserving geometry and camera…</span></div></div>`;
+    }
     try {
       activeJob = await Store?.createRenderJob?.(state.projectId, {
         contextKind: state.selectedDesign ? 'design' : state.selectedElement ? 'bim' : 'view',
@@ -276,6 +350,7 @@
         chapterId: $('#render-chapter')?.value || null,
         revision: state.cloudState?.revision || null,
         provider: 'google-gemini', model: MODEL, prompt: userPrompt, refinedPrompt: refined,
+        renderLocation: selectedLocation || (String($('#render-location')?.value || '').trim() ? { label: String($('#render-location').value).trim() } : null),
         sourceCamera: reference.camera || null, sourceRevision: reference.sourceRevision || null,
         settings: { resolution, aspectRatio: '16:9', preserveGeometry: true }, status: 'generating'
       }) || null;
@@ -290,6 +365,7 @@
       diagnostic('INFO', 'GOOGLE_RENDER_COMPLETE', 'Nano Banana 2 render completed.', { model: MODEL, resolution, projectId: connectedProjectId() });
     } catch (error) {
       if (error?.name === 'AbortError') return;
+      if (sourceStage) sourceStage.classList.remove('has-result');
       setStatus(error?.message || 'Google AI render failed.', 'bad');
       addMessage('tool error', error?.message || 'Google AI render failed.');
       if (activeJob?.id) await Store.updateRenderJob?.(state.projectId, activeJob.id, { status: 'failed', error: error?.message || String(error) }).catch(() => {});
@@ -322,18 +398,124 @@
   function showSource(reference = captureReference()) {
     const stage = $('#render-ai-stage');
     if (!stage) return;
+    stage.classList.remove('has-result');
     if (!reference?.imageDataUrl) {
-      stage.innerHTML = '<div class="render-ai-empty">Open a synced BIM view to render.</div>';
+      stage.innerHTML = '<div class="render-ai-live-note bad">Open a synced BIM view to render.</div>';
       return;
     }
-    stage.innerHTML = `<div class="render-ai-source-only"><img src="${esc(reference.imageDataUrl)}" alt="Current BIM viewport" /><div><strong>Current REVEX viewport</strong><span>Clean camera-locked source · annotations excluded</span></div></div>`;
+    stage.innerHTML = '<div class="render-ai-live-note">Live BIM viewport · move / zoom / Walk normally · the camera is captured only when you press Render</div>';
     $('#render-workspace-meta').textContent = `${reference.viewName || 'Current 3D view'} · ${reference.sourceRevision || state.cloudState?.revision || 'current revision'}`;
   }
 
-  function toggleExpanded() {
-    $('#render-dialog')?.classList.toggle('expanded');
-    const button = $('#render-expand');
-    if (button) button.setAttribute('aria-pressed', String($('#render-dialog')?.classList.contains('expanded')));
+  function locationLabel(row) {
+    const a = row?.address || {};
+    const city = a.city || a.town || a.village || a.municipality || a.county || '';
+    const stateName = a.state || a.region || '';
+    const country = a.country || '';
+    const compact = [city, stateName, country].filter(Boolean).join(', ');
+    return compact || String(row?.display_name || '').split(',').slice(0, 3).join(', ').trim();
+  }
+
+  function hideLocationSuggestions() {
+    const box = $('#render-location-suggestions');
+    if (box) { box.hidden = true; box.innerHTML = ''; }
+  }
+
+  async function searchLocations(query) {
+    const box = $('#render-location-suggestions');
+    if (!box) return;
+    locationAbort?.abort?.();
+    locationAbort = new AbortController();
+    const url = new URL('https://nominatim.openstreetmap.org/search');
+    url.searchParams.set('q', query);
+    url.searchParams.set('format', 'jsonv2');
+    url.searchParams.set('addressdetails', '1');
+    url.searchParams.set('limit', '8');
+    url.searchParams.set('layer', 'address');
+    url.searchParams.set('accept-language', navigator.language || 'en');
+    try {
+      const response = await fetch(url, { signal: locationAbort.signal, headers: { 'Accept': 'application/json' } });
+      if (!response.ok) throw new Error(`location lookup ${response.status}`);
+      const raw = await response.json();
+      const rows = (Array.isArray(raw) ? raw : []).filter((row) => {
+        const kind = String(row?.addresstype || row?.type || '').toLowerCase();
+        const a = row?.address || {};
+        return ['city','town','village','municipality','administrative','borough','county'].includes(kind) || a.city || a.town || a.village || a.municipality;
+      }).slice(0, 6);
+      if (!rows.length) return hideLocationSuggestions();
+      box.innerHTML = rows.map((row, index) => `<button type="button" data-location-index="${index}"><strong>${esc(locationLabel(row))}</strong><small>${esc(row.display_name || '')}</small></button>`).join('') + '<div class="render-location-attribution">Location data © OpenStreetMap contributors</div>';
+      box.hidden = false;
+      box.querySelectorAll('[data-location-index]').forEach((button) => button.addEventListener('click', () => {
+        const row = rows[Number(button.dataset.locationIndex)];
+        selectedLocation = { label: locationLabel(row), lat: String(row?.lat || ''), lon: String(row?.lon || ''), countryCode: String(row?.address?.country_code || '').toUpperCase() };
+        const input = $('#render-location');
+        if (input) input.value = selectedLocation.label;
+        localStorage.setItem(LOCATION_KEY, JSON.stringify(selectedLocation));
+        hideLocationSuggestions();
+        diagnostic('INFO', 'RENDER_LOCATION', 'Render location selected from public OpenStreetMap data.', selectedLocation);
+      }));
+    } catch (error) {
+      if (error?.name !== 'AbortError') diagnostic('WARN', 'RENDER_LOCATION', error?.message || String(error));
+      hideLocationSuggestions();
+    }
+  }
+
+  function setupLocationSearch() {
+    const input = $('#render-location');
+    if (!input || input.dataset.bound === '1') return;
+    input.dataset.bound = '1';
+    try {
+      const stored = JSON.parse(localStorage.getItem(LOCATION_KEY) || 'null');
+      if (stored?.label) { selectedLocation = stored; input.value = stored.label; }
+    } catch (_) {}
+    input.addEventListener('input', () => {
+      selectedLocation = null;
+      clearTimeout(locationTimer);
+      const query = input.value.trim();
+      if (query.length < 2) return hideLocationSuggestions();
+      // Public Nominatim policy is intentionally respected with a low-frequency debounce.
+      locationTimer = setTimeout(() => void searchLocations(query), 700);
+    });
+    input.addEventListener('keydown', (event) => { if (event.key === 'Escape') hideLocationSuggestions(); });
+    document.addEventListener('pointerdown', (event) => {
+      if (!event.target?.closest?.('.render-location-wrap')) hideLocationSuggestions();
+    });
+  }
+
+  function syncDockOffset() {
+    const dialog = $('#render-dialog');
+    if (!dialog) return;
+    const bars = [$('.topbar'), $('.main-nav')].filter(Boolean);
+    const bottom = bars.reduce((max, node) => Math.max(max, node.getBoundingClientRect().bottom || 0), 0);
+    dialog.style.setProperty('--revex-render-top', `${Math.max(0, Math.round(bottom))}px`);
+  }
+
+  function bindSheetResize() {
+    const handle = $('#render-sheet-handle');
+    const panel = $('#render-agent-panel');
+    if (!handle || !panel || handle.dataset.bound === '1') return;
+    handle.dataset.bound = '1';
+    handle.addEventListener('pointerdown', (event) => {
+      if (!matchMedia('(max-width:860px)').matches) return;
+      event.preventDefault();
+      handle.setPointerCapture?.(event.pointerId);
+      const startY = event.clientY;
+      const startHeight = panel.getBoundingClientRect().height;
+      const maxHeight = Math.max(260, innerHeight - Number.parseFloat(getComputedStyle($('#render-dialog')).getPropertyValue('--revex-render-top') || '0') - 72);
+      const move = (e) => {
+        const next = Math.max(220, Math.min(maxHeight, startHeight + (startY - e.clientY)));
+        panel.style.setProperty('--revex-render-sheet-h', `${Math.round(next)}px`);
+      };
+      const up = (e) => {
+        handle.releasePointerCapture?.(e.pointerId);
+        handle.removeEventListener('pointermove', move);
+        handle.removeEventListener('pointerup', up);
+        handle.removeEventListener('pointercancel', up);
+      };
+      handle.addEventListener('pointermove', move);
+      handle.addEventListener('pointerup', up);
+      handle.addEventListener('pointercancel', up);
+    });
   }
 
   function buildUi() {
@@ -343,25 +525,20 @@
     const workspace = $('.render-workspace');
     if (!dialog || !layout || !controls || !workspace) return false;
 
-    dialog.classList.add('agentized', 'google-render');
+    dialog.classList.add('agentized', 'google-render', 'render-docked');
+    dialog.setAttribute('aria-modal', 'false');
     layout.classList.add('agentized');
     controls.classList.add('render-controls-hidden');
     controls.setAttribute('aria-hidden', 'true');
 
     const head = $('.render-head', dialog);
     if (head) {
-      const eyebrow = $('.eyebrow', head); if (eyebrow) eyebrow.textContent = 'GOOGLE NANO BANANA 2 + REVEX';
-      const title = $('#render-dialog-title', head); if (title) title.textContent = 'REVEX Render';
-      if (!$('#render-expand', head)) {
-        const expand = document.createElement('button');
-        expand.id = 'render-expand'; expand.type = 'button'; expand.className = 'icon-button sp-icon-btn'; expand.setAttribute('aria-label', 'Expand render workspace'); expand.setAttribute('aria-pressed', 'false'); expand.textContent = '↗';
-        $('#render-close', head)?.insertAdjacentElement('beforebegin', expand);
-        expand.addEventListener('click', toggleExpanded);
-      }
+      const eyebrow = $('.eyebrow', head); if (eyebrow) eyebrow.textContent = 'REVEX RENDER';
+      const title = $('#render-dialog-title', head); if (title) title.textContent = 'Render properties';
     }
 
     const workspaceHead = $('.render-workspace-head', workspace);
-    if (workspaceHead) workspaceHead.innerHTML = `<strong>Nano Banana 2</strong><span id="render-workspace-meta">viewport image + exact camera context</span>`;
+    if (workspaceHead) workspaceHead.innerHTML = `<strong>Current BIM viewport</strong><span id="render-workspace-meta">live camera authority</span>`;
     const frame = $('#render-frame', workspace); if (frame) { frame.removeAttribute('src'); frame.hidden = true; }
     const empty = $('#render-frame-empty', workspace); if (empty) empty.hidden = true;
     let stage = $('#render-ai-stage', workspace);
@@ -373,26 +550,36 @@
     if (!panel) {
       panel = document.createElement('aside');
       panel.id = 'render-agent-panel'; panel.className = 'render-agent-panel';
-      panel.innerHTML = `<header class="render-agent-head"><div><strong>REVEX AI Render</strong><span>precise viewport-to-image</span></div><span id="render-agent-capability" class="render-agent-chip" data-tone="quiet">Google AI · permission required</span></header>
-        <div id="render-agent-messages" class="render-agent-messages"><div class="render-agent-message assistant"><div class="render-agent-message-body">The current BIM viewport is the geometry authority. REVEX will refine your prompt for realism without moving architecture.</div></div></div>
+      panel.innerHTML = `<div id="render-sheet-handle" class="render-sheet-handle" aria-label="Resize Render properties"><span></span></div>
+        <header class="render-agent-head"><div><strong>REVEX AI Render</strong><span>viewport-to-image</span></div><span id="render-agent-capability" class="render-agent-chip" data-tone="quiet">Google AI · permission required</span></header>
+        <div id="render-agent-messages" class="render-agent-messages"><div class="render-agent-message assistant"><div class="render-agent-message-body">Keep moving, zooming or walking in BIM while these properties are open. Render captures the viewport only when you press Render.</div></div></div>
         <div class="render-google-config">
           <label>Google Cloud project<input id="google-ai-project" type="text" autocomplete="off" spellcheck="false" /></label>
           <label>Output<select id="google-ai-resolution"><option value="1K">1K · fastest</option><option value="2K">2K · review</option><option value="4K">4K · final</option></select></label>
           <button id="google-ai-connect" class="button ghost" type="button">Connect Google AI</button>
         </div>
-        <div id="render-agent-fields" class="render-agent-fields"></div>
+        <div id="render-agent-fields" class="render-agent-fields"><label class="render-location-field">Location / surroundings<div class="render-location-wrap"><input id="render-location" type="search" autocomplete="off" spellcheck="false" placeholder="Start typing a city…" /><div id="render-location-suggestions" class="render-location-suggestions" hidden></div></div><small>Used only for sky, climate, vegetation and surrounding context.</small></label></div>
         <div id="render-agent-status-slot" class="render-agent-status-slot"></div>
         <button id="render-google-generate" class="button render-google-generate" type="button">Render current viewport</button>`;
       layout.appendChild(panel);
     }
 
-    $('#google-ai-project').value = localStorage.getItem(googleProjectKey) || root.firebaseService?.app?.options?.projectId || 'liber-apps-cca20';
-    $('#google-ai-project')?.addEventListener('change', () => { rememberProjectId(); updateConnectionUi(); });
-    $('#google-ai-connect')?.addEventListener('click', async () => {
-      try { setStatus('Requesting Google AI permission…', 'busy'); await connectGoogle(true); setStatus(`Google AI connected · billing/quota project ${connectedProjectId()}`, 'good'); }
-      catch (error) { setStatus(error?.message || 'Google authorization failed.', 'bad'); }
-    });
-    $('#render-google-generate')?.addEventListener('click', generateRender);
+    $('#google-ai-project').value = localStorage.getItem(GOOGLE_PROJECT_KEY) || root.firebaseService?.app?.options?.projectId || 'liber-apps-cca20';
+    if ($('#google-ai-project').dataset.bound !== '1') {
+      $('#google-ai-project').dataset.bound = '1';
+      $('#google-ai-project').addEventListener('change', () => { rememberProjectId(); updateConnectionUi(); });
+    }
+    if ($('#google-ai-connect').dataset.bound !== '1') {
+      $('#google-ai-connect').dataset.bound = '1';
+      $('#google-ai-connect').addEventListener('click', async () => {
+        try { setStatus('Requesting Google AI permission…', 'busy'); await connectGoogle(true); if (tokenReady()) setStatus(`Google AI connected · ${connectedProjectId()}`, 'good'); }
+        catch (error) { setStatus(error?.message || 'Google authorization failed.', 'bad'); }
+      });
+    }
+    if ($('#render-google-generate').dataset.bound !== '1') {
+      $('#render-google-generate').dataset.bound = '1';
+      $('#render-google-generate').addEventListener('click', generateRender);
+    }
 
     const fieldHost = $('#render-agent-fields');
     const promptLabel = $('#render-prompt')?.closest('label');
@@ -401,13 +588,18 @@
     const chapter = $('#render-chapter')?.closest('label');
     [promptLabel, options, materials, chapter].filter(Boolean).forEach((node) => fieldHost.appendChild(node));
     const prompt = $('#render-prompt');
-    if (prompt) { prompt.rows = 6; prompt.placeholder = 'Describe light, atmosphere and finish intent. REVEX automatically adds the geometry/camera lock.'; }
+    if (prompt) { prompt.rows = 5; prompt.placeholder = 'Describe light, atmosphere and finish intent. REVEX adds geometry/camera and location context.'; }
     const status = $('#render-status'); if (status) $('#render-agent-status-slot')?.appendChild(status);
     $('#render-prepare', controls)?.setAttribute('hidden', '');
     $('.result-upload', controls)?.setAttribute('hidden', '');
 
-    // Own the render submit at capture phase so the legacy Rendair/app handler cannot fire.
-    $('#render-form')?.addEventListener('submit', (event) => { event.preventDefault(); event.stopImmediatePropagation(); generateRender(event); }, true);
+    if ($('#render-form') && $('#render-form').dataset.googleOwner !== '1') {
+      $('#render-form').dataset.googleOwner = '1';
+      $('#render-form').addEventListener('submit', (event) => { event.preventDefault(); event.stopImmediatePropagation(); generateRender(event); }, true);
+    }
+    setupLocationSearch();
+    bindSheetResize();
+    syncDockOffset();
     updateConnectionUi();
     showSource();
     return true;
@@ -415,21 +607,28 @@
 
   function onDialogOpen() {
     if (!buildUi()) return;
+    // Render is a property surface around the real BIM viewport, not a second viewer.
+    const bimTab = document.querySelector('.main-nav [data-view="bim"]');
+    if (bimTab && !bimTab.classList.contains('active')) bimTab.click();
+    syncDockOffset();
     showSource();
     const sourcePrompt = $('#render-prompt');
     if (sourcePrompt && !sourcePrompt.value.trim()) sourcePrompt.value = 'Create a realistic architectural rendering of the current viewport while preserving the design exactly.';
-    setStatus(tokenReady() ? `Google AI connected · ${connectedProjectId()}` : 'Connect Google AI once; the OAuth token stays only in this browser session.');
+    const pending = localStorage.getItem(GOOGLE_REDIRECT_PENDING) === '1';
+    setStatus(tokenReady() ? `Google AI connected · ${connectedProjectId()}` : pending ? 'Finishing Google authorization…' : 'Connect Google AI once.');
   }
 
-  function init() {
+  async function init() {
     if (initialized) return;
     if (!buildUi()) return setTimeout(init, 120);
     initialized = true;
+    await restoreRedirectCredential();
     const dialog = $('#render-dialog');
     if (dialog) new MutationObserver(() => { if (!dialog.hidden) onDialogOpen(); }).observe(dialog, { attributes: true, attributeFilter: ['hidden'] });
+    root.addEventListener('resize', syncDockOffset, { passive: true });
     if (!dialog?.hidden) onDialogOpen();
-    console.info('[REVEX] Google renderer ' + BUILD, { model: MODEL, oauth: 'Firebase Google provider + incremental scopes', apiKeyInBrowser: false, input: 'current viewport + camera context' });
+    console.info('[REVEX] Google renderer ' + BUILD, { model: MODEL, oauth: 'Firebase popup in browser / redirect in WebView', apiKeyInBrowser: false, input: 'live current viewport + camera context', location: 'OpenStreetMap Nominatim suggestions' });
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true }); else init();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true }); else void init();
 })(window);
