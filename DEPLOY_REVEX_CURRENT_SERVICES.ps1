@@ -42,7 +42,8 @@ function Test-GCloudAuth([string]$GCloud) {
   $previous = $ErrorActionPreference
   try {
     $ErrorActionPreference = "Continue"
-    $output = @(& $GCloud auth list --filter "status:ACTIVE" --format "value(account)" 2>$null) | Where-Object { $_ }
+    $authArgs = @("auth", "list", "--filter", "status:ACTIVE", "--format", "value(account)")
+    $output = @(& $GCloud @authArgs 2>$null) | Where-Object { $_ }
     return ($LASTEXITCODE -eq 0 -and @($output).Count -gt 0)
   }
   catch { return $false }
