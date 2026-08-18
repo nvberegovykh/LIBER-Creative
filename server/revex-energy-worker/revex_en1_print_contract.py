@@ -56,6 +56,59 @@ PAGE_MARKERS = (
 )
 
 
+def _page_text(page) -> str:
+    return " ".join((page.extract_text() or "").split())
+
+
+def _spill_diagnostic(reader, source_layout: list[dict], output_root: Path) -> dict:
+    pages = []
+    for index, page in enumerate(reader.pages, start=1):
+        text = _page_text(page)
+        matched = [
+            {"sheet": sheet, "marker": marker}
+            for sheet, marker in zip(PRINT_SHEETS, PAGE_MARKERS)
+            if marker.lower() in text.lower()
+        ]
+        pages.append({
+            "page": index,
+            "characters": len(text),
+            "matchedExpectedMarkers": matched,
+            "textStart": text[:320],
+            "widthPt": round(float(page.mediabox.width), 2),
+            "heightPt": round(float(page.mediabox.height), 2),
+        })
+    diagnostic = {
+        "schema": "liber.revex.en1-print-spill-diagnostic.v1",
+        "version": VERSION,
+        "status": "PAGE_COUNT_MISMATCH",
+        "pageCount": len(reader.pages),
+        "expectedPageCount": len(PRINT_SHEETS),
+        "printScalePercent": PRINT_SCALE,
+        "fitToPage": False,
+        "selectedSheets": list(PRINT_SHEETS),
+        "sourceLayout": source_layout,
+        "pages": pages,
+    }
+    path = output_root / "EN-1_PRINT_SPILL_DIAGNOSTIC.json"
+    path.write_text(json.dumps(diagnostic, ensure_ascii=True, indent=2), encoding="utf-8")
+    print(json.dumps({
+        "stage": "EN1_PRINT_SPILL_DIAGNOSTIC",
+        "pageCount": diagnostic["pageCount"],
+        "expectedPageCount": diagnostic["expectedPageCount"],
+        "pages": [
+            {
+                "page": row["page"],
+                "characters": row["characters"],
+                "markers": [item["sheet"] for item in row["matchedExpectedMarkers"]],
+                "textStart": row["textStart"][:120],
+            }
+            for row in pages
+        ],
+        "sourceLayout": source_layout,
+    }, ensure_ascii=True, separators=(",", ":")), flush=True)
+    return diagnostic
+
+
 def _print_pdf(xlsx: Path, pdf: Path, output_root: Path) -> dict:
     from openpyxl import load_workbook
     from openpyxl.worksheet.properties import PageSetupProperties
@@ -71,8 +124,20 @@ def _print_pdf(xlsx: Path, pdf: Path, output_root: Path) -> dict:
     if missing:
         raise ValueError("EN-1 print set is missing proven filing sheets: " + ", ".join(missing))
 
+    source_layout = []
     for sheet in workbook.worksheets:
         if sheet.title in PRINT_SHEETS:
+            source_layout.append({
+                "sheet": sheet.title,
+                "dimension": sheet.calculate_dimension(),
+                "maxRow": sheet.max_row,
+                "maxColumn": sheet.max_column,
+                "printAreaBefore": str(sheet.print_area or ""),
+                "scaleBefore": sheet.page_setup.scale,
+                "fitToWidthBefore": sheet.page_setup.fitToWidth,
+                "fitToHeightBefore": sheet.page_setup.fitToHeight,
+                "orientation": sheet.page_setup.orientation,
+            })
             sheet.sheet_state = "visible"
             props = sheet.sheet_properties.pageSetUpPr
             if props is None:
@@ -111,6 +176,7 @@ def _print_pdf(xlsx: Path, pdf: Path, output_root: Path) -> dict:
 
     reader = PdfReader(str(pdf))
     if len(reader.pages) != len(PRINT_SHEETS):
+        _spill_diagnostic(reader, source_layout, output_root)
         raise ValueError(f"EN-1 PDF has {len(reader.pages)} pages; proven print contract requires {len(PRINT_SHEETS)}")
 
     page_boxes = []
@@ -124,7 +190,7 @@ def _print_pdf(xlsx: Path, pdf: Path, output_root: Path) -> dict:
             raise ValueError(f"EN-1 PDF page {index} has an invalid/cut page box")
         if crop_width > width + 1 or crop_height > height + 1:
             raise ValueError(f"EN-1 PDF page {index} crop box exceeds media box")
-        text = " ".join((page.extract_text() or "").split())
+        text = _page_text(page)
         marker_ok = marker.lower() in text.lower()
         if not marker_ok:
             raise ValueError(f"EN-1 PDF page {index} does not match expected sheet {PRINT_SHEETS[index-1]!r}; missing marker {marker!r}")
