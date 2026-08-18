@@ -1,19 +1,23 @@
 {
-  "schema": "liber.revex.current-release.v1",
+  "schema": "liber.revex.current-release.v2",
   "authority": "canonical-current-files",
   "operatorEntrypoint": "FINALIZE_REVEX.cmd",
+  "acceptanceAction": "one fresh SYNC ENGINEERING after successful finalization",
   "principles": {
     "oneSourceCommitPerRelease": true,
     "versionedImplementationsAreShadows": true,
     "shadowFilesAreNeverDeletedByFinalization": true,
     "shadowControllersAreNeverInvokedByFinalization": true,
     "installedPreviousAddinBecomesTimestampedShadow": true,
-    "immutableProjectRevisionsAreNeverRewritten": true
+    "immutableProjectRevisionsAreNeverRewritten": true,
+    "currentRuntimeUsesCanonicalFacades": true,
+    "packageFilenamesAreBoundaryAdaptersNotInternalArchitecture": true
   },
   "current": {
     "companionRoot": "docs/liber-apps/apps/revex/index.html",
     "companionIntegrityOwner": "docs/liber-apps/apps/revex/ui-integrity.js",
     "revitAddinProject": "src/Liber.Revex.Revit/Liber.Revex.Revit.csproj",
+    "engineeringSync": "src/Liber.Revex.Revit/Services/EngineeringSyncService.cs",
     "energyPipeline": "server/revex-energy-worker/revex_energy_pipeline_current.py",
     "energyContracts": "src/Liber.Revex.Revit/Engineering/Energy/revex_energy_contracts.py",
     "energyPublicationPolicy": "src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups.py",
@@ -21,6 +25,90 @@
     "energyDeployer": "server/revex-energy-worker/DEPLOY_ENERGY_R127.ps1",
     "reportDeployer": "server/revex-report-functions/DEPLOY_REPORT_R126.ps1",
     "renderDeployer": "server/revex-render-worker/DEPLOY_RENDER_R126.ps1"
+  },
+  "requiredCapabilities": {
+    "projectIdentity": "one REVEX project identity shared by Revit, BIM, Design Book, Spec Book, Docs, Chat, History, Render and Energy",
+    "bim": [
+      "exact synced Revit model",
+      "persistent visible-hidden-deleted overlays",
+      "restore hidden/deleted state",
+      "finish edits non-destructive",
+      "same-Revit-type finish application",
+      "type texture with instance UV overlay",
+      "design color fallback behind texture",
+      "six-face section box",
+      "ACC-like Walk",
+      "spatial Rooms/Spaces invisible as geometry",
+      "affected-plan export from authoritative current revision"
+    ],
+    "mobile": [
+      "viewport-safe top chrome",
+      "seven reliable icon tabs",
+      "split touch Walk look/move",
+      "compact BIM controls",
+      "first-use module guide",
+      "no horizontal overflow"
+    ],
+    "designBook": [
+      "per-position lightweight property versions",
+      "explicit Sync to Design Book release",
+      "version overlays survive later source sync",
+      "rendered images remain chapter/position assets"
+    ],
+    "specBook": [
+      "current project schedules remain project-scoped",
+      "native Revit schedule structure is preserved",
+      "user-authored spec data remains separate from Revit source"
+    ],
+    "docs": [
+      "one current Full Set owner",
+      "linked ordered one-page sheet PDFs derived from that exact Full Set",
+      "sheets are linked pages not detached standalone documents",
+      "manual project documents remain in the same library"
+    ],
+    "issues": [
+      "all active issues shown by default",
+      "empty BIM selection still shows active project issues",
+      "anchored issues can navigate back to BIM elements"
+    ],
+    "history": [
+      "append-only technical history",
+      "New York day boundary",
+      "separate post-sync daily report",
+      "affected plan evidence remains synchronized"
+    ],
+    "blocks": [
+      "Walk-only placement UI",
+      "three-foot intended placement distance",
+      "Revit ExternalEvent placement",
+      "unsupported family placement fails closed"
+    ],
+    "render": [
+      "current BIM viewport and camera authority",
+      "private authenticated off-device worker",
+      "warm model before broker cutover",
+      "no client model cache",
+      "no external Rendair routing",
+      "saved results attach to Design Book and project render history"
+    ],
+    "energy": [
+      "immutable Engineering revision",
+      "active Revit T/Z identity evidence",
+      "native Revit schedule evidence",
+      "current gbXML plus EPW evidence",
+      ">=80% publication hard stop and >=95% visible review target",
+      "GeometryCo Baseline and Proposed compilation",
+      "two EnergyPlus runs",
+      "official PNNL COMcheck Backstop",
+      "EN-1 workbook and filing PDF",
+      "complete user-visible release package",
+      "actual VT preserved; missing VT exactly 0.45",
+      "whole-glass-door geometry",
+      "panel-by-panel multi-floor curtain wall mapping",
+      "actual Levels and physical upper-envelope covers",
+      "durable lease heartbeat and resumable publication",
+      "applicant, modeler, signature and seal never fabricated"
+    ]
   },
   "preservedShadows": {
     "energy": [
@@ -38,12 +126,15 @@
       "UPDATE_REVEX_ADDIN_CURRENT.cmd",
       "UPDATE_REVEX_ADDIN_CURRENT.ps1"
     ],
-    "ui": "Version-suffixed UI modules remain preserved behind the canonical index/ui-integrity authority and are guarded by r126 convergence QA."
+    "ui": "Version-suffixed UI modules remain preserved behind the canonical index/ui-integrity authority and are guarded by current convergence QA.",
+    "cloud": "Previous Cloud Run/Functions revisions are not deleted by FINALIZE_REVEX; candidate workers cut over only after readiness proof."
   },
   "energyPolicy": {
     "actualVtWins": true,
     "missingVt": 0.45,
     "geometryExporter": "current external Python equals Dynamo embedded Python",
+    "evidenceArchitecture": "typed semantic roles at the worker boundary",
+    "packageBoundary": "canonical filing names are validated in one package contract",
     "geometryFixesPreserved": [
       "whole-glass-door openings",
       "panel-by-panel multi-floor curtain-wall mapping",
