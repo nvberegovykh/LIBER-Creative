@@ -16,7 +16,12 @@ const familyService = read('src/Liber.Revex.Revit/Services/FamilyPlacementServic
 const app = read('docs/liber-apps/apps/revex/app.js');
 const ui = read('docs/liber-apps/apps/revex/ui-integrity.js');
 const store = read('docs/liber-apps/apps/revex/store.js');
+const firebaseService = read('docs/liber-apps/js/firebase-service.js');
 const wallt = read('docs/liber-apps/apps/revex/wallt-control-plane.js');
+const projectAccess = read('server/firebase-functions/project-access.js');
+const projectChat = read('server/firebase-functions/project-chat.js');
+const functionsMain = read('server/firebase-functions/main.js');
+const functionsPackage = JSON.parse(read('server/firebase-functions/package.json'));
 
 // DOCS: one Full Set library object owns ordered linked sheet pages.
 must(docsPages,
@@ -88,7 +93,7 @@ must(familyService,
 );
 forbid(blocks, 'doc.Create.NewFamilyInstance', 'new Transaction(');
 
-// CHAT: the current project owns one secure-chat connection and resets at project boundary.
+// CHAT: frontend resolves one exact project-scoped secure-chat connection.
 must(app,
   'async function ensureChatEmbedded(context = state.selectedContext)',
   'Store.ensureProjectChat(state.projectId)',
@@ -100,6 +105,11 @@ must(store,
   'async ensureProjectChat(projectId)',
   "return this.fs.callFunction('ensureProjectChat', { projectId });"
 );
+must(firebaseService,
+  "if (name === 'ensureProjectChat' && this.auth?.currentUser)",
+  'async _callEnsureProjectChatHttp(payload)',
+  'ensureProjectChatHttp'
+);
 must(ui,
   'function installChatProjectGuard()',
   "root.addEventListener('revex:authoritative-project-bound'",
@@ -107,6 +117,40 @@ must(ui,
   'state.chatLoaded=false',
   "frame.src='about:blank'",
   'CHAT_PROJECT_BOUNDARY'
+);
+
+// CHAT backend is source-bound: preserve valid linked history, otherwise deterministic repair.
+if (functionsPackage.main !== 'main.js') throw new Error('Firebase function composition must use main.js');
+must(functionsMain,
+  "const energy = require('./index')",
+  "const projectChat = require('./project-chat')",
+  'ensureProjectChatHttp: projectChat.ensureProjectChatHttp'
+);
+must(projectAccess, "'chat'", 'function projectAccessRole');
+must(projectChat,
+  "const CHAT_SCHEMA = 'liber.revex.project-chat.v1'",
+  "getAuth().verifyIdToken",
+  'projectAccessRole(project, user, uid)',
+  "db.collection('users').where('role', '==', 'admin')",
+  'project.chatConnId',
+  "db.collection('chatConnections').where('projectId', '==', projectId)",
+  'return `revex_project_${projectId}`',
+  "key: `project:${projectId}`",
+  "type: 'project'",
+  'participants,',
+  'memberIds: participants',
+  'admins: chatAdmins',
+  'batch.set(selected.ref, chatPatch, { merge: true })',
+  'chatConnId: connId',
+  "region: ['us-central1', 'europe-west1']",
+  'cors: true',
+  'exports.ensureProjectChatHttp = onRequest'
+);
+forbid(projectChat,
+  'delete(',
+  'recursiveDelete',
+  "collection('messages')",
+  "collection('chatMessages')"
 );
 
 // WALLT may operate these owners, but must not become their storage/engine implementation.
@@ -140,9 +184,12 @@ console.log(JSON.stringify({
     unsupportedPlacementFailsClosed: true
   },
   chat: {
-    owner: 'app.js + secure-chat connection',
+    owner: 'secure-chat + source-bound project connection resolver',
     projectScoped: true,
-    projectBoundaryReset: true
+    projectBoundaryReset: true,
+    existingHistoryPreserved: true,
+    deterministicRepair: true,
+    regions: ['us-central1','europe-west1']
   },
   wallt: {
     operatorOnly: true,
