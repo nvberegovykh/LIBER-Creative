@@ -1,0 +1,46 @@
+name: REVEX r127 apply Energy policy
+
+on:
+  push:
+    branches: [revex-energy-r127-single-controller]
+    paths:
+      - 'tools/apply_revex_r127_energy_policy.py'
+      - '.github/workflows/revex-r127-apply-energy-policy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: revex-energy-r127-single-controller
+          fetch-depth: 0
+      - name: Apply deterministic fixed-VT policy
+        run: python tools/apply_revex_r127_energy_policy.py
+      - name: Verify policy markers
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups_r125.py')
+          t=p.read_text(encoding='utf-8')
+          for marker in ('MISSING_VT = 0.45','REVEX_FIXED_MISSING_VT_0_45','ACTUAL_VT_ELSE_FIXED_0_45'):
+              assert marker in t, marker
+          assert 'VT_CLEAR_FALLBACK = 0.60' not in t
+          assert 'CODE_FALLBACK_TINTED' not in t
+          print('REVEX_R127_FIXED_VT_POLICY=PASSED')
+          PY
+      - name: Commit generated policy
+        run: |
+          if git diff --quiet -- src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups_r125.py; then
+            echo 'Already applied.'
+            exit 0
+          fi
+          git config user.name 'revex-release-bot'
+          git config user.email 'revex-release-bot@users.noreply.github.com'
+          git add src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups_r125.py
+          git commit -m 'REVEX r127: make missing VT deterministic 0.45'
+          git push origin HEAD:revex-energy-r127-single-controller
