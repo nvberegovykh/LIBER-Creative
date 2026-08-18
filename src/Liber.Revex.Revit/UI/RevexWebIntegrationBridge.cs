@@ -1,6 +1,9 @@
+using Autodesk.Revit.UI;
+using Liber.Revex.Revit.Revit;
 using Liber.Revex.Revit.Services;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -11,16 +14,17 @@ namespace Liber.Revex.Revit.UI;
 
 /// <summary>
 /// Shared REVEX WebView2 integration endpoint.
-///
-/// Provider websites are never scripted or scraped. Companion requests an owned
-/// provider browser, the user interacts with the provider normally, and only a
-/// user-triggered supported image download is returned to the originating
-/// Companion WebView as a lightweight integration result.
+/// Provider websites are never scraped or scripted. A user opens an owned browser,
+/// interacts with the provider normally, and only a user-triggered supported
+/// download crosses back into REVEX. Architextures returns image bytes; Blocks
+/// returns an opaque family token whose local path never enters browser JavaScript.
 /// </summary>
 internal static class RevexWebIntegrationBridge
 {
     private const long MaxMaterialBytes = 12L * 1024L * 1024L;
+    private const long MaxFamilyBytes = 160L * 1024L * 1024L;
     private static readonly Uri ArchitexturesCreate = new("https://architextures.org/create");
+    private static readonly Uri BlocksFamilies = new("https://www.blocksrvt.com/en/families");
 
     private sealed class BridgeState
     {
@@ -30,7 +34,12 @@ internal static class RevexWebIntegrationBridge
         public Window? ProviderWindow { get; set; }
     }
 
+    private sealed record PendingFamily(string Path, string Name, long Bytes, DateTime CreatedUtc, WebView2 Target);
+
     private static readonly ConditionalWeakTable<WebView2, BridgeState> States = new();
+    private static readonly ConcurrentDictionary<string, PendingFamily> PendingFamilies = new();
+    private static RevexFamilyPlacementExternalHandler? _familyHandler;
+    private static ExternalEvent? _familyExternalEvent;
 
     [ModuleInitializer]
     internal static void Install()
@@ -39,6 +48,26 @@ internal static class RevexWebIntegrationBridge
             typeof(WebView2),
             FrameworkElement.LoadedEvent,
             new RoutedEventHandler(OnWebViewLoaded));
+    }
+
+    internal static void ConfigureFamilyPlacement()
+    {
+        if (_familyExternalEvent != null) return;
+        _familyHandler = new RevexFamilyPlacementExternalHandler();
+        _familyExternalEvent = ExternalEvent.Create(_familyHandler);
+        RevexDiagnostics.Info("FAMILY", "REVEX Blocks family placement ExternalEvent ready.");
+    }
+
+    internal static void ReleaseFamilyPlacement()
+    {
+        try { _familyExternalEvent?.Dispose(); } catch { }
+        _familyExternalEvent = null;
+        _familyHandler = null;
+        foreach (var pair in PendingFamilies.ToArray())
+        {
+            if (!PendingFamilies.TryRemove(pair.Key, out PendingFamily? pending)) continue;
+            try { if (File.Exists(pending.Path)) File.Delete(pending.Path); } catch { }
+        }
     }
 
     private static void OnWebViewLoaded(object sender, RoutedEventArgs args)
@@ -78,6 +107,17 @@ internal static class RevexWebIntegrationBridge
             if (!root.TryGetProperty("type", out JsonElement typeEl)) return;
             string type = typeEl.GetString() ?? "";
 
+            if (string.Equals(type, "liber:revex-family-place-r126", StringComparison.Ordinal))
+            {
+                QueueFamilyPlace(web, root);
+                return;
+            }
+            if (string.Equals(type, "liber:revex-family-transform-r126", StringComparison.Ordinal))
+            {
+                QueueFamilyTransform(web, root);
+                return;
+            }
+
             if (string.Equals(type, "liber:revex-integration-arm", StringComparison.Ordinal))
             {
                 string provider = ReadProvider(root);
@@ -109,14 +149,73 @@ internal static class RevexWebIntegrationBridge
         }
         catch (Exception ex)
         {
-            RevexDiagnostics.Error("INTEGRATION", "Could not open REVEX provider browser.", ex);
+            RevexDiagnostics.Error("INTEGRATION", "Could not execute REVEX provider integration request.", ex);
             await PostAsync(web, new
             {
                 type = "liber:revex-integration-error",
-                provider = "architextures",
+                provider = ReadProviderSafe(e.WebMessageAsJson),
                 message = ex.Message
             });
         }
+    }
+
+    private static void QueueFamilyPlace(WebView2 web, JsonElement root)
+    {
+        if (_familyHandler == null || _familyExternalEvent == null)
+            throw new InvalidOperationException("BIM-family placement is available only inside the REVEX Revit add-in.");
+        string token = ReadString(root, "token");
+        if (!PendingFamilies.TryGetValue(token, out PendingFamily? pending))
+            throw new InvalidOperationException("The Blocks family download token expired. Download the family again.");
+        double x = ReadDouble(root, "x"), y = ReadDouble(root, "y"), z = ReadDouble(root, "z");
+        double rotation = ReadDouble(root, "rotationDegrees");
+        string levelName = ReadString(root, "levelName");
+        double levelElevation = ReadDouble(root, "levelElevation", z);
+        var request = new FamilyPlacementService.PlacementRequest(pending.Path, x, y, z, rotation, levelName, levelElevation);
+        _familyHandler.Enqueue(new RevexFamilyPlacementExternalHandler.WorkItem(request, null, (result, error) =>
+        {
+            _ = PostFamilyResultAsync(web, result, error, "place");
+            if (PendingFamilies.TryRemove(token, out PendingFamily? remove))
+                try { if (File.Exists(remove.Path)) File.Delete(remove.Path); } catch { }
+        }));
+        _familyExternalEvent.Raise();
+    }
+
+    private static void QueueFamilyTransform(WebView2 web, JsonElement root)
+    {
+        if (_familyHandler == null || _familyExternalEvent == null)
+            throw new InvalidOperationException("BIM-family placement is available only inside the REVEX Revit add-in.");
+        long elementId = ReadLong(root, "elementId");
+        var request = new FamilyPlacementService.TransformRequest(
+            elementId,
+            ReadDouble(root, "dx"),
+            ReadDouble(root, "dy"),
+            ReadDouble(root, "dz"),
+            ReadDouble(root, "rotateDegrees"));
+        _familyHandler.Enqueue(new RevexFamilyPlacementExternalHandler.WorkItem(null, request,
+            (result, error) => _ = PostFamilyResultAsync(web, result, error, "transform")));
+        _familyExternalEvent.Raise();
+    }
+
+    private static Task PostFamilyResultAsync(WebView2 web, FamilyPlacementService.PlacementResult? result, string? error, string action)
+    {
+        if (result == null)
+            return PostAsync(web, new { type = "liber:revex-family-placement-r126", ok = false, action, message = error ?? "Family placement failed." });
+        return PostAsync(web, new
+        {
+            type = "liber:revex-family-placement-r126",
+            ok = true,
+            action,
+            elementId = result.ElementId,
+            uniqueId = result.UniqueId,
+            family = result.Family,
+            revitType = result.Type,
+            level = result.Level,
+            bboxMin = result.BboxMin,
+            bboxMax = result.BboxMax,
+            previewTriangles = result.PreviewTriangles,
+            previewTruncated = result.PreviewTruncated,
+            placementType = result.PlacementType
+        });
     }
 
     private static string ReadProvider(JsonElement root) =>
@@ -124,31 +223,63 @@ internal static class RevexWebIntegrationBridge
             ? (providerEl.GetString() ?? "").Trim().ToLowerInvariant()
             : "";
 
+    private static string ReadProviderSafe(string? json)
+    {
+        try { using JsonDocument doc = JsonDocument.Parse(json ?? "{}"); return ReadProvider(doc.RootElement); }
+        catch { return ""; }
+    }
+
+    private static string ReadString(JsonElement root, string property) =>
+        root.TryGetProperty(property, out JsonElement value) && value.ValueKind == JsonValueKind.String
+            ? (value.GetString() ?? "").Trim()
+            : "";
+
+    private static double ReadDouble(JsonElement root, string property, double fallback = 0)
+    {
+        if (!root.TryGetProperty(property, out JsonElement value)) return fallback;
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out double number) && double.IsFinite(number)) return number;
+        return double.TryParse(value.ToString(), out number) && double.IsFinite(number) ? number : fallback;
+    }
+
+    private static long ReadLong(JsonElement root, string property)
+    {
+        if (root.TryGetProperty(property, out JsonElement value) && value.TryGetInt64(out long number)) return number;
+        if (long.TryParse(root.TryGetProperty(property, out value) ? value.ToString() : "", out number)) return number;
+        throw new InvalidOperationException($"Invalid {property}.");
+    }
+
     private static Uri ResolveProviderUri(string provider, string requestedUrl)
     {
-        if (!string.Equals(provider, "architextures", StringComparison.Ordinal))
-            throw new InvalidOperationException("Unsupported REVEX material provider.");
-
-        Uri candidate = ArchitexturesCreate;
+        Uri candidate = provider switch
+        {
+            "architextures" => ArchitexturesCreate,
+            "blocks" => BlocksFamilies,
+            _ => throw new InvalidOperationException("Unsupported REVEX provider.")
+        };
         if (!string.IsNullOrWhiteSpace(requestedUrl) &&
             Uri.TryCreate(requestedUrl, UriKind.Absolute, out Uri? parsed) &&
-            IsArchitexturesUri(parsed))
+            IsProviderUri(provider, parsed))
             candidate = parsed;
         return candidate;
     }
 
-    private static bool IsArchitexturesUri(Uri uri)
+    private static bool IsProviderUri(string provider, Uri uri)
     {
         if (!string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) return false;
         string host = uri.Host.Trim().TrimEnd('.').ToLowerInvariant();
-        return host == "architextures.org" || host.EndsWith(".architextures.org", StringComparison.Ordinal);
+        return provider switch
+        {
+            "architextures" => host == "architextures.org" || host.EndsWith(".architextures.org", StringComparison.Ordinal),
+            "blocks" => host == "blocksrvt.com" || host.EndsWith(".blocksrvt.com", StringComparison.Ordinal),
+            _ => false
+        };
     }
 
     private static async Task OpenProviderAsync(WebView2 origin, BridgeState originState, string provider, Uri uri)
     {
         if (origin.CoreWebView2 is null)
             throw new InvalidOperationException("REVEX Companion browser is not ready yet.");
-
+        CleanupStaleFamilies();
         if (originState.ProviderWindow is { IsVisible: true } existing)
         {
             existing.Activate();
@@ -158,29 +289,26 @@ internal static class RevexWebIntegrationBridge
         var providerWeb = new WebView2();
         var window = new Window
         {
-            Title = "REVEX · Architextures Material",
+            Title = provider == "blocks" ? "REVEX · Blocks BIM Families" : "REVEX · Architextures Material",
             Width = 1320,
             Height = 860,
-            MinWidth = 980,
-            MinHeight = 680,
+            MinWidth = 900,
+            MinHeight = 640,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             Content = providerWeb,
             ShowInTaskbar = false
         };
         Window? owner = Window.GetWindow(origin);
-        if (owner is not null && owner.IsVisible)
-            window.Owner = owner;
+        if (owner is not null && owner.IsVisible) window.Owner = owner;
 
         BridgeState providerState = States.GetValue(providerWeb, _ => new BridgeState());
         providerState.ArmedProvider = provider;
         providerState.ReturnTarget = origin;
         providerState.ProviderWindow = window;
         originState.ProviderWindow = window;
-
         window.Closed += (_, _) =>
         {
-            if (ReferenceEquals(originState.ProviderWindow, window))
-                originState.ProviderWindow = null;
+            if (ReferenceEquals(originState.ProviderWindow, window)) originState.ProviderWindow = null;
             providerState.ArmedProvider = "";
             providerState.ReturnTarget = null;
             providerState.ProviderWindow = null;
@@ -190,28 +318,20 @@ internal static class RevexWebIntegrationBridge
         window.Show();
         try
         {
-            // Same environment/profile as Companion: login/cookies/cache are shared,
-            // but the provider receives its own owned browser surface and cannot block
-            // the BIM renderer or replace the Companion route.
             await providerWeb.EnsureCoreWebView2Async(origin.CoreWebView2.Environment);
             AttachCore(providerWeb, providerState);
             providerWeb.CoreWebView2.Settings.AreDevToolsEnabled = false;
             providerWeb.CoreWebView2.Settings.IsStatusBarEnabled = false;
             providerWeb.CoreWebView2.NewWindowRequested += (_, args) =>
             {
-                if (Uri.TryCreate(args.Uri, UriKind.Absolute, out Uri? target) && IsArchitexturesUri(target))
+                if (Uri.TryCreate(args.Uri, UriKind.Absolute, out Uri? target) && IsProviderUri(provider, target))
                 {
                     args.Handled = true;
                     providerWeb.Source = target;
                 }
             };
             providerWeb.Source = uri;
-            await PostAsync(origin, new
-            {
-                type = "liber:revex-integration-opened",
-                provider,
-                url = uri.ToString()
-            });
+            await PostAsync(origin, new { type = "liber:revex-integration-opened", provider, url = uri.ToString() });
             RevexDiagnostics.Info("INTEGRATION", $"Owned provider browser opened: provider={provider}; url={uri}.");
         }
         catch
@@ -225,17 +345,15 @@ internal static class RevexWebIntegrationBridge
     {
         string provider = state.ArmedProvider;
         if (string.IsNullOrWhiteSpace(provider)) return;
-
-        string suggested = SuggestedFileName(e.DownloadOperation);
+        string suggested = SuggestedFileName(e.DownloadOperation, provider);
         string extension = Path.GetExtension(suggested).ToLowerInvariant();
-        if (extension is not ".png" and not ".jpg" and not ".jpeg" and not ".webp")
-            return;
+        bool material = provider == "architextures" && extension is ".png" or ".jpg" or ".jpeg" or ".webp";
+        bool family = provider == "blocks" && extension is ".rfa" or ".zip";
+        if (!material && !family) return;
 
         string folder = Path.Combine(Path.GetTempPath(), "LIBER_REVEX", "integrations", provider);
         Directory.CreateDirectory(folder);
-        string fileName = $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}{extension}";
-        string path = Path.Combine(folder, fileName);
-
+        string path = Path.Combine(folder, $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}{extension}");
         e.ResultFilePath = path;
         e.Handled = true;
         CoreWebView2DownloadOperation operation = e.DownloadOperation;
@@ -245,65 +363,75 @@ internal static class RevexWebIntegrationBridge
             if (operation.State == CoreWebView2DownloadState.InProgress) return;
             operation.StateChanged -= StateChanged;
             WebView2 target = state.ReturnTarget ?? web;
+            bool retain = false;
             try
             {
                 if (operation.State != CoreWebView2DownloadState.Completed)
+                    throw new InvalidOperationException("The provider download did not complete.");
+                FileInfo info = new(path);
+                if (!info.Exists || info.Length <= 0) throw new InvalidOperationException("The provider download is empty.");
+
+                if (material)
                 {
+                    if (info.Length > MaxMaterialBytes)
+                        throw new InvalidOperationException($"Downloaded material image exceeds the {MaxMaterialBytes / 1024 / 1024} MB REVEX material limit.");
+                    byte[] bytes = await File.ReadAllBytesAsync(path);
+                    string mime = extension switch { ".jpg" or ".jpeg" => "image/jpeg", ".webp" => "image/webp", _ => "image/png" };
                     await PostAsync(target, new
                     {
-                        type = "liber:revex-integration-error",
+                        type = "liber:revex-integration-material-r126",
                         provider,
-                        message = "The material download did not complete."
+                        name = suggested,
+                        dataUrl = $"data:{mime};base64,{Convert.ToBase64String(bytes)}"
                     });
-                    return;
+                    RevexDiagnostics.Info("INTEGRATION", $"Material download returned to Companion: file={suggested}; bytes={bytes.Length}.");
                 }
-
-                FileInfo info = new(path);
-                if (!info.Exists || info.Length <= 0)
-                    throw new InvalidOperationException("Downloaded material image is empty.");
-                if (info.Length > MaxMaterialBytes)
-                    throw new InvalidOperationException($"Downloaded material image exceeds the {MaxMaterialBytes / 1024 / 1024} MB REVEX material limit.");
-
-                byte[] bytes = await File.ReadAllBytesAsync(path);
-                string mime = extension switch
+                else
                 {
-                    ".jpg" or ".jpeg" => "image/jpeg",
-                    ".webp" => "image/webp",
-                    _ => "image/png"
-                };
-                string dataUrl = $"data:{mime};base64,{Convert.ToBase64String(bytes)}";
-                await PostAsync(target, new
-                {
-                    type = "liber:revex-integration-file",
-                    provider,
-                    name = suggested,
-                    dataUrl
-                });
-                RevexDiagnostics.Info("INTEGRATION", $"User material download returned to Companion: provider={provider}; file={suggested}; bytes={bytes.Length}.");
+                    if (info.Length > MaxFamilyBytes)
+                        throw new InvalidOperationException($"Downloaded BIM family exceeds the {MaxFamilyBytes / 1024 / 1024} MB REVEX family limit.");
+                    string token = Guid.NewGuid().ToString("N");
+                    PendingFamilies[token] = new PendingFamily(path, suggested, info.Length, DateTime.UtcNow, target);
+                    retain = true;
+                    await PostAsync(target, new
+                    {
+                        type = "liber:revex-integration-family-r126",
+                        provider,
+                        token,
+                        name = suggested,
+                        bytes = info.Length
+                    });
+                    RevexDiagnostics.Info("INTEGRATION", $"Blocks family download armed for Revit placement: file={suggested}; bytes={info.Length}; token={token[..8]}…");
+                }
 
                 if (state.ProviderWindow is { IsVisible: true } providerWindow)
                     providerWindow.Dispatcher.BeginInvoke(new Action(providerWindow.Close));
             }
             catch (Exception ex)
             {
-                RevexDiagnostics.Error("INTEGRATION", "Could not return provider download to Companion.", ex);
-                await PostAsync(target, new
-                {
-                    type = "liber:revex-integration-error",
-                    provider,
-                    message = ex.Message
-                });
+                RevexDiagnostics.Error("INTEGRATION", "Could not return provider download to REVEX.", ex);
+                await PostAsync(target, new { type = "liber:revex-integration-error", provider, message = ex.Message });
             }
             finally
             {
-                try { if (File.Exists(path)) File.Delete(path); } catch { }
+                if (!retain) try { if (File.Exists(path)) File.Delete(path); } catch { }
             }
         }
-
         operation.StateChanged += StateChanged;
     }
 
-    private static string SuggestedFileName(CoreWebView2DownloadOperation operation)
+    private static void CleanupStaleFamilies()
+    {
+        DateTime threshold = DateTime.UtcNow.AddMinutes(-30);
+        foreach (var pair in PendingFamilies.ToArray())
+        {
+            if (pair.Value.CreatedUtc >= threshold) continue;
+            if (!PendingFamilies.TryRemove(pair.Key, out PendingFamily? pending)) continue;
+            try { if (File.Exists(pending.Path)) File.Delete(pending.Path); } catch { }
+        }
+    }
+
+    private static string SuggestedFileName(CoreWebView2DownloadOperation operation, string provider)
     {
         string disposition = operation.ContentDisposition ?? "";
         Match match = Regex.Match(disposition, "filename\\*?=(?:UTF-8''|\\\")?(?<name>[^\\\";]+)", RegexOptions.IgnoreCase);
@@ -312,7 +440,6 @@ internal static class RevexWebIntegrationBridge
             string name = Uri.UnescapeDataString(match.Groups["name"].Value.Trim().Trim('"'));
             if (!string.IsNullOrWhiteSpace(Path.GetExtension(name))) return Path.GetFileName(name);
         }
-
         try
         {
             Uri uri = new(operation.Uri);
@@ -320,8 +447,7 @@ internal static class RevexWebIntegrationBridge
             if (!string.IsNullOrWhiteSpace(Path.GetExtension(name))) return name;
         }
         catch { }
-
-        return "architextures.png";
+        return provider == "blocks" ? "blocks-family.rfa" : "architextures.png";
     }
 
     private static Task PostAsync(WebView2 web, object payload)
