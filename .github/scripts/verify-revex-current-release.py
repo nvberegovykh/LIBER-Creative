@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
+import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,9 +25,19 @@ def forbid(text: str, *markers: str) -> None:
             raise AssertionError(f"forbidden current-release marker: {marker}")
 
 
-def git_blob_sha(rel: str) -> str:
-    raw = (ROOT / rel).read_bytes()
-    return hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw).hexdigest()
+def git_index_blob_sha(rel: str) -> str:
+    """Read the committed/index blob id, not checkout bytes altered by core.autocrlf."""
+    result = subprocess.run(
+        ["git", "ls-files", "--stage", "--", rel],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    fields = result.stdout.strip().split()
+    if len(fields) < 2:
+        raise AssertionError(f"tracked shadow file is missing from the Git index: {rel}")
+    return fields[1].lower()
 
 
 release = json.loads(read("REVEX_CURRENT_RELEASE.json"))
@@ -69,8 +79,9 @@ for principle in (
 ):
     assert release["principles"].get(principle) is True, principle
 
-assert git_blob_sha("src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups_r125.py") == "7e11be9fb0ef6cce2df205cb0a7827682f170735"
-assert git_blob_sha("src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner_r125.py") == "885b9fffc193671f0ed199a208fe3a3690e5a021"
+# Compare committed blob identities so Windows CRLF checkout conversion cannot create a false failure.
+assert git_index_blob_sha("src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups_r125.py") == "7e11be9fb0ef6cce2df205cb0a7827682f170735"
+assert git_index_blob_sha("src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner_r125.py") == "885b9fffc193671f0ed199a208fe3a3690e5a021"
 for rel in release["preservedShadows"]["energy"] + release["preservedShadows"]["deployment"]:
     assert (ROOT / rel).is_file(), f"preserved shadow disappeared: {rel}"
 
@@ -208,6 +219,7 @@ print(json.dumps({
     "operator": "FINALIZE_REVEX.cmd",
     "canonicalVerifierIndependentOfVersionShadows": True,
     "versionedFilesShadowOnly": True,
+    "shadowIntegrityCheckoutLineEndingInvariant": True,
     "candidateBeforeBrokerCutover": True,
     "liveRulesPreservedAndSourceBound": True,
     "memberIssueWriteProven": True,
