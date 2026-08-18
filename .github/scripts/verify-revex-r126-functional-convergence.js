@@ -72,6 +72,10 @@ must(placement,'unsupported placement type','unsupported family fail-closed');
 
 must(renderWorker,'ensure_server_warm()','server boot warm');
 must(renderWorker,'REVEX_WARM_TOKEN','warm proof token');
+must(renderWorker,'_WARM_MAX_SECONDS = 32 * 60','bounded persistent warm retry');
+must(renderWorker,'_retryable_warm_error','transient warm classification');
+must(renderWorker,'retry after','Hub retry-after handling');
+must(renderWorker,'mounted GCS cache resumes','durable partial model resume');
 must(renderDeploy,'--min-instances=1','persistent GPU min instance');
 must(renderDeploy,'revex-render-worker-r126','parallel safe cutover service');
 must(renderDeploy,'server model warm failed','warm fail closed');
@@ -85,4 +89,4 @@ if(tabs<7)throw new Error(`main module tabs missing: ${tabs}`);
 for(const forbidden of ['runRevexEnergy','GeometryCo','COMcheck']){
   mustNot(blocks,forbidden,'Blocks scope');mustNot(docs,forbidden,'Docs scope');mustNot(issues,forbidden,'Issues scope');mustNot(renderClient,forbidden,'Render client scope');
 }
-console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',docs:'single-final-owner',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active+empty-selection-inspector',history:'NYC-day-technical',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'server-warm-min1',energy:'scope-preserved'}));
+console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',docs:'single-final-owner',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active+empty-selection-inspector',history:'NYC-day-technical',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'server-warm-min1-retry',energy:'scope-preserved'}));
