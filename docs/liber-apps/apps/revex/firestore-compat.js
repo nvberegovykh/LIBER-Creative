@@ -3,10 +3,14 @@
   const Store=root.RevexStore;
   if(!Store||Store.__revexFirestoreCompatR18Installed) return;
 
+  // Firestore's modular SDK rejects ordinary-looking objects created in a
+  // different Window realm. This compatibility layer executes beside the
+  // REVEX-owned SDK, so clone here instead of delegating to a potentially
+  // parent-realm helper.
   const clone=(value)=>JSON.parse(JSON.stringify(value===undefined?null:value));
-  const firestorePlain=(value)=>typeof Store.toFirestorePlain==='function'?Store.toFirestorePlain(value):clone(value);
+  const firestorePlain=(value)=>clone(value);
   const post=(stage,detail={})=>{
-    try{ root.chrome?.webview?.postMessage({type:'liber:revex-sync-progress',stage,build:'20260813r49',...detail}); }catch(_){ }
+    try{ root.chrome?.webview?.postMessage({type:'liber:revex-sync-progress',stage,build:'20260818r131-firestore-realm1',...detail}); }catch(_){ }
     console.log('[REVEX publish]',stage,detail);
   };
 
@@ -102,7 +106,7 @@
 
     Store.__revexFirestoreCompatR18Installed=true;
     root.RevexFirestoreCompat={safeSpecPayload,rowObject,sanitize};
-    post('firestore-compat-ready',{nestedArrays:'sanitized',rawPayloadPreserved:true});
+    post('firestore-compat-ready',{nestedArrays:'sanitized',rawPayloadPreserved:true,realm:'revex-owned'});
     return true;
   }
 
