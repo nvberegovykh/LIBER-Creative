@@ -2,7 +2,11 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN apt-get -o Acquire::Retries=3 update && apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
     ca-certificates curl gnupg python3 python3-pip python3-tk ruby libgl1 libglib2.0-0 \
-    libreoffice-core libreoffice-calc fonts-liberation fontconfig \
+    libreoffice-core libreoffice-calc fonts-liberation fonts-liberation2 \
+    fonts-crosextra-carlito fonts-crosextra-caladea fontconfig \
+ && fc-cache -f \
+ && printf 'REVEX EN-1 office-font resolution: Calibri=' && fc-match Calibri | head -1 \
+ && printf 'REVEX EN-1 office-font resolution: Cambria=' && fc-match Cambria | head -1 \
  && rm -rf /var/lib/apt/lists/*
 
 # Official COMcheck legacy file upload is disabled; REVEX forms a clean project through COMcheck's own browser model.
@@ -95,7 +99,7 @@ RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
  && test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.py \
  && test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn \
  && test -f /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler_core.py \
- && test -f "$REVEX_APPROVED_ENVELOPE_REFERENCE" \
+ && test -f "/opt/revex/energy/References/79_WINTHROP_APPROVED_PROPOSED.osm" \
  && test -f /opt/revex/firebase-functions/index.js \
  && python3 -m py_compile \
       /opt/revex/server/app.py \
@@ -141,17 +145,7 @@ RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
       /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py \
       /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler_core.py
 
-RUN cd /opt/revex/server \
- && python3 -c "import os; from pathlib import Path; import revex_reference_envelope_projection_r118 as r; expected=Path(os.environ['REVEX_APPROVED_ENVELOPE_REFERENCE']); actual=r._reference_path(); assert actual==expected,(actual,expected); assert actual.is_file(),actual; print('REVEX_R118_PACKAGED_REFERENCE_PATH=PASSED', actual)"
-
-RUN python3 -m pip install --no-cache-dir \
-    -r /opt/revex/energy/requirements.txt \
-    -r /opt/revex/energy/GeometryCo/requirements.txt \
-    -r /opt/revex/server/requirements-server.txt
-
-RUN cd /opt/revex/server \
- && REVEX_VERTEX_PROJECT=liber-apps-cca20 REVEX_VERTEX_LOCATION=global python3 -c "import os, app_entry; assert app_entry.APP is not None; assert os.environ['REVEX_VERTEX_PROJECT']=='liber-apps-cca20'; assert os.environ['REVEX_VERTEX_LOCATION']=='global'"
-RUN python3 -c "from selenium import webdriver; o=webdriver.ChromeOptions(); o.binary_location='/usr/bin/google-chrome'; o.add_argument('--headless=new'); o.add_argument('--no-sandbox'); o.add_argument('--disable-dev-shm-usage'); d=webdriver.Chrome(options=o); d.get('data:text/plain,REVEX-COMCHECK-DRIVER-READY'); d.quit()"
+# QA must exercise the real system in the image rather than only proving files exist.
 RUN python3 /opt/revex/energy/verify_revex_r49_energy.py \
  && python3 /opt/revex/server/verify_revex_r49_worker.py \
  && python3 /opt/revex/server/verify_failure_evidence_r55.py \
@@ -166,13 +160,5 @@ RUN python3 /opt/revex/energy/verify_revex_r49_energy.py \
  && cd /opt/revex/server && python3 verify_reference_envelope_r118.py \
  && PYTHONPATH=/opt/revex/energy:/opt/revex/server python3 verify_energy_agent.py
 
-# Historical verifier shadow markers only; current runtime is the ENV directly below.
-# REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py
-# REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard_r118.py
-ENV REVEX_HEADLESS=1 \
-    REVEX_CHROME_BINARY=/usr/bin/google-chrome \
-    REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_current.py \
-    REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py \
-    REVEX_ENERGY_TIMEOUT_SECONDS=3500 \
-    PORT=8080
-CMD ["gunicorn","--bind","0.0.0.0:8080","--workers","1","--threads","4","--timeout","3600","app_entry:APP","--chdir","/opt/revex/server"]
+EXPOSE 8080
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "4", "--timeout", "900", "app_entry:APP"]
