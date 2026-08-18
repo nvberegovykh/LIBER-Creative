@@ -41,9 +41,10 @@ const document={
   addEventListener(){}
 };
 // Do not execute interval callbacks synchronously: browsers schedule them after the
-// current script finishes. The verifier calls the exported install() explicitly below,
-// which is the supported deterministic initialization path for tests and recovery.
-const context={window:root,document,navigator:{onLine:true},location:{origin:'https://liberpict.com'},localStorage:{getItem(k){return local[k]??null;},setItem(k,v){local[k]=v;},removeItem(k){delete local[k];}},sessionStorage:{removeItem(){}},console,CSS:{escape:v=>String(v)},performance:{now:()=>1},CustomEvent:class CustomEvent{constructor(type,init={}){this.type=type;this.detail=init.detail;}},Event:class Event{constructor(type,init={}){this.type=type;this.bubbles=!!init.bubbles;}},setTimeout(fn){fn();return 1;},clearTimeout(){},setInterval(){return 1;},clearInterval(){}};
+// current script finishes. The verifier calls the exported install() explicitly below.
+// Inject the host Map constructor so instanceof Map matches the same-realm browser
+// semantics used by REVEX runtime state rather than creating a VM-only prototype split.
+const context={window:root,document,Map,navigator:{onLine:true},location:{origin:'https://liberpict.com'},localStorage:{getItem(k){return local[k]??null;},setItem(k,v){local[k]=v;},removeItem(k){delete local[k];}},sessionStorage:{removeItem(){}},console,CSS:{escape:v=>String(v)},performance:{now:()=>1},CustomEvent:class CustomEvent{constructor(type,init={}){this.type=type;this.detail=init.detail;}},Event:class Event{constructor(type,init={}){this.type=type;this.bubbles=!!init.bubbles;}},setTimeout(fn){fn();return 1;},clearTimeout(){},setInterval(){return 1;},clearInterval(){}};
 root.Event=context.Event;
 vm.runInNewContext(controlSource,context,{filename:'wallt-control-plane.js'});
 vm.runInNewContext(adapterSource,context,{filename:'wallt-fixer-adapters-r137.js'});
