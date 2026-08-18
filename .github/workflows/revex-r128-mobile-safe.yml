@@ -1,0 +1,24 @@
+name: REVEX r128 mobile safety
+on:
+  push:
+    branches:
+      - agent/revex-r128-mobile-safe-walk
+  pull_request:
+    paths:
+      - 'docs/liber-apps/apps/revex/mobile-safe-r128.js'
+      - 'docs/liber-apps/apps/revex/render-convergence-r126.js'
+      - '.github/scripts/verify-revex-r128-mobile-safe.js'
+      - '.github/workflows/revex-r128-mobile-safe.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify presentation-only mobile convergence
+        run: node .github/scripts/verify-revex-r128-mobile-safe.js
