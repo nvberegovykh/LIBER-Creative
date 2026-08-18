@@ -44,6 +44,7 @@ COPY server/revex-energy-worker/revex_energy_identity_normalizer.py /opt/revex/s
 COPY server/revex-energy-worker/revex_identity_content_agent.py /opt/revex/server/revex_identity_content_agent.py
 COPY server/revex-energy-worker/revex_cloud_project.py /opt/revex/server/revex_cloud_project.py
 COPY server/revex-energy-worker/revex_user_identity_en1.py /opt/revex/server/revex_user_identity_en1.py
+COPY server/revex-energy-worker/revex_en1_print_contract.py /opt/revex/server/revex_en1_print_contract.py
 COPY server/revex-energy-worker/revex_energy_pipeline_r69.py /opt/revex/server/revex_energy_pipeline_r69.py
 COPY server/revex-energy-worker/revex_comcheck_evidence.py /opt/revex/server/revex_comcheck_evidence.py
 COPY server/revex-energy-worker/revex_comcheck_evidence_r116.py /opt/revex/server/revex_comcheck_evidence_r116.py
@@ -78,12 +79,15 @@ RUN mv /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py
 
 RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
  && test -f /opt/revex/server/revex_energy_pipeline_current.py \
+ && test -f /opt/revex/server/revex_en1_print_contract.py \
  && test -f /opt/revex/server/verify_energy_agent.py \
  && test -f /opt/revex/energy/revex_final_touchups.py \
  && test -f /opt/revex/energy/revex_energy_contracts.py \
  && test -f /opt/revex/energy/revex_pipeline_runner.py \
  && test -f /opt/revex/energy/revex_energy_agent.py \
  && test -f /opt/revex/energy/revex_energy_agent_evidence.py \
+ && test -f /opt/revex/energy/revex_energy_agent_filing.py \
+ && test -f /opt/revex/energy/revex_energy_agent_context.py \
  && test -f /opt/revex/energy/revex_energy_maintainer.py \
  && test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.py \
  && test -f /opt/revex/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn \
@@ -103,6 +107,7 @@ RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
       /opt/revex/server/revex_identity_content_agent.py \
       /opt/revex/server/revex_cloud_project.py \
       /opt/revex/server/revex_user_identity_en1.py \
+      /opt/revex/server/revex_en1_print_contract.py \
       /opt/revex/server/revex_energy_pipeline_r69.py \
       /opt/revex/server/revex_comcheck_evidence.py \
       /opt/revex/server/revex_comcheck_evidence_r116.py \
@@ -127,6 +132,8 @@ RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
       /opt/revex/energy/revex_pipeline_runner.py \
       /opt/revex/energy/revex_energy_agent.py \
       /opt/revex/energy/revex_energy_agent_evidence.py \
+      /opt/revex/energy/revex_energy_agent_filing.py \
+      /opt/revex/energy/revex_energy_agent_context.py \
       /opt/revex/energy/revex_energy_maintainer.py \
       /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py \
       /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler_core.py
