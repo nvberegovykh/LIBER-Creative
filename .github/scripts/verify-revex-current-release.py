@@ -53,6 +53,15 @@ gbxml = read("src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_
 dyn = json.loads(read("src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn"))
 ui = read("docs/liber-apps/apps/revex/ui-integrity.js")
 mobile = read("docs/liber-apps/apps/revex/mobile-final-r122.js")
+docs_pages = read("docs/liber-apps/apps/revex/docs-pages-r115.js")
+chat_boundary = read("docs/liber-apps/apps/revex/chat-convergence-r136.js")
+wallt_control = read("docs/liber-apps/apps/revex/wallt-control-plane.js")
+wallt_fixer = read("docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js")
+wallt_cycle = read("docs/liber-apps/apps/revex/wallt-cycle-history.js")
+wallt_ui = read("docs/liber-apps/apps/revex/wallt-ui-r138.js")
+blocks_palette = read("docs/liber-apps/apps/revex/blocks-palette-r126.js")
+blocks_bridge = read("src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs")
+family_placement = read("src/Liber.Revex.Revit/Services/FamilyPlacementService.cs")
 design_versions = read("docs/liber-apps/apps/revex/design-versions-r52.js")
 workspace = read("docs/liber-apps/apps/revex/workspace-r51.js")
 render_agent = read("docs/liber-apps/apps/revex/render-agent.js")
@@ -68,6 +77,11 @@ assert release["authority"] == "canonical-current-files"
 assert release["operatorEntrypoint"] == "FINALIZE_REVEX.cmd"
 assert release["acceptanceAction"] == "one fresh SYNC ENGINEERING after successful finalization"
 assert release["current"]["releaseVerifier"] == ".github/scripts/verify-revex-current-release.py"
+assert release["current"]["walltControlRuntime"] == "docs/liber-apps/apps/revex/wallt-control-plane.js"
+assert release["current"]["walltFixerAdaptersRuntime"] == "docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js"
+assert release["current"]["walltCycleHistoryRuntime"] == "docs/liber-apps/apps/revex/wallt-cycle-history.js"
+assert release["current"]["walltUiRuntime"] == "docs/liber-apps/apps/revex/wallt-ui-r138.js"
+assert release["current"]["chatBoundaryRuntime"] == "docs/liber-apps/apps/revex/chat-convergence-r136.js"
 assert release["current"]["energyDeployer"] == "server/revex-energy-worker/deploy-current.ps1"
 assert release["current"]["reportDeployer"] == "server/revex-report-functions/deploy-current.ps1"
 assert release["current"]["accessDeployer"] == "firebase/deploy-current-access.ps1"
@@ -96,13 +110,22 @@ must(finalizer,
      "server\\revex-report-functions\\deploy-current.ps1",
      "firebase\\deploy-current-access.ps1",
      "REVEX one-command full current release finalizer",
-     "Scope: Companion + BIM + Design Book + Spec Book + Docs + Issues + History + Blocks + Render + Revit add-in + Energy + Report + access.",
+     "Scope: Companion + WALLT Helper/Fixer + BIM + Design Book + Spec Book + Docs + Chat + Issues + History + Blocks + Render + Revit add-in + Energy + Report + access.",
+     "Docs Full Set + linked-page behavioral contract",
+     "Project-isolated Secure Chat contract",
+     "Executable WALLT Helper/Fixer adapter contract",
+     "Visible WALLT Helper/Fixer UI contract",
+     "docs-pages-r115.js",
+     "BUILD='20260818r134-docs-linked-pages1'",
+     "wallt-fixer-adapters-r137.js",
+     "wallt-ui-r138.js",
      "Verify canonical Google Render provider",
      "gemini-3.1-flash-image",
      "Stage and verify current Energy candidate without broker cutover",
      "Verify current Companion UI and Render runtime are live before access/Energy cutover",
      "Deploy preserved source-bound project access rules",
-     "Deploy source-bound Report and Daily Report",
+     "Deploy source-bound Report, Daily Report and Project Chat resolver",
+     "ensureProjectChatHttp",
      "Cut Energy broker to the already-verified current candidate",
      "Install-AddinAtomically",
      "previousInstalledRevisionShadow",
@@ -124,7 +147,13 @@ must(energy_deploy,
      "Build exact current Energy worker image",
      "Cut authenticated Energy broker over to verified candidate")
 must(report_deploy,
-     "REVEX_SOURCE_CANDIDATE", "documentRevexRevision", "finalizeRevexDailyReport", "nodejs22")
+     "REVEX_SOURCE_CANDIDATE", "documentRevexRevision", "finalizeRevexDailyReport", "nodejs22",
+     "$ChatSource = Join-Path $Root 'server\\firebase-functions'",
+     "Deploy source-bound authenticated Project Chat resolver",
+     "'functions','deploy','ensureProjectChatHttp'",
+     "'--source',$ChatSource",
+     "Verify-Function $GCloud 'ensureProjectChatHttp'",
+     "Daily Report + revision documentation + Project Chat resolver are ACTIVE and source-bound")
 must(access_deploy,
      "firebaserules.googleapis.com", "patch-live-firestore-rules.js", "revex-project-access-r43.rules",
      "REVEX_SOURCE_CANDIDATE=", "firestore:rules", "preserve the live ruleset",
@@ -135,12 +164,58 @@ must(render_deploy,
      "Assert-Warm", "Build exact current Render worker image")
 
 must(ui,
+     "chat-convergence-r136.js?v=20260818r136-project-chat1",
+     "wallt-control-plane.js?v=20260818-wallt-control2",
+     "wallt-cycle-history.js?v=20260818-wallt-cycle-history1",
+     "wallt-fixer-adapters-r137.js?v=20260818r137-fixer-adapters1",
+     "wallt-ui-r138.js?v=20260818r138-wallt-ui1",
      "mobile-final-r122.js", "appearance-convergence-r126.js", "docs-convergence-r126.js",
+     "docs-pages-r115.js?v=20260818r134-docs-linked-pages1",
      "issues-convergence-r126.js", "issues-inspector-r126.js", "history-daily-r126.js",
      "blocks-palette-r126.js", "render-convergence-r126.js", "bim-properties-r117.js")
 must(mobile,
      "repeat(7,minmax(0,1fr))", "max-width:100vw", "r122-look", "r122-move",
      "function setWalk(on)", "function normalizeDocs()", "revex-r122-guide")
+must(docs_pages,
+     "fullSetAuthority:true", "legacySheetProjection:true", "function projectRows(rows)",
+     "derivedFromFullSet:true", "const rows=projectRows(s.library)", "legacyStandaloneSheets:'folded-into-parent'")
+must(chat_boundary,
+     "owner:'secure-chat'", "projectIsolated:true", "storageOwner:'secure-chat'",
+     "Project changed while Chat connection was resolving.", "Blocked a cross-project Chat connection",
+     "sessionStorage.removeItem('liber_revex_chat_draft')", "CHAT_FRAME_BOUNDARY")
+must(wallt_control,
+     "const BUILD = '20260818-wallt-control2'", "CHANNEL_HELPER", "CHANNEL_FIXER",
+     "const adapterName = type.slice(0, separator)", "Registered fixer actions (use the exact adapter:action type)",
+     "A local fix may execute only a registered fixer adapter", "Never rewrite immutable Revit/Engineering revisions",
+     "cycleReport", "windowHours: 24", "arbitraryDomMutation: false", "sourceMutation: false")
+must(wallt_fixer,
+     "reversibleLocalOnly:true", "sourceMutation:false", "registerAdapter('current'",
+     "docs_reassert_owner", "chat_reset_active_project", "bim_reapply_overlays", "bim_refit_view",
+     "ui_reopen_active_view", "mobile_reapply_constraints", "energy_reopen_review",
+     "energyPipelineMutation:false")
+must(wallt_cycle,
+     "owner:'RevexStore.appendHistory'", "kind:'wallt-cycle'", "windowHours:24",
+     "Store.appendHistory(projectId,historyEvent(row))", "newDatabaseOwner:false")
+must(wallt_ui,
+     "const BUILD='20260818r138-wallt-ui1'", "controlOwner:'wallt-control-plane'", "storageOwner:null",
+     "open.id='revex-wallt-open'", "panel.id='revex-wallt-panel'",
+     'data-wallt-mode="helper"', 'data-wallt-mode="fixer"', "owner[mode](request)",
+     "safe-area-inset-bottom", "safe-area-inset-right", "newStorageOwner:false")
+forbid(wallt_ui,
+       "firebase.firestore", "localStorage.setItem", "sessionStorage.setItem",
+       "walltAgent.response", "runEnergyServer(", "commitBimOverlay(")
+must(blocks_palette,
+     "placementDistanceFt:3", "viewer.camera.position.clone().addScaledVector(dir,3)",
+     "return{x:target.x,y:-target.z,z:target.y", "type:'liber:revex-family-place-r126'")
+must(blocks_bridge,
+     "PendingFamilies[token] = new PendingFamily", "liber:revex-family-place-r126",
+     "RevexFamilyPlacementExternalHandler", "_familyExternalEvent.Raise()")
+must(family_placement,
+     "double targetZ = double.IsFinite(request.Z) ? request.Z : level.Elevation;",
+     "TryNearestFacePlacement(doc, symbol, point)", "TryNearestHostedPlacement(doc, symbol, level, point)",
+     "MaxHostDistanceFt = 8.0", "MaxZipEntries = 2048", "MaxExpandedZipBytes = 512L * 1024L * 1024L",
+     "destination.StartsWith(root, StringComparison.OrdinalIgnoreCase)", "unsupported placement type")
+forbid(family_placement, "ZipFile.ExtractToDirectory(path, extractedFolder)")
 must(design_versions,
      "liber.revex.design-property-versions.v1", "lightweight-property-overlay",
      "Sync to Design Book", "async function syncToDesignBook",
@@ -219,7 +294,7 @@ must(dev_contract,
      "Diagnostics are evidence, not workload", "The objective is not to accumulate fixes")
 
 expected_capabilities = {
-    "projectIdentity", "bim", "mobile", "designBook", "specBook", "docs",
+    "projectIdentity", "wallt", "bim", "mobile", "designBook", "specBook", "docs", "chat",
     "issues", "history", "blocks", "render", "energy",
 }
 assert set(release.get("requiredCapabilities") or {}) == expected_capabilities
@@ -231,6 +306,14 @@ print(json.dumps({
     "versionedFilesShadowOnly": True,
     "shadowIntegrityCheckoutLineEndingInvariant": True,
     "fullUiAndBimContract": True,
+    "walltHelperFixerRequired": True,
+    "walltBoundedFixerAdaptersRequired": True,
+    "walltVisibleUiRequired": True,
+    "wallt24hHistoryRequired": True,
+    "docsLinkedPageRuntimeRequired": True,
+    "projectIsolatedSecureChatRequired": True,
+    "projectChatSourceBoundDeploymentRequired": True,
+    "blocksRevitPlacementRequired": True,
     "googleRenderCanonical": True,
     "selfHostedRenderShadowOnly": True,
     "memberIssueWriteProven": True,

@@ -80,6 +80,13 @@ def _load_cached_response(bucket, path: str, project_id: str, source_revision: s
     cached_source = _response_source_candidate(body)
     if current and cached_source != current:
         return None
+    # Never replay a terminal failure from cache. WALLT may have asked the authenticated
+    # user for one revision-scoped fact after that response was produced. The Engineering
+    # source bytes remain immutable, but the derived controller context can legitimately
+    # change; re-entering the same revision must therefore execute the controller again.
+    # COMPLETE output is safe to cache because no clarification/repair remains pending.
+    if _pipeline_status(body) != "COMPLETE":
+        return None
     return body
 
 
@@ -124,8 +131,9 @@ def install_durable_energy_execution(app) -> None:
     One immutable Engineering revision owns one worker lease. The wrapper writes a
     durable Firestore heartbeat while the existing synchronous r49 pipeline runs and
     caches the final server response in the same Storage result prefix. Cached derived
-    results are source-candidate-bound: deploying a corrected worker may replay the
-    exact same immutable revision, but never silently reuse output from older code.
+    COMPLETE results are source-candidate-bound: deploying a corrected worker may replay
+    the exact same immutable revision, and WALLT terminal/WAITING_USER results are always
+    re-executed so revision-scoped clarification can be consumed.
     """
     endpoint = "run_energy"
     original = app.view_functions.get(endpoint)

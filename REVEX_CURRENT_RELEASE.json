@@ -19,6 +19,11 @@
     "releaseVerifier": ".github/scripts/verify-revex-current-release.py",
     "companionRoot": "docs/liber-apps/apps/revex/index.html",
     "companionIntegrityOwner": "docs/liber-apps/apps/revex/ui-integrity.js",
+    "walltControlRuntime": "docs/liber-apps/apps/revex/wallt-control-plane.js",
+    "walltFixerAdaptersRuntime": "docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js",
+    "walltCycleHistoryRuntime": "docs/liber-apps/apps/revex/wallt-cycle-history.js",
+    "walltUiRuntime": "docs/liber-apps/apps/revex/wallt-ui-r138.js",
+    "chatBoundaryRuntime": "docs/liber-apps/apps/revex/chat-convergence-r136.js",
     "renderRuntime": "docs/liber-apps/apps/revex/render-agent.js",
     "revitAddinProject": "src/Liber.Revex.Revit/Liber.Revex.Revit.csproj",
     "engineeringSync": "src/Liber.Revex.Revit/Services/EngineeringSyncService.cs",
@@ -32,6 +37,16 @@
   },
   "requiredCapabilities": {
     "projectIdentity": "one REVEX project identity shared by Revit, BIM, Design Book, Spec Book, Docs, Chat, History, Render and Energy under project owner/member/admin access",
+    "wallt": [
+      "REVEX exposes one visible compact WALLT surface with Helper and Fixer modes on desktop, installed PWA and Revit WebView without creating another AI backend or storage owner",
+      "Helper operates the existing current REVEX owners through explicit navigate, focus, search, selection, control, issue and Chat actions instead of inventing duplicate implementations",
+      "Fixer diagnoses from current runtime state and diagnostics and may execute only registered bounded reversible current-owner repair adapters",
+      "planner-advertised adapter:action names are executable by the same control-plane router",
+      "bounded Fixer repairs cover Docs owner reassertion, active-project Chat reset, BIM overlay reapplication/refit, active-view reopen, mobile constraint reapply and Energy review reopen",
+      "Fixer cannot perform arbitrary DOM mutation, source mutation, deployment, database ownership changes or immutable Revit/Engineering revision rewrites",
+      "when no registered repair applies the Fixer requests a source candidate change instead of fabricating a runtime patch",
+      "Helper and Fixer evidence is kept in a rolling 24-hour cycle ledger and meaningful events mirror into the existing project History owner without creating another database lane"
+    ],
     "bim": [
       "exact synced Revit model",
       "persistent visible-hidden-deleted overlays",
@@ -67,8 +82,18 @@
     "docs": [
       "one current Full Set owner",
       "linked ordered one-page sheet PDFs derived from that exact Full Set",
+      "legacy detached printing-sheet records fold into the matching Full Set revision instead of becoming standalone documents",
       "sheets are linked pages not detached standalone documents",
-      "manual project documents remain in the same library"
+      "manual Record In and Record Out documents remain in the same project library",
+      "affected native Revit plan PDFs remain synchronized with their authoritative source revision"
+    ],
+    "chat": [
+      "Secure Chat remains the message and storage owner",
+      "Chat connection identity is scoped to the exact active REVEX project",
+      "a stale asynchronous connection from a previous project cannot enter the new project state or iframe",
+      "a server response naming a different project fails closed",
+      "project changes clear stale iframe state and draft context before reconnecting",
+      "BIM and Design Book context is delivered only to the iframe bound to the active project"
     ],
     "issues": [
       "all active issues shown by default",
@@ -84,9 +109,13 @@
     ],
     "blocks": [
       "Walk-only placement UI",
-      "three-foot intended placement distance",
+      "three-foot intended placement distance from the active Walk camera",
+      "exact Walk target elevation survives the Three-to-Revit coordinate conversion",
+      "provider file path remains local and browser JavaScript receives only an opaque placement token",
       "Revit ExternalEvent placement",
-      "unsupported family placement fails closed"
+      "bounded nearest face-host and element-host fallback for supported hosted/work-plane families",
+      "downloaded ZIP families use bounded entry, expansion and path-containment checks",
+      "unsupported adaptive, detail, view and curve family placement fails closed"
     ],
     "render": [
       "current BIM viewport and camera authority",
@@ -104,6 +133,7 @@
       "native Revit schedule evidence",
       "current gbXML plus EPW evidence",
       ">=80% publication hard stop and >=95% visible review target",
+      "WALLT active Energy maintainer preflights filing-critical facts, repairs only from current evidence/tools and emits resumable Revit repair requests when facts remain underdetermined",
       "GeometryCo Baseline and Proposed compilation",
       "two EnergyPlus runs",
       "official PNNL COMcheck Backstop",

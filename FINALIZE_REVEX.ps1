@@ -93,12 +93,26 @@ function Assert-CurrentSource([string]$Root,[string]$Node,[string]$Python) {
     ".github\scripts\verify-revex-current-generation-r53.js",
     ".github\scripts\verify-revex-r99-webview-root-cache.js",
     ".github\scripts\verify-revex-r126-functional-convergence.js",
+    ".github\scripts\verify-revex-r134-docs-linked-pages.js",
+    ".github\scripts\verify-revex-r135-blocks-placement.js",
+    ".github\scripts\verify-revex-r136-project-chat.js",
+    ".github\scripts\verify-revex-r137-wallt-fixer-adapters.js",
+    ".github\scripts\verify-revex-r138-wallt-ui.js",
     ".github\scripts\patch-live-firestore-rules.js",
     "firebase\revex-project-access-r43.rules",
     "firebase\deploy-current-access.ps1",
     "docs\liber-apps\apps\revex\workspace-r51.js",
+    "docs\liber-apps\apps\revex\docs-pages-r115.js",
+    "docs\liber-apps\apps\revex\chat-convergence-r136.js",
+    "docs\liber-apps\apps\revex\wallt-control-plane.js",
+    "docs\liber-apps\apps\revex\wallt-cycle-history.js",
+    "docs\liber-apps\apps\revex\wallt-fixer-adapters-r137.js",
+    "docs\liber-apps\apps\revex\wallt-ui-r138.js",
+    "docs\liber-apps\apps\revex\blocks-palette-r126.js",
+    "docs\liber-apps\apps\revex\mobile-safe-r133.js",
     "docs\liber-apps\apps\revex\render-agent.js",
     "docs\liber-apps\apps\revex\render-convergence-r126.js",
+    "src\Liber.Revex.Revit\Services\FamilyPlacementService.cs",
     "src\Liber.Revex.Revit\Engineering\Energy\revex_energy_contracts.py",
     "src\Liber.Revex.Revit\Engineering\Energy\revex_final_touchups.py",
     "src\Liber.Revex.Revit\Engineering\Energy\revex_pipeline_runner.py",
@@ -106,6 +120,8 @@ function Assert-CurrentSource([string]$Root,[string]$Node,[string]$Python) {
     "src\Liber.Revex.Revit\Engineering\Energy\revex_pipeline_runner_r125.py",
     "src\Liber.Revex.Revit\Engineering\Gbxml\LIBER_gbXML_Preflight_and_Export.py",
     "src\Liber.Revex.Revit\Engineering\Gbxml\LIBER_gbXML_Preflight_and_Export.dyn",
+    "server\firebase-functions\main.js",
+    "server\firebase-functions\project-chat.js",
     "server\revex-energy-worker\deploy-current.ps1",
     "server\revex-report-functions\deploy-current.ps1",
     $ProjectPath
@@ -131,6 +147,11 @@ function Assert-CurrentSource([string]$Root,[string]$Node,[string]$Python) {
   Require-Ok "Current-generation regression guard" $Node @(".github\scripts\verify-revex-current-generation-r53.js") $Root
   Require-Ok "Current WebView/UI root cache guard" $Node @(".github\scripts\verify-revex-r99-webview-root-cache.js") $Root
   Require-Ok "Full UI/Docs/Issues/History/Blocks/Render convergence" $Node @(".github\scripts\verify-revex-r126-functional-convergence.js") $Root
+  Require-Ok "Docs Full Set + linked-page behavioral contract" $Node @(".github\scripts\verify-revex-r134-docs-linked-pages.js") $Root
+  Require-Ok "Blocks provider-to-Revit placement contract" $Node @(".github\scripts\verify-revex-r135-blocks-placement.js") $Root
+  Require-Ok "Project-isolated Secure Chat contract" $Node @(".github\scripts\verify-revex-r136-project-chat.js") $Root
+  Require-Ok "Executable WALLT Helper/Fixer adapter contract" $Node @(".github\scripts\verify-revex-r137-wallt-fixer-adapters.js") $Root
+  Require-Ok "Visible WALLT Helper/Fixer UI contract" $Node @(".github\scripts\verify-revex-r138-wallt-ui.js") $Root
   Require-Ok "Canonical full current REVEX release contract" $Python @(".github\scripts\verify-revex-current-release.py") $Root
 }
 
@@ -159,7 +180,17 @@ function Verify-GoogleRenderApi([string]$GCloud) {
 
 function Verify-LiveUi([string]$Root) {
   $checks=@(
-    @{Rel="ui-integrity.js"; Marker="BUILD='20260818r128-full-convergence1'"},
+    @{Rel="ui-integrity.js"; Marker="chat-convergence-r136.js?v=20260818r136-project-chat1"},
+    @{Rel="ui-integrity.js"; Marker="wallt-control-plane.js?v=20260818-wallt-control2"},
+    @{Rel="ui-integrity.js"; Marker="wallt-fixer-adapters-r137.js?v=20260818r137-fixer-adapters1"},
+    @{Rel="ui-integrity.js"; Marker="wallt-ui-r138.js?v=20260818r138-wallt-ui1"},
+    @{Rel="docs-pages-r115.js"; Marker="BUILD='20260818r134-docs-linked-pages1'"},
+    @{Rel="chat-convergence-r136.js"; Marker="BUILD='20260818r136-project-chat1'"},
+    @{Rel="wallt-control-plane.js"; Marker="BUILD = '20260818-wallt-control2'"},
+    @{Rel="wallt-cycle-history.js"; Marker="BUILD='20260818-wallt-cycle-history1'"},
+    @{Rel="wallt-fixer-adapters-r137.js"; Marker="BUILD='20260818r137-fixer-adapters1'"},
+    @{Rel="wallt-ui-r138.js"; Marker="BUILD='20260818r138-wallt-ui1'"},
+    @{Rel="mobile-safe-r133.js"; Marker="BUILD='20260818r133-mobile-safe1'"},
     @{Rel="workspace-r51.js"; Marker="const BUILD = '20260818-current-workspace1'"},
     @{Rel="render-agent.js"; Marker="const MODEL = 'gemini-3.1-flash-image'"},
     @{Rel="render-convergence-r126.js"; Marker="providerOwner:'render-agent.js'"}
@@ -174,10 +205,10 @@ function Verify-LiveUi([string]$Root) {
         if(-not $live.Contains([string]$check.Marker)){$all=$false;break}
       }catch{$all=$false;break}
     }
-    if($all){Write-Host "PASS: live Companion UI + Google Render runtime are current." -ForegroundColor Green;return}
+    if($all){Write-Host "PASS: live Companion current owners (Docs/Chat/WALLT/Mobile/Render) are source-current." -ForegroundColor Green;return}
     Start-Sleep -Seconds 10
   }
-  throw "Live REVEX Companion did not expose the exact current UI/Render runtime within 10 minutes."
+  throw "Live REVEX Companion did not expose the exact current Docs/Chat/WALLT/Mobile/Render runtime within 10 minutes."
 }
 
 function Verify-LiveAccessSource([string]$GCloud) {
@@ -204,7 +235,7 @@ function Verify-LiveSourceBindings([string]$GCloud) {
   if($state.Code-ne 0-or-not $state.Text){throw "Live Energy service could not be verified: $($script:EnergyService)"}
   $run=$state.Text|ConvertFrom-Json;$envs=@{};foreach($row in @($run.spec.template.spec.containers[0].env)){$envs[[string]$row.name]=[string]$row.value}
   if([string]$envs["REVEX_SOURCE_CANDIDATE"]-ne $SourceSha){throw "$($script:EnergyService) is not bound to exact source $SourceSha."}
-  foreach($functionName in @("runRevexEnergy","documentRevexRevision","finalizeRevexDailyReport")){
+  foreach($functionName in @("runRevexEnergy","documentRevexRevision","finalizeRevexDailyReport","ensureProjectChatHttp")){
     $fnState=Capture-Native $GCloud @("functions","describe",$functionName,"--gen2","--project",$ProjectId,"--region",$Region,"--format","json")
     if($fnState.Code-ne 0-or-not $fnState.Text){throw "Live function could not be verified: $functionName"}
     $fn=$fnState.Text|ConvertFrom-Json
@@ -212,7 +243,7 @@ function Verify-LiveSourceBindings([string]$GCloud) {
     if([string]$fn.serviceConfig.environmentVariables.REVEX_SOURCE_CANDIDATE-ne $SourceSha){throw "$functionName is not bound to exact source $SourceSha."}
   }
   Verify-LiveAccessSource $GCloud
-  Write-Host "PASS: Access, Energy and Report are source-bound to $SourceSha; Render is the verified live Companion client path." -ForegroundColor Green
+  Write-Host "PASS: Access, Project Chat, Energy and Report are source-bound to $SourceSha; Render is the verified live Companion client path." -ForegroundColor Green
 }
 
 function Install-AddinAtomically {
@@ -231,7 +262,7 @@ function Install-AddinAtomically {
     $marker=[ordered]@{
       schema="liber.revex.current-release.v2";repository="nvberegovykh/LIBER-Creative";sourceCommit=$SourceSha;finalizedAtUtc=[DateTime]::UtcNow.ToString("o");
       energyWorker=$script:EnergyService;renderProvider=$RenderModel;renderRuntime="Companion render-agent.js";missingVt=0.45;actualVtWins=$true;projectAccessSourceBound=$true;
-      geometryPolicy="whole-door + curtain-panel + physical-cover corrections";uiPolicy="full current convergence";previousInstalledRevisionShadow=$BackupRoot
+      geometryPolicy="whole-door + curtain-panel + physical-cover corrections";uiPolicy="current owners + visible WALLT bounded fixer";previousInstalledRevisionShadow=$BackupRoot
     }|ConvertTo-Json -Depth 8
     [IO.File]::WriteAllText((Join-Path $InstalledRoot "REVEX-CURRENT-SOURCE.json"),$marker,[Text.UTF8Encoding]::new($false))
     $manifest=@"
@@ -262,7 +293,7 @@ function Install-AddinAtomically {
 try{
   try{Start-Transcript -LiteralPath $LogPath -Force|Out-Null;$TranscriptStarted=$true}catch{}
   Write-Host "REVEX one-command full current release finalizer" -ForegroundColor Cyan
-  Write-Host "Scope: Companion + BIM + Design Book + Spec Book + Docs + Issues + History + Blocks + Render + Revit add-in + Energy + Report + access." -ForegroundColor Green
+  Write-Host "Scope: Companion + WALLT Helper/Fixer + BIM + Design Book + Spec Book + Docs + Chat + Issues + History + Blocks + Render + Revit add-in + Energy + Report + access." -ForegroundColor Green
   Write-Host "Render: verified Google Gemini image path in Companion; experimental Qwen worker is not a release dependency." -ForegroundColor Green
   Write-Host "VT policy: preserve actual VT; when absent use exactly 0.45." -ForegroundColor Green
   Write-Host "Persistent log: $LogPath"
@@ -297,7 +328,7 @@ try{
   Step "Verify current Companion UI and Render runtime are live before access/Energy cutover"
   Verify-LiveUi $SourceRoot
   Invoke-ReleaseController "Deploy preserved source-bound project access rules" $accessDeploy @("-ProjectId",$ProjectId,"-SourceCandidate",$SourceSha,"-NoPause")
-  Invoke-ReleaseController "Deploy source-bound Report and Daily Report" $reportDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-SourceCandidate",$SourceSha,"-NoPause")
+  Invoke-ReleaseController "Deploy source-bound Report, Daily Report and Project Chat resolver" $reportDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-SourceCandidate",$SourceSha,"-NoPause")
   Invoke-ReleaseController "Cut Energy broker to the already-verified current candidate" $energyDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:EnergyService,"-SourceCandidate",$SourceSha,"-BrokerOnly","-NoPause")
 
   Verify-LiveSourceBindings $GCloud
@@ -307,10 +338,10 @@ try{
   Write-Host ""
   Write-Host "PASS: REVEX full current release is converged." -ForegroundColor Green
   Write-Host "Source: $SourceSha"
-  Write-Host "Companion/UI/BIM/Books/Docs/Issues/History/Blocks: exact current live runtime verified"
+  Write-Host "Companion/WALLT/BIM/Books/Docs/Chat/Issues/History/Blocks: exact current live runtime verified"
   Write-Host "Render: $RenderModel via canonical Companion render-agent.js; Google Generative Language API enabled"
   Write-Host "Energy: $($script:EnergyService) · actual VT preserved · missing VT 0.45 · complete release package required"
-  Write-Host "Report/Daily Report + access: source-bound $SourceSha"
+  Write-Host "Project Chat + Report/Daily Report + access: source-bound $SourceSha"
   Write-Host "Revit add-in: $(Join-Path $InstalledRoot 'Liber.Revex.Revit.dll')"
   Write-Host "Previous installed add-in preserved as shadow: $BackupRoot"
   Write-Host ""

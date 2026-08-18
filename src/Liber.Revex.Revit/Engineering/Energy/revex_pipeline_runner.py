@@ -2,6 +2,9 @@
 """Current REVEX Energy runner.
 
 The proven engine remains version-shadowed; this canonical runner owns current contracts.
+WALLT is the active repair controller around those proven blocks: it can repair derived
+worker evidence, run bounded current-evidence AI tools, fail fast before expensive stages,
+and request exact Revit/user clarification without mutating immutable source evidence.
 """
 from __future__ import annotations
 
@@ -32,6 +35,17 @@ def _request_from_args(values: list[str]) -> Path | None:
     return None
 
 
+def _replace_request(values: list[str], request_path: Path | None) -> list[str]:
+    if request_path is None:
+        return list(values)
+    output = list(values)
+    for index, value in enumerate(output):
+        if value == "--request" and index + 1 < len(output):
+            output[index + 1] = str(Path(request_path).resolve())
+            return output
+    return output
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--impl", type=Path, required=True)
@@ -45,19 +59,28 @@ def main() -> int:
             sys.path.insert(0, str(server_root))
 
     import revex_final_touchups as touchups
+    import revex_energy_agent as maintainer
+    import revex_energy_agent_filing as filing
+    import revex_energy_agent_context as agent_context
     from revex_energy_contracts import DEFAULT_MISSING_VT, EvidenceBundle
 
     if abs(float(touchups.MISSING_VT) - DEFAULT_MISSING_VT) > 1e-9:
         raise RuntimeError("REVEX Energy VT policy drifted from the typed current contract")
+    if abs(float(filing.MISSING_VT) - DEFAULT_MISSING_VT) > 1e-9:
+        raise RuntimeError("WALLT filing VT policy drifted from the typed current contract")
 
     request_path = _request_from_args(remaining)
     if request_path is not None:
         EvidenceBundle.from_request(request_path).require_sync_evidence()
+    effective_request = agent_context.enrich_request(request_path) if request_path is not None else None
+    remaining = _replace_request(remaining, effective_request)
+    maintainer.bind_request(effective_request or request_path)
 
     module = _load(impl)
     touchups.patch_pipeline(module)
+    maintainer.install(module)
+    filing.install(module)
 
-    # The proven implementation's main() parses sys.argv itself.
     sys.argv = [str(impl), *remaining]
     return int(module.main())
 

@@ -24,6 +24,14 @@ if str(energy_module_root) not in sys.path:
 from revex_final_touchups import install_worker_touchups  # noqa: E402
 from revex_publication_resume_current import install_publication_resume  # noqa: E402
 from durable_execution import install_durable_energy_execution  # noqa: E402
+from revex_user_identity_en1 import __name__ as _en1_module_name  # noqa: E402
+import revex_user_identity_en1 as _en1  # noqa: E402
+import revex_en1_print_contract as _en1_print  # noqa: E402
+
+# The same user-confirmed EN-1 print policy must govern both a fresh full run and the
+# resumable publication path. Install it once at process startup so every later import
+# of revex_user_identity_en1 observes the exact 17-sheet / 63% print contract.
+_en1_print.install(_en1)
 
 install_worker_touchups()
 install_publication_resume(APP)

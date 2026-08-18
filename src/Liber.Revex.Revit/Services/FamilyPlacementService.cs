@@ -7,8 +7,8 @@ namespace Liber.Revex.Revit.Services;
 /// <summary>
 /// User-triggered BIM-family placement for the Walk palette. The provider file is
 /// validated locally and placement occurs only through a Revit ExternalEvent.
-/// Common point/level based families are placed directly; hosted families are
-/// attempted only against a bounded nearest physical host. Unsupported curve,
+/// Common point/level based families are placed directly; hosted/work-plane families
+/// are attempted only against bounded nearby physical faces/hosts. Unsupported curve,
 /// adaptive and view-only families fail visibly rather than being guessed.
 /// </summary>
 internal sealed class FamilyPlacementService
@@ -38,6 +38,8 @@ internal sealed class FamilyPlacementService
 
     private const int MaxPreviewVertices = 120_000;
     private const double MaxHostDistanceFt = 8.0;
+    private const int MaxZipEntries = 2048;
+    private const long MaxExpandedZipBytes = 512L * 1024L * 1024L;
 
     internal PlacementResult Place(Document doc, PlacementRequest request)
     {
@@ -75,9 +77,14 @@ internal sealed class FamilyPlacementService
                     throw new InvalidOperationException($"Blocks family '{family.Name}' uses unsupported placement type {placementType}. REVEX Walk placement accepts 3D point/level/hosted families only.");
 
                 Level level = ResolveLevel(doc, request.RequestedLevelName, request.RequestedLevelElevation, request.Z);
-                XYZ point = new(request.X, request.Y, level.Elevation);
+                double targetZ = double.IsFinite(request.Z) ? request.Z : level.Elevation;
+                XYZ point = new(request.X, request.Y, targetZ);
                 instance = TryLevelPlacement(doc, symbol, level, point);
-                if (instance == null && (placementType.Contains("Hosted", StringComparison.OrdinalIgnoreCase) || placementType.Contains("WorkPlane", StringComparison.OrdinalIgnoreCase)))
+                bool hosted = placementType.Contains("Hosted", StringComparison.OrdinalIgnoreCase) ||
+                              placementType.Contains("WorkPlane", StringComparison.OrdinalIgnoreCase);
+                if (instance == null && hosted)
+                    instance = TryNearestFacePlacement(doc, symbol, point);
+                if (instance == null && hosted)
                     instance = TryNearestHostedPlacement(doc, symbol, level, point);
                 if (instance == null)
                     throw new InvalidOperationException($"REVEX could not place '{family.Name} · {symbol.Name}' safely at the Walk target. The family requires a host/placement rule that was not available within {MaxHostDistanceFt:0.#} ft.");
@@ -125,11 +132,40 @@ internal sealed class FamilyPlacementService
         string ext = Path.GetExtension(path).ToLowerInvariant();
         if (ext == ".rfa") return path;
         if (ext != ".zip") throw new InvalidOperationException("REVEX BIM palette accepts .rfa or .zip family downloads.");
+
         extractedFolder = Path.Combine(Path.GetTempPath(), "LIBER_REVEX", "families", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(extractedFolder);
-        ZipFile.ExtractToDirectory(path, extractedFolder);
-        string? family = Directory.GetFiles(extractedFolder, "*.rfa", SearchOption.AllDirectories)
-            .OrderBy(p => p.Length).FirstOrDefault();
+        string root = Path.GetFullPath(extractedFolder) + Path.DirectorySeparatorChar;
+        using ZipArchive archive = ZipFile.OpenRead(path);
+        if (archive.Entries.Count > MaxZipEntries)
+            throw new InvalidOperationException($"Downloaded BIM ZIP contains too many entries ({archive.Entries.Count}; limit {MaxZipEntries}).");
+
+        long expanded = 0;
+        var extractedFamilies = new List<string>();
+        foreach (ZipArchiveEntry entry in archive.Entries)
+        {
+            if (string.IsNullOrEmpty(entry.Name)) continue;
+            expanded = checked(expanded + Math.Max(0, entry.Length));
+            if (expanded > MaxExpandedZipBytes)
+                throw new InvalidOperationException($"Downloaded BIM ZIP expands beyond the {MaxExpandedZipBytes / 1024 / 1024} MB REVEX limit.");
+
+            string relative = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
+            string destination = Path.GetFullPath(Path.Combine(extractedFolder, relative));
+            if (!destination.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Downloaded BIM ZIP contains an unsafe file path.");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            using Stream input = entry.Open();
+            using FileStream output = File.Create(destination);
+            input.CopyTo(output);
+            if (string.Equals(Path.GetExtension(destination), ".rfa", StringComparison.OrdinalIgnoreCase))
+                extractedFamilies.Add(destination);
+        }
+
+        string? family = extractedFamilies
+            .OrderByDescending(p => new FileInfo(p).Length)
+            .ThenBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
         return family ?? throw new InvalidOperationException("The downloaded ZIP contains no Revit .rfa family.");
     }
 
@@ -167,18 +203,92 @@ internal sealed class FamilyPlacementService
         }
     }
 
-    private static FamilyInstance? TryNearestHostedPlacement(Document doc, FamilySymbol symbol, Level level, XYZ point)
+    private static IEnumerable<Element> NearbyHosts(Document doc, XYZ point)
     {
         var hosts = new List<Element>();
         hosts.AddRange(new FilteredElementCollector(doc).OfClass(typeof(Wall)).WhereElementIsNotElementType());
         hosts.AddRange(new FilteredElementCollector(doc).OfClass(typeof(Floor)).WhereElementIsNotElementType());
         hosts.AddRange(new FilteredElementCollector(doc).OfClass(typeof(RoofBase)).WhereElementIsNotElementType());
-        foreach (Element host in hosts
-                     .Select(h => new { host = h, d = DistanceToBox(point, h.get_BoundingBox(null)) })
-                     .Where(x => x.d <= MaxHostDistanceFt)
-                     .OrderBy(x => x.d)
-                     .Take(20)
-                     .Select(x => x.host))
+        return hosts
+            .Select(h => new { host = h, d = DistanceToBox(point, h.get_BoundingBox(null)) })
+            .Where(x => x.d <= MaxHostDistanceFt)
+            .OrderBy(x => x.d)
+            .Take(20)
+            .Select(x => x.host);
+    }
+
+    private static FamilyInstance? TryNearestFacePlacement(Document doc, FamilySymbol symbol, XYZ point)
+    {
+        var options = new Options
+        {
+            ComputeReferences = true,
+            IncludeNonVisibleObjects = false,
+            DetailLevel = ViewDetailLevel.Fine
+        };
+        foreach (Element host in NearbyHosts(doc, point))
+        {
+            GeometryElement? geometry;
+            try { geometry = host.get_Geometry(options); }
+            catch { continue; }
+            if (geometry == null) continue;
+
+            foreach (Face face in Faces(geometry))
+            {
+                Reference? reference = face.Reference;
+                if (reference == null) continue;
+                IntersectionResult? projection;
+                try { projection = face.Project(point); }
+                catch { continue; }
+                if (projection == null || projection.XYZPoint == null || projection.Distance > MaxHostDistanceFt) continue;
+
+                XYZ normal;
+                try { normal = face.ComputeNormal(projection.UVPoint); }
+                catch { continue; }
+                if (normal == null || normal.GetLength() < 1e-9) continue;
+                XYZ seed = Math.Abs(normal.Normalize().DotProduct(XYZ.BasisZ)) < 0.9 ? XYZ.BasisZ : XYZ.BasisX;
+                XYZ referenceDirection = normal.CrossProduct(seed);
+                if (referenceDirection.GetLength() < 1e-9) continue;
+                referenceDirection = referenceDirection.Normalize();
+
+                using var sub = new SubTransaction(doc);
+                try
+                {
+                    sub.Start();
+                    FamilyInstance instance = doc.Create.NewFamilyInstance(reference, projection.XYZPoint, referenceDirection, symbol);
+                    sub.Commit();
+                    return instance;
+                }
+                catch
+                {
+                    try { if (sub.GetStatus() == TransactionStatus.Started) sub.RollBack(); } catch { }
+                }
+            }
+        }
+        return null;
+    }
+
+    private static IEnumerable<Face> Faces(GeometryElement geometry)
+    {
+        foreach (GeometryObject obj in geometry)
+        {
+            switch (obj)
+            {
+                case Solid solid when solid.Faces.Size > 0:
+                    foreach (Face face in solid.Faces) yield return face;
+                    break;
+                case GeometryInstance instance:
+                    GeometryElement nested;
+                    try { nested = instance.GetInstanceGeometry(); }
+                    catch { continue; }
+                    foreach (Face face in Faces(nested)) yield return face;
+                    break;
+            }
+        }
+    }
+
+    private static FamilyInstance? TryNearestHostedPlacement(Document doc, FamilySymbol symbol, Level level, XYZ point)
+    {
+        foreach (Element host in NearbyHosts(doc, point))
         {
             XYZ hostPoint = ProjectToHost(host, point);
             using var sub = new SubTransaction(doc);

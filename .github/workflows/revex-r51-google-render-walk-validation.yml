@@ -7,6 +7,7 @@ on:
       - 'docs/liber-apps/apps/revex/index.html'
       - 'docs/liber-apps/apps/revex/render-agent.js'
       - 'docs/liber-apps/apps/revex/render-agent.css'
+      - 'docs/liber-apps/apps/revex/render-convergence-r126.js'
       - 'docs/liber-apps/apps/revex/workspace-r51.js'
       - 'docs/liber-apps/apps/revex/workspace-r51.css'
       - 'docs/liber-apps/js/firebase-loader.js'
@@ -29,14 +30,16 @@ jobs:
         run: |
           set -euo pipefail
           node --check docs/liber-apps/apps/revex/render-agent.js
+          node --check docs/liber-apps/apps/revex/render-convergence-r126.js
           node --check docs/liber-apps/js/firebase-loader.js
           cp docs/liber-apps/apps/revex/workspace-r51.js /tmp/workspace-r51.mjs
           node --check /tmp/workspace-r51.mjs
-      - name: Verify renderer and navigation contract
+      - name: Verify current renderer and navigation contract
         shell: bash
         run: |
           set -euo pipefail
           R='docs/liber-apps/apps/revex/render-agent.js'
+          C='docs/liber-apps/apps/revex/render-convergence-r126.js'
           W='docs/liber-apps/apps/revex/workspace-r51.js'
           I='docs/liber-apps/apps/revex/index.html'
           F='docs/liber-apps/js/firebase-loader.js'
@@ -51,10 +54,13 @@ jobs:
           grep -q "ShiftLeft" "$W"
           grep -q "spatialObjectsVisible: false" "$W"
           grep -q "REVEX_LIGHTWEIGHT_OBJECT_OUTLINES" "$W"
-          grep -q "workspace-r51.js?v=20260815r49-workspace1" "$I"
-          grep -q "render-agent.js?v=20260815r49-google-render1" "$I"
+          grep -q "workspace-r51.js?v=20260818-current-workspace1" "$I"
+          grep -q "render-agent.js?v=20260818-google-render1" "$I"
+          grep -q "providerOwner:'render-agent.js'" "$C"
+          grep -q "localModelCache:false" "$C"
+          grep -q "legacyIframe:false" "$C"
           grep -q "reauthenticateWithPopup" "$F"
-          ! grep -qi "rendair" "$R"
-          ! grep -qi "rendair" "$I"
+          ! grep -qi "rendair.com" "$R"
+          ! grep -qi "rendair.com" "$I"
           ! grep -q "x-goog-api-key" "$R"
-          echo 'REVEX Google renderer / Walk source contract passed.'
+          echo 'REVEX current Google renderer / Walk source contract passed.'

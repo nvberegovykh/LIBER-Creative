@@ -1,0 +1,89 @@
+name: REVEX WALLT Energy production image acceptance
+
+on:
+  pull_request:
+    paths:
+      - 'src/Liber.Revex.Revit/Engineering/Energy/**'
+      - 'src/Liber.Revex.Revit/UI/RendairWindow.cs'
+      - 'server/revex-energy-worker/**'
+      - 'docs/liber-apps/apps/revex/energy-agent-review.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - '.github/workflows/revex-wallt-energy-production-image.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wallt-production-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Compile active WALLT runtime and verifiers
+        run: |
+          python -m py_compile \
+            src/Liber.Revex.Revit/Engineering/Energy/revex_energy_agent.py \
+            src/Liber.Revex.Revit/Engineering/Energy/revex_energy_agent_evidence.py \
+            src/Liber.Revex.Revit/Engineering/Energy/revex_energy_agent_filing.py \
+            src/Liber.Revex.Revit/Engineering/Energy/revex_energy_agent_context.py \
+            src/Liber.Revex.Revit/Engineering/Energy/revex_energy_maintainer.py \
+            src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner.py \
+            server/revex-energy-worker/app_entry.py \
+            server/revex-energy-worker/durable_execution.py \
+            server/revex-energy-worker/revex_energy_pipeline_current.py \
+            server/revex-energy-worker/revex_en1_print_contract.py \
+            server/revex-energy-worker/verify_energy_agent.py \
+            server/revex-energy-worker/verify_en1_print_contract.py
+          grep -F 'if _pipeline_status(body) != "COMPLETE"' server/revex-energy-worker/durable_execution.py
+          grep -F 'revision-scoped clarification' server/revex-energy-worker/durable_execution.py
+
+      - name: Verify WALLT Companion review and Revit return bridge
+        shell: bash
+        run: |
+          node --input-type=module --check < docs/liber-apps/apps/revex/energy-agent-review.js
+          grep -F "energy-agent-review.js?v=20260818-wallt-energy-review2" docs/liber-apps/apps/revex/ui-integrity.js
+          grep -F 'liber:revex-energy-revit-repair-request' src/Liber.Revex.Revit/UI/RendairWindow.cs
+          grep -F 'RunEnergySyncToCompanionAsync()' src/Liber.Revex.Revit/UI/RendairWindow.cs
+          grep -F 'Request fresh Revit evidence' docs/liber-apps/apps/revex/energy-agent-review.js
+          grep -F 'Approve this Energy revision' docs/liber-apps/apps/revex/energy-agent-review.js
+          grep -F 'OrbitControls' docs/liber-apps/apps/revex/energy-agent-review.js
+
+      - name: Run isolated WALLT one-shot contract
+        run: python server/revex-energy-worker/verify_energy_agent.py
+
+      - name: Build exact production Energy image
+        run: docker build --pull -f server/revex-energy-worker/Dockerfile -t revex-wallt-energy:${{ github.sha }} .
+
+      - name: Re-run WALLT verifier inside exact production image
+        run: |
+          docker run --rm \
+            -e PYTHONPATH=/opt/revex/energy:/opt/revex/server \
+            --entrypoint python3 revex-wallt-energy:${{ github.sha }} \
+            /opt/revex/server/verify_energy_agent.py
+
+      - name: Verify user-confirmed 17-sheet EN-1 at 63 percent inside image
+        run: |
+          docker run --rm \
+            -e PYTHONPATH=/opt/revex/energy:/opt/revex/server \
+            -v "$PWD/server/revex-energy-worker/verify_en1_print_contract.py:/opt/revex/server/verify_en1_print_contract.py:ro" \
+            --entrypoint python3 revex-wallt-energy:${{ github.sha }} \
+            /opt/revex/server/verify_en1_print_contract.py
+
+      - name: Verify active current runner and print policy imports inside image
+        run: |
+          docker run --rm \
+            -e PYTHONPATH=/opt/revex/energy:/opt/revex/server \
+            --entrypoint python3 revex-wallt-energy:${{ github.sha }} \
+            -c "import revex_energy_agent as a, revex_energy_agent_evidence as e, revex_energy_agent_filing as f, revex_energy_agent_context as c, revex_en1_print_contract as pc, revex_user_identity_en1 as en1, revex_energy_pipeline_current as p; pc.install(en1); assert a.MISSING_VT == 0.45; assert e.MISSING_VT == 0.45; assert f.MISSING_VT == 0.45; assert c.SCHEMA == 'liber.revex.energy-agent-context.v1'; assert pc.PRINT_SCALE == 63 and len(pc.PRINT_SHEETS) == 17 and pc.PRINT_SHEETS[0] == 'Color legend'; assert en1._print_en1_pdf is pc._print_pdf; assert p.maintainer is a; print('WALLT_PRODUCTION_IMAGE=PASSED')"
+
+# The EN-1 contract emits a compact page/source-layout diagnostic before failing a page-count mismatch.

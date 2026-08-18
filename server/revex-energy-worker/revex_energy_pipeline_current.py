@@ -3,7 +3,7 @@
 
 Versioned guards remain preserved as shadows. This file is the only active managed-pipeline
 entrypoint and binds typed evidence, current VT policy, the proven simulation/filing engine,
-and one verified user-facing release package.
+one verified user-facing release package, and the active WALLT repair controller.
 """
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ if str(_energy_root) not in sys.path:
     sys.path.insert(0, str(_energy_root))
 
 import revex_final_touchups as current_touchups
+import revex_energy_agent as maintainer
 from revex_energy_contracts import FilingPackage
 
 shadow.r125 = current_touchups
@@ -52,6 +53,50 @@ def _request_path(argv=None) -> Path | None:
         if value == "--request" and index + 1 < len(values):
             return Path(values[index + 1]).resolve()
     return None
+
+
+def _request_output_root(request_path: Path, request: dict) -> Path:
+    raw = str(request.get("outputFolder") or "").strip()
+    if raw:
+        return Path(raw).resolve()
+    parent = Path(request_path).resolve().parent
+    return parent.parent if parent.name.lower() in {"work", "_input", "input"} else parent
+
+
+def _attach_maintainer_state(output_root: Path, result: dict) -> dict:
+    """Expose WALLT state/repair requests without changing immutable source authority."""
+    state_path = output_root / maintainer.STATE_NAME
+    events_path = output_root / maintainer.EVENTS_NAME
+    repair_path = output_root / getattr(maintainer, "REPAIR_REQUEST_NAME", "REVEX_ENERGY_REVIT_REPAIR_REQUEST.json")
+    state = None
+    if state_path.is_file():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception:
+            state = None
+    if state is not None:
+        result["maintainer"] = state
+
+    rows = [dict(row) for row in list(result.get("artifacts") or [])]
+    existing = {str(row.get("name") or "") for row in rows}
+    for path, kind, visible, review_name in (
+        (state_path, "maintainer-state", True, "WALLT Energy Controller State"),
+        (repair_path, "revit-repair-request", True, "WALLT Revit Repair Request"),
+        (events_path, "maintainer-events", False, "WALLT Energy Controller Event Trace"),
+    ):
+        if not path.is_file() or path.name in existing:
+            continue
+        rows.append({
+            "name": path.name,
+            "reviewName": review_name,
+            "path": path.name,
+            "kind": kind,
+            "userVisible": visible,
+            "bytes": path.stat().st_size,
+            "sha256": _sha256(path),
+        })
+    result["artifacts"] = rows
+    return result
 
 
 def _install_current_full_pipeline_runner() -> None:
@@ -81,6 +126,7 @@ def _install_current_full_pipeline_runner() -> None:
                     "status": "CANONICAL_RUNNER",
                     "runner": str(runner),
                     "impl": str(pinned),
+                    "controller": "WALLT_ACTIVE_REPAIR",
                 }, ensure_ascii=True), flush=True)
                 return original_run(values, *args, **kwargs)
         return original_run(command, *args, **kwargs)
@@ -89,7 +135,6 @@ def _install_current_full_pipeline_runner() -> None:
     r116.__revex_current_subprocess_patched__ = True
 
 
-# Replace only the version-shadow dispatch point; all proven guard semantics remain intact.
 shadow._install_full_pipeline_runner = _install_current_full_pipeline_runner
 
 
@@ -101,15 +146,44 @@ def _verify_clean_zip(path: Path) -> None:
         raise RuntimeError("clean Energy release ZIP does not match the exact nine-file filing/review contract")
 
 
+def _review_models(output_root: Path, artifact_rows: list[dict] | None = None) -> list[dict]:
+    rows = []
+    artifacts = [dict(row) for row in list(artifact_rows or [])]
+    for name, role in (("GEOMETRY.osm", "current-geometry"), ("BASELINE.osm", "baseline"), ("PROPOSED.osm", "proposed")):
+        path = output_root / name
+        if path.is_file():
+            rows.append({
+                "name": name, "role": role, "path": name, "viewer": "osm-3d",
+                "rotatable": True, "bytes": path.stat().st_size, "sha256": _sha256(path),
+            })
+            continue
+        # Full-pipeline review names are archive aliases over the real declared artifact path.
+        # Expose the real path/hash so Companion can fetch and rotate the OSM directly without
+        # manufacturing a second copy or depending on the ZIP container.
+        row = next((item for item in artifacts
+                    if str(item.get("reviewName") or "") == name
+                    or str(item.get("name") or "") == name), None)
+        if row is None:
+            continue
+        rows.append({
+            "name": name, "role": role, "path": row.get("path"), "viewer": "osm-3d",
+            "rotatable": True, "bytes": row.get("bytes"), "sha256": row.get("sha256"),
+            "artifactName": row.get("name"),
+        })
+    return rows
+
+
 def _promote_clean_release_package(request_path: Path, code: int) -> int:
-    """A COMPLETE run must expose one verified clean package, not only diagnostic recovery ZIPs."""
+    """A COMPLETE run exposes one verified package and a final WALLT approval surface."""
     request = json.loads(Path(request_path).read_text(encoding="utf-8"))
-    output_root = Path(str(request.get("outputFolder") or "")).resolve()
+    output_root = _request_output_root(Path(request_path), request)
     result_path = output_root / "energy-result.json"
     if not result_path.is_file():
         return int(code or 2)
     result = json.loads(result_path.read_text(encoding="utf-8"))
+    result = _attach_maintainer_state(output_root, result)
     if str(result.get("status") or "").upper() != "COMPLETE":
+        result_path.write_text(json.dumps(result, ensure_ascii=True, indent=2), encoding="utf-8")
         return int(code or 2)
 
     try:
@@ -125,7 +199,6 @@ def _promote_clean_release_package(request_path: Path, code: int) -> int:
         else:
             raise RuntimeError("completed Energy run produced no clean release package")
 
-        # The r118 recovery ZIP stays available as diagnostic evidence but is not the public package.
         rows = []
         for raw in list(result.get("artifacts") or []):
             row = dict(raw)
@@ -168,12 +241,34 @@ def _promote_clean_release_package(request_path: Path, code: int) -> int:
             "missingVtPolicy": 0.45,
             "actualVtPreserved": True,
         }
+        review_models = _review_models(output_root, result.get("artifacts") or [])
+        maint = dict(result.get("maintainer") or {})
+        if maint:
+            maint["status"] = "REVIEW_READY"
+            maint["stage"] = "PACKAGE_REVIEW"
+            maint["message"] = "All internal Energy/filing integrity checks passed. Review the synchronized package and OSM models, then approve this revision."
+            maint["packageApprovalRequired"] = True
+            maint["reviewModels"] = review_models
+            maint["releasePackage"] = CURRENT_RELEASE_PACKAGE
+            result["maintainer"] = maint
+            state_path = output_root / maintainer.STATE_NAME
+            if state_path.is_file():
+                state_path.write_text(json.dumps(maint, ensure_ascii=True, indent=2), encoding="utf-8")
+                for row in result["artifacts"]:
+                    if str(row.get("name") or "") == maintainer.STATE_NAME:
+                        row["bytes"] = state_path.stat().st_size
+                        row["sha256"] = _sha256(state_path)
+        result["reviewModels"] = review_models
+        result["packageApprovalRequired"] = True
+
         result_path.write_text(json.dumps(result, ensure_ascii=True, indent=2), encoding="utf-8")
         print(json.dumps({
             "stage": "CURRENT_FILING_PACKAGE",
             "status": "PASSED",
             "package": CURRENT_RELEASE_PACKAGE,
             "entryCount": 9,
+            "reviewModels": len(review_models),
+            "maintainer": "REVIEW_READY" if result.get("maintainer") else "NOT_PRESENT",
         }, ensure_ascii=True), flush=True)
         return 0
     except Exception as exc:

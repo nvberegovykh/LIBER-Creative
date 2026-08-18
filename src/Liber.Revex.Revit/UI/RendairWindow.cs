@@ -1791,6 +1791,31 @@ public sealed class RendairWindow : Window
                 return;
             }
 
+            if (kind == "liber:revex-energy-revit-repair-request")
+            {
+                string requestedProjectId = ReadString(root, "projectId", "").Trim();
+                string requestedRevision = ReadString(root, "sourceEngineeringRevision", "").Trim();
+                string repairMessage = ReadString(root, "message", "WALLT requested fresh current-Revit Energy evidence.");
+                string activeProjectId = _projectId.Text.Trim();
+                if (string.IsNullOrWhiteSpace(requestedProjectId) || !string.Equals(requestedProjectId, activeProjectId, StringComparison.Ordinal))
+                {
+                    RevexDiagnostics.Warn("WALLT-REVIT", $"Ignored Energy repair request for another project: requested={requestedProjectId}; active={activeProjectId}; sourceRevision={requestedRevision}");
+                    SetStatus("WALLT repair request belongs to a different REVEX project; open the bound Revit project first.");
+                    return;
+                }
+                if (_gbxmlAwaitingRevit || _energySyncRequested)
+                {
+                    RevexDiagnostics.Info("WALLT-REVIT", "Fresh Engineering evidence is already running; duplicate repair request ignored.");
+                    SetStatus("WALLT requested fresh Revit evidence; the Engineering Sync is already running.");
+                    return;
+                }
+                RevexDiagnostics.Info("WALLT-REVIT", $"Accepted Energy repair/evidence request for project={requestedProjectId}; priorRevision={requestedRevision}; {repairMessage}");
+                SetMode(true);
+                SetStatus("WALLT requested a fresh authoritative Revit evidence block. REVEX is running SYNC ENGINEERING now; the resulting immutable revision will continue the managed Energy chain automatically.");
+                Dispatcher.BeginInvoke(new Action(() => _ = RunEnergySyncToCompanionAsync()));
+                return;
+            }
+
             if (kind == "liber:revex-energy-run")
             {
                 RevexDiagnostics.Warn("ENERGY", "Ignored legacy Companion local-run request. Managed server execution is authoritative in r31.");
