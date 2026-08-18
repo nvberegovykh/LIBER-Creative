@@ -1,140 +1,113 @@
 param(
   [string]$ProjectId = "liber-apps-cca20",
   [string]$Region = "us-central1",
-  [switch]$SkipEnergy,
+  [switch]$SkipReport,
   [switch]$SkipRender,
-  [switch]$RenderBrokerOnly,
-  [switch]$EnergyWorkerOnly,
+  [switch]$ValidateOnly,
   [switch]$NoPause
 )
 
 $ErrorActionPreference = "Stop"
+Set-StrictMode -Version 3.0
+
 $Stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $LogPath = Join-Path $PSScriptRoot ("DEPLOY_REVEX_CURRENT_SERVICES." + $Stamp + ".log")
 $LatestLogPath = Join-Path $PSScriptRoot "DEPLOY_REVEX_CURRENT_SERVICES.latest.log"
 $TempScript = Join-Path ([IO.Path]::GetTempPath()) ("REVEX-CURRENT-BOOTSTRAP-" + [guid]::NewGuid().ToString("N") + ".ps1")
-$Uri = "https://raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1"
+$BootstrapUri = "https://raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1"
 $TranscriptStarted = $false
 $ExitCode = 1
 
 function Require-Command([string]$Name) {
   $cmd = Get-Command $Name -ErrorAction SilentlyContinue | Select-Object -First 1
-  if (-not $cmd) { throw "$Name is required for REVEX managed deployment." }
+  if (-not $cmd) { throw "$Name is required for REVEX current-service deployment." }
   return $cmd.Source
-}
-
-function Test-GCloudAuth([string]$GCloud) {
-  $previous = $ErrorActionPreference
-  try {
-    $ErrorActionPreference = "Continue"
-    $args = @("auth","list","--filter","status:ACTIVE","--format","value(account)")
-    $output = @(& $GCloud @args 2>$null) | Where-Object { $_ }
-    return ($LASTEXITCODE -eq 0 -and @($output).Count -gt 0)
-  } catch { return $false } finally { $ErrorActionPreference = $previous }
 }
 
 function Invoke-NativeExitCode([string]$Command, [string[]]$Arguments, [switch]$Quiet) {
   $previous = $ErrorActionPreference
   try {
     $ErrorActionPreference = "Continue"
-    if ($Quiet) {
-      & $Command @Arguments *> $null
-    } else {
-      & $Command @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
-    }
+    if ($Quiet) { & $Command @Arguments *> $null }
+    else { & $Command @Arguments 2>&1 | ForEach-Object { Write-Host ([string]$_) } }
     $code = $LASTEXITCODE
     if ($null -eq $code) { $code = 0 }
     return [int]$code
-  } catch { return 1 } finally { $ErrorActionPreference = $previous }
+  }
+  catch { return 1 }
+  finally { $ErrorActionPreference = $previous }
 }
 
-function Test-FirebaseAuth([string]$Firebase) {
-  return ((Invoke-NativeExitCode $Firebase @("projects:list","--json") -Quiet) -eq 0)
+function Test-GCloudAuth([string]$GCloud) {
+  $previous = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $output = @(& $GCloud auth list --filter "status:ACTIVE" --format "value(account)" 2>$null) | Where-Object { $_ }
+    return ($LASTEXITCODE -eq 0 -and @($output).Count -gt 0)
+  }
+  catch { return $false }
+  finally { $ErrorActionPreference = $previous }
 }
 
 try {
   try {
     Start-Transcript -LiteralPath $LogPath -Force | Out-Null
     $TranscriptStarted = $true
-  } catch {
+  }
+  catch {
     Write-Warning "Could not start persistent transcript at $LogPath : $($_.Exception.Message)"
   }
 
-  Write-Host "REVEX current managed-services launcher" -ForegroundColor Cyan
+  Write-Host "REVEX current r126 managed-services launcher" -ForegroundColor Cyan
   Write-Host "Persistent log: $LogPath"
-  if ($SkipRender -and $RenderBrokerOnly) { throw "-SkipRender and -RenderBrokerOnly cannot be used together." }
-  if ($SkipEnergy -and $EnergyWorkerOnly) { throw "-SkipEnergy and -EnergyWorkerOnly cannot be used together." }
+  Write-Host "Scope: current-main r126 Report + warm Render only." -ForegroundColor Green
+  Write-Host "Protected: Energy worker, Energy broker, Engineering revisions, and project data are not changed by this launcher." -ForegroundColor Green
+
+  if ($SkipReport -and $SkipRender -and -not $ValidateOnly) {
+    throw "Both Report and Render were skipped; nothing was requested for deployment."
+  }
 
   $GCloud = Require-Command "gcloud"
-  if (-not (Test-GCloudAuth $GCloud)) {
+  if (-not $ValidateOnly -and -not (Test-GCloudAuth $GCloud)) {
     Write-Host ""
     Write-Host "Google Cloud authorization is required once. Opening Google sign-in..." -ForegroundColor Yellow
-    if ((Invoke-NativeExitCode $GCloud @("auth","login")) -ne 0 -or -not (Test-GCloudAuth $GCloud)) {
+    if ((Invoke-NativeExitCode $GCloud @("auth", "login")) -ne 0 -or -not (Test-GCloudAuth $GCloud)) {
       throw "Google Cloud authentication did not complete successfully."
     }
     Write-Host "Google Cloud authorization confirmed." -ForegroundColor Green
   }
 
-  # Firebase CLI is required only when the Energy broker itself is deployed.
-  # r69 EnergyWorkerOnly updates the existing private Cloud Run worker through
-  # gcloud and deliberately leaves the already-active broker untouched.
-  if (-not $SkipEnergy -and -not $EnergyWorkerOnly) {
-    $Firebase = Require-Command "firebase"
-    if (-not (Test-FirebaseAuth $Firebase)) {
-      Write-Host ""
-      Write-Host "Firebase authorization is required once. Opening Google sign-in; deployment will resume automatically after approval..." -ForegroundColor Yellow
-      if ((Invoke-NativeExitCode $Firebase @("login","--reauth")) -ne 0 -or -not (Test-FirebaseAuth $Firebase)) {
-        throw "Firebase authentication did not complete successfully."
-      }
-    }
-    $env:REVEX_FIREBASE_AUTH_VERIFIED = "1"
-    Write-Host "Firebase authorization confirmed for the Energy broker deployment chain." -ForegroundColor Green
-  } elseif ($EnergyWorkerOnly) {
-    Remove-Item Env:REVEX_FIREBASE_AUTH_VERIFIED -ErrorAction SilentlyContinue
-    Write-Host "Firebase CLI skipped: r69 Energy worker-only deployment uses gcloud and preserves the active broker." -ForegroundColor Green
-  } else {
-    Remove-Item Env:REVEX_FIREBASE_AUTH_VERIFIED -ErrorAction SilentlyContinue
-    Write-Host "Firebase CLI skipped: Energy is not being deployed." -ForegroundColor Green
-  }
-
-  $env:CI = "1"
-
-  if (-not $RenderBrokerOnly) {
-    $artifactArgs = @("artifacts","repositories","describe","revex","--location",$Region,"--project",$ProjectId)
-    if ((Invoke-NativeExitCode $GCloud $artifactArgs -Quiet) -eq 0) {
-      $env:REVEX_ARTIFACT_REPOSITORY_VERIFIED = "1"
-      Write-Host "Existing REVEX Artifact Registry repository confirmed; creation will be skipped." -ForegroundColor Green
-    } else {
-      $env:REVEX_ARTIFACT_REPOSITORY_VERIFIED = "0"
-    }
-  } else {
-    Remove-Item Env:REVEX_ARTIFACT_REPOSITORY_VERIFIED -ErrorAction SilentlyContinue
-    Write-Host "Artifact Registry probe skipped: broker-only resume does not build an image." -ForegroundColor Green
-  }
-
-  Write-Host "Refreshing Windows-safe REVEX deployment bootstrap from GitHub main..." -ForegroundColor Cyan
-  Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $TempScript
+  Write-Host "Refreshing the current-main deployment bootstrap..." -ForegroundColor Cyan
+  Invoke-WebRequest -UseBasicParsing -Uri $BootstrapUri -OutFile $TempScript
   if (-not (Test-Path -LiteralPath $TempScript -PathType Leaf) -or (Get-Item -LiteralPath $TempScript).Length -lt 1000) {
     throw "Current REVEX deployment bootstrap could not be downloaded completely."
   }
 
-  $args = @("-NoProfile","-ExecutionPolicy","Bypass","-File",$TempScript,"-ProjectId",$ProjectId,"-Region",$Region)
-  if ($SkipEnergy) { $args += "-SkipEnergy" }
+  $args = @(
+    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $TempScript,
+    "-ProjectId", $ProjectId, "-Region", $Region
+  )
+  if ($SkipReport) { $args += "-SkipReport" }
   if ($SkipRender) { $args += "-SkipRender" }
-  if ($RenderBrokerOnly) { $args += "-RenderBrokerOnly" }
-  if ($EnergyWorkerOnly) { $args += "-EnergyWorkerOnly" }
+  if ($ValidateOnly) { $args += "-ValidateOnly" }
   if ($NoPause) { $args += "-NoPause" }
 
   $ExitCode = Invoke-NativeExitCode "powershell.exe" $args
-  if ($ExitCode -ne 0) { throw "Current REVEX bootstrap exited with code $ExitCode." }
+  if ($ExitCode -ne 0) { throw "Current REVEX r126 bootstrap exited with code $ExitCode." }
 
   Write-Host ""
-  Write-Host "PASS: REVEX current managed-services launcher completed." -ForegroundColor Green
+  if ($ValidateOnly) {
+    Write-Host "PASS: current r126 deployment chain validated; no cloud service was changed." -ForegroundColor Green
+  }
+  else {
+    Write-Host "PASS: current r126 Report/Render deployment launcher completed." -ForegroundColor Green
+    Write-Host "Energy remained untouched by contract." -ForegroundColor Green
+  }
   $ExitCode = 0
 }
 catch {
   Write-Host ""
-  Write-Host "REVEX current managed-services launcher stopped safely." -ForegroundColor Red
+  Write-Host "REVEX current r126 managed-services launcher stopped safely." -ForegroundColor Red
   Write-Host $_.Exception.Message -ForegroundColor Red
   Write-Host "Persistent log: $LogPath" -ForegroundColor Yellow
   $ExitCode = 1
