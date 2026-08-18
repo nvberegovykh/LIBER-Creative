@@ -13,9 +13,15 @@ on:
       - 'docs/liber-apps/apps/revex/sync-docs-r24.js'
       - 'docs/liber-apps/apps/revex/blocks-palette-r126.js'
       - 'docs/liber-apps/js/wallt-agent.js'
+      - 'docs/liber-apps/js/firebase-service.js'
       - 'src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs'
       - 'src/Liber.Revex.Revit/UI/RendairWindowManager.cs'
       - 'src/Liber.Revex.Revit/Services/FamilyPlacementService.cs'
+      - 'server/firebase-functions/main.js'
+      - 'server/firebase-functions/index.js'
+      - 'server/firebase-functions/project-chat.js'
+      - 'server/firebase-functions/project-access.js'
+      - 'server/firebase-functions/package.json'
       - '.github/scripts/verify-revex-wallt-control-plane.js'
       - '.github/scripts/verify-revex-current-platform-connections.js'
       - '.github/workflows/revex-wallt-control-plane-validation.yml'
@@ -34,6 +40,8 @@ jobs:
           node --check docs/liber-apps/apps/revex/wallt-control-plane.js
           node --check docs/liber-apps/apps/revex/wallt-cycle-history.js
           node --check docs/liber-apps/apps/revex/ui-integrity.js
+          node --check server/firebase-functions/main.js
+          node --check server/firebase-functions/project-chat.js
           node --check .github/scripts/verify-revex-wallt-control-plane.js
           node --check .github/scripts/verify-revex-current-platform-connections.js
       - name: Verify isolated helper and fixer channels
