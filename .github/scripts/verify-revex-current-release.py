@@ -53,6 +53,11 @@ gbxml = read("src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_
 dyn = json.loads(read("src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn"))
 ui = read("docs/liber-apps/apps/revex/ui-integrity.js")
 mobile = read("docs/liber-apps/apps/revex/mobile-final-r122.js")
+docs_pages = read("docs/liber-apps/apps/revex/docs-pages-r115.js")
+chat_boundary = read("docs/liber-apps/apps/revex/chat-convergence-r136.js")
+blocks_palette = read("docs/liber-apps/apps/revex/blocks-palette-r126.js")
+blocks_bridge = read("src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs")
+family_placement = read("src/Liber.Revex.Revit/Services/FamilyPlacementService.cs")
 design_versions = read("docs/liber-apps/apps/revex/design-versions-r52.js")
 workspace = read("docs/liber-apps/apps/revex/workspace-r51.js")
 render_agent = read("docs/liber-apps/apps/revex/render-agent.js")
@@ -68,6 +73,7 @@ assert release["authority"] == "canonical-current-files"
 assert release["operatorEntrypoint"] == "FINALIZE_REVEX.cmd"
 assert release["acceptanceAction"] == "one fresh SYNC ENGINEERING after successful finalization"
 assert release["current"]["releaseVerifier"] == ".github/scripts/verify-revex-current-release.py"
+assert release["current"]["chatBoundaryRuntime"] == "docs/liber-apps/apps/revex/chat-convergence-r136.js"
 assert release["current"]["energyDeployer"] == "server/revex-energy-worker/deploy-current.ps1"
 assert release["current"]["reportDeployer"] == "server/revex-report-functions/deploy-current.ps1"
 assert release["current"]["accessDeployer"] == "firebase/deploy-current-access.ps1"
@@ -135,12 +141,33 @@ must(render_deploy,
      "Assert-Warm", "Build exact current Render worker image")
 
 must(ui,
+     "chat-convergence-r136.js?v=20260818r136-project-chat1",
      "mobile-final-r122.js", "appearance-convergence-r126.js", "docs-convergence-r126.js",
+     "docs-pages-r115.js?v=20260818r134-docs-linked-pages1",
      "issues-convergence-r126.js", "issues-inspector-r126.js", "history-daily-r126.js",
      "blocks-palette-r126.js", "render-convergence-r126.js", "bim-properties-r117.js")
 must(mobile,
      "repeat(7,minmax(0,1fr))", "max-width:100vw", "r122-look", "r122-move",
      "function setWalk(on)", "function normalizeDocs()", "revex-r122-guide")
+must(docs_pages,
+     "fullSetAuthority:true", "legacySheetProjection:true", "function projectRows(rows)",
+     "derivedFromFullSet:true", "const rows=projectRows(s.library)", "legacyStandaloneSheets:'folded-into-parent'")
+must(chat_boundary,
+     "owner:'secure-chat'", "projectIsolated:true", "storageOwner:'secure-chat'",
+     "Project changed while Chat connection was resolving.", "Blocked a cross-project Chat connection",
+     "sessionStorage.removeItem('liber_revex_chat_draft')", "CHAT_FRAME_BOUNDARY")
+must(blocks_palette,
+     "placementDistanceFt:3", "viewer.camera.position.clone().addScaledVector(dir,3)",
+     "return{x:target.x,y:-target.z,z:target.y", "type:'liber:revex-family-place-r126'")
+must(blocks_bridge,
+     "PendingFamilies[token] = new PendingFamily", "liber:revex-family-place-r126",
+     "RevexFamilyPlacementExternalHandler", "_familyExternalEvent.Raise()")
+must(family_placement,
+     "double targetZ = double.IsFinite(request.Z) ? request.Z : level.Elevation;",
+     "TryNearestFacePlacement(doc, symbol, point)", "TryNearestHostedPlacement(doc, symbol, level, point)",
+     "MaxHostDistanceFt = 8.0", "MaxZipEntries = 2048", "MaxExpandedZipBytes = 512L * 1024L * 1024L",
+     "destination.StartsWith(root, StringComparison.OrdinalIgnoreCase)", "unsupported placement type")
+forbid(family_placement, "ZipFile.ExtractToDirectory(path, extractedFolder)")
 must(design_versions,
      "liber.revex.design-property-versions.v1", "lightweight-property-overlay",
      "Sync to Design Book", "async function syncToDesignBook",
@@ -219,7 +246,7 @@ must(dev_contract,
      "Diagnostics are evidence, not workload", "The objective is not to accumulate fixes")
 
 expected_capabilities = {
-    "projectIdentity", "bim", "mobile", "designBook", "specBook", "docs",
+    "projectIdentity", "bim", "mobile", "designBook", "specBook", "docs", "chat",
     "issues", "history", "blocks", "render", "energy",
 }
 assert set(release.get("requiredCapabilities") or {}) == expected_capabilities
@@ -231,6 +258,9 @@ print(json.dumps({
     "versionedFilesShadowOnly": True,
     "shadowIntegrityCheckoutLineEndingInvariant": True,
     "fullUiAndBimContract": True,
+    "docsLinkedPageRuntimeRequired": True,
+    "projectIsolatedSecureChatRequired": True,
+    "blocksRevitPlacementRequired": True,
     "googleRenderCanonical": True,
     "selfHostedRenderShadowOnly": True,
     "memberIssueWriteProven": True,
