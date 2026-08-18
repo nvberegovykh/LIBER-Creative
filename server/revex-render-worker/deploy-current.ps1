@@ -102,9 +102,7 @@ function Assert-Warm([string]$GCloud,[string]$Bucket,$Candidate,[int]$Minutes=35
       if($payload){
         if([string]$payload.warmToken-ne [string]$Candidate.WarmToken){Start-Sleep -Seconds 10;continue}
         if($payload.ok-eq $false-and $payload.error){throw "Render server model warm failed: $($payload.error)"}
-        if($payload.ok-eq $true-and $payload.serverWarm-eq $true-and [string]$payload.model-eq 'Qwen/Qwen-Image-Edit-2511' -and [string]$payload.revision-eq '6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9'){
-          return
-        }
+        if($payload.ok-eq $true-and $payload.serverWarm-eq $true-and [string]$payload.model-eq 'Qwen/Qwen-Image-Edit-2511' -and [string]$payload.revision-eq '6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9'){return}
       }
     }
     Start-Sleep -Seconds 10
@@ -119,9 +117,7 @@ try {
   Write-Host "Candidate service: $Service"
   Write-Host "Contract: private persistent GPU, source-bound image, server warm proof before broker cutover." -ForegroundColor Green
 
-  foreach($required in @($FunctionsDir,$CloudBuild,(Join-Path $Root 'REVEX_CURRENT_RELEASE.json'),(Join-Path $Root '.github\scripts\verify-revex-r127-single-controller.py'))){
-    if(-not(Test-Path -LiteralPath $required)){throw "Render deployment source is incomplete: $required"}
-  }
+  foreach($required in @($FunctionsDir,$CloudBuild,(Join-Path $Root 'REVEX_CURRENT_RELEASE.json'),(Join-Path $Root '.github\scripts\verify-revex-r127-single-controller.py'))){if(-not(Test-Path -LiteralPath $required)){throw "Render deployment source is incomplete: $required"}}
   $GCloud=Require-Command 'gcloud'
   $Python=Require-Command 'python'
   Require-Ok "Validate full current REVEX revision before Render cloud changes" $Python @('.github\scripts\verify-revex-r127-single-controller.py')
@@ -141,9 +137,7 @@ try {
     Add-ProjectRole $GCloud "serviceAccount:$WorkerSa" 'roles/datastore.user' 'Grant Render worker job progress access'
     Add-ProjectRole $GCloud "serviceAccount:$BrokerSa" 'roles/storage.objectAdmin' 'Grant Render broker snapshot access'
     Add-ProjectRole $GCloud "serviceAccount:$BrokerSa" 'roles/datastore.user' 'Grant Render broker job access'
-    if(-not(Native-Ok $GCloud @('artifacts','repositories','describe',$Repository,'--location',$Region,'--project',$ProjectId))){
-      Require-Ok 'Create REVEX Artifact Registry repository' $GCloud @('artifacts','repositories','create',$Repository,'--repository-format','docker','--location',$Region,'--project',$ProjectId,'--description','REVEX managed runtimes') -Quiet
-    }
+    if(-not(Native-Ok $GCloud @('artifacts','repositories','describe',$Repository,'--location',$Region,'--project',$ProjectId))){Require-Ok 'Create REVEX Artifact Registry repository' $GCloud @('artifacts','repositories','create',$Repository,'--repository-format','docker','--location',$Region,'--project',$ProjectId,'--description','REVEX managed runtimes') -Quiet}
     Require-Ok 'Build exact current Render worker image' $GCloud @('builds','submit',$Root,'--project',$ProjectId,'--config',$CloudBuild,'--substitutions',"_REGION=$Region,_REPOSITORY=$Repository,_IMAGE=revex-render-worker,_TAG=$ImageTag")
     Require-Ok 'Deploy private warm Render candidate' $GCloud @(
       'run','deploy',$Service,'--project',$ProjectId,'--region',$Region,'--platform','managed',
@@ -167,9 +161,9 @@ try {
   $Candidate=Resolve-Candidate $GCloud
   Assert-Warm $GCloud $Bucket $Candidate 2
   $Npm=Require-Command 'npm';$Node=Require-Command 'node'
-  Require-Ok 'Install pinned Render broker dependencies' $Npm @('install','--ignore-scripts','--no-audit','--no-fund')
   Push-Location $FunctionsDir
   try {
+    Require-Ok 'Install pinned Render broker dependencies' $Npm @('install','--ignore-scripts','--no-audit','--no-fund')
     $package=Get-Content -LiteralPath (Join-Path $FunctionsDir 'package.json') -Raw|ConvertFrom-Json
     if([string]$package.engines.node-ne '22'){throw 'REVEX render broker package.json must pin engines.node to 22.'}
     Require-Ok 'Preflight callable Render broker export' $Node @('-e',"const m=require('./index.js');if(typeof m.runRevexRender!=='function')throw new Error('runRevexRender export missing');console.log('REVEX render broker module OK')")
