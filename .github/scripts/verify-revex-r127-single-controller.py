@@ -2,6 +2,7 @@
 from pathlib import Path
 import importlib.util
 import json
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -26,7 +27,6 @@ gbxml = read("src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_
 dyn = read("src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn")
 ui = read("docs/liber-apps/apps/revex/ui-integrity.js")
 
-# One user command, one fresh source clone, one SHA across every mutable runtime.
 require(launcher,
         "raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/FINALIZE_REVEX.ps1",
         "REVEX one-command current release finalizer",
@@ -48,7 +48,6 @@ forbid(controller,
        "CanonicalSourceCommit",
        "FINALIZE_REVEX_CURRENT")
 
-# Current UI/Docs/Issues/History/Render work is part of the same gate, not a separate release.
 require(controller,
         "verify-revex-current-generation-r53.js",
         "verify-revex-r99-webview-root-cache.js",
@@ -62,7 +61,6 @@ require(ui,
         "blocks-palette-r126.js",
         "render-convergence-r126.js")
 
-# Missing VT is intentionally boring: actual value wins; otherwise exactly 0.45.
 require(touchups,
         "MISSING_VT = 0.45",
         'authority = "REVEX_FIXED_MISSING_VT_0_45"',
@@ -73,7 +71,6 @@ forbid(touchups,
        'authority = "CODE_FALLBACK_TINTED"',
        'authority = "CODE_FALLBACK_CLEAR"')
 
-# Geometry corrections proven in r125 remain mandatory for every fresh Engineering Sync.
 for marker in (
     "REVEX_R125_GEOMETRY_TOUCHUPS_BEGIN",
     "bbox-whole-door-r125",
@@ -83,7 +80,6 @@ for marker in (
 ):
     require(gbxml, marker)
 
-# Dynamo and external exporter must remain one source, preventing two geometry behaviors.
 graph = json.loads(dyn)
 nodes = [n for n in graph.get("Nodes", []) if "PythonNodeModels.PythonNode" in str(n.get("ConcreteType") or "")]
 assert len(nodes) == 1, "gbXML Dynamo must contain exactly one authoritative Python node"
@@ -91,17 +87,16 @@ embedded = str(nodes[0].get("Code") or "").replace("\r\n", "\n").rstrip()
 external = gbxml.replace("\r\n", "\n").rstrip()
 assert embedded == external, "Dynamo embedded gbXML source drifted from external exporter"
 
-# Typed domain contracts replace downstream filename guessing. Filenames remain only boundary adapters.
 spec = importlib.util.spec_from_file_location("revex_energy_contracts", contracts_path)
 assert spec and spec.loader
 contracts = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = contracts
 spec.loader.exec_module(contracts)
 assert abs(float(contracts.DEFAULT_MISSING_VT) - 0.45) < 1e-9
 for name in ("ArtifactKind", "ArtifactSpec", "ArtifactRef", "EvidenceBundle", "FilingPackage", "ContractError"):
     assert hasattr(contracts, name), name
 require(runner, "EvidenceBundle.from_request(request_path).require_sync_evidence()", "DEFAULT_MISSING_VT")
 
-# Exercise the typed package contract, not just textual markers.
 with tempfile.TemporaryDirectory(prefix="revex-r127-contract-") as tmp:
     root = Path(tmp)
     for spec_row in contracts.SPECS:
