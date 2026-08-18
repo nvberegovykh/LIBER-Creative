@@ -9,6 +9,7 @@ on:
       - 'agent/revex-auto-firebase-auth-r59-*'
       - 'agent/revex-broker-docs-r64-*'
     paths:
+      - 'DEPLOY_REVEX_CURRENT_SERVICES.cmd'
       - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
       - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
       - 'server/revex-report-functions/DEPLOY_REPORT_R126.ps1'
@@ -17,6 +18,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - 'DEPLOY_REVEX_CURRENT_SERVICES.cmd'
       - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
       - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
       - 'server/revex-report-functions/DEPLOY_REPORT_R126.ps1'
@@ -74,11 +76,25 @@ jobs:
           $launcher = Get-Content -Raw .\DEPLOY_REVEX_CURRENT_SERVICES.ps1
           if (-not $bootstrap.Contains('@($active).Count')) { throw 'Bootstrap is missing StrictMode-safe active-account normalization.' }
           if (-not $launcher.Contains('@($output).Count')) { throw 'Launcher is missing StrictMode-safe active-account normalization.' }
-      - name: Require automatic gcloud recovery persistent logs and current-only scope
+      - name: Require self-refresh gcloud recovery persistent logs and current-only scope
         shell: powershell
         run: |
+          $cmd = Get-Content -Raw .\DEPLOY_REVEX_CURRENT_SERVICES.cmd
           $launcher = Get-Content -Raw .\DEPLOY_REVEX_CURRENT_SERVICES.ps1
           $bootstrap = Get-Content -Raw .\DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1
+
+          foreach ($required in @(
+            'raw.githubusercontent.com/nvberegovykh/LIBER-Creative/main/DEPLOY_REVEX_CURRENT_SERVICES.ps1',
+            'REVEX current r126 managed-services deployment',
+            'Energy was not changed by the current finalization path.',
+            'pause >nul'
+          )) {
+            if (-not $cmd.Contains($required)) { throw "Managed .cmd launcher is missing current self-refresh contract: $required" }
+          }
+          foreach ($forbidden in @('DEPLOY_ENERGY_CURRENT.ps1','DEPLOY_ENERGY_WORKER_ONLY_R69.ps1','EnergyWorkerOnly','PUBLISH_REVEX_R49.ps1')) {
+            if ($cmd.Contains($forbidden)) { throw "Managed .cmd launcher revives forbidden historical path: $forbidden" }
+          }
+
           if (-not $launcher.Contains('Invoke-NativeExitCode $GCloud @("auth", "login")')) { throw 'Managed launcher is missing gcloud automatic login.' }
           foreach ($required in @('DEPLOY_REVEX_CURRENT_SERVICES.latest.log','Start-Transcript','Report + warm Render only')) {
             if (-not $launcher.Contains($required)) { throw "Managed launcher is missing current auth/logging contract: $required" }
