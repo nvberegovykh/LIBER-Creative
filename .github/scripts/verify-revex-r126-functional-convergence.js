@@ -23,8 +23,12 @@ const bridge=read('src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs');
 const placement=read('src/Liber.Revex.Revit/Services/FamilyPlacementService.cs');
 const plans=read('src/Liber.Revex.Revit/Services/AffectedPlanExportService.cs');
 
-must(index,'ui-integrity.js?v=20260818r128-full-convergence1','root cache key');
-must(ui,"BUILD='20260818r128-full-convergence1'",'current loader');
+const uiBuild=(ui.match(/const BUILD=['"]([^'"]+)['"]/)||[])[1];
+const rootBuild=(index.match(/ui-integrity\.js\?v=([^"']+)/)||[])[1];
+if(!uiBuild)throw new Error('current loader BUILD marker is missing');
+if(!rootBuild)throw new Error('root cache key is missing');
+if(rootBuild!==uiBuild)throw new Error(`current UI owner mismatch: index=${rootBuild} ui=${uiBuild}`);
+must(ui,'mobile-safe-r133.js','current mobile safety owner');
 for(const file of ['appearance-convergence-r126.js','docs-convergence-r126.js','issues-convergence-r126.js','issues-inspector-r126.js','history-daily-r126.js','blocks-palette-r126.js','render-convergence-r126.js']) must(ui,file,'r126 loader');
 
 must(pages,'fullSetAuthority:true','Docs canonical owner');
@@ -92,4 +96,4 @@ if(tabs<7)throw new Error(`main module tabs missing: ${tabs}`);
 for(const forbidden of ['runRevexEnergy','GeometryCo','COMcheck']){
   mustNot(blocks,forbidden,'Blocks scope');mustNot(docs,forbidden,'Docs scope');mustNot(issues,forbidden,'Issues scope');mustNot(renderClient,forbidden,'Render client scope');
 }
-console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',docs:'single-final-owner',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active+empty-selection-inspector',history:'NYC-day-technical',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'google-current+qwen-shadow',energy:'scope-preserved'}));
+console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',uiOwner:uiBuild,docs:'single-final-owner',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active+empty-selection-inspector',history:'NYC-day-technical',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'google-current+qwen-shadow',energy:'scope-preserved'}));
