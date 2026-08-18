@@ -108,7 +108,13 @@ must(finalizer,
      "server\\revex-report-functions\\deploy-current.ps1",
      "firebase\\deploy-current-access.ps1",
      "REVEX one-command full current release finalizer",
-     "Scope: Companion + BIM + Design Book + Spec Book + Docs + Issues + History + Blocks + Render + Revit add-in + Energy + Report + access.",
+     "Scope: Companion + WALLT Helper/Fixer + BIM + Design Book + Spec Book + Docs + Chat + Issues + History + Blocks + Render + Revit add-in + Energy + Report + access.",
+     "Docs Full Set + linked-page behavioral contract",
+     "Project-isolated Secure Chat contract",
+     "Executable WALLT Helper/Fixer adapter contract",
+     "docs-pages-r115.js",
+     "BUILD='20260818r134-docs-linked-pages1'",
+     "wallt-fixer-adapters-r137.js",
      "Verify canonical Google Render provider",
      "gemini-3.1-flash-image",
      "Stage and verify current Energy candidate without broker cutover",
@@ -124,7 +130,7 @@ forbid(finalizer,
        "Cut Render broker", "DEPLOY_ENERGY_R127.ps1", "DEPLOY_RENDER_R126.ps1", "DEPLOY_REPORT_R126.ps1",
        "RECOVER_REVEX_ENERGY_CURRENT", "FINALIZE_REVEX_CURRENT", "PUBLISH_REVEX_R49")
 assert finalizer.index("Stage and verify current Energy candidate") < finalizer.index("Verify current Companion UI and Render runtime")
-assert finalizer.index("Deploy preserved source-bound project access rules") < finalizer.index("Cut Energy broker to the already-verified current Energy candidate") if "Cut authenticated Energy broker over" in finalizer else finalizer.index("Deploy preserved source-bound project access rules") < finalizer.index("Cut Energy broker to the already-verified current candidate")
+assert finalizer.index("Deploy preserved source-bound project access rules") < finalizer.index("Cut Energy broker to the already-verified current candidate")
 assert finalizer.index("Cut Energy broker to the already-verified current candidate") < finalizer.index("Install the exact same source revision into Revit")
 
 for deployer in (energy_deploy, report_deploy, access_deploy):
