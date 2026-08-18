@@ -56,17 +56,20 @@ jobs:
           node --check docs/liber-apps/apps/revex/docs-pages-r68.js
       - name: Prove Energy, deployment, Docs and BIM appearance contracts
         run: python .github/scripts/verify-revex-r69-energy-finish.py
-      - name: Prove worker-only path bypasses Firebase and renderer
+      - name: Preserve historical worker-only primitive without making it current
         shell: pwsh
         run: |
           $launcher = Get-Content -Raw DEPLOY_REVEX_CURRENT_SERVICES.ps1
           $bootstrap = Get-Content -Raw DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1
           $worker = Get-Content -Raw server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1
-          foreach($marker in @('-EnergyWorkerOnly','Firebase CLI skipped: r69 Energy worker-only deployment uses gcloud')) { if(-not $launcher.Contains($marker)){throw "launcher missing $marker"} }
-          foreach($marker in @('EnergyWorkerOnly = $energyWorkerOnly','r69 Energy worker-only deployment preserves the active broker')) { if(-not $bootstrap.Contains($marker)){throw "bootstrap missing $marker"} }
-          if($worker -match 'Require-Command\s+["'']firebase["'']' -or $worker -match '\$Firebase\b' -or $worker -match 'functions:revex-energy') { throw 'worker-only deployment invokes or requires firebase-tools' }
-          if($worker -match 'revex-render-worker' -or $worker -match 'DEPLOY_RENDER' -or $worker -match 'runRevexRender') { throw 'worker-only deployment touches renderer infrastructure' }
+          if($worker -match 'Require-Command\s+["'']firebase["'']' -or $worker -match '\$Firebase\b' -or $worker -match 'functions:revex-energy') { throw 'preserved worker-only deployment invokes or requires firebase-tools' }
+          if($worker -match 'revex-render-worker' -or $worker -match 'DEPLOY_RENDER' -or $worker -match 'runRevexRender') { throw 'preserved worker-only deployment touches renderer infrastructure' }
           foreach($marker in @('Build exact current Energy worker image','Deploy private current Energy worker','Preserve Energy broker invocation access','REVEX_NATIVE_EXITCODE_AUTHORITATIVE')) { if(-not $worker.Contains($marker)){throw "worker-only deploy missing $marker"} }
+          foreach($forbidden in @('EnergyWorkerOnly','DEPLOY_ENERGY_WORKER_ONLY_R69.ps1','DEPLOY_ENERGY_CURRENT.ps1')) {
+            if($launcher.Contains($forbidden)){throw "current r126 launcher revives historical Energy marker $forbidden"}
+            if($bootstrap.Contains($forbidden)){throw "current r126 bootstrap revives historical Energy marker $forbidden"}
+          }
+          foreach($marker in @('DEPLOY_REPORT_R126.ps1','DEPLOY_RENDER_R126.ps1')) { if(-not $bootstrap.Contains($marker)){throw "current bootstrap missing $marker"} }
       - name: Preserve current REVEX contracts
         run: |
           node .github/scripts/verify-revex-current-generation-r53.js
