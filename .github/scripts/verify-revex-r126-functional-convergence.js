@@ -6,6 +6,7 @@ const must=(text,marker,label)=>{if(!text.includes(marker))throw new Error(`${la
 const mustNot=(text,marker,label)=>{if(text.includes(marker))throw new Error(`${label}: forbidden ${marker}`)};
 const index=read('docs/liber-apps/apps/revex/index.html');
 const ui=read('docs/liber-apps/apps/revex/ui-integrity.js');
+const mobileSheet=read('docs/liber-apps/apps/revex/mobile-sheet-r142.js');
 const docs=read('docs/liber-apps/apps/revex/docs-convergence-r126.js');
 const pages=read('docs/liber-apps/apps/revex/docs-pages-r115.js');
 const walltUi=read('docs/liber-apps/apps/revex/wallt-ui-r138.js');
@@ -23,6 +24,8 @@ const report=read('server/revex-report-functions/index.js');
 const bridge=read('src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs');
 const placement=read('src/Liber.Revex.Revit/Services/FamilyPlacementService.cs');
 const plans=read('src/Liber.Revex.Revit/Services/AffectedPlanExportService.cs');
+const revitRequests=read('src/Liber.Revex.Revit/Revit/RevitRequestHandler.cs');
+const app=read('src/Liber.Revex.Revit/App.cs');
 
 const uiBuild=(ui.match(/const BUILD=['"]([^'"]+)['"]/)||[])[1];
 const rootBuild=(index.match(/ui-integrity\.js\?v=([^"']+)/)||[])[1];
@@ -31,14 +34,26 @@ if(!rootBuild)throw new Error('root cache key is missing');
 if(rootBuild!==uiBuild)throw new Error(`current UI owner mismatch: index=${rootBuild} ui=${uiBuild}`);
 must(ui,'mobile-safe-r133.js','current mobile safety owner');
 must(ui,"wallt-ui-r138.js?v=20260818r138-wallt-ui1",'visible WALLT loader');
+must(ui,"mobile-sheet-r142.js?v=20260819r142-mobile-sheet1",'reused-node mobile sheet loader');
 for(const file of ['appearance-convergence-r126.js','docs-convergence-r126.js','issues-convergence-r126.js','issues-inspector-r126.js','history-daily-r126.js','blocks-palette-r126.js','render-convergence-r126.js']) must(ui,file,'r126 loader');
 mustNot(ui,'mobile-design-r139.js','removed r139 mobile rewrite');
 mustNot(ui,'mobile-convergence-r140.js','removed r140 mobile rewrite');
 mustNot(ui,'chat-embed-r141.js','removed Secure Chat projection wrapper');
+must(mobileSheet,"const BUILD='20260819r142-mobile-sheet1'",'r142 mobile sheet build');
+must(mobileSheet,'reusesExistingNodes:true','r142 reuses actual owners');
+must(mobileSheet,"a:{label:'Model'",'BIM bottom sheet Model tab');
+must(mobileSheet,"b:{label:'Properties'",'BIM bottom sheet Properties tab');
+must(mobileSheet,"a:{label:'Selector'",'Design bottom sheet Selector tab');
+must(mobileSheet,"b:{label:'Position'",'Design bottom sheet Position tab');
+must(mobileSheet,"#view-chat>.chat-head{display:none",'mobile Chat projection hides only REVEX outer chrome');
+mustNot(mobileSheet,'secureChatApp','Secure Chat internals remain native');
+must(mobileSheet,"#revex-r109-actions-menu",'WALLT mobile entry uses existing actions menu');
+must(mobileSheet,'.viewport-tools.viewer-controls{box-sizing:border-box!important;max-width:calc(100% - 24px)','viewer tools bounded to viewport container');
 must(walltUi,"const BUILD='20260818r138-wallt-ui1'",'visible WALLT build');
 must(walltUi,"controlOwner:'wallt-control-plane'",'visible WALLT control owner');
 must(walltUi,'storageOwner:null','visible WALLT no storage owner');
 require('./verify-revex-r138-wallt-ui.js');
+require('./verify-revex-r142-mobile-sheet.js');
 
 must(pages,'fullSetAuthority:true','Docs canonical owner');
 must(pages,'derivedFromFullSet:true','Docs linked sheet authority');
@@ -76,7 +91,7 @@ must(plans,'normalized-revit-plan-crop-v1','Revit projected cloud evidence');
 must(plans,'unlocatedChangedElementIds','deletion no-guess evidence');
 
 must(blocks,"placementDistanceFt:3",'Blocks distance');
-must(blocks,"button.hidden=!(hosted()&&v()?.walk)",'Blocks distance');
+must(blocks,"button.hidden=!(hosted()&&v()?.walk)",'Blocks Walk-only availability');
 must(blocks,"type:'liber:revex-family-place-r126'",'Blocks placement bridge');
 must(bridge,'https://www.blocksrvt.com/en/families','owned Blocks provider');
 must(bridge,'PendingFamilies','opaque provider family token');
@@ -100,9 +115,14 @@ must(renderClient,"providerOwner:'render-agent.js'",'canonical Google Render own
 must(renderClient,'localModelCache:false','no client model cache');
 must(renderClient,"frame.setAttribute('src','about:blank')",'legacy iframe suppressed');
 
+must(revitRequests,'ApplyExistingSpatialCheckpointPolicy','Energy spatial checkpoint policy');
+must(revitRequests,'topologyMutation=false','complete existing Spaces are read-only');
+must(revitRequests,'CreateOrFixSpaces = false','complete checkpoint disables NewSpace/NewSpaces2');
+mustNot(app,'RevexSpaceFailureShield','global Space failure handler removed');
+
 const tabs=(index.match(/data-view="(?:bim|design|spec|docs|energy|chat|history)"/g)||[]).length;
 if(tabs<7)throw new Error(`main module tabs missing: ${tabs}`);
 for(const forbidden of ['runRevexEnergy','GeometryCo','COMcheck']){
   mustNot(blocks,forbidden,'Blocks scope');mustNot(docs,forbidden,'Docs scope');mustNot(issues,forbidden,'Issues scope');mustNot(renderClient,forbidden,'Render client scope');mustNot(walltUi,forbidden,'WALLT UI scope');
 }
-console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',uiOwner:uiBuild,wallt:'visible-helper-fixer-current-control',mobile:'proven-r109+r122+r133-no-r139-r140',docs:'single-final-owner+linked-page-runtime',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active+empty-selection-inspector',history:'NYC-day-technical',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'google-current+qwen-shadow',energy:'scope-preserved'}));
+console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',uiOwner:uiBuild,wallt:'visible-helper-fixer-current-control+mobile-actions-menu',mobile:'proven-r109+r122+r133+r142-reused-node-sheet',docs:'single-final-owner+linked-page-runtime',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active+empty-selection-inspector',history:'NYC-day-technical',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'google-current+qwen-shadow',energy:'complete-existing-space-checkpoint-read-only'}));
