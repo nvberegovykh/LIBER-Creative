@@ -187,11 +187,6 @@ public sealed class RevitRequestHandler : IExternalEventHandler
                 settings.CreateOrFixSpaces &&
                 IsRecoverableSpatialTopologyFailure(ex))
             {
-                // Revit can throw an analytical-plan topology exception through Dynamo's
-                // ExecuteCommand before the Python engine can downgrade the affected level
-                // to preservation-gate evidence. Retry exactly once without topology
-                // mutation; a source-bound simplified serializer remains available after
-                // that if the exact/EADM publication gate still cannot clear.
                 sourceTopologyFallback = true;
                 RevexDiagnostics.Warn("GBXML",
                     "Revit rejected automatic Space topology at an ambiguous boundary branch. " +
@@ -211,11 +206,6 @@ public sealed class RevitRequestHandler : IExternalEventHandler
 
             bool ok = GbxmlEngineeringService.IsSuccessful(output!, settings.AuditOnly);
 
-            // The exact/EADM path is preferred, but it is not allowed to dead-end a
-            // regular SYNC ENGINEERING run. A non-publishable non-empty run already
-            // contains the current Revit Space/page evidence; simplify only geometry,
-            // preserve that same run/evidence identity, and continue with an explicit
-            // review-quality fallback marker. Ambiguous openings become opaque wall.
             if (!settings.AuditOnly && !ok && output != null &&
                 !string.IsNullOrWhiteSpace(output.RunFolder) && Directory.Exists(output.RunFolder))
             {
@@ -302,15 +292,13 @@ public sealed class RevitRequestHandler : IExternalEventHandler
             return settings;
         }
 
-        // Rooms, when present, are a conservative coverage witness. Compare by Revit
-        // LevelId rather than raw total so extra Spaces on one story cannot disguise a
-        // missing story. If the model has no Rooms, the existing MEP Space model itself
-        // is the authoritative spatial source and is left untouched.
-        Dictionary<int, int> spacesByLevel = spaces
-            .GroupBy(e => e.LevelId.IntegerValue)
+        // Revit 2026 ElementId values are 64-bit. Compare coverage by LevelId so extra
+        // Spaces on one story cannot disguise a missing story on another.
+        Dictionary<long, int> spacesByLevel = spaces
+            .GroupBy(e => e.LevelId.Value)
             .ToDictionary(g => g.Key, g => g.Count());
-        Dictionary<int, int> roomsByLevel = rooms
-            .GroupBy(e => e.LevelId.IntegerValue)
+        Dictionary<long, int> roomsByLevel = rooms
+            .GroupBy(e => e.LevelId.Value)
             .ToDictionary(g => g.Key, g => g.Count());
         int coveredRooms = roomsByLevel.Sum(row => Math.Min(
             row.Value,
@@ -336,10 +324,6 @@ public sealed class RevitRequestHandler : IExternalEventHandler
 
     private static bool IsRecoverableSpatialTopologyFailure(Exception error)
     {
-        // Keep this deliberately narrow. Only native/Dynamo failures that explicitly
-        // describe an ambiguous Room/Space/analytical boundary branch are rerun in
-        // read-mostly source-topology mode. Dependency, phase, file, authentication,
-        // and arbitrary programming failures must remain hard failures.
         for (Exception? current = error; current != null; current = current.InnerException)
         {
             string message = (current.Message ?? string.Empty).ToLowerInvariant();
