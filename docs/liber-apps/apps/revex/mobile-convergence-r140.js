@@ -1,6 +1,6 @@
 (function(root){
 'use strict';
-const BUILD='20260819r140-mobile-convergence1';
+const BUILD='20260819r140-mobile-convergence2';
 if(root.__revexMobileConvergenceR140)return;
 root.__revexMobileConvergenceR140={build:BUILD,presentationOnly:true,owner:'all-mobile-layout',floatingControls:false,inFlowPanels:true};
 
@@ -22,7 +22,8 @@ body.revex-mobile-touch .viewport-tools.viewer-controls .r140-icon{width:18px!im
 body.revex-mobile-touch #workspace{min-height:0!important;height:100%!important;overflow:hidden!important}
 body.revex-mobile-touch #workspace>.view:not([hidden]),body.revex-mobile-touch #workspace>.empty-view:not([hidden]){box-sizing:border-box!important;width:100%!important;max-width:100vw!important;min-width:0!important;height:100%!important;min-height:0!important}
 body.revex-mobile-touch #view-design:not([hidden]),body.revex-mobile-touch #view-docs:not([hidden]),body.revex-mobile-touch #view-energy:not([hidden]),body.revex-mobile-touch #view-history:not([hidden]){display:block!important;overflow-y:auto!important;overflow-x:hidden!important;-webkit-overflow-scrolling:touch!important;overscroll-behavior-y:contain!important;touch-action:pan-y!important;padding-bottom:max(18px,var(--r133-safe-bottom,0px))!important}
-body.revex-mobile-touch #view-spec:not([hidden]),body.revex-mobile-touch #view-chat:not([hidden]){display:block!important;overflow:hidden!important}
+body.revex-mobile-touch #view-spec:not([hidden]),body.revex-mobile-touch #view-chat:not([hidden]){display:grid!important;grid-template-rows:auto minmax(0,1fr)!important;height:100%!important;min-height:0!important;overflow:hidden!important}
+body.revex-mobile-touch #view-spec .spec-frame-wrap,body.revex-mobile-touch #view-chat .chat-frame-wrap{display:block!important;height:100%!important;min-height:0!important;overflow:hidden!important}
 body.revex-mobile-touch #view-spec iframe,body.revex-mobile-touch #view-chat iframe,body.revex-mobile-touch #chat-frame{display:block!important;width:100%!important;max-width:100%!important;height:100%!important;min-height:0!important;border:0!important}
 body.revex-mobile-touch #view-bim.bim-view:not([hidden]){display:block!important;height:100%!important;overflow-y:auto!important;overflow-x:hidden!important;-webkit-overflow-scrolling:touch!important;padding-bottom:max(16px,var(--r133-safe-bottom,0px))!important}
 body.revex-mobile-touch #view-bim>.viewport-wrap{display:block!important;width:100%!important;height:max(56dvh,340px)!important;min-height:340px!important;max-height:680px!important;border-right:0!important;border-bottom:1px solid var(--line)!important}
@@ -47,6 +48,10 @@ body.revex-mobile-touch #view-docs .docs-tree-wrap{display:block!important;max-h
 body.revex-mobile-touch #view-docs .docs-preview{display:block!important;height:58dvh!important;min-height:360px!important;overflow:hidden!important}
 body.revex-mobile-touch #view-energy .energy-layout,body.revex-mobile-touch #view-energy .energy-fields{grid-template-columns:1fr!important;max-width:100%!important}
 body.revex-mobile-touch #view-history{padding-left:max(10px,var(--r133-safe-left,0px))!important;padding-right:max(10px,var(--r133-safe-right,0px))!important}
+body.revex-mobile-touch #view-history .history-head{flex-direction:column!important}
+body.revex-mobile-touch #view-history .history-layout{grid-template-columns:1fr!important;height:auto!important;min-height:0!important}
+body.revex-mobile-touch #view-history .history-filters,body.revex-mobile-touch #view-history .history-inspector{max-height:none!important;overflow:visible!important}
+body.revex-mobile-touch #view-history .history-stream-wrap{min-height:42dvh!important;max-height:65dvh!important;overflow:auto!important}
 body.revex-mobile-touch #revex-wallt-open.r140-wallt-docked{position:static!important;inset:auto!important;z-index:auto!important;display:inline-grid!important;place-items:center!important;flex:0 0 34px!important;width:34px!important;min-width:34px!important;height:32px!important;min-height:32px!important;margin:0!important;padding:0!important;border-radius:8px!important;font-size:0!important;box-shadow:none!important;backdrop-filter:none!important}
 body.revex-mobile-touch #revex-wallt-open.r140-wallt-docked:after{content:none!important;display:none!important}
 body.revex-mobile-touch #revex-wallt-open.r140-wallt-docked .r140-wallt-mark{display:inline!important;font:17px/1 system-ui,sans-serif!important;letter-spacing:0!important}
@@ -101,6 +106,6 @@ function apply(){
  if(!mobile()){restoreDesktop();return}
  installDesign();installBim();dockWallt();
 }
-function install(){css();apply();root.addEventListener('resize',()=>setTimeout(apply,0),{passive:true});root.addEventListener('orientationchange',()=>setTimeout(apply,80),{passive:true});root.addEventListener('revex:source-revision-loaded',()=>setTimeout(apply,0));document.querySelectorAll('.main-nav [data-view]').forEach(b=>b.addEventListener('click',()=>setTimeout(apply,0)));setTimeout(apply,350);diag('INFO','MOBILE_CONVERGENCE_R140','One final mobile presentation owner installed. No persistent floating controls; module rails and inspectors are in-flow and reachable.',{allModules:true,design:'in-flow selector+editor',bim:'in-flow navigator+properties',docs:'single flow',energy:'single flow',spec:'full iframe',chat:'full iframe',history:'single flow',wallt:'topbar dock'})}
+function install(){css();apply();root.addEventListener('resize',()=>setTimeout(apply,0),{passive:true});root.addEventListener('orientationchange',()=>setTimeout(apply,80),{passive:true});root.addEventListener('revex:source-revision-loaded',()=>setTimeout(apply,0));document.querySelectorAll('.main-nav [data-view]').forEach(b=>b.addEventListener('click',()=>setTimeout(apply,0)));setTimeout(apply,350);diag('INFO','MOBILE_CONVERGENCE_R140','One final mobile presentation owner installed. Persistent controls stay in flow; Chat and Spec retain their native header plus frame grid.',{allModules:true,design:'in-flow selector+editor',bim:'in-flow navigator+properties',docs:'single flow',energy:'single flow',spec:'native header+frame grid',chat:'native header+frame grid+r141 embedded mobile',history:'forced single-column',wallt:'topbar dock'})}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install,{once:true});else install();
 })(window);
