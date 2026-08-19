@@ -98,6 +98,7 @@ function Assert-CurrentSource([string]$Root,[string]$Node,[string]$Python) {
     ".github\scripts\verify-revex-r136-project-chat.js",
     ".github\scripts\verify-revex-r137-wallt-fixer-adapters.js",
     ".github\scripts\verify-revex-r138-wallt-ui.js",
+    ".github\scripts\verify-revex-r142-mobile-sheet.js",
     ".github\scripts\patch-live-firestore-rules.js",
     "firebase\revex-project-access-r43.rules",
     "firebase\deploy-current-access.ps1",
@@ -110,6 +111,7 @@ function Assert-CurrentSource([string]$Root,[string]$Node,[string]$Python) {
     "docs\liber-apps\apps\revex\wallt-ui-r138.js",
     "docs\liber-apps\apps\revex\blocks-palette-r126.js",
     "docs\liber-apps\apps\revex\mobile-safe-r133.js",
+    "docs\liber-apps\apps\revex\mobile-sheet-r142.js",
     "docs\liber-apps\apps\revex\render-agent.js",
     "docs\liber-apps\apps\revex\render-convergence-r126.js",
     "src\Liber.Revex.Revit\Services\FamilyPlacementService.cs",
@@ -152,6 +154,7 @@ function Assert-CurrentSource([string]$Root,[string]$Node,[string]$Python) {
   Require-Ok "Project-isolated Secure Chat contract" $Node @(".github\scripts\verify-revex-r136-project-chat.js") $Root
   Require-Ok "Executable WALLT Helper/Fixer adapter contract" $Node @(".github\scripts\verify-revex-r137-wallt-fixer-adapters.js") $Root
   Require-Ok "Visible WALLT Helper/Fixer UI contract" $Node @(".github\scripts\verify-revex-r138-wallt-ui.js") $Root
+  Require-Ok "Compact BIM/Design mobile sheet contract" $Node @(".github\scripts\verify-revex-r142-mobile-sheet.js") $Root
   Require-Ok "Canonical full current REVEX release contract" $Python @(".github\scripts\verify-revex-current-release.py") $Root
 }
 
@@ -184,13 +187,16 @@ function Verify-LiveUi([string]$Root) {
     @{Rel="ui-integrity.js"; Marker="wallt-control-plane.js?v=20260818-wallt-control2"},
     @{Rel="ui-integrity.js"; Marker="wallt-fixer-adapters-r137.js?v=20260818r137-fixer-adapters1"},
     @{Rel="ui-integrity.js"; Marker="wallt-ui-r138.js?v=20260818r138-wallt-ui1"},
+    @{Rel="ui-integrity.js"; Marker="mobile-safe-r133.js?v=20260819r133-mobile-safe2"},
+    @{Rel="ui-integrity.js"; Marker="mobile-sheet-r142.js?v=20260819r142-mobile-sheet1"},
     @{Rel="docs-pages-r115.js"; Marker="BUILD='20260818r134-docs-linked-pages1'"},
     @{Rel="chat-convergence-r136.js"; Marker="BUILD='20260818r136-project-chat1'"},
     @{Rel="wallt-control-plane.js"; Marker="BUILD = '20260818-wallt-control2'"},
     @{Rel="wallt-cycle-history.js"; Marker="BUILD='20260818-wallt-cycle-history1'"},
     @{Rel="wallt-fixer-adapters-r137.js"; Marker="BUILD='20260818r137-fixer-adapters1'"},
     @{Rel="wallt-ui-r138.js"; Marker="BUILD='20260818r138-wallt-ui1'"},
-    @{Rel="mobile-safe-r133.js"; Marker="BUILD='20260818r133-mobile-safe1'"},
+    @{Rel="mobile-safe-r133.js"; Marker="BUILD='20260819r133-mobile-safe2'"},
+    @{Rel="mobile-sheet-r142.js"; Marker="BUILD='20260819r142-mobile-sheet1'"},
     @{Rel="workspace-r51.js"; Marker="const BUILD = '20260818-current-workspace1'"},
     @{Rel="render-agent.js"; Marker="const MODEL = 'gemini-3.1-flash-image'"},
     @{Rel="render-convergence-r126.js"; Marker="providerOwner:'render-agent.js'"}
@@ -262,7 +268,7 @@ function Install-AddinAtomically {
     $marker=[ordered]@{
       schema="liber.revex.current-release.v2";repository="nvberegovykh/LIBER-Creative";sourceCommit=$SourceSha;finalizedAtUtc=[DateTime]::UtcNow.ToString("o");
       energyWorker=$script:EnergyService;renderProvider=$RenderModel;renderRuntime="Companion render-agent.js";missingVt=0.45;actualVtWins=$true;projectAccessSourceBound=$true;
-      geometryPolicy="whole-door + curtain-panel + physical-cover corrections";uiPolicy="current owners + visible WALLT bounded fixer";previousInstalledRevisionShadow=$BackupRoot
+      geometryPolicy="whole-door + curtain-panel + physical-cover corrections";uiPolicy="current owners + visible WALLT bounded fixer + compact BIM/Design mobile sheet";previousInstalledRevisionShadow=$BackupRoot
     }|ConvertTo-Json -Depth 8
     [IO.File]::WriteAllText((Join-Path $InstalledRoot "REVEX-CURRENT-SOURCE.json"),$marker,[Text.UTF8Encoding]::new($false))
     $manifest=@"
