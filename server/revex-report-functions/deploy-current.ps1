@@ -42,7 +42,7 @@ function Verify-Function([string]$GCloud,[string]$FunctionName,[switch]$Requires
 }
 
 try{
-  Write-Host ($ChatOnly ? 'REVEX current Project Chat hotfix deployment' : 'REVEX current revision-documentation + Daily Report + Project Chat deployment') -ForegroundColor Cyan
+  if($ChatOnly){Write-Host 'REVEX current Project Chat hotfix deployment' -ForegroundColor Cyan}else{Write-Host 'REVEX current revision-documentation + Daily Report + Project Chat deployment' -ForegroundColor Cyan}
   Write-Host "Source: $SourceCandidate"
   Write-Host 'Authority: Secure Chat remains the message/storage owner; REVEX Project Chat only resolves project identity and preserves crypto lineage.' -ForegroundColor Green
   foreach($required in @(
@@ -101,7 +101,7 @@ try{
     $null=Verify-Function $GCloud 'finalizeRevexDailyReport' -RequiresStorage
   }
   $null=Verify-Function $GCloud 'ensureProjectChatHttp'
-  Write-Host ($ChatOnly ? 'PASS: current Project Chat resolver is ACTIVE, crypto-preserving and source-bound.' : 'PASS: current Daily Report + revision documentation + Project Chat resolver are ACTIVE and source-bound.') -ForegroundColor Green
+  if($ChatOnly){Write-Host 'PASS: current Project Chat resolver is ACTIVE, crypto-preserving and source-bound.' -ForegroundColor Green}else{Write-Host 'PASS: current Daily Report + revision documentation + Project Chat resolver are ACTIVE and source-bound.' -ForegroundColor Green}
   $ExitCode=0
 }catch{
   Write-Host "REVEX current project-runtime function deployment stopped safely: $($_.Exception.Message)" -ForegroundColor Red
