@@ -2,6 +2,7 @@ param(
   [string]$ProjectId = "liber-apps-cca20",
   [string]$Region = "us-central1",
   [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$SourceCandidate,
+  [switch]$ChatOnly,
   [switch]$NoPause
 )
 
@@ -11,8 +12,10 @@ $Source = $PSScriptRoot
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $ChatSource = Join-Path $Root 'server\firebase-functions'
 $Verifier = Join-Path $Root '.github\scripts\verify-revex-current-release.py'
+$ChatVerifier = Join-Path $Root '.github\scripts\verify-revex-r141-chat-compat.js'
 $ReportSa = "revex-report-worker@$ProjectId.iam.gserviceaccount.com"
 $ExitCode = 1
+$Bucket = ""
 
 function Require-Command([string]$Name){$cmd=Get-Command $Name -ErrorAction SilentlyContinue|Select-Object -First 1;if(-not $cmd){throw "$Name is required."};return $cmd.Source}
 function Invoke-Native([string]$Command,[string[]]$Arguments,[switch]$Quiet){$previous=$ErrorActionPreference;try{$ErrorActionPreference='Continue';if($Quiet){& $Command @Arguments *> $null}else{& $Command @Arguments 2>&1|ForEach-Object{Write-Host ([string]$_)}};$code=$LASTEXITCODE;if($null-eq $code){$code=0};return [int]$code}finally{$ErrorActionPreference=$previous}}
@@ -39,17 +42,18 @@ function Verify-Function([string]$GCloud,[string]$FunctionName,[switch]$Requires
 }
 
 try{
-  Write-Host 'REVEX current revision-documentation + Daily Report + Project Chat deployment' -ForegroundColor Cyan
+  Write-Host ($ChatOnly ? 'REVEX current Project Chat hotfix deployment' : 'REVEX current revision-documentation + Daily Report + Project Chat deployment') -ForegroundColor Cyan
   Write-Host "Source: $SourceCandidate"
-  Write-Host 'Authority: deterministic revision diff + native affected plans + active issues; Secure Chat remains the message/storage owner; technical history remains separate.' -ForegroundColor Green
+  Write-Host 'Authority: Secure Chat remains the message/storage owner; REVEX Project Chat only resolves project identity and preserves crypto lineage.' -ForegroundColor Green
   foreach($required in @(
-    (Join-Path $Root 'REVEX_CURRENT_RELEASE.json'),$Verifier,
+    (Join-Path $Root 'REVEX_CURRENT_RELEASE.json'),$Verifier,$ChatVerifier,
     (Join-Path $Source 'index.js'),(Join-Path $Source 'package.json'),
     (Join-Path $ChatSource 'main.js'),(Join-Path $ChatSource 'project-chat.js'),(Join-Path $ChatSource 'project-access.js'),(Join-Path $ChatSource 'package.json')
   )){if(-not(Test-Path -LiteralPath $required)){throw "Project-runtime function deployment source is incomplete: $required"}}
 
   $GCloud=Require-Command 'gcloud';$Npm=Require-Command 'npm';$Node=Require-Command 'node';$Python=Require-Command 'python'
   Require-Ok 'Validate full current REVEX revision before project-runtime cloud changes' $Python @($Verifier)
+  Require-Ok 'Validate r141 Secure Chat compatibility contract' $Node @($ChatVerifier)
   Require-Ok 'Validate Project Chat composition syntax' $Node @('--check',(Join-Path $ChatSource 'main.js'))
   Require-Ok 'Validate Project Chat boundary syntax' $Node @('--check',(Join-Path $ChatSource 'project-chat.js'))
   $auth=Capture-Native $GCloud @('auth','list','--filter','status:ACTIVE','--format','value(account)');if($auth.Code-ne 0-or-not $auth.Text){throw 'Google Cloud administrator sign-in is required.'};$Deployer=($auth.Text -split "`n")[0].Trim()
@@ -57,42 +61,47 @@ try{
   Require-Ok 'Enable project-runtime function infrastructure APIs' $GCloud @('services','enable','cloudfunctions.googleapis.com','run.googleapis.com','eventarc.googleapis.com','firestore.googleapis.com','cloudbuild.googleapis.com','artifactregistry.googleapis.com','--project',$ProjectId) -Quiet
   if(-not(Native-Ok $GCloud @('iam','service-accounts','describe',$ReportSa,'--project',$ProjectId))){Require-Ok 'Create REVEX Project Runtime Worker identity' $GCloud @('iam','service-accounts','create','revex-report-worker','--display-name','REVEX Project Runtime Worker','--project',$ProjectId) -Quiet}
   Require-Ok 'Allow deployer to use Project Runtime Worker identity' $GCloud @('iam','service-accounts','add-iam-policy-binding',$ReportSa,'--project',$ProjectId,'--member',"user:$Deployer",'--role','roles/iam.serviceAccountUser','--quiet') -Quiet
-  Add-Role $GCloud 'roles/datastore.user' 'Grant project-runtime Firestore access';Add-Role $GCloud 'roles/storage.objectAdmin' 'Grant Report Storage access';Add-Role $GCloud 'roles/eventarc.eventReceiver' 'Grant Report Eventarc receipt';Add-Role $GCloud 'roles/run.invoker' 'Grant project-runtime trigger invocation'
+  Add-Role $GCloud 'roles/datastore.user' 'Grant project-runtime Firestore access'
+  Add-Role $GCloud 'roles/run.invoker' 'Grant project-runtime trigger invocation'
 
-  $Bucket=Resolve-Bucket $GCloud
-  $firestore=Capture-Native $GCloud @('firestore','databases','describe','--database=(default)','--project',$ProjectId,'--format','value(locationId)');if($firestore.Code-ne 0-or-not $firestore.Text){throw 'Could not resolve the Firestore database location.'};$TriggerLocation=($firestore.Text -split "`n")[0].Trim()
-  Push-Location $Source
-  try{
-    Require-Ok 'Install pinned Report dependencies' $Npm @('install','--ignore-scripts','--no-audit','--no-fund')
-    Require-Ok 'Static-load Report worker' $Node @('-e',"const m=require('./index.js');if(typeof m.documentRevexRevision!=='function'||typeof m.finalizeRevexDailyReport!=='function')throw new Error('report exports missing');console.log('REVEX report module OK')")
-  }finally{Pop-Location}
+  if(-not $ChatOnly){
+    Add-Role $GCloud 'roles/storage.objectAdmin' 'Grant Report Storage access'
+    Add-Role $GCloud 'roles/eventarc.eventReceiver' 'Grant Report Eventarc receipt'
+    $Bucket=Resolve-Bucket $GCloud
+    $firestore=Capture-Native $GCloud @('firestore','databases','describe','--database=(default)','--project',$ProjectId,'--format','value(locationId)');if($firestore.Code-ne 0-or-not $firestore.Text){throw 'Could not resolve the Firestore database location.'};$TriggerLocation=($firestore.Text -split "`n")[0].Trim()
+    Push-Location $Source
+    try{
+      Require-Ok 'Install pinned Report dependencies' $Npm @('install','--ignore-scripts','--no-audit','--no-fund')
+      Require-Ok 'Static-load Report worker' $Node @('-e',"const m=require('./index.js');if(typeof m.documentRevexRevision!=='function'||typeof m.finalizeRevexDailyReport!=='function')throw new Error('report exports missing');console.log('REVEX report module OK')")
+    }finally{Pop-Location}
 
-  $envs="REVEX_STORAGE_BUCKET=$Bucket,REVEX_WALLT_PROXY_URL=https://europe-west1-$ProjectId.cloudfunctions.net/openaiProxy,REVEX_WALLT_MODEL=gpt-4.1,REVEX_SOURCE_CANDIDATE=$SourceCandidate"
-  Require-Ok 'Deploy source-bound post-sync revision documentation trigger' $GCloud @(
-    'functions','deploy','documentRevexRevision','--gen2','--project',$ProjectId,'--region',$Region,
-    '--runtime','nodejs22','--source',$Source,'--entry-point','documentRevexRevision','--service-account',$ReportSa,'--trigger-service-account',$ReportSa,
-    '--trigger-location',$TriggerLocation,'--trigger-event-filters=type=google.cloud.firestore.document.v1.created','--trigger-event-filters=database=(default)','--trigger-event-filters-path-pattern=document=projects/{projectId}/revexRevisions/{revision}',
-    '--set-env-vars',$envs,'--memory','2GiB','--timeout','540s','--max-instances','2','--retry','--quiet')
-  Require-Ok 'Deploy source-bound authenticated Daily Report finalizer' $GCloud @(
-    'functions','deploy','finalizeRevexDailyReport','--gen2','--project',$ProjectId,'--region',$Region,
-    '--runtime','nodejs22','--source',$Source,'--entry-point','finalizeRevexDailyReport','--trigger-http','--allow-unauthenticated','--service-account',$ReportSa,
-    '--set-env-vars',$envs,'--memory','2GiB','--timeout','540s','--concurrency','2','--max-instances','2','--quiet')
+    $envs="REVEX_STORAGE_BUCKET=$Bucket,REVEX_WALLT_PROXY_URL=https://europe-west1-$ProjectId.cloudfunctions.net/openaiProxy,REVEX_WALLT_MODEL=gpt-4.1,REVEX_SOURCE_CANDIDATE=$SourceCandidate"
+    Require-Ok 'Deploy source-bound post-sync revision documentation trigger' $GCloud @(
+      'functions','deploy','documentRevexRevision','--gen2','--project',$ProjectId,'--region',$Region,
+      '--runtime','nodejs22','--source',$Source,'--entry-point','documentRevexRevision','--service-account',$ReportSa,'--trigger-service-account',$ReportSa,
+      '--trigger-location',$TriggerLocation,'--trigger-event-filters=type=google.cloud.firestore.document.v1.created','--trigger-event-filters=database=(default)','--trigger-event-filters-path-pattern=document=projects/{projectId}/revexRevisions/{revision}',
+      '--set-env-vars',$envs,'--memory','2GiB','--timeout','540s','--max-instances','2','--retry','--quiet')
+    Require-Ok 'Deploy source-bound authenticated Daily Report finalizer' $GCloud @(
+      'functions','deploy','finalizeRevexDailyReport','--gen2','--project',$ProjectId,'--region',$Region,
+      '--runtime','nodejs22','--source',$Source,'--entry-point','finalizeRevexDailyReport','--trigger-http','--allow-unauthenticated','--service-account',$ReportSa,
+      '--set-env-vars',$envs,'--memory','2GiB','--timeout','540s','--concurrency','2','--max-instances','2','--quiet')
+  }
 
   # Secure Chat remains the message/storage owner. This endpoint only resolves/repairs the
-  # exact active REVEX project's deterministic chat connection after Firebase bearer auth.
-  # Cloud Run requires >=1 vCPU whenever request concurrency is greater than 1, so keep the
-  # resolver at 512 MiB + exactly 1 vCPU + concurrency 20 rather than relying on a fractional
-  # CPU inferred from memory.
+  # exact active REVEX project after Firebase bearer auth. Existing Secure Chat keys are
+  # preserved; REVEX project identity is stored separately as projectKey/cryptoLegacySalts.
   $chatEnvs="REVEX_SOURCE_CANDIDATE=$SourceCandidate"
   Require-Ok 'Deploy source-bound authenticated Project Chat resolver' $GCloud @(
     'functions','deploy','ensureProjectChatHttp','--gen2','--project',$ProjectId,'--region',$Region,
     '--runtime','nodejs22','--source',$ChatSource,'--entry-point','ensureProjectChatHttp','--trigger-http','--allow-unauthenticated','--service-account',$ReportSa,
     '--set-env-vars',$chatEnvs,'--memory','512MiB','--cpu','1','--timeout','60s','--concurrency','20','--max-instances','4','--quiet')
 
-  $null=Verify-Function $GCloud 'documentRevexRevision' -RequiresStorage
-  $null=Verify-Function $GCloud 'finalizeRevexDailyReport' -RequiresStorage
+  if(-not $ChatOnly){
+    $null=Verify-Function $GCloud 'documentRevexRevision' -RequiresStorage
+    $null=Verify-Function $GCloud 'finalizeRevexDailyReport' -RequiresStorage
+  }
   $null=Verify-Function $GCloud 'ensureProjectChatHttp'
-  Write-Host 'PASS: current Daily Report + revision documentation + Project Chat resolver are ACTIVE and source-bound.' -ForegroundColor Green
+  Write-Host ($ChatOnly ? 'PASS: current Project Chat resolver is ACTIVE, crypto-preserving and source-bound.' : 'PASS: current Daily Report + revision documentation + Project Chat resolver are ACTIVE and source-bound.') -ForegroundColor Green
   $ExitCode=0
 }catch{
   Write-Host "REVEX current project-runtime function deployment stopped safely: $($_.Exception.Message)" -ForegroundColor Red
