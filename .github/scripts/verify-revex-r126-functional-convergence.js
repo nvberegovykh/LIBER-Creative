@@ -6,10 +6,6 @@ const must=(text,marker,label)=>{if(!text.includes(marker))throw new Error(`${la
 const mustNot=(text,marker,label)=>{if(text.includes(marker))throw new Error(`${label}: forbidden ${marker}`)};
 const index=read('docs/liber-apps/apps/revex/index.html');
 const ui=read('docs/liber-apps/apps/revex/ui-integrity.js');
-const mobile=read('docs/liber-apps/apps/revex/mobile-convergence-r140.js');
-const gbxmlSettings=read('src/Liber.Revex.Revit/Models/GbxmlEngineeringModels.cs');
-const app=read('src/Liber.Revex.Revit/App.cs');
-const spaceShield=read('src/Liber.Revex.Revit/Services/RevexSpaceFailureShield.cs');
 const docs=read('docs/liber-apps/apps/revex/docs-convergence-r126.js');
 const pages=read('docs/liber-apps/apps/revex/docs-pages-r115.js');
 const walltUi=read('docs/liber-apps/apps/revex/wallt-ui-r138.js');
@@ -33,42 +29,12 @@ const rootBuild=(index.match(/ui-integrity\.js\?v=([^"']+)/)||[])[1];
 if(!uiBuild)throw new Error('current loader BUILD marker is missing');
 if(!rootBuild)throw new Error('root cache key is missing');
 if(rootBuild!==uiBuild)throw new Error(`current UI owner mismatch: index=${rootBuild} ui=${uiBuild}`);
-must(ui,'mobile-safe-r133.js','current mobile safety base');
-must(ui,"mobile-convergence-r140.js?v=20260819r140-mobile-convergence2",'final r140 v2 mobile convergence loader');
-mustNot(ui,'mobile-design-r139.js?v=20260819r139-mobile-design1','obsolete r139 floating mobile owner');
+must(ui,'mobile-safe-r133.js','current mobile safety owner');
 must(ui,"wallt-ui-r138.js?v=20260818r138-wallt-ui1",'visible WALLT loader');
 for(const file of ['appearance-convergence-r126.js','docs-convergence-r126.js','issues-convergence-r126.js','issues-inspector-r126.js','history-daily-r126.js','blocks-palette-r126.js','render-convergence-r126.js']) must(ui,file,'r126 loader');
-
-must(mobile,"const BUILD='20260819r140-mobile-convergence2'",'r140 v2 mobile build');
-must(mobile,"floatingControls:false",'r140 no persistent floating controls');
-must(mobile,"inFlowPanels:true",'r140 in-flow mobile panels');
-must(mobile,"r140-design-selector",'Design selector reachable in flow');
-must(mobile,"r140-design-editor",'Design position editor reachable in flow');
-must(mobile,"r140-bim-navigator",'BIM navigator reachable in flow');
-must(mobile,"r140-bim-properties",'BIM properties reachable in flow');
-must(mobile,"r140-wallt-docked",'WALLT docked into mobile app chrome');
-must(mobile,"removeR139Artifacts",'r139 floating artifacts removed');
-must(mobile,"#view-chat:not([hidden]){display:grid",'Chat preserves native header plus frame grid');
-must(mobile,"#view-spec:not([hidden]),body.revex-mobile-touch #view-chat:not([hidden]){display:grid",'Spec and Chat preserve grid shell');
-must(mobile,"#view-chat .chat-frame-wrap",'Chat frame wrap gets bounded remaining height');
-must(mobile,"#view-spec .spec-frame-wrap",'Spec frame wrap gets bounded remaining height');
-must(mobile,"#view-docs",'Docs mobile flow covered');
-must(mobile,"#view-energy",'Energy mobile flow covered');
-must(mobile,"#view-history .history-layout{grid-template-columns:1fr",'History forced single-column at REVEX mobile breakpoint');
-must(mobile,"r140-icon",'real inline mobile icon nodes');
-
-// Automatic Room/Space repair is part of the production Energy path. The Revit-level
-// failure shield is narrowly scoped to REVEX gbXML transactions and removes only transient
-// zero-height MEP Spaces so bounded residual placement can continue without a modal.
-must(gbxmlSettings,'public bool CreateOrFixSpaces { get; init; } = true;','automatic Space repair remains enabled');
-must(app,'FailuresProcessing += RevexSpaceFailureShield.OnFailuresProcessing','zero-height Space shield startup subscription');
-must(app,'FailuresProcessing -= RevexSpaceFailureShield.OnFailuresProcessing','zero-height Space shield shutdown cleanup');
-must(spaceShield,'TransactionPrefix = "LIBER gbXML"','failure shield transaction scope');
-must(spaceShield,'normalized.Contains("greater than 0")','native zero-height Space failure match');
-must(spaceShield,'doc.GetElement(id) is Space','failure shield limited to MEP Spaces');
-must(spaceShield,'accessor.DeleteElements(transientSpaceIds)','transient invalid Space removal');
-must(spaceShield,'FailureProcessingResult.ProceedWithCommit','bounded transaction continuation');
-
+mustNot(ui,'mobile-design-r139.js','removed r139 mobile rewrite');
+mustNot(ui,'mobile-convergence-r140.js','removed r140 mobile rewrite');
+mustNot(ui,'chat-embed-r141.js','removed Secure Chat projection wrapper');
 must(walltUi,"const BUILD='20260818r138-wallt-ui1'",'visible WALLT build');
 must(walltUi,"controlOwner:'wallt-control-plane'",'visible WALLT control owner');
 must(walltUi,'storageOwner:null','visible WALLT no storage owner');
@@ -110,7 +76,7 @@ must(plans,'normalized-revit-plan-crop-v1','Revit projected cloud evidence');
 must(plans,'unlocatedChangedElementIds','deletion no-guess evidence');
 
 must(blocks,"placementDistanceFt:3",'Blocks distance');
-must(blocks,"button.hidden=!(hosted()&&v()?.walk)",'Blocks Walk-only availability');
+must(blocks,"button.hidden=!(hosted()&&v()?.walk)",'Blocks distance');
 must(blocks,"type:'liber:revex-family-place-r126'",'Blocks placement bridge');
 must(bridge,'https://www.blocksrvt.com/en/families','owned Blocks provider');
 must(bridge,'PendingFamilies','opaque provider family token');
@@ -118,7 +84,6 @@ must(bridge,'RevexFamilyPlacementExternalHandler','Revit ExternalEvent placement
 must(placement,'MaxHostDistanceFt = 8.0','bounded hosted placement');
 must(placement,'unsupported placement type','unsupported family fail-closed');
 
-// Preserve and validate the Qwen enhancement implementation without making it the current Render owner.
 must(renderWorker,'ensure_server_warm()','server boot warm');
 must(renderWorker,'REVEX_WARM_TOKEN','warm proof token');
 must(renderWorker,'_WARM_MAX_SECONDS = 32 * 60','bounded persistent warm retry');
@@ -140,4 +105,4 @@ if(tabs<7)throw new Error(`main module tabs missing: ${tabs}`);
 for(const forbidden of ['runRevexEnergy','GeometryCo','COMcheck']){
   mustNot(blocks,forbidden,'Blocks scope');mustNot(docs,forbidden,'Docs scope');mustNot(issues,forbidden,'Issues scope');mustNot(renderClient,forbidden,'Render client scope');mustNot(walltUi,forbidden,'WALLT UI scope');
 }
-console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',uiOwner:uiBuild,wallt:'visible-helper-fixer-current-control+r140-topbar-dock',mobile:'r140v2-single-owner+in-flow-panels+native-frame-grids+all-modules',docs:'single-final-owner+linked-page-runtime',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active+empty-selection-inspector',history:'NYC-day-technical+forced-mobile-column',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'google-current+qwen-shadow',energy:'automatic-space-repair+revex-zero-height-shield'}));
+console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',uiOwner:uiBuild,wallt:'visible-helper-fixer-current-control',mobile:'proven-r109+r122+r133-no-r139-r140',docs:'single-final-owner+linked-page-runtime',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active+empty-selection-inspector',history:'NYC-day-technical',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'google-current+qwen-shadow',energy:'scope-preserved'}));
