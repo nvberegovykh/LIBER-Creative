@@ -28,7 +28,7 @@ has(sheet,'if(currentView&&currentView!==view){restoreView(currentView);closePan
 has(sheet,"#view-bim>.viewport-wrap",'full-height BIM viewport');
 has(sheet,"#view-chat>.chat-head{display:none",'only outer REVEX Chat chrome hidden on mobile projection');
 has(sheet,"#chat-frame",'Chat iframe fills projection');
-has(sheet,"#revex-r109-actions-menu",'existing mobile actions menu reused for WALLT');
+has(sheet,"byId('revex-r109-actions-menu')",'existing mobile actions menu reused for WALLT');
 has(sheet,"WALLT Helper / Fixer",'WALLT remains reachable on mobile');
 has(sheet,".viewport-tools.viewer-controls{box-sizing:border-box!important;max-width:calc(100% - 24px)",'viewer toolbar constrained to viewport container');
 no(sheet,'detailsShell','no replacement details-stack UI');
