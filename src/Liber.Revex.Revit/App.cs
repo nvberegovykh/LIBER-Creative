@@ -13,6 +13,7 @@ public sealed class App : IExternalApplication
         RevexDiagnostics.Info("APP", $"LIBER REVEX {runtimeVersion} startup. Assembly={typeof(App).Assembly.Location}");
         RevexDiagnostics.LogEnvironmentSnapshot();
         application.ControlledApplication.DocumentChanged += RevexAffectedViewTracker.OnDocumentChanged;
+        application.ControlledApplication.FailuresProcessing += RevexSpaceFailureShield.OnFailuresProcessing;
         application.ViewActivated += UI.RendairWindowManager.OnViewActivated;
         ReleaseEvidenceAutomation.TryStart(application);
         const string tabName = "LIBER";
@@ -47,6 +48,7 @@ public sealed class App : IExternalApplication
     {
         ReleaseEvidenceAutomation.Stop(application);
         try { application.ControlledApplication.DocumentChanged -= RevexAffectedViewTracker.OnDocumentChanged; } catch { }
+        try { application.ControlledApplication.FailuresProcessing -= RevexSpaceFailureShield.OnFailuresProcessing; } catch { }
         try { application.ViewActivated -= UI.RendairWindowManager.OnViewActivated; } catch { }
         RevexDiagnostics.Info("APP", "LIBER REVEX shutdown.");
         UI.RendairWindowManager.Close();
