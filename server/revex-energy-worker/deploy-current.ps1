@@ -25,6 +25,8 @@ $Image = "$Region-docker.pkg.dev/$ProjectId/$Repository/revex-energy-worker:$Ima
 $EnvPath = Join-Path $FunctionsDir ".env.$ProjectId"
 $EnvBackup = $null
 $ExitCode = 1
+$PinnedNodeVersion = "22.23.2"
+$PinnedFirebaseToolsVersion = "15.26.0"
 
 function Require-Command([string]$Name) {
   $cmd = Get-Command $Name -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -83,6 +85,30 @@ function Resolve-VerifiedCandidate([string]$GCloud) {
   if ([string]$liveEnv["REVEX_VERTEX_PROJECT"] -ne $ProjectId -or [string]$liveEnv["REVEX_VERTEX_LOCATION"] -ne "global") { throw "Energy candidate Vertex binding is not canonical." }
   return $url
 }
+function Try-ResolveVerifiedCandidate([string]$GCloud) {
+  try { return [string](Resolve-VerifiedCandidate $GCloud) }
+  catch { return "" }
+}
+function Install-PinnedFirebaseToolchain([string]$Npm) {
+  Require-Ok "Install pinned Firebase Node 22 deployment toolchain" $Npm @(
+    "install","--no-save","--no-package-lock","--no-audit","--no-fund",
+    "node@$PinnedNodeVersion","firebase-tools@$PinnedFirebaseToolsVersion"
+  )
+  $nodeCandidates = @(
+    (Join-Path $FunctionsDir "node_modules\node\bin\node.exe"),
+    (Join-Path $FunctionsDir "node_modules\node\bin\node")
+  )
+  $Node22 = $nodeCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+  if (-not $Node22) { throw "Pinned Node $PinnedNodeVersion binary was not installed in the Energy functions checkout." }
+  $FirebaseJs = Join-Path $FunctionsDir "node_modules\firebase-tools\lib\bin\firebase.js"
+  if (-not (Test-Path -LiteralPath $FirebaseJs -PathType Leaf)) { throw "Pinned firebase-tools $PinnedFirebaseToolsVersion entry point was not installed." }
+  $nodeVersion = Capture-Native $Node22 @("--version")
+  if ($nodeVersion.Code -ne 0 -or $nodeVersion.Text -ne "v$PinnedNodeVersion") { throw "Energy broker deployment requires Node v$PinnedNodeVersion; resolved '$($nodeVersion.Text)'." }
+  $firebaseVersion = Capture-Native $Node22 @($FirebaseJs,"--version")
+  if ($firebaseVersion.Code -ne 0 -or $firebaseVersion.Text -ne $PinnedFirebaseToolsVersion) { throw "Energy broker deployment requires firebase-tools $PinnedFirebaseToolsVersion; resolved '$($firebaseVersion.Text)'." }
+  Write-Host "PASS: pinned Firebase deployment runtime is Node $PinnedNodeVersion + firebase-tools $PinnedFirebaseToolsVersion." -ForegroundColor Green
+  return [pscustomobject]@{ Node=$Node22; FirebaseJs=$FirebaseJs }
+}
 
 try {
   $mode = if ($CandidateOnly) { "candidate-only" } elseif ($BrokerOnly) { "broker-only" } else { "candidate+broker" }
@@ -130,18 +156,24 @@ try {
     $CloudBuildSa = ($buildSa.Text -split "`n")[0].Trim()
     Add-ProjectRole $GCloud "serviceAccount:$CloudBuildSa" "roles/cloudbuild.builds.builder" "Grant Cloud Build builder role"
     Add-ProjectRole $GCloud "serviceAccount:$CloudBuildSa" "roles/artifactregistry.writer" "Grant Cloud Build image push access"
-    Require-Ok "Build exact current Energy worker image" $GCloud @(
-      "builds","submit",$Root,"--project",$ProjectId,"--config",$CloudBuild,
-      "--substitutions","_REGION=$Region,_REPOSITORY=$Repository,_IMAGE=revex-energy-worker,_TAG=$ImageTag"
-    )
-    Require-Ok "Deploy private current Energy candidate" $GCloud @(
-      "run","deploy",$Service,"--project",$ProjectId,"--region",$Region,"--platform","managed",
-      "--image",$Image,"--service-account",$WorkerSa,"--no-allow-unauthenticated",
-      "--cpu=4","--memory=8Gi","--concurrency=1","--min-instances=0","--max-instances=3","--timeout=3600",
-      "--set-env-vars","REVEX_ENERGY_TIMEOUT_SECONDS=3500,REVEX_SOURCE_CANDIDATE=$SourceCandidate,REVEX_VERTEX_PROJECT=$ProjectId,REVEX_VERTEX_LOCATION=global",
-      "--quiet"
-    )
-    $WorkerUrl = Resolve-VerifiedCandidate $GCloud
+
+    $WorkerUrl = Try-ResolveVerifiedCandidate $GCloud
+    if ($WorkerUrl) {
+      Write-Host "PASS: exact source-bound Energy candidate is already Ready; skipping duplicate Cloud Build and Cloud Run deployment." -ForegroundColor Green
+    } else {
+      Require-Ok "Build exact current Energy worker image" $GCloud @(
+        "builds","submit",$Root,"--project",$ProjectId,"--config",$CloudBuild,
+        "--substitutions","_REGION=$Region,_REPOSITORY=$Repository,_IMAGE=revex-energy-worker,_TAG=$ImageTag"
+      )
+      Require-Ok "Deploy private current Energy candidate" $GCloud @(
+        "run","deploy",$Service,"--project",$ProjectId,"--region",$Region,"--platform","managed",
+        "--image",$Image,"--service-account",$WorkerSa,"--no-allow-unauthenticated",
+        "--cpu=4","--memory=8Gi","--concurrency=1","--min-instances=0","--max-instances=3","--timeout=3600",
+        "--set-env-vars","REVEX_ENERGY_TIMEOUT_SECONDS=3500,REVEX_SOURCE_CANDIDATE=$SourceCandidate,REVEX_VERTEX_PROJECT=$ProjectId,REVEX_VERTEX_LOCATION=global",
+        "--quiet"
+      )
+      $WorkerUrl = Resolve-VerifiedCandidate $GCloud
+    }
     Require-Ok "Allow only REVEX Energy broker to invoke candidate" $GCloud @(
       "run","services","add-iam-policy-binding",$Service,"--project",$ProjectId,"--region",$Region,
       "--member","serviceAccount:$BrokerSa","--role","roles/run.invoker","--quiet"
@@ -151,20 +183,28 @@ try {
   }
 
   $WorkerUrl = Resolve-VerifiedCandidate $GCloud
-  $Firebase = Require-Command "firebase"
   $Npm = Require-Command "npm"
-  if (-not (Native-Ok $Firebase @("projects:list","--json"))) { throw "Firebase administrator sign-in is required before Energy broker cutover." }
   Push-Location $FunctionsDir
   try {
     Require-Ok "Install pinned Energy broker dependencies" $Npm @("install","--omit=dev","--no-audit","--no-fund")
+    $FirebaseToolchain = Install-PinnedFirebaseToolchain $Npm
+    $Node22 = [string]$FirebaseToolchain.Node
+    $FirebaseJs = [string]$FirebaseToolchain.FirebaseJs
+    if (-not (Native-Ok $Node22 @($FirebaseJs,"projects:list","--json"))) { throw "Firebase administrator sign-in is required before Energy broker cutover." }
     if (Test-Path -LiteralPath $EnvPath) { $EnvBackup = "$EnvPath.revex-current-backup"; Copy-Item -LiteralPath $EnvPath -Destination $EnvBackup -Force }
     @(
       "REVEX_ENERGY_WORKER_URL=$WorkerUrl",
       "REVEX_ENERGY_BROKER_SERVICE_ACCOUNT=$BrokerSa",
       "REVEX_SOURCE_CANDIDATE=$SourceCandidate"
     ) | Set-Content -LiteralPath $EnvPath -Encoding Ascii
-    $env:FUNCTIONS_DISCOVERY_TIMEOUT = "60"
-    Require-Ok "Cut authenticated Energy broker over to verified candidate" $Firebase @("deploy","--only","functions:revex-energy","--project",$ProjectId,"--force","--non-interactive")
+
+    $preflight = "const started=Date.now();const m=require('./main.js');const required=['runRevexEnergy','ensureProjectChatHttp'];const missing=required.filter(k=>typeof m[k]!=='function');if(missing.length){console.error('REVEX Firebase preflight missing exports: '+missing.join(','));process.exit(2);}console.log('REVEX_FIREBASE_NODE22_PREFLIGHT=PASSED ms='+(Date.now()-started)+' exports='+required.join(','));"
+    Require-Ok "Preflight-load Energy broker under pinned Node 22" $Node22 @("-e",$preflight)
+
+    $env:FUNCTIONS_DISCOVERY_TIMEOUT = "180"
+    Require-Ok "Cut authenticated Energy broker over to verified candidate" $Node22 @(
+      $FirebaseJs,"deploy","--only","functions:revex-energy","--project",$ProjectId,"--force","--non-interactive"
+    )
   } finally {
     if (Test-Path -LiteralPath $EnvPath) { Remove-Item -LiteralPath $EnvPath -Force }
     if ($EnvBackup -and (Test-Path -LiteralPath $EnvBackup)) { Move-Item -LiteralPath $EnvBackup -Destination $EnvPath -Force }
