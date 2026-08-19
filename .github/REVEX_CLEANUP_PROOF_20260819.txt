@@ -1,0 +1,1 @@
+CI-only marker for the REVEX cleanup proof. Product changes are on agent/revex-cleanup-20260819; this branch is used only to exercise PR-triggered current gates before merge.
