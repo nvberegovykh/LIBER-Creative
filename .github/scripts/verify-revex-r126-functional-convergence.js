@@ -47,7 +47,7 @@ must(mobileSheet,"a:{label:'Selector'",'Design bottom sheet Selector tab');
 must(mobileSheet,"b:{label:'Position'",'Design bottom sheet Position tab');
 must(mobileSheet,"#view-chat>.chat-head{display:none",'mobile Chat projection hides only REVEX outer chrome');
 mustNot(mobileSheet,'secureChatApp','Secure Chat internals remain native');
-must(mobileSheet,"#revex-r109-actions-menu",'WALLT mobile entry uses existing actions menu');
+must(mobileSheet,"byId('revex-r109-actions-menu')",'WALLT mobile entry uses existing actions menu');
 must(mobileSheet,'.viewport-tools.viewer-controls{box-sizing:border-box!important;max-width:calc(100% - 24px)','viewer tools bounded to viewport container');
 must(walltUi,"const BUILD='20260818r138-wallt-ui1'",'visible WALLT build');
 must(walltUi,"controlOwner:'wallt-control-plane'",'visible WALLT control owner');
