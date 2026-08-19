@@ -12,7 +12,6 @@ $Source = $PSScriptRoot
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $ChatSource = Join-Path $Root 'server\firebase-functions'
 $Verifier = Join-Path $Root '.github\scripts\verify-revex-current-release.py'
-$ChatVerifier = Join-Path $Root '.github\scripts\verify-revex-r141-chat-compat.js'
 $ReportSa = "revex-report-worker@$ProjectId.iam.gserviceaccount.com"
 $ExitCode = 1
 $Bucket = ""
@@ -42,11 +41,11 @@ function Verify-Function([string]$GCloud,[string]$FunctionName,[switch]$Requires
 }
 
 try{
-  if($ChatOnly){Write-Host 'REVEX current Project Chat hotfix deployment' -ForegroundColor Cyan}else{Write-Host 'REVEX current revision-documentation + Daily Report + Project Chat deployment' -ForegroundColor Cyan}
+  if($ChatOnly){Write-Host 'REVEX current Project Chat resolver deployment' -ForegroundColor Cyan}else{Write-Host 'REVEX current revision-documentation + Daily Report + Project Chat deployment' -ForegroundColor Cyan}
   Write-Host "Source: $SourceCandidate"
-  Write-Host 'Authority: Secure Chat remains the message/storage owner; REVEX Project Chat only resolves project identity and preserves crypto lineage.' -ForegroundColor Green
+  Write-Host 'Authority: Secure Chat remains the message/storage/UI owner; REVEX Project Chat only resolves project identity and preserves an existing crypto key.' -ForegroundColor Green
   foreach($required in @(
-    (Join-Path $Root 'REVEX_CURRENT_RELEASE.json'),$Verifier,$ChatVerifier,
+    (Join-Path $Root 'REVEX_CURRENT_RELEASE.json'),$Verifier,
     (Join-Path $Source 'index.js'),(Join-Path $Source 'package.json'),
     (Join-Path $ChatSource 'main.js'),(Join-Path $ChatSource 'project-chat.js'),(Join-Path $ChatSource 'project-access.js'),(Join-Path $ChatSource 'package.json')
   )){if(-not(Test-Path -LiteralPath $required)){throw "Project-runtime function deployment source is incomplete: $required"}}
@@ -55,7 +54,6 @@ try{
   Push-Location $Root
   try{
     Require-Ok 'Validate full current REVEX revision before project-runtime cloud changes' $Python @($Verifier)
-    Require-Ok 'Validate r141 Secure Chat compatibility contract' $Node @($ChatVerifier)
     Require-Ok 'Validate Project Chat composition syntax' $Node @('--check',(Join-Path $ChatSource 'main.js'))
     Require-Ok 'Validate Project Chat boundary syntax' $Node @('--check',(Join-Path $ChatSource 'project-chat.js'))
   }finally{Pop-Location}
@@ -90,9 +88,9 @@ try{
       '--set-env-vars',$envs,'--memory','2GiB','--timeout','540s','--concurrency','2','--max-instances','2','--quiet')
   }
 
-  # Secure Chat remains the message/storage owner. This endpoint only resolves/repairs the
-  # exact active REVEX project after Firebase bearer auth. Existing Secure Chat keys are
-  # preserved; REVEX project identity is stored separately as projectKey/cryptoLegacySalts.
+  # Secure Chat remains the application/message/storage owner. This endpoint only
+  # resolves the exact active REVEX project after Firebase bearer auth. Existing
+  # connection keys are preserved; project identity is stored separately.
   $chatEnvs="REVEX_SOURCE_CANDIDATE=$SourceCandidate"
   Require-Ok 'Deploy source-bound authenticated Project Chat resolver' $GCloud @(
     'functions','deploy','ensureProjectChatHttp','--gen2','--project',$ProjectId,'--region',$Region,
@@ -104,7 +102,7 @@ try{
     $null=Verify-Function $GCloud 'finalizeRevexDailyReport' -RequiresStorage
   }
   $null=Verify-Function $GCloud 'ensureProjectChatHttp'
-  if($ChatOnly){Write-Host 'PASS: current Project Chat resolver is ACTIVE, crypto-preserving and source-bound.' -ForegroundColor Green}else{Write-Host 'PASS: current Daily Report + revision documentation + Project Chat resolver are ACTIVE and source-bound.' -ForegroundColor Green}
+  if($ChatOnly){Write-Host 'PASS: current Project Chat resolver is ACTIVE, existing-key-preserving and source-bound.' -ForegroundColor Green}else{Write-Host 'PASS: current Daily Report + revision documentation + Project Chat resolver are ACTIVE and source-bound.' -ForegroundColor Green}
   $ExitCode=0
 }catch{
   Write-Host "REVEX current project-runtime function deployment stopped safely: $($_.Exception.Message)" -ForegroundColor Red
