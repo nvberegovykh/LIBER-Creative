@@ -11,7 +11,7 @@ const db = getFirestore();
 const PROJECT_ID_RE = /^[A-Za-z0-9._-]{1,160}$/;
 const SOURCE_RE = /^[0-9a-f]{40}$/i;
 const CHAT_SCHEMA = 'liber.revex.project-chat.v1';
-const BUILD = '20260818-project-chat2';
+const BUILD = '20260819-project-chat3';
 const SOURCE_CANDIDATE = String(process.env.REVEX_SOURCE_CANDIDATE || '').trim();
 
 function fail(status, code, message) {
@@ -35,6 +35,28 @@ function sameArray(a, b) {
   const left = unique(a).sort();
   const right = unique(b).sort();
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function participantSalt(values) {
+  return unique(values).sort().join('|');
+}
+
+function cryptoLegacySalts(existing, connId, projectKey) {
+  const parts = unique(existing.participants || existing.memberIds || []);
+  const prior = [];
+  for (const field of ['cryptoLegacySalts', 'legacyCryptoSalts', 'legacyKeySalts', 'keyHistory']) {
+    const value = existing[field];
+    if (Array.isArray(value)) prior.push(...value);
+    else if (typeof value === 'string') prior.push(value);
+  }
+  const existingKey = String(existing.key || '').trim();
+  const oldParticipantSalt = participantSalt(parts);
+  return unique([
+    ...prior,
+    existingKey && existingKey !== projectKey ? existingKey : '',
+    oldParticipantSalt,
+    connId
+  ]).slice(0, 64);
 }
 
 async function authenticatedUid(req) {
@@ -103,8 +125,8 @@ async function resolveExistingChat(projectId, project) {
     if (snap.exists) {
       const data = snap.data() || {};
       const linkedProject = String(data.projectId || '').trim();
-      // An explicit project->chat link is preserved for backwards-compatible project
-      // rooms even when old room records predate projectId. We never delete its messages.
+      // Preserve an explicitly linked room and its messages, but never rewrite away
+      // its Secure Chat crypto lineage. ensureProjectChat stores project identity separately.
       if (!linkedProject || linkedProject === projectId) return { ref, snap, data, linked: true };
     }
   }
@@ -140,23 +162,32 @@ async function ensureProjectChat(projectId, uid) {
   const groupName = String(access.project.name || access.project.title || access.project.code || 'REVEX Project').trim().slice(0, 180) || 'REVEX Project';
   const chatAdmins = unique([access.project.ownerId, ...admins]);
   const created = !selected.snap.exists;
+  const projectKey = `project:${projectId}`;
+  const existingKey = String(existing.key || '').trim();
+  // New REVEX project rooms use the project key. Existing Secure Chat rooms keep the
+  // key under which their historical messages were created; project identity is separate.
+  const connectionKey = created ? projectKey : (existingKey || projectKey);
+  const legacySalts = cryptoLegacySalts(existing, connId, projectKey);
   const repaired = created ||
     String(access.project.chatConnId || '') !== connId ||
     String(existing.projectId || '') !== projectId ||
     String(existing.type || '') !== 'project' ||
-    String(existing.key || '') !== `project:${projectId}` ||
+    String(existing.projectKey || '') !== projectKey ||
     String(existing.groupName || '') !== groupName ||
     Boolean(existing.archived) ||
     !sameArray(existing.participants || existing.memberIds || [], participants) ||
     !sameArray(existing.memberIds || existing.participants || [], participants) ||
     !sameArray(existing.admins || [], chatAdmins) ||
+    !sameArray(existing.cryptoLegacySalts || [], legacySalts) ||
     String(existing.sourceCandidate || '') !== SOURCE_CANDIDATE;
 
   const chatPatch = {
     schema: CHAT_SCHEMA,
     projectId,
     type: 'project',
-    key: `project:${projectId}`,
+    key: connectionKey,
+    projectKey,
+    cryptoLegacySalts: legacySalts,
     groupName,
     participants,
     memberIds: participants,
@@ -193,7 +224,8 @@ async function ensureProjectChat(projectId, uid) {
     repaired,
     created,
     accessRole: access.role,
-    participantCount: participants.length
+    participantCount: participants.length,
+    cryptoLegacySaltCount: legacySalts.length
   };
 }
 
@@ -231,6 +263,8 @@ module.exports._test = Object.freeze({
   cleanId,
   unique,
   sameArray,
+  participantSalt,
+  cryptoLegacySalts,
   projectParticipants,
   projectChatId
 });
