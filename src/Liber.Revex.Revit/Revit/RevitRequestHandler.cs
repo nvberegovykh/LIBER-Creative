@@ -171,6 +171,13 @@ public sealed class RevitRequestHandler : IExternalEventHandler
         bool simplifiedGeometryFallback = false;
         try
         {
+            // A complete existing MEP Space topology is authoritative. The successful
+            // Midwood checkpoint exported 158 source Spaces while reporting invalid
+            // height metadata as warning-only evidence; re-entering NewSpaces2 against
+            // that same saved topology is what raises Revit's non-ignorable zero-height
+            // modal. Only genuinely unspatialized/incomplete models may mutate topology.
+            settings = ApplyExistingSpatialCheckpointPolicy(uidoc.Document, settings);
+
             try
             {
                 output = new GbxmlEngineeringService().Run(app, uidoc.Document, settings);
@@ -253,6 +260,78 @@ public sealed class RevitRequestHandler : IExternalEventHandler
                     : "Engineering gbXML execution failed.", ex);
             return RevitRequestResult.EngineeringFailed(ex.Message, output);
         }
+    }
+
+    private static GbxmlEngineeringSettings ApplyExistingSpatialCheckpointPolicy(
+        Document doc,
+        GbxmlEngineeringSettings settings)
+    {
+        if (settings.AuditOnly || !settings.CreateOrFixSpaces)
+            return settings;
+
+        static bool IsPlaced(Element element)
+        {
+            try
+            {
+                Parameter? area = element.get_Parameter(BuiltInParameter.ROOM_AREA);
+                return element.Location != null && area != null && area.AsDouble() > 1.0e-6;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        List<Element> spaces = new FilteredElementCollector(doc)
+            .OfCategory(BuiltInCategory.OST_MEPSpaces)
+            .WhereElementIsNotElementType()
+            .ToElements()
+            .Where(IsPlaced)
+            .ToList();
+        List<Element> rooms = new FilteredElementCollector(doc)
+            .OfCategory(BuiltInCategory.OST_Rooms)
+            .WhereElementIsNotElementType()
+            .ToElements()
+            .Where(IsPlaced)
+            .ToList();
+
+        if (spaces.Count == 0)
+        {
+            RevexDiagnostics.Stage("GBXML", "EXISTING_SPATIAL_CHECKPOINT", "NOT_APPLICABLE",
+                $"placedSpaces=0; placedRooms={rooms.Count}; automatic Space creation remains enabled");
+            return settings;
+        }
+
+        // Rooms, when present, are a conservative coverage witness. Compare by Revit
+        // LevelId rather than raw total so extra Spaces on one story cannot disguise a
+        // missing story. If the model has no Rooms, the existing MEP Space model itself
+        // is the authoritative spatial source and is left untouched.
+        Dictionary<int, int> spacesByLevel = spaces
+            .GroupBy(e => e.LevelId.IntegerValue)
+            .ToDictionary(g => g.Key, g => g.Count());
+        Dictionary<int, int> roomsByLevel = rooms
+            .GroupBy(e => e.LevelId.IntegerValue)
+            .ToDictionary(g => g.Key, g => g.Count());
+        int coveredRooms = roomsByLevel.Sum(row => Math.Min(
+            row.Value,
+            spacesByLevel.TryGetValue(row.Key, out int count) ? count : 0));
+        double roomCoverage = rooms.Count == 0 ? 1.0 : (double)coveredRooms / rooms.Count;
+        bool completeCheckpoint = rooms.Count == 0
+            ? spaces.Count > 0
+            : roomCoverage >= 0.98 && spaces.Count >= Math.Max(1, rooms.Count - 1);
+
+        if (!completeCheckpoint)
+        {
+            RevexDiagnostics.Stage("GBXML", "EXISTING_SPATIAL_CHECKPOINT", "INCOMPLETE",
+                $"placedSpaces={spaces.Count}; placedRooms={rooms.Count}; roomLevelCoverage={roomCoverage:P1}; automatic Space repair remains enabled");
+            return settings;
+        }
+
+        RevexDiagnostics.Stage("GBXML", "EXISTING_SPATIAL_CHECKPOINT", "PASSED",
+            $"placedSpaces={spaces.Count}; placedRooms={rooms.Count}; roomLevelCoverage={roomCoverage:P1}; topologyMutation=false; invalid height metadata remains warning-only");
+        RevexDiagnostics.Info("GBXML",
+            "Existing placed MEP Spaces are a complete spatial checkpoint. REVEX will not call NewSpace/NewSpaces2 for this run; native Revit Space geometry remains authoritative.");
+        return settings with { CreateOrFixSpaces = false };
     }
 
     private static bool IsRecoverableSpatialTopologyFailure(Exception error)
