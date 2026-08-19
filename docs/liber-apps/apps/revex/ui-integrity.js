@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260818r133-mobile-accessibility1';
+  const BUILD='20260819r142-cleanup1';
   const REVEX_R87_REPLAY_CONTRACT='energy-diagnostics-r68.js?v=20260816r87-energy-replay1';
   const REVEX_R87_REPLAY_LABEL="energyDiagnostics:'revision-scoped-replay-r87'";
   const REVEX_R92_REPLAY_COMPAT='energy-replay-r92.js?v=20260816r92-hosted-replay1';
