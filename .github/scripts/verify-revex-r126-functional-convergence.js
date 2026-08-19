@@ -8,6 +8,8 @@ const index=read('docs/liber-apps/apps/revex/index.html');
 const ui=read('docs/liber-apps/apps/revex/ui-integrity.js');
 const mobileDesign=read('docs/liber-apps/apps/revex/mobile-design-r139.js');
 const gbxmlSettings=read('src/Liber.Revex.Revit/Models/GbxmlEngineeringModels.cs');
+const app=read('src/Liber.Revex.Revit/App.cs');
+const spaceShield=read('src/Liber.Revex.Revit/Services/RevexSpaceFailureShield.cs');
 const docs=read('docs/liber-apps/apps/revex/docs-convergence-r126.js');
 const pages=read('docs/liber-apps/apps/revex/docs-pages-r115.js');
 const walltUi=read('docs/liber-apps/apps/revex/wallt-ui-r138.js');
@@ -43,12 +45,17 @@ must(mobileDesign,"#view-design>.chapter-rail[data-r139-open=\"1\"]",'r139 expan
 must(mobileDesign,"#view-design>.design-content",'r139 Design scroll owner');
 must(mobileDesign,"r139-mobile-icon",'r139 actual inline icon nodes');
 
-// Revit 2026 bulk NewSpaces2 is fail-closed until per-circuit placement can establish
-// positive vertical extent before commit. Existing Rooms/Spaces + source-bound fallback remain live.
-must(gbxmlSettings,'private bool _createOrFixSpacesRequested = true;','Space mutation request evidence');
-must(gbxmlSettings,'get => false;','unsafe broad Space creation disabled');
-must(gbxmlSettings,'CreateOrFixSpacesRequested','requested/effective Space mutation distinction');
-must(gbxmlSettings,'Space must have a height greater than 0','native Revit zero-height failure guard rationale');
+// Automatic Room/Space repair is part of the production Energy path. The Revit-level
+// failure shield is narrowly scoped to REVEX gbXML transactions and removes only transient
+// zero-height MEP Spaces so bounded residual placement can continue without a modal.
+must(gbxmlSettings,'public bool CreateOrFixSpaces { get; init; } = true;','automatic Space repair remains enabled');
+must(app,'FailuresProcessing += RevexSpaceFailureShield.OnFailuresProcessing','zero-height Space shield startup subscription');
+must(app,'FailuresProcessing -= RevexSpaceFailureShield.OnFailuresProcessing','zero-height Space shield shutdown cleanup');
+must(spaceShield,'TransactionPrefix = "LIBER gbXML"','failure shield transaction scope');
+must(spaceShield,'normalized.Contains("greater than 0")','native zero-height Space failure match');
+must(spaceShield,'doc.GetElement(id) is Space','failure shield limited to MEP Spaces');
+must(spaceShield,'accessor.DeleteElements(transientSpaceIds)','transient invalid Space removal');
+must(spaceShield,'FailureProcessingResult.ProceedWithCommit','bounded transaction continuation');
 
 must(walltUi,"const BUILD='20260818r138-wallt-ui1'",'visible WALLT build');
 must(walltUi,"controlOwner:'wallt-control-plane'",'visible WALLT control owner');
@@ -121,4 +128,4 @@ if(tabs<7)throw new Error(`main module tabs missing: ${tabs}`);
 for(const forbidden of ['runRevexEnergy','GeometryCo','COMcheck']){
   mustNot(blocks,forbidden,'Blocks scope');mustNot(docs,forbidden,'Docs scope');mustNot(issues,forbidden,'Issues scope');mustNot(renderClient,forbidden,'Render client scope');mustNot(walltUi,forbidden,'WALLT UI scope');
 }
-console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',uiOwner:uiBuild,wallt:'visible-helper-fixer-current-control',mobile:'r139-expandable-design+inline-icons',docs:'single-final-owner+linked-page-runtime',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active+empty-selection-inspector',history:'NYC-day-technical',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'google-current+qwen-shadow',energy:'bulk-space-mutation-fail-closed+source-fallback'}));
+console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',uiOwner:uiBuild,wallt:'visible-helper-fixer-current-control',mobile:'r139-expandable-design+inline-icons',docs:'single-final-owner+linked-page-runtime',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active+empty-selection-inspector',history:'NYC-day-technical',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'google-current+qwen-shadow',energy:'automatic-space-repair+revex-zero-height-shield'}));
