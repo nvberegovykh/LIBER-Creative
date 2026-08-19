@@ -52,10 +52,13 @@ try{
   )){if(-not(Test-Path -LiteralPath $required)){throw "Project-runtime function deployment source is incomplete: $required"}}
 
   $GCloud=Require-Command 'gcloud';$Npm=Require-Command 'npm';$Node=Require-Command 'node';$Python=Require-Command 'python'
-  Require-Ok 'Validate full current REVEX revision before project-runtime cloud changes' $Python @($Verifier)
-  Require-Ok 'Validate r141 Secure Chat compatibility contract' $Node @($ChatVerifier)
-  Require-Ok 'Validate Project Chat composition syntax' $Node @('--check',(Join-Path $ChatSource 'main.js'))
-  Require-Ok 'Validate Project Chat boundary syntax' $Node @('--check',(Join-Path $ChatSource 'project-chat.js'))
+  Push-Location $Root
+  try{
+    Require-Ok 'Validate full current REVEX revision before project-runtime cloud changes' $Python @($Verifier)
+    Require-Ok 'Validate r141 Secure Chat compatibility contract' $Node @($ChatVerifier)
+    Require-Ok 'Validate Project Chat composition syntax' $Node @('--check',(Join-Path $ChatSource 'main.js'))
+    Require-Ok 'Validate Project Chat boundary syntax' $Node @('--check',(Join-Path $ChatSource 'project-chat.js'))
+  }finally{Pop-Location}
   $auth=Capture-Native $GCloud @('auth','list','--filter','status:ACTIVE','--format','value(account)');if($auth.Code-ne 0-or-not $auth.Text){throw 'Google Cloud administrator sign-in is required.'};$Deployer=($auth.Text -split "`n")[0].Trim()
   Require-Ok 'Select Google Cloud project' $GCloud @('config','set','project',$ProjectId) -Quiet
   Require-Ok 'Enable project-runtime function infrastructure APIs' $GCloud @('services','enable','cloudfunctions.googleapis.com','run.googleapis.com','eventarc.googleapis.com','firestore.googleapis.com','cloudbuild.googleapis.com','artifactregistry.googleapis.com','--project',$ProjectId) -Quiet
