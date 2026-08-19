@@ -82,7 +82,7 @@
     loadScript('mobile-safe-r133.js?v=20260818r133-mobile-safe1','mobile-safe-r133');
     loadScript('wallt-fixer-adapters-r137.js?v=20260818r137-fixer-adapters1','wallt-fixer-adapters-r137');
     loadScript('wallt-ui-r138.js?v=20260818r138-wallt-ui1','wallt-ui-r138');
-    loadScript('mobile-convergence-r140.js?v=20260819r140-mobile-convergence1','mobile-convergence-r140');
+    loadScript('mobile-convergence-r140.js?v=20260819r140-mobile-convergence2','mobile-convergence-r140');
     loadScript('chat-embed-r141.js?v=20260819r141-chat-embed1','chat-embed-r141');
   }
   function bind(){installCanonicalOverlayStore();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
