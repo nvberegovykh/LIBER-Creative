@@ -41,6 +41,14 @@ const projectId = 'demo-revex-r43';
       name: 'Alpha Spec Book', ownerId: 'owner', memberIds: ['owner'], linkedProjectId: 'alpha'
     });
     await setDoc(doc(db, 'specProjects', 'spec_alpha', 'items', 'door'), { finish: 'oak' });
+    await setDoc(doc(db, 'chatConnections', 'project_alpha'), {
+      projectId: 'alpha', type: 'project', key: 'stable-existing-key',
+      participants: ['owner', 'member'], memberIds: ['owner', 'member'], admins: ['owner'],
+      groupName: 'Alpha', updatedAt: '2026-08-19T00:00:00Z'
+    });
+    await setDoc(doc(db, 'chatMessages', 'project_alpha', 'messages', 'owner_msg'), {
+      id: 'owner_msg', connId: 'project_alpha', sender: 'owner', cipher: { iv: 'a', data: 'b' }, reactions: {}
+    });
   });
 
   const member = env.authenticatedContext('member').firestore();
@@ -66,6 +74,36 @@ const projectId = 'demo-revex-r43';
   await assertSucceeds(setDoc(doc(member, 'specProjects', 'spec_alpha', 'items', 'window'), { finish: 'bronze' }));
   await assertSucceeds(updateDoc(doc(member, 'specProjects', 'spec_alpha'), { name: 'Alpha Specifications' }));
 
+  // Secure Chat participant boundary. Participants can use their room without being
+  // granted access to unrelated connections or permission to rewrite membership/crypto identity.
+  await assertSucceeds(getDoc(doc(member, 'chatConnections', 'project_alpha')));
+  await assertSucceeds(getDocs(query(collection(member, 'chatConnections'), where('participants', 'array-contains', 'member'))));
+  await assertSucceeds(updateDoc(doc(member, 'chatConnections', 'project_alpha'), {
+    [`typing.member`]: { active: true, username: 'member', updatedAt: '2026-08-19T00:00:01Z' },
+    updatedAt: '2026-08-19T00:00:01Z'
+  }));
+  await assertFails(updateDoc(doc(member, 'chatConnections', 'project_alpha'), { participants: ['owner', 'member', 'outsider'] }));
+  await assertFails(updateDoc(doc(member, 'chatConnections', 'project_alpha'), { key: 'replaced-key' }));
+
+  const memberMsg = doc(member, 'chatMessages', 'project_alpha', 'messages', 'member_msg');
+  await assertSucceeds(getDoc(doc(member, 'chatMessages', 'project_alpha', 'messages', 'owner_msg')));
+  await assertSucceeds(setDoc(memberMsg, {
+    id: 'member_msg', connId: 'project_alpha', sender: 'member', cipher: { iv: 'c', data: 'd' }
+  }));
+  await assertSucceeds(updateDoc(memberMsg, { cipher: { iv: 'e', data: 'f' }, updatedAt: '2026-08-19T00:00:02Z' }));
+  await assertSucceeds(updateDoc(doc(member, 'chatMessages', 'project_alpha', 'messages', 'owner_msg'), {
+    reactions: { '👍': ['member'] }, updatedAt: '2026-08-19T00:00:03Z'
+  }));
+  await assertFails(updateDoc(doc(member, 'chatMessages', 'project_alpha', 'messages', 'owner_msg'), {
+    cipher: { iv: 'x', data: 'tamper' }, updatedAt: '2026-08-19T00:00:04Z'
+  }));
+  await assertFails(deleteDoc(doc(member, 'chatMessages', 'project_alpha', 'messages', 'owner_msg')));
+  await assertSucceeds(deleteDoc(memberMsg));
+  await assertSucceeds(deleteDoc(doc(owner, 'chatMessages', 'project_alpha', 'messages', 'owner_msg')));
+  await assertFails(getDoc(doc(outsider, 'chatConnections', 'project_alpha')));
+  await assertFails(getDoc(doc(outsider, 'chatMessages', 'project_alpha', 'messages', 'member_msg')));
+  await assertFails(getDoc(doc(anonymous, 'chatConnections', 'project_alpha')));
+
   await assertFails(updateDoc(doc(member, 'projects', 'alpha'), { memberIds: ['member', 'outsider'] }));
   await assertFails(getDoc(doc(outsider, 'projects', 'alpha')));
   await assertFails(getDoc(doc(outsider, 'projects', 'alpha', 'library', 'revex_engineering')));
@@ -82,10 +120,13 @@ const projectId = 'demo-revex-r43';
   await assertSucceeds(updateDoc(doc(admin, 'projects', 'alpha'), { memberIds: ['owner', 'member', 'new_member'] }));
   await assertSucceeds(deleteDoc(doc(owner, 'projects', 'alpha')));
 
-  console.log('REVEX r43 project-member security rules QA passed:', {
+  console.log('REVEX r43 project/member + Secure Chat participant security rules QA passed:', {
     memberContentAccess: true,
     memberIssueWrite: true,
     linkedSpecAccess: true,
+    chatParticipantReadWrite: true,
+    chatMembershipProtected: true,
+    chatCrossConnectionDenied: true,
     aclProtected: true,
     outsiderDenied: true,
     crossProjectDenied: true,
