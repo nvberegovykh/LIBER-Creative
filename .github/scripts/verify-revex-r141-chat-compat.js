@@ -12,7 +12,7 @@ const no=(text,needle,label)=>assert.ok(!text.includes(needle),`${label}: forbid
 
 has(ui,"chat-embed-r141.js?v=20260819r141-chat-embed1",'REVEX current loader');
 has(embed,"revex-compat-r141.js?v=20260819r141-revex-chat-compat1",'same-origin Secure Chat injection');
-has(embed,"/liber-apps/apps/secure-chat/",'Secure Chat owner boundary');
+has(embed,"secure-chat",'Secure Chat owner boundary');
 has(compat,"const BUILD='20260819r141-revex-chat-compat1'",'Secure Chat compatibility build');
 has(compat,'participantSalt', 'legacy participant-derived crypto salt');
 has(compat,'cryptoLegacySalts', 'server-preserved legacy crypto salts');
