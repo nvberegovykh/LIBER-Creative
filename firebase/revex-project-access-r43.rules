@@ -136,7 +136,16 @@ match /specProjects/{specProjectId} {
 
 match /chatConnections/{connId} {
   allow get: if revexR43IsAdmin() || revexR43ChatMemberOf(resource.data);
-  allow list: if revexR43IsAdmin() || revexR43ChatMemberOf(resource.data);
+
+  // Keep list rules field-specific. Firestore must be able to prove the exact
+  // array-contains query constraint before executing it; one broad OR helper is
+  // safe for a direct get but cannot be proven for a participants-only query.
+  allow list: if revexR43IsAdmin();
+  allow list: if revexR43SignedIn() && request.auth.uid in resource.data.participants;
+  allow list: if revexR43SignedIn() && request.auth.uid in resource.data.users;
+  allow list: if revexR43SignedIn() && request.auth.uid in resource.data.memberIds;
+  allow list: if revexR43SignedIn() && request.auth.uid in resource.data.admins;
+
   allow create: if revexR43IsAdmin() || revexR43ChatMemberOf(request.resource.data);
   allow update: if revexR43ChatAdmin(connId) || (
     revexR43ChatMemberOf(resource.data)
