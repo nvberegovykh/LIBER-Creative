@@ -53,6 +53,35 @@ function revexR43SpecMember(specProjectId) {
   return revexR43IsAdmin() || revexR43SpecRecordMember(specProjectId);
 }
 
+/* Secure Chat stays the Chat data owner. REVEX only guarantees that a signed-in
+ * participant can use the connection they actually belong to. No public chat
+ * reads and no cross-connection message access are introduced here. */
+function revexR43ChatMemberOf(data) {
+  return revexR43SignedIn() && (
+    (data.keys().hasAny(['participants']) && data.participants is list && request.auth.uid in data.participants)
+    || (data.keys().hasAny(['users']) && data.users is list && request.auth.uid in data.users)
+    || (data.keys().hasAny(['memberIds']) && data.memberIds is list && request.auth.uid in data.memberIds)
+    || (data.keys().hasAny(['admins']) && data.admins is list && request.auth.uid in data.admins)
+  );
+}
+
+function revexR43ChatMember(connId) {
+  return revexR43IsAdmin() || (
+    exists(/databases/$(database)/documents/chatConnections/$(connId))
+    && revexR43ChatMemberOf(get(/databases/$(database)/documents/chatConnections/$(connId)).data)
+  );
+}
+
+function revexR43ChatAdmin(connId) {
+  return revexR43IsAdmin() || (
+    revexR43SignedIn()
+    && exists(/databases/$(database)/documents/chatConnections/$(connId))
+    && get(/databases/$(database)/documents/chatConnections/$(connId)).data.keys().hasAny(['admins'])
+    && get(/databases/$(database)/documents/chatConnections/$(connId)).data.admins is list
+    && request.auth.uid in get(/databases/$(database)/documents/chatConnections/$(connId)).data.admins
+  );
+}
+
 match /projects/{projectId} {
   allow get: if revexR43IsAdmin() || revexR43MemberOf(resource.data);
   allow list: if revexR43IsAdmin()
@@ -103,5 +132,50 @@ match /specProjects/{specProjectId} {
   match /{specCollection}/{specDocument=**} {
     allow read, write: if revexR43SpecMember(specProjectId);
   }
+}
+
+match /chatConnections/{connId} {
+  allow get: if revexR43IsAdmin() || revexR43ChatMemberOf(resource.data);
+
+  // Keep list rules field-specific. Firestore must be able to prove the exact
+  // array-contains query constraint before executing it; one broad OR helper is
+  // safe for a direct get but cannot be proven for a participants-only query.
+  allow list: if revexR43IsAdmin();
+  allow list: if revexR43SignedIn() && request.auth.uid in resource.data.participants;
+  allow list: if revexR43SignedIn() && request.auth.uid in resource.data.users;
+  allow list: if revexR43SignedIn() && request.auth.uid in resource.data.memberIds;
+  allow list: if revexR43SignedIn() && request.auth.uid in resource.data.admins;
+
+  allow create: if revexR43IsAdmin() || revexR43ChatMemberOf(request.resource.data);
+  allow update: if revexR43ChatAdmin(connId) || (
+    revexR43ChatMemberOf(resource.data)
+    && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+      'participants', 'users', 'memberIds', 'admins',
+      'projectId', 'type', 'key', 'projectKey', 'cryptoLegacySalts'
+    ])
+  );
+  allow delete: if revexR43ChatAdmin(connId);
+}
+
+match /chatMessages/{connId}/messages/{messageId} {
+  allow read: if revexR43ChatMember(connId);
+  allow create: if revexR43ChatMember(connId)
+    && request.resource.data.keys().hasAll(['sender', 'connId'])
+    && request.resource.data.sender == request.auth.uid
+    && request.resource.data.connId == connId;
+  allow update: if revexR43ChatMember(connId) && (
+    (
+      resource.data.keys().hasAny(['sender'])
+      && resource.data.sender == request.auth.uid
+      && request.resource.data.sender == request.auth.uid
+      && request.resource.data.connId == connId
+    )
+    || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'updatedAt'])
+  );
+  allow delete: if revexR43ChatAdmin(connId) || (
+    revexR43SignedIn()
+    && resource.data.keys().hasAny(['sender'])
+    && resource.data.sender == request.auth.uid
+  );
 }
 /* REVEX_PROJECT_ACCESS_R43_END */

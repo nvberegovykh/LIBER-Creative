@@ -7,6 +7,7 @@ const control = read('docs/liber-apps/apps/revex/wallt-control-plane.js');
 const fixer = read('docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js');
 const walltUi = read('docs/liber-apps/apps/revex/wallt-ui-r138.js');
 const cycleHistory = read('docs/liber-apps/apps/revex/wallt-cycle-history.js');
+const mobileSheet = read('docs/liber-apps/apps/revex/mobile-sheet-r142.js');
 const ui = read('docs/liber-apps/apps/revex/ui-integrity.js');
 const store = read('docs/liber-apps/apps/revex/store.js');
 const wallt = read('docs/liber-apps/js/wallt-agent.js');
@@ -99,7 +100,15 @@ must(ui,
   "loadScript('wallt-cycle-history.js?v=20260818-wallt-cycle-history1','wallt-cycle-history')",
   "loadScript('wallt-fixer-adapters-r137.js?v=20260818r137-fixer-adapters1','wallt-fixer-adapters-r137')",
   "loadScript('wallt-ui-r138.js?v=20260818r138-wallt-ui1','wallt-ui-r138')",
-  "wallt:'visible-helper+bounded-fixer-adapters+24h-history'"
+  "loadScript('mobile-sheet-r142.js?v=20260819r142-mobile-sheet1','mobile-sheet-r142')",
+  "wallt:'visible-helper+bounded-fixer-adapters+24h-history+mobile-actions-menu'"
+);
+
+must(mobileSheet,
+  "byId('revex-r109-actions-menu')",
+  "b.textContent='WALLT Helper / Fixer'",
+  "byId('revex-wallt-open')?.click()",
+  "body.revex-mobile-touch #revex-wallt-open{display:none!important}"
 );
 
 must(wallt,
@@ -151,6 +160,7 @@ console.log(JSON.stringify({
   build: '20260818-wallt-control2',
   visibleUiBuild: '20260818r138-wallt-ui1',
   visibleEntryPoint: true,
+  mobileEntryPoint: 'existing-r109-actions-menu',
   helperPipeline: true,
   fixerPipeline: true,
   executablePrefixedAdapters: true,

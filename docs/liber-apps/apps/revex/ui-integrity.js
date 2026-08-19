@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260818r133-mobile-accessibility1';
+  const BUILD='20260819r142-cleanup1';
   const REVEX_R87_REPLAY_CONTRACT='energy-diagnostics-r68.js?v=20260816r87-energy-replay1';
   const REVEX_R87_REPLAY_LABEL="energyDiagnostics:'revision-scoped-replay-r87'";
   const REVEX_R92_REPLAY_COMPAT='energy-replay-r92.js?v=20260816r92-hosted-replay1';
@@ -79,13 +79,12 @@
     loadScript('history-daily-r126.js?v=20260817r126-daily1','history-daily-r126');
     loadScript('blocks-palette-r126.js?v=20260817r126-blocks1','blocks-palette-r126');
     loadScript('render-convergence-r126.js?v=20260818r129-freeze-guard1','render-convergence-r126');
-    loadScript('mobile-safe-r133.js?v=20260818r133-mobile-safe1','mobile-safe-r133');
+    loadScript('mobile-safe-r133.js?v=20260819r133-mobile-safe2','mobile-safe-r133');
     loadScript('wallt-fixer-adapters-r137.js?v=20260818r137-fixer-adapters1','wallt-fixer-adapters-r137');
     loadScript('wallt-ui-r138.js?v=20260818r138-wallt-ui1','wallt-ui-r138');
-    loadScript('mobile-convergence-r140.js?v=20260819r140-mobile-convergence2','mobile-convergence-r140');
-    loadScript('chat-embed-r141.js?v=20260819r141-chat-embed1','chat-embed-r141');
+    loadScript('mobile-sheet-r142.js?v=20260819r142-mobile-sheet1','mobile-sheet-r142');
   }
   function bind(){installCanonicalOverlayStore();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r125-preserved+wallt-review',wallt:'visible-helper+bounded-fixer-adapters+24h-history+r140-topbar-dock',moduleLoad:'r126-convergence+r133-mobile-safe+r137-fixer+r138-wallt-ui+r140-mobile-final+r141-chat-compat',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r122-walk-touch+r126-responsive+r133-safe-area+r140-single-mobile-owner',docs:'r134-full-set-linked-pages+r126-ownership-guard+r140-mobile-flow',texture:'instance-uv>type-texture>design-color>revit',render:'google-gemini-client+docked-owner+qwen-shadow+interaction-freeze-guard',chat:'r136-project-isolated+r141-legacy-crypto+embedded-mobile',issues:'revexIssues+all-active-default+empty-selection-inspector',history:'technical-NYC-day+wallt-24h',dailyReport:'separate-post-sync-worker',blocks:'r135-walk-target+face-host+external-event',bimProperties:'r117-preserved',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r125-preserved+wallt-review',wallt:'visible-helper+bounded-fixer-adapters+24h-history+mobile-actions-menu',moduleLoad:'r126-convergence+r133-mobile-safe2+r137-fixer+r138-wallt-ui+r142-bottom-sheet',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r109-svg+r122-walk+r133-safe-area+r142-reused-node-sheet',docs:'r134-full-set-linked-pages+r126-ownership-guard+r133-content-height-mobile-stack',texture:'instance-uv>type-texture>design-color>revit',render:'google-gemini-client+docked-owner+qwen-shadow+interaction-freeze-guard',chat:'r136-project-isolated-secure-chat-native-ui',issues:'revexIssues+all-active-default+empty-selection-inspector',history:'technical-NYC-day+wallt-24h',dailyReport:'separate-post-sync-worker',blocks:'r135-walk-target+face-host+external-event',bimProperties:'r117-preserved',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
 })(window);

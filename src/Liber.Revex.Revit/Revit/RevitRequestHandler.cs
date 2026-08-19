@@ -171,6 +171,13 @@ public sealed class RevitRequestHandler : IExternalEventHandler
         bool simplifiedGeometryFallback = false;
         try
         {
+            // A complete existing MEP Space topology is authoritative. The successful
+            // Midwood checkpoint exported 158 source Spaces while reporting invalid
+            // height metadata as warning-only evidence; re-entering NewSpaces2 against
+            // that same saved topology is what raises Revit's non-ignorable zero-height
+            // modal. Only genuinely unspatialized/incomplete models may mutate topology.
+            settings = ApplyExistingSpatialCheckpointPolicy(uidoc.Document, settings);
+
             try
             {
                 output = new GbxmlEngineeringService().Run(app, uidoc.Document, settings);
@@ -180,11 +187,6 @@ public sealed class RevitRequestHandler : IExternalEventHandler
                 settings.CreateOrFixSpaces &&
                 IsRecoverableSpatialTopologyFailure(ex))
             {
-                // Revit can throw an analytical-plan topology exception through Dynamo's
-                // ExecuteCommand before the Python engine can downgrade the affected level
-                // to preservation-gate evidence. Retry exactly once without topology
-                // mutation; a source-bound simplified serializer remains available after
-                // that if the exact/EADM publication gate still cannot clear.
                 sourceTopologyFallback = true;
                 RevexDiagnostics.Warn("GBXML",
                     "Revit rejected automatic Space topology at an ambiguous boundary branch. " +
@@ -204,11 +206,6 @@ public sealed class RevitRequestHandler : IExternalEventHandler
 
             bool ok = GbxmlEngineeringService.IsSuccessful(output!, settings.AuditOnly);
 
-            // The exact/EADM path is preferred, but it is not allowed to dead-end a
-            // regular SYNC ENGINEERING run. A non-publishable non-empty run already
-            // contains the current Revit Space/page evidence; simplify only geometry,
-            // preserve that same run/evidence identity, and continue with an explicit
-            // review-quality fallback marker. Ambiguous openings become opaque wall.
             if (!settings.AuditOnly && !ok && output != null &&
                 !string.IsNullOrWhiteSpace(output.RunFolder) && Directory.Exists(output.RunFolder))
             {
@@ -255,12 +252,78 @@ public sealed class RevitRequestHandler : IExternalEventHandler
         }
     }
 
+    private static GbxmlEngineeringSettings ApplyExistingSpatialCheckpointPolicy(
+        Document doc,
+        GbxmlEngineeringSettings settings)
+    {
+        if (settings.AuditOnly || !settings.CreateOrFixSpaces)
+            return settings;
+
+        static bool IsPlaced(Element element)
+        {
+            try
+            {
+                Parameter? area = element.get_Parameter(BuiltInParameter.ROOM_AREA);
+                return element.Location != null && area != null && area.AsDouble() > 1.0e-6;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        List<Element> spaces = new FilteredElementCollector(doc)
+            .OfCategory(BuiltInCategory.OST_MEPSpaces)
+            .WhereElementIsNotElementType()
+            .ToElements()
+            .Where(IsPlaced)
+            .ToList();
+        List<Element> rooms = new FilteredElementCollector(doc)
+            .OfCategory(BuiltInCategory.OST_Rooms)
+            .WhereElementIsNotElementType()
+            .ToElements()
+            .Where(IsPlaced)
+            .ToList();
+
+        if (spaces.Count == 0)
+        {
+            RevexDiagnostics.Stage("GBXML", "EXISTING_SPATIAL_CHECKPOINT", "NOT_APPLICABLE",
+                $"placedSpaces=0; placedRooms={rooms.Count}; automatic Space creation remains enabled");
+            return settings;
+        }
+
+        // Revit 2026 ElementId values are 64-bit. Compare coverage by LevelId so extra
+        // Spaces on one story cannot disguise a missing story on another.
+        Dictionary<long, int> spacesByLevel = spaces
+            .GroupBy(e => e.LevelId.Value)
+            .ToDictionary(g => g.Key, g => g.Count());
+        Dictionary<long, int> roomsByLevel = rooms
+            .GroupBy(e => e.LevelId.Value)
+            .ToDictionary(g => g.Key, g => g.Count());
+        int coveredRooms = roomsByLevel.Sum(row => Math.Min(
+            row.Value,
+            spacesByLevel.TryGetValue(row.Key, out int count) ? count : 0));
+        double roomCoverage = rooms.Count == 0 ? 1.0 : (double)coveredRooms / rooms.Count;
+        bool completeCheckpoint = rooms.Count == 0
+            ? spaces.Count > 0
+            : roomCoverage >= 0.98 && spaces.Count >= Math.Max(1, rooms.Count - 1);
+
+        if (!completeCheckpoint)
+        {
+            RevexDiagnostics.Stage("GBXML", "EXISTING_SPATIAL_CHECKPOINT", "INCOMPLETE",
+                $"placedSpaces={spaces.Count}; placedRooms={rooms.Count}; roomLevelCoverage={roomCoverage:P1}; automatic Space repair remains enabled");
+            return settings;
+        }
+
+        RevexDiagnostics.Stage("GBXML", "EXISTING_SPATIAL_CHECKPOINT", "PASSED",
+            $"placedSpaces={spaces.Count}; placedRooms={rooms.Count}; roomLevelCoverage={roomCoverage:P1}; topologyMutation=false; invalid height metadata remains warning-only");
+        RevexDiagnostics.Info("GBXML",
+            "Existing placed MEP Spaces are a complete spatial checkpoint. REVEX will not call NewSpace/NewSpaces2 for this run; native Revit Space geometry remains authoritative.");
+        return settings with { CreateOrFixSpaces = false };
+    }
+
     private static bool IsRecoverableSpatialTopologyFailure(Exception error)
     {
-        // Keep this deliberately narrow. Only native/Dynamo failures that explicitly
-        // describe an ambiguous Room/Space/analytical boundary branch are rerun in
-        // read-mostly source-topology mode. Dependency, phase, file, authentication,
-        // and arbitrary programming failures must remain hard failures.
         for (Exception? current = error; current != null; current = current.InnerException)
         {
             string message = (current.Message ?? string.Empty).ToLowerInvariant();
