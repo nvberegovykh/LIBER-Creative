@@ -27,6 +27,12 @@ $TranscriptStarted = $false
 $SourceSha = ""
 $script:EnergyService = ""
 
+# The production web app is explicitly configured for the modern default bucket.
+# Preserve the legacy Storage release by selecting only the bucket REVEX actually uses.
+if (-not $StorageBucket -and $ProjectId -eq "liber-apps-cca20") {
+  $StorageBucket = "liber-apps-cca20.firebasestorage.app"
+}
+
 New-Item -ItemType Directory -Path $LogRoot, $WorkRoot -Force | Out-Null
 
 function Step([string]$Message) { Write-Host ">> $Message" -ForegroundColor Cyan }

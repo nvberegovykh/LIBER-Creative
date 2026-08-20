@@ -69,7 +69,7 @@ No release should be described as production-complete until all six gates pass o
 1. Review this branch and open a PR without squashing away the immutable release evidence.
 2. Require the `REVEX current single-source finalization` workflow to pass, including emulator, Docker and Windows jobs.
 3. Merge the exact approved source to `main`.
-4. On the authorized Windows/Revit workstation, run `FINALIZE_REVEX.cmd`. If the Firebase project has more than one Storage release, invoke the PowerShell finalizer with `-StorageBucket <exact-bucket>`.
+4. On the authorized Windows/Revit workstation, run `FINALIZE_REVEX.cmd`. Production automatically selects the web app's configured `liber-apps-cca20.firebasestorage.app` release and leaves the legacy Storage release untouched; optional launcher arguments are forwarded for other project configurations.
 5. The finalizer stages the Energy candidate, verifies the live Companion, preserves/patches Firestore and Storage rules, deploys source-bound Project Chat/report functions, cuts the Energy broker only after verification, and atomically installs the add-in while retaining the previous installation as a timestamped shadow.
 6. Reopen Revit 2026 and run one fresh **SYNC ENGINEERING**. Archive the finalizer log, Revit diagnostics, immutable Engineering revision, Energy package and CI source SHA together.
 
