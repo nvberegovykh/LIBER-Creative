@@ -163,7 +163,7 @@ async function verifyAppendOnlyLane(db, project, lane, identity) {
       keyRotationRequired: false
     }));
     await assertFails(updateDoc(doc(member, 'chatConnections', 'owner_member'), { groupKeyEpoch: 2 }));
-    await assertFails(updateDoc(doc(member, 'chatConnections', 'owner_member'), { keyRotationRequired: false }));
+    await assertFails(updateDoc(doc(member, 'chatConnections', 'owner_member'), { keyRotationRequired: true }));
     await assertFails(getDoc(doc(admin, 'chatConnections', 'owner_member')));
     await assertFails(getDoc(doc(admin, 'chatMessages', 'owner_member', 'messages', 'seed')));
     await assertFails(getDoc(doc(outsider, 'chatConnections', 'owner_member')));
