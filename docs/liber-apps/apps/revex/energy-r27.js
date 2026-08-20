@@ -39,7 +39,7 @@ function renderSource() {
   const manifest = sourceState?.manifest;
   if (!manifest) {
     setBadge('No current Engineering Sync', 'quiet');
-    summary.innerHTML = 'In the active Revit document, click <b>SYNC ENGINEERING</b>.';
+    summary.innerHTML = 'In the active Revit document, click <b>SYNC PROJECT</b>.';
     facts.innerHTML = '';
     authorize.hidden = true;
     setRun('Waiting for active-document Engineering evidence that clears the ≥80% hard-stop gate.');
@@ -49,9 +49,9 @@ function renderSource() {
     const legacyRevision = sourceState?.revision || manifest?.revision || 'legacy revision';
     setBadge('Re-sync required', 'quiet');
     summary.innerHTML = `Stored revision <b>${esc(legacyRevision)}</b> predates the verified active-Revit-document evidence contract and cannot run downstream Energy.`;
-    facts.innerHTML = '<dt>Required action</dt><dd>Open the authoritative Revit model and click SYNC ENGINEERING. REVEX will not run this stale revision as a substitute.</dd>';
+    facts.innerHTML = '<dt>Required action</dt><dd>Open the authoritative Revit model and click SYNC PROJECT. REVEX will not run this stale revision as a substitute.</dd>';
     authorize.hidden = true;
-    setRun('This stored Engineering revision is not bound to verified active-Revit-document evidence. Create a fresh SYNC ENGINEERING revision.', 'bad');
+    setRun('This stored Engineering revision is not bound to verified active-Revit-document evidence. Create a fresh aligned revision with SYNC PROJECT.', 'bad');
     return;
   }
   const ratios = Object.values(manifest.publicationIntegrity?.ratios || {}).map(Number).filter(Number.isFinite);

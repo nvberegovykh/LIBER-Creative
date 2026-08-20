@@ -1,6 +1,7 @@
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Structure;
 using System.IO.Compression;
+using System.Security.Cryptography;
 
 namespace Liber.Revex.Revit.Services;
 
@@ -22,7 +23,13 @@ internal sealed class FamilyPlacementService
         string RequestedLevelName,
         double RequestedLevelElevation);
 
-    internal sealed record TransformRequest(long ElementId, double Dx, double Dy, double Dz, double RotateDegrees);
+    internal sealed record TransformRequest(
+        string UniqueId,
+        long? ElementIdHint,
+        double Dx,
+        double Dy,
+        double Dz,
+        double RotateDegrees);
 
     internal sealed record PlacementResult(
         long ElementId,
@@ -34,16 +41,35 @@ internal sealed class FamilyPlacementService
         double[] BboxMax,
         float[] PreviewTriangles,
         bool PreviewTruncated,
-        string PlacementType);
+        string PlacementType,
+        string HostUniqueId);
+
+    internal sealed class TransactionCommitException : InvalidOperationException
+    {
+        internal TransactionCommitException(TransactionStatus status, Exception? inner = null)
+            : base(status == TransactionStatus.Pending
+                ? "The Revit family transaction is pending failure processing. REVEX preserved its prepared receipt and will reconcile the model witness before any retry."
+                : $"The Revit family transaction did not commit (status: {status}).", inner)
+        {
+            Status = status;
+        }
+
+        internal TransactionStatus Status { get; }
+        internal bool RecoveryPending => Status != TransactionStatus.RolledBack;
+    }
 
     private const int MaxPreviewVertices = 120_000;
     private const double MaxHostDistanceFt = 8.0;
     private const int MaxZipEntries = 2048;
     private const long MaxExpandedZipBytes = 512L * 1024L * 1024L;
 
-    internal PlacementResult Place(Document doc, PlacementRequest request)
+    internal PlacementResult Place(
+        Document doc,
+        PlacementRequest request,
+        Action<PlacementResult> recordCommittedWitness)
     {
-        string source = ResolveFamilyPath(request.Path, out string? extractedFolder);
+        ResolvedFamilyAsset resolved = ResolveFamilyAsset(request.Path);
+        string source = resolved.Path;
         try
         {
             if (!File.Exists(source) || !string.Equals(Path.GetExtension(source), ".rfa", StringComparison.OrdinalIgnoreCase))
@@ -52,6 +78,7 @@ internal sealed class FamilyPlacementService
             Family? family = null;
             FamilySymbol? symbol = null;
             FamilyInstance? instance = null;
+            PlacementResult? committedResult = null;
             using (var tx = new Transaction(doc, "REVEX · Place BIM family"))
             {
                 tx.Start();
@@ -91,24 +118,49 @@ internal sealed class FamilyPlacementService
 
                 if (Math.Abs(request.RotationDegrees) > 1e-8)
                     Rotate(doc, instance, request.RotationDegrees * Math.PI / 180.0);
-                tx.Commit();
+
+                // Snapshot and the model-backed command witness must both exist
+                // before the one transaction is allowed to commit.
+                doc.Regenerate();
+                PlacementResult preparedResult = Snapshot(doc, instance, family, symbol);
+                recordCommittedWitness(preparedResult);
+                CommitExact(tx);
+                committedResult = preparedResult;
             }
 
-            if (instance == null || symbol == null || family == null)
+            if (committedResult == null || instance == null || symbol == null || family == null)
                 throw new InvalidOperationException("Family placement completed without a Revit instance.");
-            return Snapshot(doc, instance, family, symbol);
+            return committedResult;
         }
         finally
         {
-            if (!string.IsNullOrWhiteSpace(extractedFolder))
-                try { Directory.Delete(extractedFolder, true); } catch { }
+            resolved.Dispose();
         }
     }
 
-    internal PlacementResult Transform(Document doc, TransformRequest request)
+    internal PlacementResult Transform(
+        Document doc,
+        TransformRequest request,
+        Action<PlacementResult> recordCommittedWitness)
     {
-        FamilyInstance instance = doc.GetElement(new ElementId(request.ElementId)) as FamilyInstance
-            ?? throw new InvalidOperationException("The placed REVEX family instance is no longer available in the active Revit document.");
+        FamilyInstance? instance = null;
+        if (!string.IsNullOrWhiteSpace(request.UniqueId))
+        {
+            instance = doc.GetElement(request.UniqueId.Trim()) as FamilyInstance;
+            if (instance == null)
+                throw new InvalidOperationException("The exact placed REVEX family UniqueId is not available in the bound active Revit document.");
+            if (request.ElementIdHint is long hinted && instance.Id.Value != hinted)
+                throw new InvalidOperationException("The family transform ElementId hint does not match the exact Revit UniqueId.");
+        }
+        else if (request.ElementIdHint is long compatibilityId)
+        {
+            // Compatibility fallback is allowed only after the external handler has
+            // verified the exact project/document command envelope.
+            instance = doc.GetElement(new ElementId(compatibilityId)) as FamilyInstance;
+        }
+        if (instance == null)
+            throw new InvalidOperationException("The placed REVEX family instance is no longer available in the bound active Revit document.");
+        PlacementResult? committedResult = null;
         using (var tx = new Transaction(doc, "REVEX · Adjust BIM family"))
         {
             tx.Start();
@@ -117,56 +169,125 @@ internal sealed class FamilyPlacementService
                 ElementTransformUtils.MoveElement(doc, instance.Id, delta);
             if (Math.Abs(request.RotateDegrees) > 1e-8)
                 Rotate(doc, instance, request.RotateDegrees * Math.PI / 180.0);
-            tx.Commit();
+            doc.Regenerate();
+            FamilySymbol symbol = doc.GetElement(instance.GetTypeId()) as FamilySymbol
+                ?? throw new InvalidOperationException("The placed family type is no longer available.");
+            PlacementResult preparedResult = Snapshot(doc, instance, symbol.Family, symbol);
+            recordCommittedWitness(preparedResult);
+            CommitExact(tx);
+            committedResult = preparedResult;
         }
-        FamilySymbol symbol = doc.GetElement(instance.GetTypeId()) as FamilySymbol
-            ?? throw new InvalidOperationException("The placed family type is no longer available.");
-        return Snapshot(doc, instance, symbol.Family, symbol);
+        return committedResult ?? throw new InvalidOperationException("Family transform completed without an exact committed Revit result.");
     }
 
-    private static string ResolveFamilyPath(string source, out string? extractedFolder)
+    private sealed class ResolvedFamilyAsset : IDisposable
     {
-        extractedFolder = null;
+        private readonly FileStream _readLock;
+        private readonly string? _extractedFolder;
+
+        internal ResolvedFamilyAsset(string path, FileStream readLock, string? extractedFolder)
+        {
+            Path = path;
+            _readLock = readLock;
+            _extractedFolder = extractedFolder;
+        }
+
+        internal string Path { get; }
+
+        public void Dispose()
+        {
+            _readLock.Dispose();
+            if (!string.IsNullOrWhiteSpace(_extractedFolder))
+                try { Directory.Delete(_extractedFolder, true); } catch { }
+        }
+    }
+
+    private sealed record ExtractedFamilyCandidate(string Path, long Length, string Sha256);
+
+    private static ResolvedFamilyAsset ResolveFamilyAsset(string source)
+    {
         string path = Path.GetFullPath(source ?? "");
         if (!File.Exists(path)) throw new FileNotFoundException("The downloaded BIM family file is missing.", path);
         string ext = Path.GetExtension(path).ToLowerInvariant();
-        if (ext == ".rfa") return path;
+        if (ext == ".rfa")
+        {
+            FileStream directLock = new(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            return new ResolvedFamilyAsset(path, directLock, extractedFolder: null);
+        }
         if (ext != ".zip") throw new InvalidOperationException("REVEX BIM palette accepts .rfa or .zip family downloads.");
 
-        extractedFolder = Path.Combine(Path.GetTempPath(), "LIBER_REVEX", "families", Guid.NewGuid().ToString("N"));
+        string extractedFolder = Path.Combine(Path.GetTempPath(), "LIBER_REVEX", "families", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(extractedFolder);
         string root = Path.GetFullPath(extractedFolder) + Path.DirectorySeparatorChar;
-        using ZipArchive archive = ZipFile.OpenRead(path);
-        if (archive.Entries.Count > MaxZipEntries)
-            throw new InvalidOperationException($"Downloaded BIM ZIP contains too many entries ({archive.Entries.Count}; limit {MaxZipEntries}).");
-
-        long expanded = 0;
-        var extractedFamilies = new List<string>();
-        foreach (ZipArchiveEntry entry in archive.Entries)
+        try
         {
-            if (string.IsNullOrEmpty(entry.Name)) continue;
-            expanded = checked(expanded + Math.Max(0, entry.Length));
-            if (expanded > MaxExpandedZipBytes)
-                throw new InvalidOperationException($"Downloaded BIM ZIP expands beyond the {MaxExpandedZipBytes / 1024 / 1024} MB REVEX limit.");
+            using ZipArchive archive = ZipFile.OpenRead(path);
+            if (archive.Entries.Count > MaxZipEntries)
+                throw new InvalidOperationException($"Downloaded BIM ZIP contains too many entries ({archive.Entries.Count}; limit {MaxZipEntries}).");
 
-            string relative = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
-            string destination = Path.GetFullPath(Path.Combine(extractedFolder, relative));
-            if (!destination.StartsWith(root, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("Downloaded BIM ZIP contains an unsafe file path.");
+            long expanded = 0;
+            var extractedFamilies = new List<ExtractedFamilyCandidate>();
+            byte[] buffer = new byte[81920];
+            foreach (ZipArchiveEntry entry in archive.Entries)
+            {
+                if (string.IsNullOrEmpty(entry.Name)) continue;
 
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            using Stream input = entry.Open();
-            using FileStream output = File.Create(destination);
-            input.CopyTo(output);
-            if (string.Equals(Path.GetExtension(destination), ".rfa", StringComparison.OrdinalIgnoreCase))
-                extractedFamilies.Add(destination);
+                string relative = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
+                string destination = Path.GetFullPath(Path.Combine(extractedFolder, relative));
+                if (!destination.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Downloaded BIM ZIP contains an unsafe file path.");
+
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                long entryBytes = 0;
+                string extractedSha;
+                using (Stream input = entry.Open())
+                using (FileStream output = new(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                using (IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
+                {
+                    int read;
+                    while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        entryBytes = checked(entryBytes + read);
+                        expanded = checked(expanded + read);
+                        if (expanded > MaxExpandedZipBytes)
+                            throw new InvalidOperationException($"Downloaded BIM ZIP expands beyond the {MaxExpandedZipBytes / 1024 / 1024} MB REVEX limit.");
+                        hash.AppendData(buffer, 0, read);
+                        output.Write(buffer, 0, read);
+                    }
+                    output.Flush(flushToDisk: true);
+                    extractedSha = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+                }
+                if (string.Equals(Path.GetExtension(destination), ".rfa", StringComparison.OrdinalIgnoreCase))
+                    extractedFamilies.Add(new ExtractedFamilyCandidate(destination, entryBytes, extractedSha));
+            }
+
+            ExtractedFamilyCandidate? family = extractedFamilies
+                .OrderByDescending(candidate => candidate.Length)
+                .ThenBy(candidate => candidate.Path, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+            if (family == null)
+                throw new InvalidOperationException("The downloaded ZIP contains no Revit .rfa family.");
+
+            FileStream familyLock = new(family.Path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            try
+            {
+                string lockedSha = Convert.ToHexString(SHA256.HashData(familyLock)).ToLowerInvariant();
+                if (!string.Equals(lockedSha, family.Sha256, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("The extracted Revit family changed before it could be locked. Insert it again; no Revit mutation was run.");
+                familyLock.Position = 0;
+                return new ResolvedFamilyAsset(family.Path, familyLock, extractedFolder);
+            }
+            catch
+            {
+                familyLock.Dispose();
+                throw;
+            }
         }
-
-        string? family = extractedFamilies
-            .OrderByDescending(p => new FileInfo(p).Length)
-            .ThenBy(p => p, StringComparer.OrdinalIgnoreCase)
-            .FirstOrDefault();
-        return family ?? throw new InvalidOperationException("The downloaded ZIP contains no Revit .rfa family.");
+        catch
+        {
+            try { Directory.Delete(extractedFolder, true); } catch { }
+            throw;
+        }
     }
 
     private static Family? FindLoadedFamily(Document doc, string name) =>
@@ -344,6 +465,28 @@ internal sealed class FamilyPlacementService
         ElementTransformUtils.RotateElement(doc, instance.Id, axis, radians);
     }
 
+    private static void CommitExact(Transaction transaction)
+    {
+        TransactionStatus status;
+        try
+        {
+            status = transaction.Commit();
+        }
+        catch (Exception ex)
+        {
+            TransactionStatus observed;
+            try { observed = transaction.GetStatus(); }
+            catch { observed = TransactionStatus.Pending; }
+            // Only a confirmed rollback may discard the prepared local receipt.
+            // Any unresolved failure-processing state remains recovery-pending.
+            throw new TransactionCommitException(
+                observed == TransactionStatus.RolledBack ? TransactionStatus.RolledBack : TransactionStatus.Pending,
+                ex);
+        }
+        if (status != TransactionStatus.Committed)
+            throw new TransactionCommitException(status);
+    }
+
     private static PlacementResult Snapshot(Document doc, FamilyInstance instance, Family family, FamilySymbol symbol)
     {
         BoundingBoxXYZ? box = instance.get_BoundingBox(null);
@@ -358,7 +501,8 @@ internal sealed class FamilyPlacementService
         catch { truncated = true; }
         string level = instance.LevelId == ElementId.InvalidElementId ? "" : doc.GetElement(instance.LevelId)?.Name ?? "";
         return new PlacementResult(instance.Id.Value, instance.UniqueId, family.Name, symbol.Name, level,
-            new[] { min.X, min.Y, min.Z }, new[] { max.X, max.Y, max.Z }, vertices.ToArray(), truncated, family.FamilyPlacementType.ToString());
+            new[] { min.X, min.Y, min.Z }, new[] { max.X, max.Y, max.Z }, vertices.ToArray(), truncated,
+            family.FamilyPlacementType.ToString(), instance.Host?.UniqueId ?? "");
     }
 
     private static void CollectTriangles(GeometryElement geometry, List<float> vertices, ref bool truncated)

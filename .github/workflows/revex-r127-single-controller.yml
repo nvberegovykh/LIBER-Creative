@@ -46,10 +46,12 @@ jobs:
           node --check .github/scripts/verify-revex-r138-wallt-ui.js
           node --check .github/scripts/verify-revex-r142-mobile-sheet.js
           node --check .github/scripts/verify-revex-r143-ui-recovery.js
+          node --check .github/scripts/verify-revex-r144-experience.js
           node --check .github/scripts/verify-revex-project-chat-isolation.js
           node --check .github/scripts/verify-revex-storage-access.js
           node --check .github/scripts/verify-revex-storage-live-rules.js
           node --check .github/scripts/verify-secure-chat-group-crypto.js
+          node --check .github/scripts/verify-secure-chat-recovery.js
           node --check .github/scripts/verify-revex-security-boundaries.js
           node --check docs/liber-apps/apps/revex/docs-pages-r115.js
           node --check docs/liber-apps/apps/revex/blocks-palette-r126.js
@@ -73,9 +75,11 @@ jobs:
           node .github/scripts/verify-revex-r138-wallt-ui.js
           node .github/scripts/verify-revex-r142-mobile-sheet.js
           node .github/scripts/verify-revex-r143-ui-recovery.js
+          node .github/scripts/verify-revex-r144-experience.js
           node .github/scripts/verify-revex-project-chat-isolation.js
           node .github/scripts/verify-revex-storage-access.js
           node .github/scripts/verify-secure-chat-group-crypto.js
+          node .github/scripts/verify-secure-chat-recovery.js
           node .github/scripts/verify-revex-security-boundaries.js
       - uses: actions/setup-java@v4
         with:
@@ -104,6 +108,7 @@ jobs:
               "REVEX_RULES_TEST_PROJECT=demo-revex-r43 node $GITHUB_WORKSPACE/.github/scripts/verify-revex-r43-rules.js && REVEX_RULES_TEST_PROJECT=demo-revex-r43 node $GITHUB_WORKSPACE/.github/scripts/verify-revex-r49-live-rules.js && REVEX_RULES_TEST_PROJECT=demo-revex-r43 node $GITHUB_WORKSPACE/.github/scripts/verify-revex-storage-live-rules.js"
       - name: Canonical current release contract
         run: |
+          python .github/scripts/verify-revex-r127-single-controller.py
           python .github/scripts/verify-revex-current-release.py
           python .github/scripts/verify-revex-space-recovery.py
           PYTHONPATH=server/revex-energy-worker python server/revex-energy-worker/verify_r95_consumer_boundary.py

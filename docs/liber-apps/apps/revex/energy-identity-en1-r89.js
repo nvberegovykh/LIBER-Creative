@@ -1,115 +1,97 @@
 (function(root){
   'use strict';
-  const BUILD='20260816r89-en1-identity1';
+  const BUILD='20260820r145-en1-amendment1';
   const clean=v=>String(v??'').trim().replace(/\s+/g,' ');
   const Store=()=>root.RevexStore;
-  const diagnostic=(level,stage,message,detail={})=>{try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'EN-1 identity r89',...detail});}catch(_){}};
-  const field=(id,label,attrs='')=>`<label style="display:grid;gap:4px"><span>${label}</span><input id="${id}" ${attrs}></label>`;
+  const State=()=>root.__revexState||{};
+  const diagnostic=(level,stage,message,detail={})=>{try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'EN-1 identity amendment r145',...detail})}catch(_){}};
+  let dirty=false,loadedKey='',busy=false;
 
-  function ensureForm(){
-    const dialog=document.getElementById('energy-consent-dialog');
-    const form=dialog?.querySelector('form');
-    if(!form||document.getElementById('energy-en1-identity'))return;
-    const block=document.createElement('fieldset');
-    block.id='energy-en1-identity';
-    block.style.cssText='margin:14px 0 10px;padding:12px;border:1px solid rgba(255,255,255,.14);border-radius:9px;display:grid;gap:10px';
-    block.innerHTML=`<legend style="padding:0 6px">EN-1 applicant + lead modeler</legend>
-      <div style="font-size:12px;opacity:.72">Stored only with this immutable Engineering revision for EN-1. These fields are not transmitted to COMcheck.</div>
-      <details open><summary>Applicant</summary><div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 10px;margin-top:9px">
-        ${field('energy-en1-a-first','First name','autocomplete="given-name"')}
-        ${field('energy-en1-a-last','Last name','autocomplete="family-name"')}
-        ${field('energy-en1-a-mi','Middle initial','maxlength="1"')}
-        ${field('energy-en1-a-license','License number','autocomplete="off"')}
-        ${field('energy-en1-a-business','Business name','autocomplete="organization"')}
-        ${field('energy-en1-a-business-email','Business email','type="email" autocomplete="email"')}
-        ${field('energy-en1-a-address','Business address','autocomplete="street-address"')}
-        ${field('energy-en1-a-phone','Business telephone','autocomplete="tel"')}
-        ${field('energy-en1-a-city','City','autocomplete="address-level2"')}
-        ${field('energy-en1-a-state','State','autocomplete="address-level1" maxlength="32"')}
-        ${field('energy-en1-a-zip','ZIP','autocomplete="postal-code" maxlength="10" inputmode="numeric"')}
-        ${field('energy-en1-a-email','Email','type="email" autocomplete="email"')}
-      </div></details>
-      <details open><summary>Lead modeler</summary><div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 10px;margin-top:9px">
-        ${field('energy-en1-m-first','First name','autocomplete="given-name"')}
-        ${field('energy-en1-m-last','Last name','autocomplete="family-name"')}
-        ${field('energy-en1-m-mi','Middle initial','maxlength="1"')}
-        ${field('energy-en1-m-business','Business name','autocomplete="organization"')}
-        ${field('energy-en1-m-address','Business address','autocomplete="street-address"')}
-        ${field('energy-en1-m-phone','Telephone','autocomplete="tel"')}
-        ${field('energy-en1-m-city','City','autocomplete="address-level2"')}
-        ${field('energy-en1-m-state','State','autocomplete="address-level1" maxlength="32"')}
-        ${field('energy-en1-m-zip','ZIP','autocomplete="postal-code" maxlength="10" inputmode="numeric"')}
-        ${field('energy-en1-m-email','Email','type="email" autocomplete="email"')}
-      </div></details>`;
-    const note=form.querySelector('.energy-consent-note');
-    if(note)note.insertAdjacentElement('beforebegin',block);else form.appendChild(block);
-    diagnostic('INFO','EN1_IDENTITY_FORM_READY','Applicant and lead-modeler fields are available in the revision authorization step.');
-  }
-
-  function value(id){return clean(document.getElementById(id)?.value);}
-  function record(prefix,map){
-    const out={};
-    for(const [key,suffix] of Object.entries(map)){
-      let v=value(`${prefix}${suffix}`);
-      if(!v)continue;
-      if(key==='middleInitial')v=v.slice(0,1).toUpperCase();
-      if(key==='state')v=v.toUpperCase();
-      out[key]=v.slice(0,200);
+  const fields={
+    applicant:{
+      firstName:['a-first','First name','autocomplete="given-name"'],lastName:['a-last','Last name','autocomplete="family-name"'],middleInitial:['a-mi','Middle initial','maxlength="1"'],licenseNumber:['a-license','License number','autocomplete="off"'],businessName:['a-business','Business name','autocomplete="organization"'],businessEmail:['a-business-email','Business email','type="email" autocomplete="email"'],businessAddress:['a-address','Business address','autocomplete="street-address"'],businessTelephone:['a-phone','Business telephone','autocomplete="tel"'],city:['a-city','City','autocomplete="address-level2"'],state:['a-state','State','autocomplete="address-level1" maxlength="32"'],zip:['a-zip','ZIP','autocomplete="postal-code" maxlength="10" inputmode="numeric"'],email:['a-email','Email','type="email" autocomplete="email"']
+    },
+    modeler:{
+      firstName:['m-first','First name','autocomplete="given-name"'],lastName:['m-last','Last name','autocomplete="family-name"'],middleInitial:['m-mi','Middle initial','maxlength="1"'],businessName:['m-business','Business name','autocomplete="organization"'],businessAddress:['m-address','Business address','autocomplete="street-address"'],telephone:['m-phone','Telephone','autocomplete="tel"'],city:['m-city','City','autocomplete="address-level2"'],state:['m-state','State','autocomplete="address-level1" maxlength="32"'],zip:['m-zip','ZIP','autocomplete="postal-code" maxlength="10" inputmode="numeric"'],email:['m-email','Email','type="email" autocomplete="email"']
     }
-    return out;
+  };
+  const field=([suffix,label,attrs])=>`<label><span>${label}</span><input id="energy-en1-${suffix}" ${attrs||''}></label>`;
+  const personFields=group=>Object.values(fields[group]).map(field).join('');
+
+  function installCss(){if(document.getElementById('energy-en1-r145-css'))return;const style=document.createElement('style');style.id='energy-en1-r145-css';style.textContent=`
+    #energy-en1-publication{grid-column:1/-1}.energy-en1-scope{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid var(--line-2);border-radius:10px;background:#111821}.energy-en1-scope strong{display:block;font-size:12px}.energy-en1-scope span{display:block;margin-top:3px;color:var(--tx-3);font:9px/1.45 var(--mono)}.energy-en1-people{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.energy-en1-people details{border:1px solid var(--line);border-radius:10px;padding:10px;background:#0e141c}.energy-en1-people summary{cursor:pointer;font-weight:700;font-size:12px}.energy-en1-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px}.energy-en1-fields label{display:grid;gap:4px;color:var(--tx-3);font:9px var(--mono)}.energy-en1-fields input{min-width:0;width:100%;height:36px}.energy-en1-actions{display:flex;align-items:center;gap:10px;margin-top:12px}.energy-en1-actions button{min-height:40px}.energy-en1-actions small{color:var(--tx-3);font:9px/1.45 var(--mono)}#energy-en1-status[data-tone="bad"]{color:var(--bad)}#energy-en1-status[data-tone="good"]{color:var(--good)}
+    @media(max-width:860px){.energy-en1-people{grid-template-columns:1fr}.energy-en1-fields{grid-template-columns:repeat(2,minmax(0,1fr))}.energy-en1-actions{align-items:stretch;flex-direction:column}.energy-en1-actions button{width:100%;min-height:44px}}
+    @media(max-width:480px){.energy-en1-fields{grid-template-columns:1fr}.energy-en1-scope{display:block}}
+  `;document.head.appendChild(style)}
+
+  function ensurePanel(){
+    let panel=document.getElementById('energy-en1-publication');if(panel)return panel;
+    const layout=document.querySelector('#view-energy .energy-layout');if(!layout)return null;
+    panel=document.createElement('section');panel.id='energy-en1-publication';panel.className='energy-card';
+    panel.innerHTML=`<div class="eyebrow">EN-1 · PROFESSIONAL IDENTITY</div><h2>Applicant + lead modeler</h2>
+      <p class="energy-summary">Fill or update these fields at any time for the exact project and immutable Engineering revision shown below. <b>Apply to EN-1</b> republishes only the EN-1 workbook, EN-1 PDF and review ZIP. GeometryCo, OpenStudio/EnergyPlus and COMcheck do not rerun; project identity, signature and seal remain unchanged.</p>
+      <div class="energy-en1-scope"><div><strong id="energy-en1-project">No project selected</strong><span id="energy-en1-revision">No immutable Engineering revision</span></div><span id="energy-en1-parent">Generate a complete Energy package before applying.</span></div>
+      <div class="energy-en1-people"><details open><summary>Applicant</summary><div class="energy-en1-fields">${personFields('applicant')}</div></details><details open><summary>Lead modeler</summary><div class="energy-en1-fields">${personFields('modeler')}</div></details></div>
+      <div class="energy-en1-actions"><button id="energy-en1-apply" class="button sp-btn" type="button" disabled>Apply to EN-1</button><small id="energy-en1-status" role="status" aria-live="polite">Waiting for a complete Energy package bound to this Engineering revision.</small></div>`;
+    const results=layout.querySelector('.energy-results-card');layout.insertBefore(panel,results||null);
+    panel.addEventListener('input',event=>{if(event.target.matches('input'))dirty=true});
+    panel.querySelector('#energy-en1-apply').addEventListener('click',()=>void apply());
+    return panel;
   }
-  function applicant(){return record('energy-en1-a-',{
-    firstName:'first',lastName:'last',middleInitial:'mi',licenseNumber:'license',businessName:'business',
-    businessEmail:'business-email',businessAddress:'address',businessTelephone:'phone',city:'city',state:'state',zip:'zip',email:'email'
-  });}
-  function modeler(){return record('energy-en1-m-',{
-    firstName:'first',lastName:'last',middleInitial:'mi',businessName:'business',businessAddress:'address',telephone:'phone',city:'city',state:'state',zip:'zip',email:'email'
-  });}
-  function revisionId(value){return clean(value).replace(/[^a-zA-Z0-9._-]+/g,'_').slice(0,120).replace(/\./g,'_');}
-  function validate(person,label){
-    if(person.zip&&!/^\d{5}(?:-\d{4})?$/.test(person.zip))throw new Error(`${label} ZIP must be 5 digits or ZIP+4.`);
-    if(person.state&&!/^[A-Z][A-Z .-]{1,31}$/.test(person.state))throw new Error(`${label} state is invalid.`);
+
+  function setStatus(message,tone=''){const node=document.getElementById('energy-en1-status');if(node){node.textContent=message;node.dataset.tone=tone}}
+  function revisionId(value){return clean(value).replace(/[^a-zA-Z0-9._-]+/g,'_').slice(0,120).replace(/\./g,'_')}
+  function value(id){return clean(document.getElementById(id)?.value)}
+  function readPerson(group){const out={};for(const [key,[suffix]] of Object.entries(fields[group])){let item=value(`energy-en1-${suffix}`);if(!item)continue;if(key==='middleInitial')item=item.slice(0,1).toUpperCase();if(key==='state')item=item.toUpperCase();out[key]=item.slice(0,200)}return out}
+  function validate(person,label){if(person.zip&&!/^\d{5}(?:-\d{4})?$/.test(person.zip))throw new Error(`${label} ZIP must be 5 digits or ZIP+4.`);if(person.state&&!/^[A-Z][A-Z .-]{1,31}$/.test(person.state))throw new Error(`${label} state is invalid.`);for(const key of['email','businessEmail'])if(person[key]&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(person[key]))throw new Error(`${label} ${key==='businessEmail'?'business email':'email'} is invalid.`)}
+  function populate(group,person){for(const [key,[suffix]] of Object.entries(fields[group])){const input=document.getElementById(`energy-en1-${suffix}`);if(input)input.value=clean(person?.[key])}}
+  function amendmentId(){const random=root.crypto?.randomUUID?.()||`${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;return `en1_${random}`}
+
+  async function context(){
+    const store=Store(),projectId=clean(State().projectId||document.getElementById('project-select')?.value);if(!store||!projectId)return{projectId};
+    const [source,result]=await Promise.all([store.getEngineeringState(projectId),store.getEnergyResult(projectId)]);
+    const sourceRevision=clean(source?.revision||source?.manifest?.revision),parentResultRevision=clean(result?.revision||result?.manifest?.resultRevision);
+    const complete=clean(result?.manifest?.status).toUpperCase()==='COMPLETE'&&clean(result?.manifest?.sourceEngineeringRevision)===sourceRevision&&parentResultRevision===clean(result?.manifest?.resultRevision);
+    return{store,projectId,source,sourceRevision,result,parentResultRevision,complete};
+  }
+
+  async function hydrate(force=false){
+    ensurePanel();let ctx;try{ctx=await context()}catch(error){setStatus(error.message||String(error),'bad');return}
+    const project=document.getElementById('energy-en1-project'),revision=document.getElementById('energy-en1-revision'),parent=document.getElementById('energy-en1-parent'),button=document.getElementById('energy-en1-apply');
+    if(project)project.textContent=ctx.projectId||'No project selected';if(revision)revision.textContent=ctx.sourceRevision?`Engineering revision · ${ctx.sourceRevision}`:'No immutable Engineering revision';if(parent)parent.textContent=ctx.complete?`Current Energy result · ${ctx.parentResultRevision}`:'Generate a complete Energy package before applying.';if(button)button.disabled=busy||!ctx.complete;
+    const key=`${ctx.projectId||''}:${ctx.sourceRevision||''}`;
+    if(ctx.store&&ctx.sourceRevision&&(force||key!==loadedKey||!dirty)){const consent=await ctx.store.getEnergyConsent(ctx.projectId,ctx.sourceRevision).catch(()=>null);populate('applicant',consent?.en1Applicant||{});populate('modeler',consent?.en1Modeler||{});loadedKey=key;dirty=false}
+    if(!ctx.projectId)setStatus('Choose a REVEX project.');else if(!ctx.sourceRevision)setStatus('Publish an immutable Engineering revision.');else if(!ctx.complete)setStatus('Applicant/modeler fields are ready; generate the first complete Energy package, then Apply to EN-1.');else setStatus('Ready. Apply updates EN-1 only; simulations, COMcheck, signature and seal remain unchanged.');
+  }
+
+  async function writeIdentity(ctx,en1Applicant,en1Modeler,authority){
+    const store=ctx.store,uid=clean(store.user?.uid),revision=revisionId(ctx.sourceRevision);if(!store.isCloud?.()||!uid||!revision)throw new Error('A signed-in REVEX cloud session is required.');
+    const ref=store.api.doc(store.db,'projects',ctx.projectId,'revexEnergyConsents',revision,'approvers',uid);
+    const raw={en1Applicant,en1Modeler,en1IdentityAuthority:authority,en1IdentityRecordedAt:new Date().toISOString()};
+    const patch=store.toFirestorePlain?store.toFirestorePlain(raw):raw,options=store.toFirestorePlain?store.toFirestorePlain({merge:true}):{merge:true};await store.api.setDoc(ref,patch,options);return patch;
+  }
+
+  async function apply(){
+    if(busy)return;busy=true;const button=document.getElementById('energy-en1-apply');if(button)button.disabled=true;
+    try{
+      const ctx=await context();if(!ctx.complete)throw new Error('The exact current Engineering revision has no complete Energy result to amend.');
+      const en1Applicant=readPerson('applicant'),en1Modeler=readPerson('modeler');validate(en1Applicant,'Applicant');validate(en1Modeler,'Lead modeler');
+      setStatus('Saving revision-scoped identity…');await writeIdentity(ctx,en1Applicant,en1Modeler,'explicit-user-input-publication-only-en1-amendment');
+      setStatus('Publishing EN-1 only… GeometryCo, simulation and COMcheck remain untouched.');
+      const response=await ctx.store.applyEn1IdentityAmendment(ctx.projectId,ctx.sourceRevision,ctx.parentResultRevision,amendmentId());
+      const result=await ctx.store.getEnergyResult(ctx.projectId);if(clean(result?.revision||result?.manifest?.resultRevision)!==clean(response.resultRevision))throw new Error('The EN-1 amendment completed without the exact current result record.');
+      try{await ctx.store.appendHistory(ctx.projectId,{sourceRevision:ctx.sourceRevision,kind:'energy-en1-amendment',operation:'apply-to-en1',label:'Applied Applicant/Modeler to EN-1',affectedElementIds:[],affectedUniqueIds:[],affectedLevels:[],before:{resultRevision:ctx.parentResultRevision},after:{resultRevision:response.resultRevision,applicantFields:Object.keys(en1Applicant),modelerFields:Object.keys(en1Modeler)},note:'Publication-only amendment: GeometryCo, OpenStudio/EnergyPlus and COMcheck were not rerun; project identity, signature and seal were unchanged.'})}catch(error){diagnostic('WARN','EN1_AMENDMENT_HISTORY',error.message||String(error))}
+      dirty=false;setStatus(`Applied to EN-1 as ${response.resultRevision}. Simulations and COMcheck were reused byte-for-byte.`,'good');root.dispatchEvent(new CustomEvent('revex:managed-energy-result',{detail:{projectId:ctx.projectId,revision:ctx.sourceRevision,resultRevision:response.resultRevision,result,response}}));diagnostic('INFO','EN1_IDENTITY_AMENDMENT_COMPLETE','Applicant/modeler were published through the EN-1-only amendment lane.',{projectId:ctx.projectId,sourceRevision:ctx.sourceRevision,parentResultRevision:ctx.parentResultRevision,resultRevision:response.resultRevision});
+      await hydrate(true);
+    }catch(error){setStatus(error.message||String(error),'bad');diagnostic('ERROR','EN1_IDENTITY_AMENDMENT_FAILED',error.message||String(error))}
+    finally{busy=false;const ctx=await context().catch(()=>({complete:false}));if(button)button.disabled=!ctx.complete}
   }
 
   function wrapConsent(){
-    const store=Store();
-    if(!store?.recordEnergyConsent||store.recordEnergyConsent.__revexEn1IdentityR89)return;
-    const original=store.recordEnergyConsent.bind(store);
-    const wrapped=async function(projectId,sourceRevision){
-      const consent=await original(projectId,sourceRevision);
-      const en1Applicant=applicant(),en1Modeler=modeler();
-      validate(en1Applicant,'Applicant');validate(en1Modeler,'Lead modeler');
-      if(!Object.keys(en1Applicant).length&&!Object.keys(en1Modeler).length)return consent;
-      const revision=revisionId(sourceRevision),uid=clean(store.user?.uid);
-      if(!store.isCloud?.()||!store.api?.doc||!store.api?.setDoc||!store.db||!uid||!projectId||!revision)
-        throw new Error('REVEX cloud session is required to attach EN-1 identity to this authorization.');
-      const ref=store.api.doc(store.db,'projects',projectId,'revexEnergyConsents',revision,'approvers',uid);
-      const raw={
-        en1Applicant,en1Modeler,
-        en1IdentityAuthority:'explicit-user-input-during-revision-scoped-comcheck-authorization',
-        en1IdentityRecordedAt:new Date().toISOString()
-      };
-      const patch=store.toFirestorePlain?store.toFirestorePlain(raw):raw;
-      const options=store.toFirestorePlain?store.toFirestorePlain({merge:true}):{merge:true};
-      await store.api.setDoc(ref,patch,options);
-      diagnostic('INFO','EN1_IDENTITY_RECORDED','Applicant/modeler identity was attached to this immutable Engineering revision.',{
-        projectId,revision,applicantFields:Object.keys(en1Applicant),modelerFields:Object.keys(en1Modeler)
-      });
-      return {...consent,...patch};
-    };
-    wrapped.__revexEn1IdentityR89=true;
-    wrapped.__revexOriginal=original;
-    store.recordEnergyConsent=wrapped;
+    const store=Store();if(!store?.recordEnergyConsent||store.recordEnergyConsent.__revexEn1IdentityR145)return;
+    const original=store.recordEnergyConsent.bind(store);const wrapped=async function(projectId,sourceRevision){const consent=await original(projectId,sourceRevision),en1Applicant=readPerson('applicant'),en1Modeler=readPerson('modeler');validate(en1Applicant,'Applicant');validate(en1Modeler,'Lead modeler');if(!Object.keys(en1Applicant).length&&!Object.keys(en1Modeler).length)return consent;const ctx={store,projectId,sourceRevision};const patch=await writeIdentity(ctx,en1Applicant,en1Modeler,'explicit-user-input-during-revision-scoped-comcheck-authorization');return{...consent,...patch}};wrapped.__revexEn1IdentityR145=true;wrapped.__revexOriginal=original;store.recordEnergyConsent=wrapped;
   }
 
-  function install(){
-    if(root.__revexEn1IdentityR89)return;
-    root.__revexEn1IdentityR89={build:BUILD};
-    ensureForm();wrapConsent();
-    root.addEventListener('revex:managed-energy-status',event=>{
-      if(String(event.detail?.stage||'').toUpperCase()==='CONSENT_REQUIRED'){ensureForm();wrapConsent();}
-    });
-  }
-  const wait=()=>{if(Store()&&document.getElementById('energy-consent-dialog')){install();return;}setTimeout(wait,50);};
-  wait();
+  function install(){if(root.__revexEn1IdentityR145)return;root.__revexEn1IdentityR145={build:BUILD,publicationOnly:true};installCss();ensurePanel();wrapConsent();for(const event of['revex:energy-open','revex:authoritative-project-bound','revex:source-revision-loaded','revex:managed-energy-result'])root.addEventListener(event,()=>setTimeout(()=>void hydrate(),0));document.getElementById('project-select')?.addEventListener('change',()=>{loadedKey='';dirty=false;setTimeout(()=>void hydrate(true),0)});void hydrate(true);diagnostic('INFO','EN1_IDENTITY_PANEL_READY','Always-visible project/revision-scoped Applicant/Modeler panel installed.',{publicationOnly:true,simulationRerun:false,comcheckRerun:false,signatureSealChanged:false})}
+  const wait=()=>{if(Store()&&document.getElementById('view-energy')){install();return}setTimeout(wait,50)};wait();
 })(window);

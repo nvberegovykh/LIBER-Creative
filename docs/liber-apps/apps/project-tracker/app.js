@@ -28,14 +28,16 @@
 
   function getFirebaseService() {
     try {
+      // A frame owns the SDK/service pair that creates its Firestore/Auth objects.
+      // Wait for that local service instead of racing a parent-realm constructor.
+      if (window.firebaseService)
+        return window.firebaseService;
       if (window.self !== window.top) {
         for (const w of [window.parent, window.top].filter(Boolean)) {
           if (w !== window && w.firebaseService && w.firebaseService.isInitialized)
             return w.firebaseService;
         }
       }
-      if (window.firebaseService && window.firebaseService.isInitialized)
-        return window.firebaseService;
     } catch (_) {}
     return window.firebaseService;
   }

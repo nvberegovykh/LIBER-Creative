@@ -173,7 +173,7 @@ def install_durable_energy_execution(app) -> None:
             state_source = str(state.get("workerSourceCandidate") or "").strip()
             if (
                 str(state.get("workerStatus") or "").upper() == "COMPLETE"
-                and state.get("workerResponsePath")
+                and str(state.get("workerResponsePath") or "") == cache_path
                 and state_source == source_candidate
             ):
                 return "COMPLETE", state

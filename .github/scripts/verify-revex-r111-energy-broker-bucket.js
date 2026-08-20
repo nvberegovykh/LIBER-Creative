@@ -19,6 +19,7 @@ const helperSource = [
   extract('function configuredStorageBucket','function resolveStorageBucket'),
   extract('function resolveStorageBucket','exports.runRevexEnergy')
 ].join('\n');
+const energyHandlerSource = extract('exports.runRevexEnergy','exports.runRevexGoogleRender');
 const sandbox={URL,decodeURIComponent,process:{env:{}},Error};
 vm.createContext(sandbox);
 vm.runInContext(`${helperSource}\nthis.bucketFromArtifactUrls=bucketFromArtifactUrls;this.resolveStorageBucket=resolveStorageBucket;`,sandbox);
@@ -28,12 +29,17 @@ assert.strictEqual(sandbox.bucketFromArtifactUrls([{url:firebaseUrl('liber-apps-
 assert.strictEqual(sandbox.bucketFromArtifactUrls([{url:gcsUrl('liber-apps-cca20.appspot.com')}]),'liber-apps-cca20.appspot.com');
 assert.strictEqual(sandbox.bucketFromArtifactUrls([{url:firebaseUrl('bucket-a')},{url:firebaseUrl('bucket-a')}]),'bucket-a');
 assert.throws(()=>sandbox.bucketFromArtifactUrls([{url:firebaseUrl('bucket-a')},{url:firebaseUrl('bucket-b')}]),/multiple storage buckets/);
+assert.throws(()=>sandbox.resolveStorageBucket([{url:firebaseUrl('live-bucket')}]),/no exact release-bound Firebase Storage bucket/);
+sandbox.process.env.REVEX_STORAGE_BUCKET='live-bucket';
+assert.strictEqual(sandbox.resolveStorageBucket([]),'live-bucket');
 assert.strictEqual(sandbox.resolveStorageBucket([{url:firebaseUrl('live-bucket')}]),'live-bucket');
+assert.throws(()=>sandbox.resolveStorageBucket([{url:firebaseUrl('other-bucket')}]),/outside the release-bound Storage bucket/);
 
 forbid('getStorage().bucket().name','Energy broker must not depend on an implicit/unconfigured default Storage bucket');
-forbid("require('firebase-admin/storage')",'Energy broker must not need Admin Storage merely to discover the bucket name');
+assert(!energyHandlerSource.includes('getStorage('),'Energy handler must not use Admin Storage merely to discover its immutable artifact bucket');
 must("stage: 'BROKER_PREPARE'",'revision job must begin before broker preparation');
 must('const bucketName = resolveStorageBucket(artifacts);','broker must bind worker to immutable artifact storage');
+must('if (artifactBucket && artifactBucket !== configuredBucket)','artifact URL bucket must be cross-checked against the release-bound bucket');
 must("brokerLog('STORAGE_BUCKET_RESOLVED'",'resolved bucket provenance must be logged');
 must("failureStage = 'WORKER_REQUEST';",'broker must distinguish prepare from worker-call failure');
 must("status: 'INFRASTRUCTURE_FAILED'",'broker must persist exact infrastructure failure');
@@ -51,7 +57,7 @@ for(const name of ['BASELINE_UPDATED_GEOMETRY.osm','PROPOSED_UPDATED_GEOMETRY.os
 console.log(JSON.stringify({
   schema:'liber.revex.r111-energy-broker-bucket.v1',status:'PASSED',
   regression:'real-250-broker-failed-before-job-detail',
-  storage:{implicitDefault:false,artifactBound:true,mixedBucketsRejected:true},
+  storage:{implicitDefault:false,releaseConfigured:true,artifactUrlCrossCheck:true,mixedBucketsRejected:true,energyHandlerUsesAdminStorage:false,independentRenderBrokerMayUseConfiguredAdminStorage:true},
   failureVisibility:{jobBeforePrepare:true,stageScoped:true},
   replay:{sameEngineeringRevision:true,revitResyncRequired:false}
 },null,2));

@@ -2,17 +2,42 @@ using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
 using Liber.Revex.Revit.Models;
 using Liber.Revex.Revit.Services;
-using System.Collections.Concurrent;
+using System.Windows.Threading;
 
 namespace Liber.Revex.Revit.Revit;
 
 public sealed class RevitRequestHandler : IExternalEventHandler
 {
-    private readonly ConcurrentQueue<RevitRequest> _queue = new();
+    private enum PumpState { Idle, WakeOutstanding, Executing, Closed }
+
+    private const int MaxQueuedRequests = 8;
+    private const int MaxWakeRetries = 8;
+    private readonly object _gate = new();
+    private readonly Queue<RevitRequest> _queue = new();
+    private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
     private readonly TransferPackageService _transfer = new();
+    private ExternalEvent? _externalEvent;
+    private PumpState _pumpState = PumpState.Idle;
+    private long _wakeGeneration;
+    private int _wakeRetryCount;
+    private bool _retryScheduled;
+
+    public void AttachExternalEvent(ExternalEvent externalEvent)
+    {
+        ArgumentNullException.ThrowIfNull(externalEvent);
+        lock (_gate)
+        {
+            if (_pumpState == PumpState.Closed)
+                throw new ObjectDisposedException(nameof(RevitRequestHandler));
+            if (_externalEvent != null && !ReferenceEquals(_externalEvent, externalEvent))
+                throw new InvalidOperationException("REVEX Revit request pump is already attached.");
+            _externalEvent = externalEvent;
+        }
+    }
 
     public void Enqueue(RevitRequest request)
     {
+        ArgumentNullException.ThrowIfNull(request);
         if (request.Kind == RevitRequestKind.ResolveActiveProjectBinding)
         {
             // Read-only active-document binding recovery is safe to queue implicitly:
@@ -21,17 +46,78 @@ public sealed class RevitRequestHandler : IExternalEventHandler
             // performs no Revit mutation. New/rebound projects still require an explicit
             // user selection during SYNC.
             RevexDiagnostics.Stage("REVIT", "READ_ONLY_BINDING_PROBE_QUEUED", "PASSED",
-                $"kind={request.Kind}; initiator={request.Initiator}; queueDepth={_queue.Count}");
+                $"kind={request.Kind}; initiator={request.Initiator}; queue=bounded-pump");
         }
 
-        _queue.Enqueue(request);
-        RevexDiagnostics.Info("REVIT", $"ExternalEvent queued: kind={request.Kind}; correlationId={request.CorrelationId}; initiator={request.Initiator}; queueDepth={_queue.Count}");
+        long generation = 0;
+        bool raise = false;
+        string? rejection = null;
+        int queueDepth;
+        lock (_gate)
+        {
+            if (_pumpState == PumpState.Closed || _externalEvent == null)
+            {
+                rejection = "The REVEX Revit request pump is not available. Re-open the REVEX window and try again.";
+            }
+            else if (_queue.Count >= MaxQueuedRequests)
+            {
+                rejection = "REVEX is already processing the maximum number of Revit requests. Wait for the current operation to finish and try again.";
+            }
+            else
+            {
+                _queue.Enqueue(request);
+                if (_pumpState == PumpState.Idle)
+                {
+                    _pumpState = PumpState.WakeOutstanding;
+                    _wakeRetryCount = 0;
+                    generation = ++_wakeGeneration;
+                    raise = true;
+                }
+            }
+            queueDepth = _queue.Count;
+        }
+
+        if (rejection != null)
+        {
+            FailRequest(request, rejection);
+            return;
+        }
+        RevexDiagnostics.Info("REVIT", $"ExternalEvent queued: kind={request.Kind}; correlationId={request.CorrelationId}; initiator={request.Initiator}; queueDepth={queueDepth}");
+        if (raise) TryRaise(generation);
     }
 
     public void Execute(UIApplication app)
     {
-        if (!_queue.TryDequeue(out RevitRequest? request))
-            return;
+        lock (_gate)
+        {
+            if (_pumpState == PumpState.Closed) return;
+            _pumpState = PumpState.Executing;
+            _wakeGeneration++;
+            _wakeRetryCount = 0;
+            _retryScheduled = false;
+        }
+
+        while (true)
+        {
+            RevitRequest request;
+            lock (_gate)
+            {
+                if (_pumpState == PumpState.Closed) return;
+                if (_queue.Count == 0)
+                {
+                    // Atomic with Enqueue: a producer arriving after this transition
+                    // creates a fresh wake. Pending is retried after Execute returns.
+                    _pumpState = PumpState.Idle;
+                    return;
+                }
+                request = _queue.Dequeue();
+            }
+            ExecuteOne(app, request);
+        }
+    }
+
+    private void ExecuteOne(UIApplication app, RevitRequest request)
+    {
 
         long queueWaitMs = Math.Max(0L, (long)(DateTime.UtcNow - request.EnqueuedAtUtc).TotalMilliseconds);
         using RevexDiagnostics.WorkflowScope workflow = RevexDiagnostics.BeginWorkflow(
@@ -104,6 +190,111 @@ public sealed class RevitRequestHandler : IExternalEventHandler
             $"kind={request.Kind}; resultSuccess={result.Success}; callbackSuccess={callbackSuccess}; queueWaitMs={queueWaitMs}");
     }
 
+    public void Close()
+    {
+        List<RevitRequest> abandoned;
+        lock (_gate)
+        {
+            if (_pumpState == PumpState.Closed) return;
+            _pumpState = PumpState.Closed;
+            _wakeGeneration++;
+            _retryScheduled = false;
+            abandoned = _queue.ToList();
+            _queue.Clear();
+            _externalEvent = null;
+        }
+        foreach (RevitRequest request in abandoned)
+            FailRequest(request, "The REVEX window closed before Revit could process this request. No queued model operation was run.");
+    }
+
+    private void TryRaise(long generation)
+    {
+        ExternalEvent? externalEvent;
+        lock (_gate)
+        {
+            if (_pumpState != PumpState.WakeOutstanding || generation != _wakeGeneration || _queue.Count == 0)
+                return;
+            _retryScheduled = false;
+            externalEvent = _externalEvent;
+        }
+
+        ExternalEventRequest response;
+        try
+        {
+            response = externalEvent?.Raise() ?? ExternalEventRequest.Denied;
+        }
+        catch (Exception ex)
+        {
+            FailWake(generation, "Revit rejected the queued REVEX operation before it started: " + ex.Message);
+            return;
+        }
+
+        if (response == ExternalEventRequest.Accepted)
+        {
+            lock (_gate)
+            {
+                if (_pumpState == PumpState.WakeOutstanding && generation == _wakeGeneration)
+                {
+                    _wakeRetryCount = 0;
+                    _retryScheduled = false;
+                }
+            }
+            return;
+        }
+        if (response == ExternalEventRequest.Pending || response == ExternalEventRequest.TimedOut)
+        {
+            ScheduleWakeRetry(generation, response);
+            return;
+        }
+        FailWake(generation, $"Revit denied the queued REVEX operation ({response}). No queued model operation was run.");
+    }
+
+    private void ScheduleWakeRetry(long generation, ExternalEventRequest response)
+    {
+        bool terminal = false;
+        lock (_gate)
+        {
+            if (_pumpState != PumpState.WakeOutstanding || generation != _wakeGeneration || _queue.Count == 0 || _retryScheduled)
+                return;
+            if (++_wakeRetryCount > MaxWakeRetries)
+                terminal = true;
+            else
+                _retryScheduled = true;
+        }
+        if (terminal)
+        {
+            FailWake(generation, $"Revit did not accept the queued REVEX operation after {MaxWakeRetries} bounded retries ({response}). No queued model operation was run.");
+            return;
+        }
+        _ = Task.Delay(50).ContinueWith(_ =>
+        {
+            try { _dispatcher.BeginInvoke(new Action(() => TryRaise(generation)), DispatcherPriority.Background); }
+            catch (Exception ex) { FailWake(generation, "REVEX could not reschedule the queued Revit operation: " + ex.Message); }
+        }, TaskScheduler.Default);
+    }
+
+    private void FailWake(long generation, string message)
+    {
+        List<RevitRequest> failed;
+        lock (_gate)
+        {
+            if (_pumpState != PumpState.WakeOutstanding || generation != _wakeGeneration) return;
+            failed = _queue.ToList();
+            _queue.Clear();
+            _pumpState = PumpState.Idle;
+            _wakeRetryCount = 0;
+            _retryScheduled = false;
+        }
+        RevexDiagnostics.Error("REVIT", message);
+        foreach (RevitRequest request in failed) FailRequest(request, message);
+    }
+
+    private static void FailRequest(RevitRequest request, string message)
+    {
+        try { request.Callback(RevitRequestResult.Fail(message)); }
+        catch (Exception ex) { RevexDiagnostics.Warn("REVIT", "Rejected-request callback failed: " + ex.Message); }
+    }
+
     public string GetName() => "LIBER REVEX Revit requests";
 
     private RevitRequestResult CaptureCurrent(UIDocument uidoc, RenderSettings settings)
@@ -169,6 +360,14 @@ public sealed class RevitRequestHandler : IExternalEventHandler
         GbxmlEngineeringOutput? output = null;
         bool sourceTopologyFallback = false;
         bool simplifiedGeometryFallback = false;
+        // Capture provenance before the canonical exporter is allowed to create
+        // REVEX-owned Spaces. The simplified fallback can then distinguish the
+        // untouched source model from geometry created during this exact attempt.
+        HashSet<long> originalSpaceIds = new FilteredElementCollector(uidoc.Document)
+            .OfCategory(BuiltInCategory.OST_MEPSpaces)
+            .WhereElementIsNotElementType()
+            .Select(element => element.Id.Value)
+            .ToHashSet();
         try
         {
             // A complete existing MEP Space topology is authoritative. The successful
@@ -212,7 +411,7 @@ public sealed class RevitRequestHandler : IExternalEventHandler
                 simplifiedGeometryFallback = true;
                 RevexDiagnostics.Stage("GBXML", "SIMPLIFIED_GEOMETRY_FALLBACK", "STARTED",
                     $"normalStatus={output.Status}; source=placed Revit MEP Spaces; policy=source-bound 2.5D simplification");
-                output = new SimplifiedGbxmlFallbackService().Run(uidoc.Document, output);
+                output = new SimplifiedGbxmlFallbackService().Run(uidoc.Document, output, originalSpaceIds);
                 ok = GbxmlEngineeringService.IsSuccessful(output, auditOnly: false);
                 RevexDiagnostics.Stage("GBXML", "SIMPLIFIED_GEOMETRY_FALLBACK", ok ? "PASSED" : "FAILED",
                     $"status={output.Status}; gbxml={output.GbxmlPath ?? "<none>"}; ambiguous openings remain opaque");
@@ -272,12 +471,38 @@ public sealed class RevitRequestHandler : IExternalEventHandler
             }
         }
 
+        bool HasPositiveVerticalEvidence(Element element)
+        {
+            if (element is not Autodesk.Revit.DB.Mechanical.Space space)
+                return false;
+            try
+            {
+                if (space.Volume <= 1.0e-9)
+                    return false;
+                BoundingBoxXYZ? box = space.get_BoundingBox(null);
+                if (box != null && box.Max.Z > box.Min.Z + 0.25)
+                    return true;
+                Level? lower = doc.GetElement(space.LevelId) as Level;
+                Level? upper = space.UpperLimit;
+                if (lower == null || upper == null)
+                    return false;
+                double bottom = lower.Elevation + space.BaseOffset;
+                double top = upper.Elevation + space.LimitOffset;
+                return top > bottom + 0.25;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         List<Element> spaces = new FilteredElementCollector(doc)
             .OfCategory(BuiltInCategory.OST_MEPSpaces)
             .WhereElementIsNotElementType()
             .ToElements()
             .Where(IsPlaced)
             .ToList();
+        List<Element> positiveSpaces = spaces.Where(HasPositiveVerticalEvidence).ToList();
         List<Element> rooms = new FilteredElementCollector(doc)
             .OfCategory(BuiltInCategory.OST_Rooms)
             .WhereElementIsNotElementType()
@@ -294,7 +519,7 @@ public sealed class RevitRequestHandler : IExternalEventHandler
 
         // Revit 2026 ElementId values are 64-bit. Compare coverage by LevelId so extra
         // Spaces on one story cannot disguise a missing story on another.
-        Dictionary<long, int> spacesByLevel = spaces
+        Dictionary<long, int> spacesByLevel = positiveSpaces
             .GroupBy(e => e.LevelId.Value)
             .ToDictionary(g => g.Key, g => g.Count());
         Dictionary<long, int> roomsByLevel = rooms
@@ -305,18 +530,18 @@ public sealed class RevitRequestHandler : IExternalEventHandler
             spacesByLevel.TryGetValue(row.Key, out int count) ? count : 0));
         double roomCoverage = rooms.Count == 0 ? 1.0 : (double)coveredRooms / rooms.Count;
         bool completeCheckpoint = rooms.Count == 0
-            ? spaces.Count > 0
-            : roomCoverage >= 0.98 && spaces.Count >= Math.Max(1, rooms.Count - 1);
+            ? positiveSpaces.Count > 0
+            : roomCoverage >= 0.98 && positiveSpaces.Count >= Math.Max(1, rooms.Count - 1);
 
         if (!completeCheckpoint)
         {
             RevexDiagnostics.Stage("GBXML", "EXISTING_SPATIAL_CHECKPOINT", "INCOMPLETE",
-                $"placedSpaces={spaces.Count}; placedRooms={rooms.Count}; roomLevelCoverage={roomCoverage:P1}; automatic Space repair remains enabled");
+                $"placedSpaces={spaces.Count}; positiveVerticalSpaces={positiveSpaces.Count}; placedRooms={rooms.Count}; roomLevelCoverage={roomCoverage:P1}; automatic Space repair remains enabled; invalid originals remain untouched and receive Room-derived isolated geometry if overlap prevents replacement");
             return settings;
         }
 
         RevexDiagnostics.Stage("GBXML", "EXISTING_SPATIAL_CHECKPOINT", "PASSED",
-            $"placedSpaces={spaces.Count}; placedRooms={rooms.Count}; roomLevelCoverage={roomCoverage:P1}; topologyMutation=false; invalid height metadata remains warning-only");
+            $"placedSpaces={spaces.Count}; positiveVerticalSpaces={positiveSpaces.Count}; placedRooms={rooms.Count}; roomLevelCoverage={roomCoverage:P1}; topologyMutation=false; invalid height metadata remains warning-only");
         RevexDiagnostics.Info("GBXML",
             "Existing placed MEP Spaces are a complete spatial checkpoint. REVEX will not call NewSpace/NewSpaces2 for this run; native Revit Space geometry remains authoritative.");
         return settings with { CreateOrFixSpaces = false };

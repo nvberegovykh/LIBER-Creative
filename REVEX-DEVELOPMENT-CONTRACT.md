@@ -32,6 +32,8 @@ The BIM viewer must remain interactive even when exact geometry is unavailable, 
 - never traverse/rebuild the entire model for one visibility or appearance edit
 - hidden meshes remain indexed so Restore can always find them
 - project re-entry must render a usable fallback before exact-detail promotion
+- two-point measurement reports architectural feet and inches from the same rendered world-coordinate authority used for picking
+- when section clipping is active, ray hits outside every active clip plane are ineligible; the nearest surviving visible surface is authoritative and must occlude geometry behind it
 
 ## 3. BIM state lanes are separate
 
@@ -79,6 +81,8 @@ Preferred order:
 
 Do not run `pdf-lib` full-set splitting during a normal sheet click in the shared Companion WebView.
 
+On narrow screens, document sets/groups are semantic disclosures. Persist expansion by stable project/group identity, keep one group open initially, and never expand the complete library into a blocking mobile DOM by default.
+
 ## 7. Integrations belong inside the relevant workspace
 
 Provider integrations should be an easy modal/docked endpoint in the current task context, not a block of external-site buttons.
@@ -91,6 +95,7 @@ For BIM materials:
 - a user-triggered supported texture download may be intercepted by the native host and applied automatically
 - texture asset is copied into the project-owned private material lane
 - provider source identity is retained
+- the BIM-family entry remains discoverable outside Walk with a truthful disabled/readiness explanation; actual placement still requires the hosted Revit add-in and an active Walk target
 
 A separate browser window is a fallback of last resort, not the primary UX.
 
@@ -108,6 +113,8 @@ Production handoff uses a **private, native-managed hidden file input** created 
 Do not use a normal/public Energy file input for production handoff. Do not use browser `fetch()` of a local WebView virtual host for the committed folder; CSP/CORS/browser policy can turn a valid local revision into `Failed to fetch`.
 
 The managed bridge re-verifies manifest + XML + EPW before cloud publication. If the add-in or Companion restarts after Revit has already committed a revision, resume the newest matching local revision rather than rerunning Revit geometry.
+
+The user-facing native action is **Sync project**. It commits and attaches the source BIM/Design/Spec/Docs revision first, then creates the aligned Engineering revision with that exact source revision recorded in `engineering-sync.json`. These remain separate immutable retry points even though the normal UX is one action.
 
 ## 9. Current-project identity is evidence normalization, not a template value
 

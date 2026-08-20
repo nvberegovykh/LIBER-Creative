@@ -32,7 +32,8 @@ body.revex-mobile-touch #view-design .design-lanes{grid-template-columns:1fr!imp
 body.revex-mobile-touch #view-design .design-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;max-width:100%!important}
 body.revex-mobile-touch #view-bim>.rail,body.revex-mobile-touch #view-bim>#bim-inspector,body.revex-mobile-touch #view-design>.chapter-rail,body.revex-mobile-touch #view-design>#design-inspector{display:none!important}
 body.revex-mobile-touch.revex-r142-pane-model #view-bim>.rail,body.revex-mobile-touch.revex-r142-pane-properties #view-bim>#bim-inspector,body.revex-mobile-touch.revex-r142-pane-selector #view-design>.chapter-rail,body.revex-mobile-touch.revex-r142-pane-position #view-design>#design-inspector{display:block!important;position:fixed!important;z-index:9395!important;left:max(4px,var(--r133-safe-left,0px))!important;right:max(4px,var(--r133-safe-right,0px))!important;bottom:calc(var(--revex-r142-sheet-bar) + max(4px,var(--r133-safe-bottom,0px)))!important;width:auto!important;max-width:none!important;height:auto!important;min-height:0!important;max-height:min(58dvh,560px)!important;overflow:auto!important;-webkit-overflow-scrolling:touch!important;overscroll-behavior:contain!important;border:1px solid var(--line-2)!important;border-radius:13px 13px 0 0!important;background:rgba(13,17,23,.985)!important;box-shadow:0 16px 60px rgba(0,0,0,.55)!important;padding:12px!important}
-body.revex-mobile-touch #revex-r142-sheet{display:block!important;position:fixed!important;z-index:9400!important;left:max(4px,var(--r133-safe-left,0px))!important;right:max(4px,var(--r133-safe-right,0px))!important;bottom:max(4px,var(--r133-safe-bottom,0px))!important;width:auto!important;height:var(--revex-r142-sheet-bar)!important;max-width:none!important;min-width:0!important;border:1px solid var(--line-2)!important;border-radius:13px!important;background:rgba(13,17,23,.985)!important;box-shadow:0 10px 36px rgba(0,0,0,.5)!important;overflow:hidden!important}
+	body.revex-mobile-touch #revex-r142-sheet{display:block!important;position:fixed!important;z-index:9400!important;left:max(4px,var(--r133-safe-left,0px))!important;right:max(4px,var(--r133-safe-right,0px))!important;bottom:max(4px,var(--r133-safe-bottom,0px))!important;width:auto!important;height:var(--revex-r142-sheet-bar)!important;max-width:none!important;min-width:0!important;border:1px solid var(--line-2)!important;border-radius:13px!important;background:rgba(13,17,23,.985)!important;box-shadow:0 10px 36px rgba(0,0,0,.5)!important;overflow:hidden!important}
+	body.revex-r142-sheet-owner #bim-mobile-dock{display:none!important}
 body.revex-mobile-touch #revex-r142-sheet[hidden],body.revex-mobile-touch.revex-r142-walk-active #revex-r142-sheet{display:none!important}
 body.revex-mobile-touch #revex-r142-sheet-tabs{display:grid!important;grid-template-columns:1fr 1fr 44px!important;height:100%!important;min-height:44px!important}
 body.revex-mobile-touch #revex-r142-sheet-tabs button{min-width:0!important;min-height:44px!important;border:0!important;border-right:1px solid var(--line)!important;border-radius:0!important;background:transparent!important;color:var(--tx-2)!important;font:600 11px/1.1 system-ui,sans-serif!important;padding:0 9px!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;touch-action:manipulation!important}
@@ -102,15 +103,17 @@ function sync(){
  const view=activeView();if(view==='bim'||view==='design')configureTabs(view);else restoreAll();
 }
 function schedule(){if(scheduled)return;scheduled=true;(root.requestAnimationFrame||((fn)=>setTimeout(fn,0)))(()=>{scheduled=false;sync();ensureActionsMenu();});}
-function ensureActionsMenu(){
+	function ensureActionsMenu(){
  const menu=byId('revex-r109-actions-menu');if(!menu)return;
  if(!byId('revex-r142-wallt-menu')){const b=document.createElement('button');b.type='button';b.id='revex-r142-wallt-menu';b.textContent='WALLT Helper / Fixer';b.addEventListener('click',()=>{menu.hidden=true;byId('revex-r109-actions')?.setAttribute('aria-expanded','false');byId('revex-wallt-open')?.click();});menu.appendChild(b);}
- if(!byId('revex-r142-issues-menu')&&byId('revex-r126-issues-button')){const b=document.createElement('button');b.type='button';b.id='revex-r142-issues-menu';b.textContent='Project Issues';b.addEventListener('click',()=>{menu.hidden=true;byId('revex-r109-actions')?.setAttribute('aria-expanded','false');byId('revex-r126-issues-button')?.click();});menu.appendChild(b);}
-}
+	 if(!byId('revex-r142-issues-menu')&&byId('revex-r126-issues-button')){const b=document.createElement('button');b.type='button';b.id='revex-r142-issues-menu';b.textContent='Project Issues';b.addEventListener('click',()=>{menu.hidden=true;byId('revex-r109-actions')?.setAttribute('aria-expanded','false');byId('revex-r126-issues-button')?.click();});menu.appendChild(b);}
+	 root.__revexWalltUiR138?.syncAvailability?.();
+	}
 function install(){
- css();sheet();sync();ensureActionsMenu();
+	 document.body?.classList.add('revex-r142-sheet-owner');byId('bim-mobile-dock')?.remove();
+	 css();sheet();sync();ensureActionsMenu();
  document.querySelectorAll('.main-nav [data-view]').forEach(button=>button.addEventListener('click',schedule));
- for(const event of['revex:mobile-mode-changed','revex:walk-mode-changed','revex:source-revision-loaded','revex:authoritative-project-bound','revex:viewer-host-ready'])root.addEventListener(event,schedule);
+	 for(const event of['revex:mobile-mode-changed','revex:view-changed','revex:walk-mode-changed','revex:source-revision-loaded','revex:authoritative-project-bound','revex:viewer-host-ready'])root.addEventListener(event,schedule);
  root.addEventListener('resize',schedule,{passive:true});root.addEventListener('orientationchange',schedule,{passive:true});
 }
 Object.assign(api,{sync,openPane,closePane});

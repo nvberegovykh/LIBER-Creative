@@ -67,7 +67,7 @@ must(edge,'workerPipelineStatus','native edge must expose worker pipeline status
 must(loader,"import('./live-worker-edge-r97.js?v=20260817r116-final-energy1')",'current native live edge import must be cache-broken');
 must(loader,'REVEX_R114_LIVE_EDGE_COMPAT','r114 compatibility marker must remain for historical cache contract');
 must(ui,"energy-replay-r95.js?v=20260817r116-final-energy1",'current hosted Energy owner must be cache-broken');
-must(ui,"viewer-interaction-r85-loader.js?v=20260817r116-final-energy1",'current native Energy loader must be cache-broken');
+must(ui,"viewer-interaction-r85-loader.js?v=20260820r147-release1",'current native viewer/live-edge loader must be cache-broken');
 
 for(const required of ['BASELINE_UPDATED_GEOMETRY.osm','PROPOSED_UPDATED_GEOMETRY.osm','EN-1_READY_TO_INSERT.xlsx','COMcheck_PROJECT_INPUT_READY.cxl','COMcheck_OFFICIAL_BACKSTOP_REPORT.pdf','COMcheck_BACKSTOP_RESULT.json'])must(broker,required,`strict final package output missing: ${required}`);
 must(broker,"ok: pipelineStatus === 'COMPLETE'",'broker success must remain strict COMPLETE-only');

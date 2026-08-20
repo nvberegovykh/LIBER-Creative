@@ -1,4 +1,3 @@
-using Autodesk.Revit.UI;
 using Liber.Revex.Revit.Models;
 using Liber.Revex.Revit.Revit;
 using Liber.Revex.Revit.Services;
@@ -20,7 +19,6 @@ namespace Liber.Revex.Revit.UI;
 public sealed class RendairWindow : Window
 {
     private readonly RevitRequestHandler _handler;
-    private readonly ExternalEvent _externalEvent;
     private readonly BridgeSettings _bridgeSettings;
 
     private readonly WebView2 _web = new();
@@ -51,6 +49,7 @@ public sealed class RendairWindow : Window
     private readonly CheckBox _gbxmlForce = new();
     private readonly TextBlock _gbxmlLastResult = new();
     private ColumnDefinition? _controlsColumn;
+    private ColumnDefinition? _diagnosticsColumn;
     private FrameworkElement? _diagnosticsPanel;
     private Button? _diagnosticsToggle;
 
@@ -65,6 +64,8 @@ public sealed class RendairWindow : Window
     private TransferPackage? _pendingQuickRender;
     private string _pendingQuickPrompt = "";
     private string _pendingRenderJobId = "";
+    private bool _openCompanionRenderPending;
+    private string _companionRenderPrompt = "";
     private bool _syncAwaitingRevit;
     private bool _renderAwaitingRevit;
     private bool _gbxmlAwaitingRevit;
@@ -82,11 +83,21 @@ public sealed class RendairWindow : Window
     private DateTime _webRendererUnresponsiveWindow = DateTime.MinValue;
     private bool _webRecoveryPending;
     private bool _projectBindingProbePending;
+    private bool _sourcePublishInFlight;
+    private bool _continueUnifiedSyncToEngineering;
+    private string? _lastSourceRevision;
+    private string? _confirmedLiveSourceRevision;
+    private string? _activeEngineeringSourceRevision;
+    private string? _activeUnifiedSyncAttemptId;
+    private string? _activeUnifiedProjectId;
+    private string? _activeUnifiedEngineeringRevision;
+    private string? _activeUnifiedDocumentUniqueId;
+    private string? _activeUnifiedDocumentFingerprint;
+    private string? _activeUnifiedIdentityEvidenceDigest;
 
-    public RendairWindow(RevitRequestHandler handler, ExternalEvent externalEvent)
+    public RendairWindow(RevitRequestHandler handler)
     {
         _handler = handler;
-        _externalEvent = externalEvent;
         _bridgeSettings = SettingsService.Load();
 
         Title = "LIBER REVEX";
@@ -183,10 +194,10 @@ public sealed class RendairWindow : Window
         };
         _specProjectId.Text = _bridgeSettings.LiberSpecProjectId ?? "";
         _designControls.Children.Add(LabeledInput("LIBER Project ID", _projectId, "Create or select the project in REVEX Companion; the ID returns here automatically"));
-        _designControls.Children.Add(MakeButton("SYNC BIM + BOOKS", (_, _) => SyncRevexProject()));
+        _designControls.Children.Add(MakeButton("SYNC PROJECT", (_, _) => SyncRevexProject()));
         _designControls.Children.Add(new TextBlock
         {
-            Text = "One click exports immutable IFC + browser display geometry + BIM metadata + Design Book sources + every remaining Spec Book schedule, then publishes one controlled REVEX revision. No RVT parameters are written.",
+            Text = "One click publishes the immutable BIM + Design/Spec/Docs source revision, then continues into the aligned Engineering revision and managed Energy chain. Each completed stage remains retryable. No post-export model parameters are written.",
             TextWrapping = TextWrapping.Wrap,
             FontSize = 11,
             Opacity = 0.68,
@@ -195,7 +206,7 @@ public sealed class RendairWindow : Window
         _designControls.Children.Add(MakeButton("OPEN SYNC FOLDER", (_, _) => OpenSyncFolder(), secondary: true));
         _designControls.Children.Add(MakeButton("RETRY LAST PUBLISH", (_, _) => RetryLastPublish(), secondary: true));
 
-        _designControls.Children.Add(SectionTitle("RENDER CURRENT VIEW"));
+        _designControls.Children.Add(SectionTitle("REVEX AI RENDER"));
         _prompt.AcceptsReturn = false;
         _prompt.TextWrapping = TextWrapping.NoWrap;
         _prompt.Height = 34;
@@ -205,19 +216,19 @@ public sealed class RendairWindow : Window
         {
             if (e.Key != System.Windows.Input.Key.Enter) return;
             e.Handled = true;
-            QuickRenderCurrentView();
+            OpenCompanionRender();
         };
         _designControls.Children.Add(_prompt);
-        _designControls.Children.Add(MakeButton("RENDER CURRENT VIEW", (_, _) => QuickRenderCurrentView()));
+        _designControls.Children.Add(MakeButton("OPEN RENDER", (_, _) => OpenCompanionRender()));
         _designControls.Children.Add(new TextBlock
         {
-            Text = "One line is enough. REVEX captures the active Revit 3D viewport, opens Rendair in this window, attaches the capture, adds Revit context, and starts the render.",
+            Text = "Opens the shared REVEX Render surface. It captures the live synced BIM viewport when you press Render, preserves geometry and camera intent, and runs through the authenticated project broker for add-in and browser users.",
             TextWrapping = TextWrapping.Wrap,
             FontSize = 11,
             Opacity = 0.68,
             Margin = new Thickness(0, 1, 0, 8)
         });
-        _designControls.Children.Add(MakeButton("OPEN RENDAIR", (_, _) => OpenRenderBridge(), secondary: true));
+        _designControls.Children.Add(MakeButton("OPEN RENDER WORKSPACE", (_, _) => OpenCompanionRender(), secondary: true));
 
         BuildEngineeringControls();
         SetMode(false);
@@ -256,7 +267,7 @@ public sealed class RendairWindow : Window
         nav.Children.Add(MakeNavButton("Docs", (_, _) => OpenCompanion("docs")));
         nav.Children.Add(MakeNavButton("Energy", (_, _) => OpenCompanion("energy")));
         nav.Children.Add(MakeNavButton("Chat", (_, _) => OpenCompanion("chat")));
-        nav.Children.Add(MakeNavButton("Render", (_, _) => OpenRenderBridge()));
+        nav.Children.Add(MakeNavButton("Render", (_, _) => OpenCompanionRender()));
         nav.Children.Add(MakeNavButton("LIBER Account", (_, _) => _web.Source = new Uri(_bridgeSettings.LiberAppsUrl)));
         _diagnosticsToggle = MakeNavButton("Diagnostics", (_, _) =>
             SetDiagnosticsVisible(_diagnosticsPanel?.Visibility != Visibility.Visible));
@@ -265,19 +276,33 @@ public sealed class RendairWindow : Window
 
         webRoot.Children.Add(nav);
 
-        Grid.SetRow(_web, 1);
-        webRoot.Children.Add(_web);
+        // WebView2 is an HWND-backed surface. A diagnostics panel layered over the
+        // same Grid cell can remain hidden behind that native child window even
+        // when WPF reports Visibility.Visible. Give diagnostics a real adjacent
+        // layout column so show/hide is deterministic and never covers REVEX.
+        var webSurface = new Grid();
+        webSurface.ColumnDefinitions.Add(new ColumnDefinition
+        {
+            Width = new GridLength(1, GridUnitType.Star),
+            MinWidth = 720
+        });
+        _diagnosticsColumn = new ColumnDefinition { Width = new GridLength(0) };
+        webSurface.ColumnDefinitions.Add(_diagnosticsColumn);
+
+        Grid.SetColumn(_web, 0);
+        webSurface.Children.Add(_web);
+        Grid.SetRow(webSurface, 1);
+        webRoot.Children.Add(webSurface);
 
         Grid.SetColumn(webRoot, 1);
         root.Children.Add(webRoot);
 
         _diagnosticsPanel = (FrameworkElement)BuildDiagnosticsPanel();
         _diagnosticsPanel.Visibility = Visibility.Collapsed;
-        _diagnosticsPanel.Width = 370;
-        _diagnosticsPanel.HorizontalAlignment = HorizontalAlignment.Right;
-        Grid.SetRow(_diagnosticsPanel, 1);
-        Panel.SetZIndex(_diagnosticsPanel, 20);
-        webRoot.Children.Add(_diagnosticsPanel);
+        _diagnosticsPanel.MinWidth = 300;
+        _diagnosticsPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
+        Grid.SetColumn(_diagnosticsPanel, 1);
+        webSurface.Children.Add(_diagnosticsPanel);
 
         return root;
     }
@@ -314,7 +339,7 @@ public sealed class RendairWindow : Window
             "Spaces + analytical model + EN/Energy tags",
             "Phase, evidence folder and gbXML naming are resolved automatically. REVEX preserves Revit as the authority and publishes only when every required evidence domain reaches the ≥80% hard-stop gate; results from 80% to below 95% continue with an explicit Companion quality warning, and anything below 80% is preserved for repair."));
 
-        _energyWeather.ToolTip = "Select the EnergyPlus weather file used for this Energy revision. The selected .EPW remains changeable until SYNC ENGINEERING starts, then it is copied and hashed into the immutable revision.";
+        _energyWeather.ToolTip = "Select the EnergyPlus weather file used for this Energy revision. The selected .EPW remains changeable until the Engineering stage of SYNC PROJECT starts, then it is copied and hashed into the immutable revision.";
         _engineeringControls.Children.Add(SectionTitle("02 · WEATHER"));
         _engineeringControls.Children.Add(LabeledInput(
             "Weather file (.EPW)",
@@ -325,9 +350,9 @@ public sealed class RendairWindow : Window
         _engineeringControls.Children.Add(EngineeringInfoCard(
             "03 · CONTROLLED PROCESSING",
             "GeometryCo → Baseline + Proposed → EnergyPlus → EN-1",
-            "After the ≥80% Revit hard-stop gate, the managed server runs the deterministic downstream chain. Results below 95% remain explicit review-quality evidence in Companion; sub-80% evidence never publishes. Applicant/modeler/signature/seal remain blank and there is no writeback to Revit."));
+            "After the ≥80% Revit hard-stop gate, the managed server runs the deterministic downstream chain. Results below 95% remain explicit review-quality evidence in Companion; sub-80% evidence never publishes. Applicant and lead modeler may be filled in Companion and applied to EN-1 without rerunning simulation or COMcheck; signature/seal remain unchanged and there is no writeback to Revit."));
 
-        _engineeringControls.Children.Add(MakeButton("SYNC ENGINEERING", async (_, _) => await RunEnergySyncToCompanionAsync()));
+        _engineeringControls.Children.Add(MakeButton("SYNC PROJECT", (_, _) => SyncRevexProject()));
         _engineeringControls.Children.Add(MakeButton("OPEN EVIDENCE FOLDER", (_, _) => OpenGbxmlFolder(), secondary: true));
 
         _gbxmlLastResult.TextWrapping = TextWrapping.Wrap;
@@ -424,10 +449,22 @@ public sealed class RendairWindow : Window
     private void SetDiagnosticsVisible(bool visible)
     {
         if (_diagnosticsPanel == null) return;
+        if (_diagnosticsColumn != null)
+            _diagnosticsColumn.Width = visible ? new GridLength(370) : new GridLength(0);
+        if (_controlsColumn != null)
+            _controlsColumn.Width = visible ? new GridLength(0) : new GridLength(390);
         _diagnosticsPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
-        if (_diagnosticsToggle == null) return;
-        _diagnosticsToggle.Content = visible ? "Hide Diagnostics" : "Diagnostics";
-        AutomationProperties.SetName(_diagnosticsToggle, visible ? "Hide diagnostics" : "Show diagnostics");
+        if (_diagnosticsToggle != null)
+        {
+            _diagnosticsToggle.Content = visible ? "Hide Diagnostics" : "Diagnostics";
+            AutomationProperties.SetName(_diagnosticsToggle, visible ? "Hide diagnostics" : "Show diagnostics");
+        }
+        if (visible)
+        {
+            _diagnostics.ScrollToEnd();
+            _diagnostics.Focus();
+        }
+        UpdateLayout();
     }
 
     private void CopyDiagnostics()
@@ -548,6 +585,12 @@ public sealed class RendairWindow : Window
             };
             _web.CoreWebView2.WebMessageReceived += (_, e) =>
             {
+                if (!RevexWebIntegrationBridge.IsTrustedCompanionMessageSource(e.Source) ||
+                    !RevexWebIntegrationBridge.IsTrustedCompanionMessageSource(_web.Source?.AbsoluteUri))
+                {
+                    RevexDiagnostics.Warn("WEBMSG", "Rejected a native Companion message from an untrusted WebView origin.");
+                    return;
+                }
                 string payload = e.WebMessageAsJson ?? "";
                 RevexDiagnostics.Info("WEBMSG", payload.Length <= 500 ? payload : payload[..500] + "…");
                 HandleCompanionMessage(payload);
@@ -559,7 +602,7 @@ public sealed class RendairWindow : Window
             };
 
             _web.Source = new Uri(_bridgeSettings.LiberAppsUrl);
-            SetStatus("REVEX ready. LIBER and Rendair sessions persist in the local WebView2 profile.");
+            SetStatus("REVEX ready. The add-in and browser share the authenticated project workspace.");
         }
         catch (Exception ex)
         {
@@ -570,12 +613,14 @@ public sealed class RendairWindow : Window
 
     private void SyncRevexProject()
     {
-        if (_syncAwaitingRevit)
+        if (_syncAwaitingRevit || _gbxmlAwaitingRevit || _sourcePublishInFlight ||
+            _activeUnifiedSyncAttemptId != null || _pendingSync != null ||
+            _pendingEngineeringSync != null || _energyPipelineRunning)
         {
-            SetStatus("A REVEX source revision is already being prepared for the active document.");
+            SetStatus("REVEX already has a project sync or preserved publish in progress. Finish or retry that exact revision before starting another.");
             return;
         }
-        RevexDiagnostics.Info("SYNC", "SYNC BIM + BOOKS clicked. Project=" + _projectId.Text.Trim());
+        RevexDiagnostics.Info("SYNC", "SYNC PROJECT clicked. Project=" + _projectId.Text.Trim());
         if (string.IsNullOrWhiteSpace(_projectId.Text))
         {
             SetStatus("Choose the REVEX project in the Companion first. Its Project ID will appear here automatically.");
@@ -585,22 +630,32 @@ public sealed class RendairWindow : Window
         }
 
         SaveBridgeSettings();
+        string attemptId = RevexDiagnostics.NewCorrelationId("sync-project");
+        string attemptProjectId = _projectId.Text.Trim();
+        _activeUnifiedSyncAttemptId = attemptId;
+        _activeUnifiedProjectId = attemptProjectId;
+        _activeUnifiedEngineeringRevision = null;
+        _activeUnifiedDocumentUniqueId = null;
+        _activeUnifiedDocumentFingerprint = null;
+        _activeUnifiedIdentityEvidenceDigest = null;
+        _continueUnifiedSyncToEngineering = true;
+        _lastSourceRevision = null;
+        _confirmedLiveSourceRevision = null;
         _syncAwaitingRevit = true;
         _ = WatchPendingAsync("SYNC", () => _syncAwaitingRevit);
-        SetStatus("Synchronizing REVEX BIM, Design Book and specification source...");
+        SetStatus("Sync project · stage 1 of 2: preparing BIM, Design Book, Spec Book and Docs source evidence…");
         _handler.Enqueue(new RevitRequest(
             RevitRequestKind.SyncRevexProject,
             CurrentSettings(),
-            result => Dispatcher.BeginInvoke(new Action(() => HandleSyncResult(result))))
+            result => Dispatcher.BeginInvoke(new Action(() => HandleSyncResult(result, attemptId, attemptProjectId))))
         {
-            CorrelationId = RevexDiagnostics.NewCorrelationId("sync"),
-            Initiator = "SYNC BIM + BOOKS button",
+            CorrelationId = attemptId,
+            Initiator = "SYNC PROJECT button",
             ProjectBindingCandidate = CurrentProjectBindingCandidate(),
             AllowProjectRebind = _explicitProjectSelectionPending
         });
         _explicitProjectSelectionPending = false;
 
-        _externalEvent.Raise();
         RevexDiagnostics.Info("SYNC", "Revit ExternalEvent raised; waiting for Revit callback.");
     }
 
@@ -647,13 +702,22 @@ public sealed class RendairWindow : Window
             ProjectBindingCandidate = null,
             AllowProjectRebind = false
         });
-        _externalEvent.Raise();
     }
 
     public void NotifyActiveDocumentChanged()
     {
         Dispatcher.BeginInvoke(new Action(() =>
         {
+            if (_activeUnifiedSyncAttemptId != null)
+            {
+                RevexDiagnostics.Warn("SYNC", $"Cancelled aligned sync {_activeUnifiedSyncAttemptId} because the active Revit document changed.");
+                EndUnifiedSyncAttempt(_activeUnifiedSyncAttemptId);
+                _pendingSync = null;
+                _pendingEngineeringSync = null;
+                _syncAwaitingRevit = false;
+                _gbxmlAwaitingRevit = false;
+                _energySyncRequested = false;
+            }
             _applyingResolvedProjectBinding = true;
             try
             {
@@ -669,27 +733,192 @@ public sealed class RendairWindow : Window
         }));
     }
 
-    private void HandleSyncResult(RevitRequestResult result)
+    private void HandleSyncResult(RevitRequestResult result, string attemptId, string attemptProjectId)
     {
-        _syncAwaitingRevit = false;
-        ApplyResolvedProjectBinding(result.ProjectBinding);
-        RevexDiagnostics.Info("SYNC", $"Revit callback received. success={result.Success} message={result.Message}");
-        if (!result.Success || result.SyncOutput == null)
+        if (!IsCurrentUnifiedAttempt(attemptId, attemptProjectId))
         {
-            ShowFailure("SYNC BIM + BOOKS failed", result.Message);
+            RevexDiagnostics.Warn("SYNC", $"Ignored stale source callback for attempt={attemptId}; project={attemptProjectId}.");
+            return;
+        }
+        _syncAwaitingRevit = false;
+        RevexProjectBinding? sourceBinding = result.ProjectBinding;
+        RevexDiagnostics.Info("SYNC", $"Revit callback received. success={result.Success} message={result.Message}");
+        if (!result.Success || result.SyncOutput == null || sourceBinding == null ||
+            !string.Equals(sourceBinding.ProjectId, attemptProjectId, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(sourceBinding.DocumentUniqueId) ||
+            string.IsNullOrWhiteSpace(sourceBinding.DocumentFingerprint) ||
+            string.IsNullOrWhiteSpace(sourceBinding.IdentityEvidenceDigest))
+        {
+            EndUnifiedSyncAttempt(attemptId);
+            ShowFailure("Sync project failed", result.Success
+                ? "The source revision did not return a complete active-document identity envelope. Nothing was published."
+                : result.Message);
             return;
         }
 
-        SetStatus(result.Message + " No model parameters were written.");
+        ApplyResolvedProjectBinding(sourceBinding);
+        _activeUnifiedDocumentUniqueId = sourceBinding.DocumentUniqueId;
+        _activeUnifiedDocumentFingerprint = sourceBinding.DocumentFingerprint;
+        _activeUnifiedIdentityEvidenceDigest = sourceBinding.IdentityEvidenceDigest;
+        SetStatus(result.Message + " Source revision is preserved; publishing it before Engineering starts.");
         _pendingSync = result.SyncOutput;
+        _lastSourceRevision = result.SyncOutput.Revision;
         _lastSyncFolder = result.SyncOutput.RootFolder;
         RevexDiagnostics.Info("SYNC", "Local revision ready: " + _lastSyncFolder);
         OpenCompanion("bim");
     }
 
+    private async Task<bool> AttachPendingSourceSyncAsync()
+    {
+        if (_pendingSync == null) return true;
+        if (_sourcePublishInFlight || _web.CoreWebView2 == null) return false;
+
+        string? attemptId = _activeUnifiedSyncAttemptId;
+        string? attemptProjectId = _activeUnifiedProjectId;
+        string? documentUniqueId = _activeUnifiedDocumentUniqueId;
+        string? documentFingerprint = _activeUnifiedDocumentFingerprint;
+        string? identityEvidenceDigest = _activeUnifiedIdentityEvidenceDigest;
+        _sourcePublishInFlight = true;
+        try
+        {
+            RevexSyncOutput output = _pendingSync;
+            var attached = await CompanionWebBridge.AttachSyncPackageAsync(
+                _web,
+                output,
+                attemptId ?? "",
+                attemptProjectId ?? "",
+                documentUniqueId ?? "",
+                documentFingerprint ?? "",
+                identityEvidenceDigest ?? "");
+            if (attemptId != null && !IsCurrentUnifiedAttempt(attemptId, attemptProjectId))
+            {
+                RevexDiagnostics.Warn("SYNC", $"Ignored stale source attach completion for attempt={attemptId}; revision={output.Revision}.");
+                return false;
+            }
+            SetStatus(attached.message);
+            if (!attached.ok)
+            {
+                OpenOfflineCompanion(output, "viewer", attached.message);
+                return false;
+            }
+
+            if (_pendingSync?.Revision == output.Revision)
+                _pendingSync = null;
+            SetStatus($"Sync project · stage 1 of 2: {output.Revision} is attached; waiting for exact Companion validation and cloud publication before Engineering starts…");
+            await ContinueUnifiedSyncToEngineeringAsync();
+            return true;
+        }
+        finally
+        {
+            _sourcePublishInFlight = false;
+        }
+    }
+
+    private async Task ContinueUnifiedSyncToEngineeringAsync()
+    {
+        string? attemptId = _activeUnifiedSyncAttemptId;
+        string? attemptProjectId = _activeUnifiedProjectId;
+        string? sourceRevision = _lastSourceRevision;
+        if (attemptId == null || !_continueUnifiedSyncToEngineering || _pendingSync != null ||
+            _gbxmlAwaitingRevit ||
+            !IsCurrentUnifiedAttempt(attemptId, attemptProjectId) ||
+            !string.Equals(_confirmedLiveSourceRevision, sourceRevision, StringComparison.Ordinal))
+            return;
+        SetStatus("Sync project · stage 2 of 2: source revision attached; preparing the aligned Engineering revision…");
+        await RunEnergySyncToCompanionAsync(attemptId, sourceRevision, attemptProjectId);
+    }
+
+    private bool IsCurrentUnifiedAttempt(string? attemptId, string? projectId)
+    {
+        return !string.IsNullOrWhiteSpace(attemptId) &&
+               string.Equals(attemptId, _activeUnifiedSyncAttemptId, StringComparison.Ordinal) &&
+               !string.IsNullOrWhiteSpace(projectId) &&
+               string.Equals(projectId, _activeUnifiedProjectId, StringComparison.Ordinal) &&
+               string.Equals(projectId, _projectId.Text.Trim(), StringComparison.Ordinal);
+    }
+
+    private void EndUnifiedSyncAttempt(string? attemptId)
+    {
+        if (!string.IsNullOrWhiteSpace(attemptId) &&
+            !string.Equals(attemptId, _activeUnifiedSyncAttemptId, StringComparison.Ordinal))
+            return;
+        _activeUnifiedSyncAttemptId = null;
+        _activeUnifiedProjectId = null;
+        _activeUnifiedEngineeringRevision = null;
+        _activeUnifiedDocumentUniqueId = null;
+        _activeUnifiedDocumentFingerprint = null;
+        _activeUnifiedIdentityEvidenceDigest = null;
+        _continueUnifiedSyncToEngineering = false;
+        _confirmedLiveSourceRevision = null;
+        _activeEngineeringSourceRevision = null;
+    }
+
     private void OpenCompanion(string mode)
     {
         _ = OpenCompanionAsync(mode);
+    }
+
+    private void OpenCompanionRender()
+    {
+        _companionRenderPrompt = _prompt.Text.Trim();
+        _openCompanionRenderPending = true;
+        _ = OpenCompanionRenderAsync();
+    }
+
+    private async Task OpenCompanionRenderAsync()
+    {
+        // Render is a docked property surface around the canonical synced BIM
+        // viewer. Keep every user on the same authenticated project broker
+        // instead of navigating the add-in to a provider-specific web site.
+        await OpenCompanionAsync("bim");
+        await TryOpenCompanionRenderAsync();
+    }
+
+    private async Task<bool> TryOpenCompanionRenderAsync()
+    {
+        if (!_openCompanionRenderPending || _web.CoreWebView2 == null) return false;
+        Uri? current = _web.Source;
+        if (current == null ||
+            !current.AbsoluteUri.Contains("/apps/revex/", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        try
+        {
+            string projectJson = JsonSerializer.Serialize(_projectId.Text.Trim());
+            string promptJson = JsonSerializer.Serialize(_companionRenderPrompt);
+            string opened = await _web.ExecuteScriptAsync($$$"""
+                (async () => {
+                  const expectedProject = {{{projectJson}}};
+                  for (let attempt = 0; attempt < 40; attempt += 1) {
+                    const ready = window.__revexState?.projectId === expectedProject &&
+                      document.getElementById('render-button');
+                    if (ready) break;
+                    await new Promise((resolve) => setTimeout(resolve, 75));
+                  }
+                  if (window.__revexState?.projectId !== expectedProject) return false;
+                  const button = document.getElementById('render-button');
+                  if (!button || button.disabled) return false;
+                  button.click();
+                  const field = document.getElementById('render-prompt');
+                  const prompt = {{{promptJson}}};
+                  if (field && prompt) {
+                    field.value = prompt;
+                    field.dispatchEvent(new Event('input', { bubbles: true }));
+                  }
+                  return document.getElementById('render-dialog')?.hidden === false;
+                })()
+                """);
+            if (!string.Equals(opened, "true", StringComparison.OrdinalIgnoreCase)) return false;
+            _openCompanionRenderPending = false;
+            _companionRenderPrompt = "";
+            SetStatus("REVEX Render is ready for the current synced BIM viewport.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            RevexDiagnostics.Warn("RENDER", "REVEX Render surface is not ready yet: " + ex.Message);
+            return false;
+        }
     }
 
     private async Task OpenCompanionAsync(string mode)
@@ -748,6 +977,8 @@ public sealed class RendairWindow : Window
                     await InstallNativeProjectSelectionBridgeAsync();
                     await EngineeringCompanionWebBridge.EnsureManagedEnergyBridgeAsync(_web);
                     await ApplyEnergyCompanionNativePolicyAsync();
+                    if (!await AttachPendingSourceSyncAsync())
+                        return;
                     return;
                 }
             }
@@ -804,6 +1035,18 @@ public sealed class RendairWindow : Window
     {
         try
         {
+            if (_pendingEngineeringSync != null)
+            {
+                SetStatus($"Retrying preserved Engineering revision {_pendingEngineeringSync.Revision}; Revit and source export will not run again.");
+                _ = PublishPendingEngineeringSyncAsync();
+                return;
+            }
+            if (_syncAwaitingRevit || _gbxmlAwaitingRevit || _sourcePublishInFlight ||
+                _energyPipelineRunning)
+            {
+                SetStatus("REVEX is still processing the active exact revision. Wait for that stage to finish before retrying its publish.");
+                return;
+            }
             AppPaths.Ensure();
             string activeProjectId = _projectId.Text.Trim();
             string? folder = _lastSyncFolder;
@@ -852,6 +1095,9 @@ public sealed class RendairWindow : Window
             }
 
             string revision = Path.GetFileName(folder);
+            string sourceDocumentUniqueId = "";
+            string sourceDocumentFingerprint = "";
+            string sourceIdentityEvidenceDigest = "";
             int schedules = 0, elements = 0, printingSets = 0, printingSheets = 0, affectedPlanViews = 0, changedElements = 0;
             try
             {
@@ -871,6 +1117,28 @@ public sealed class RendairWindow : Window
             catch (Exception ex)
             {
                 RevexDiagnostics.Warn("SYNC", "Retry manifest summary could not be read: " + ex.Message);
+            }
+            try
+            {
+                using JsonDocument sourceManifest = JsonDocument.Parse(File.ReadAllText(project));
+                JsonElement sourceRoot = sourceManifest.RootElement;
+                if (!sourceRoot.TryGetProperty("central", out JsonElement central))
+                    throw new InvalidOperationException("project.json has no central document envelope.");
+                string sourceProjectId = ReadString(central, "projectId", "").Trim();
+                sourceDocumentUniqueId = ReadString(central, "documentUniqueId", "").Trim();
+                sourceDocumentFingerprint = ReadString(central, "documentFingerprint", "").Trim();
+                sourceIdentityEvidenceDigest = ReadString(central, "identityEvidenceDigest", "").Trim();
+                if (!string.Equals(sourceProjectId, activeProjectId, StringComparison.Ordinal) ||
+                    string.IsNullOrWhiteSpace(sourceDocumentUniqueId) ||
+                    string.IsNullOrWhiteSpace(sourceDocumentFingerprint) ||
+                    string.IsNullOrWhiteSpace(sourceIdentityEvidenceDigest))
+                    throw new InvalidOperationException("project.json does not match the active project's complete document identity envelope.");
+            }
+            catch (Exception ex)
+            {
+                SetStatus("The preserved revision has no valid source-document identity envelope and cannot be retried as an aligned project sync.");
+                RevexDiagnostics.Error("SYNC", "Retry source identity validation failed.", ex);
+                return;
             }
 
             if (!File.Exists(affectedPlans))
@@ -892,6 +1160,26 @@ public sealed class RendairWindow : Window
             }
 
             _lastSyncFolder = folder;
+            if (_activeUnifiedSyncAttemptId == null)
+            {
+                _activeUnifiedSyncAttemptId = RevexDiagnostics.NewCorrelationId("sync-retry");
+                _activeUnifiedProjectId = activeProjectId;
+                _activeUnifiedDocumentUniqueId = sourceDocumentUniqueId;
+                _activeUnifiedDocumentFingerprint = sourceDocumentFingerprint;
+                _activeUnifiedIdentityEvidenceDigest = sourceIdentityEvidenceDigest;
+                _activeUnifiedEngineeringRevision = null;
+            }
+            if (!IsCurrentUnifiedAttempt(_activeUnifiedSyncAttemptId, activeProjectId) ||
+                !string.Equals(_activeUnifiedDocumentUniqueId, sourceDocumentUniqueId, StringComparison.Ordinal) ||
+                !string.Equals(_activeUnifiedDocumentFingerprint, sourceDocumentFingerprint, StringComparison.Ordinal) ||
+                !string.Equals(_activeUnifiedIdentityEvidenceDigest, sourceIdentityEvidenceDigest, StringComparison.Ordinal))
+            {
+                SetStatus("Retry was blocked because the preserved revision does not match the active sync identity envelope.");
+                return;
+            }
+            _continueUnifiedSyncToEngineering = true;
+            _confirmedLiveSourceRevision = null;
+            _lastSourceRevision = revision;
             _pendingSync = new RevexSyncOutput(
                 revision, folder, project, design, spec, ifc, fbx, mesh, meshManifest, meshPages, viewer,
                 File.Exists(printing) ? printing : null, printingPdfs,
@@ -927,8 +1215,28 @@ public sealed class RendairWindow : Window
         }
     }
 
-    private async Task RunEnergySyncToCompanionAsync()
+    private async Task RunEnergySyncToCompanionAsync(
+        string? unifiedAttemptId = null,
+        string? sourceRevision = null,
+        string? expectedProjectId = null)
     {
+        bool unifiedContinuation = unifiedAttemptId != null;
+        if (unifiedContinuation)
+        {
+            if (!IsCurrentUnifiedAttempt(unifiedAttemptId, expectedProjectId) ||
+                !string.Equals(sourceRevision, _lastSourceRevision, StringComparison.Ordinal) ||
+                !string.Equals(sourceRevision, _confirmedLiveSourceRevision, StringComparison.Ordinal))
+            {
+                RevexDiagnostics.Warn("ENERGY-SYNC", $"Blocked stale unified continuation attempt={unifiedAttemptId}; source={sourceRevision}; project={expectedProjectId}.");
+                return;
+            }
+        }
+        else if (_activeUnifiedSyncAttemptId != null)
+        {
+            SetStatus("The aligned project sync is still active. Finish or retry its exact source revision before starting a separate Engineering sync.");
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(_projectId.Text))
         {
             _energySyncWaitingForProject = true;
@@ -945,14 +1253,26 @@ public sealed class RendairWindow : Window
         }
         catch (Exception ex)
         {
-            RevexDiagnostics.Error("ENERGY-SYNC", "Weather input could not be resolved before SYNC ENGINEERING.", ex);
+            RevexDiagnostics.Error("ENERGY-SYNC", "Weather input could not be resolved before the Engineering stage of SYNC PROJECT.", ex);
             ShowFailure("Energy Sync weather", ex.Message);
             return;
         }
+        if (unifiedContinuation && !IsCurrentUnifiedAttempt(unifiedAttemptId, expectedProjectId))
+        {
+            RevexDiagnostics.Warn("ENERGY-SYNC", $"Unified continuation changed while weather was resolving; attempt={unifiedAttemptId} was not started.");
+            return;
+        }
         OpenCompanion("energy");
-        RevexDiagnostics.Info("ENERGY-SYNC", $"clicked; project={_projectId.Text.Trim()}; destination=Companion/Spec/Energy; downstream=managed-server");
+        if (unifiedContinuation) _continueUnifiedSyncToEngineering = false;
+        _activeEngineeringSourceRevision = unifiedContinuation ? sourceRevision : null;
+        RevexDiagnostics.Info("ENERGY-SYNC", $"started; unified={unifiedContinuation}; sourceRevision={_activeEngineeringSourceRevision ?? "<engineering-only>"}; project={_projectId.Text.Trim()}; destination=Companion/Spec/Energy; downstream=managed-server");
         SetStatus("Engineering Sync started. Revit will stop after verified evidence; the controlled REVEX server will run GeometryCo, Baseline/Proposed simulation, reports and EN-1 after the ≥80% hard-stop gate; 80–<95% results continue with a Companion quality warning, while sub-80% evidence is preserved for repair and is not published.");
-        RunGbxmlEngineering(syncToCompanion: true);
+        RunGbxmlEngineering(
+            syncToCompanion: true,
+            initiator: unifiedContinuation ? "SYNC PROJECT button · Engineering stage" : null,
+            unifiedAttemptId: unifiedAttemptId,
+            sourceRevision: sourceRevision,
+            expectedProjectId: expectedProjectId);
     }
 
     private void SelectEnergyWeather()
@@ -968,10 +1288,20 @@ public sealed class RendairWindow : Window
         {
             _energyWeather.Text = dialog.FileName;
             RevexDiagnostics.Info("ENERGY", "Weather EPW selected: " + dialog.FileName);
+            if (_continueUnifiedSyncToEngineering && _pendingSync == null && !_gbxmlAwaitingRevit)
+            {
+                SetStatus("Weather selected. Continuing Sync project from its preserved source revision…");
+                _ = ContinueUnifiedSyncToEngineeringAsync();
+            }
         }
     }
 
-    private void RunGbxmlEngineering(bool syncToCompanion = false)
+    private void RunGbxmlEngineering(
+        bool syncToCompanion = false,
+        string? initiator = null,
+        string? unifiedAttemptId = null,
+        string? sourceRevision = null,
+        string? expectedProjectId = null)
     {
         if (_gbxmlAwaitingRevit)
         {
@@ -993,7 +1323,9 @@ public sealed class RendairWindow : Window
         _gbxmlAwaitingRevit = true;
         _energySyncRequested = syncToCompanion;
         _activeGbxmlCorrelationId = RevexDiagnostics.NewCorrelationId(syncToCompanion ? "energy-sync" : "gbxml");
-        _activeGbxmlInitiator = syncToCompanion ? "SYNC ENGINEERING button" : "gbXML Engineering button";
+        _activeGbxmlInitiator = initiator ?? (syncToCompanion ? "Engineering Sync request" : "gbXML Engineering button");
+        string requestCorrelationId = _activeGbxmlCorrelationId;
+        string requestInitiator = _activeGbxmlInitiator;
         _ = WatchGbxmlAsync();
         RevexDiagnostics.Info("GBXML", $"Engineering run requested. audit={settings.AuditOnly}; phase={(string.IsNullOrWhiteSpace(settings.PhaseName) ? "auto" : settings.PhaseName)}");
         SetStatus(settings.AuditOnly ? "Running gbXML preflight audit…" : "Preparing Spaces and exporting gbXML…");
@@ -1001,7 +1333,13 @@ public sealed class RendairWindow : Window
         _handler.Enqueue(new RevitRequest(
             RevitRequestKind.GbxmlEngineering,
             CurrentSettings(),
-            result => Dispatcher.BeginInvoke(new Action(() => HandleGbxmlResult(result))),
+            result => Dispatcher.BeginInvoke(new Action(() => HandleGbxmlResult(
+                result,
+                requestCorrelationId,
+                requestInitiator,
+                unifiedAttemptId,
+                sourceRevision,
+                expectedProjectId))),
             settings)
         {
             CorrelationId = _activeGbxmlCorrelationId,
@@ -1010,17 +1348,42 @@ public sealed class RendairWindow : Window
             AllowProjectRebind = syncToCompanion && _explicitProjectSelectionPending
         });
         if (syncToCompanion) _explicitProjectSelectionPending = false;
-        _externalEvent.Raise();
     }
 
-    private void HandleGbxmlResult(RevitRequestResult result)
+    private void HandleGbxmlResult(
+        RevitRequestResult result,
+        string correlationId,
+        string initiator,
+        string? unifiedAttemptId,
+        string? sourceRevision,
+        string? expectedProjectId)
     {
-        string correlationId = _activeGbxmlCorrelationId;
-        string initiator = _activeGbxmlInitiator;
+        if (!string.Equals(correlationId, _activeGbxmlCorrelationId, StringComparison.Ordinal))
+        {
+            RevexDiagnostics.Warn("GBXML", $"Ignored stale Engineering callback correlation={correlationId}.");
+            return;
+        }
         using var workflow = RevexDiagnostics.BeginWorkflow("ENGINEERING_SYNC_CALLBACK", initiator, correlationId);
         _gbxmlAwaitingRevit = false;
         bool energySyncRequested = _energySyncRequested;
         _energySyncRequested = false;
+        if (unifiedAttemptId != null &&
+            (!IsCurrentUnifiedAttempt(unifiedAttemptId, expectedProjectId) ||
+             !string.Equals(sourceRevision, _activeEngineeringSourceRevision, StringComparison.Ordinal) ||
+             result.ProjectBinding == null ||
+             !string.Equals(result.ProjectBinding.ProjectId, _activeUnifiedProjectId, StringComparison.Ordinal) ||
+             !string.Equals(result.ProjectBinding.DocumentUniqueId, _activeUnifiedDocumentUniqueId, StringComparison.Ordinal) ||
+             !string.Equals(result.ProjectBinding.DocumentFingerprint, _activeUnifiedDocumentFingerprint, StringComparison.Ordinal) ||
+             !string.Equals(result.ProjectBinding.IdentityEvidenceDigest, _activeUnifiedIdentityEvidenceDigest, StringComparison.Ordinal)))
+        {
+            RevexDiagnostics.Warn("ENERGY-SYNC", $"Rejected stale or cross-document Engineering callback attempt={unifiedAttemptId}; source={sourceRevision}; project={expectedProjectId}.");
+            _activeGbxmlCorrelationId = "";
+            _activeGbxmlInitiator = "";
+            EndUnifiedSyncAttempt(unifiedAttemptId);
+            workflow.Complete(false, "aligned Engineering callback did not match the exact source document identity envelope");
+            ShowFailure("Engineering Sync alignment", "The active Revit document changed after the source revision. Engineering was not labeled or published against that source. Run SYNC PROJECT again from the intended active document.");
+            return;
+        }
         ApplyResolvedProjectBinding(result.ProjectBinding);
         GbxmlEngineeringOutput? output = result.EngineeringOutput;
         if (output != null)
@@ -1044,9 +1407,11 @@ public sealed class RendairWindow : Window
                 {
                     RevexProjectBinding resolvedBinding = result.ProjectBinding
                         ?? throw new InvalidOperationException("The active Revit document project binding was not returned with Engineering evidence.");
-                    EngineeringSyncOutput revision = new EngineeringSyncService().Create(output, resolvedBinding, _resolvedEnergyWeatherPath);
+                    EngineeringSyncOutput revision = new EngineeringSyncService().Create(
+                        output, resolvedBinding, _resolvedEnergyWeatherPath, sourceRevision);
                     _lastEngineeringSync = revision;
                     _pendingEngineeringSync = revision;
+                    if (unifiedAttemptId != null) _activeUnifiedEngineeringRevision = revision.Revision;
                     SetStatus($"{revision.Revision} passed the Revit evidence gate. Revit writes are finished. REVEX is publishing the immutable gbXML + verified EPW package; all downstream Energy work runs in the controlled server environment.");
                     SendEnergyStatus("server-upload", true, "≥80% Revit hard-stop gate passed. Publishing immutable engineering evidence, EN/Z page evidence, and Weather file (.EPW) to the managed REVEX Energy server…", revision.Revision);
                     _ = PublishPendingEngineeringSyncAsync();
@@ -1058,6 +1423,7 @@ public sealed class RendairWindow : Window
                     ShowFailure("Energy Sync", ex.Message);
                     _activeGbxmlCorrelationId = "";
                     _activeGbxmlInitiator = "";
+                    EndUnifiedSyncAttempt(unifiedAttemptId);
                     return;
                 }
             }
@@ -1077,6 +1443,7 @@ public sealed class RendairWindow : Window
         workflow.Complete(false, detail);
         _activeGbxmlCorrelationId = "";
         _activeGbxmlInitiator = "";
+        EndUnifiedSyncAttempt(unifiedAttemptId);
         ShowFailure("gbXML engineering", detail);
     }
 
@@ -1122,7 +1489,6 @@ public sealed class RendairWindow : Window
             Initiator = "Capture current view button"
         });
 
-        _externalEvent.Raise();
     }
 
     private void CaptureBatch()
@@ -1142,7 +1508,6 @@ public sealed class RendairWindow : Window
             Initiator = "Capture batch button"
         });
 
-        _externalEvent.Raise();
     }
 
     private async Task HandleCaptureResultAsync(RevitRequestResult result)
@@ -1285,7 +1650,6 @@ public sealed class RendairWindow : Window
             CorrelationId = RevexDiagnostics.NewCorrelationId("quick-render"),
             Initiator = "Quick Render current view button"
         });
-        _externalEvent.Raise();
         RevexDiagnostics.Info("RENDER", "Capture ExternalEvent raised; waiting for Revit callback.");
     }
 
@@ -1410,6 +1774,8 @@ public sealed class RendairWindow : Window
                 RevexDiagnostics.Warn("ENERGY", managedBridge.message);
             await ApplyEnergyCompanionNativePolicyAsync();
             await RefreshProjectBindingFromCompanionAsync("navigation");
+            if (_openCompanionRenderPending)
+                await TryOpenCompanionRenderAsync();
         }
 
         if (_pendingSync == null && _pendingEngineeringSync == null && _pendingEnergyResult == null) return;
@@ -1427,19 +1793,8 @@ public sealed class RendairWindow : Window
         if (!onRevex)
             return;
 
-        if (_pendingSync != null)
-        {
-            RevexSyncOutput output = _pendingSync;
-            var attached = await CompanionWebBridge.AttachSyncPackageAsync(_web, output);
-            SetStatus(attached.message);
-            if (attached.ok)
-                _pendingSync = null;
-            else
-            {
-                OpenOfflineCompanion(output, "viewer", attached.message);
-                return;
-            }
-        }
+        if (_pendingSync != null && !await AttachPendingSourceSyncAsync())
+            return;
 
         if (_pendingEngineeringSync != null)
         {
@@ -1470,7 +1825,10 @@ public sealed class RendairWindow : Window
                 // Revit owns evidence only; the managed server owns every downstream Energy stage.
                 // Harden an older hosted Companion so stale local-run/identity controls cannot
                 // reopen an uncontrolled workstation workflow.
-                document.querySelectorAll('[data-energy-applicant],#energy-seal').forEach((node) => node.remove());
+                // Keep the publication-only Applicant/Lead modeler amendment panel.
+                // Only stale signature/seal controls are removed; that filing
+                // attestation is never changed by the amendment lane.
+                document.querySelectorAll('[data-energy-signature],#energy-seal').forEach((node) => node.remove());
 
                 // Hosted Companion can lag the native build behind CDN/browser caches.
                 // The native host owns the active integrity contract, so never let an
@@ -1499,7 +1857,7 @@ public sealed class RendairWindow : Window
                   }
                   const sourceSummary = document.getElementById('energy-source-summary');
                   if (sourceSummary && /(engineering sync|98%)/i.test(sourceSummary.textContent || '') ) {
-                    sourceSummary.innerHTML = 'In Revit, click <b>SYNC ENGINEERING</b>. The downstream chain starts after the ≥80% hard-stop gate. Results below 95% stay visible as a Companion quality warning; sub-80% evidence never publishes.';
+                    sourceSummary.innerHTML = 'In Revit, click <b>SYNC PROJECT</b>. The aligned Engineering stage starts after the source revision is live; its downstream chain starts after the ≥80% hard-stop gate. Results below 95% stay visible as a Companion quality warning; sub-80% evidence never publishes.';
                   }
                 } catch (_) {}
 
@@ -1517,7 +1875,7 @@ public sealed class RendairWindow : Window
                     const status = document.getElementById('energy-run-status');
                     form.insertBefore(summary, status || null);
                   }
-                  summary.textContent = 'No second run step. SYNC ENGINEERING publishes verified gbXML + EPW; the managed REVEX server runs GeometryCo/OpenStudio/EnergyPlus and EN-1. Applicant/modeler/signature/seal remain blank.';
+                  summary.textContent = 'No second run step. SYNC PROJECT publishes verified gbXML + EPW after its aligned source stage; the managed REVEX server runs GeometryCo/OpenStudio/EnergyPlus and EN-1. Applicant and lead modeler stay editable in the publication-only Apply to EN-1 panel; signature and seal remain unchanged.';
                 }
               })();
             """);
@@ -1736,7 +2094,7 @@ public sealed class RendairWindow : Window
         }
     }
 
-    private void HandleCompanionMessage(string json)
+    private async void HandleCompanionMessage(string json)
     {
         try
         {
@@ -1758,6 +2116,13 @@ public sealed class RendairWindow : Window
                     return;
                 }
                 if (selectedProjectId.Length == 0) return;
+                if (_activeUnifiedSyncAttemptId != null &&
+                    !string.Equals(selectedProjectId, _activeUnifiedProjectId, StringComparison.Ordinal))
+                {
+                    RevexDiagnostics.Warn("PROJECT", $"Ignored project switch to {selectedProjectId} while aligned sync {_activeUnifiedSyncAttemptId} is bound to {_activeUnifiedProjectId}.");
+                    SetStatus("Finish or retry the active project sync before switching projects. REVEX kept the source and Engineering identity envelope unchanged.");
+                    return;
+                }
 
                 _projectId.Text = selectedProjectId;
                 _specProjectId.Text = SettingsService.ExpectedSpecProjectId(selectedProjectId);
@@ -1787,6 +2152,7 @@ public sealed class RendairWindow : Window
             {
                 string stage = ReadString(root, "stage", "MANAGED_ENERGY");
                 string managedMessage = ReadString(root, "message", "Managed Energy update");
+                string managedProjectId = ReadString(root, "projectId", "").Trim();
                 string managedRevision = ReadString(root, "revision", "");
                 bool managedSucceeded = root.TryGetProperty("ok", out JsonElement managedOk) && managedOk.GetBoolean();
 
@@ -1803,17 +2169,40 @@ public sealed class RendairWindow : Window
                 if (string.Equals(stage, "CLOUD_UPLOAD_PASSED", StringComparison.OrdinalIgnoreCase))
                 {
                     if (_pendingEngineeringSync != null &&
-                        (string.IsNullOrWhiteSpace(managedRevision) || string.Equals(_pendingEngineeringSync.Revision, managedRevision, StringComparison.Ordinal)))
+                        string.Equals(_pendingEngineeringSync.ProjectId, managedProjectId, StringComparison.Ordinal) &&
+                        string.Equals(_pendingEngineeringSync.Revision, managedRevision, StringComparison.Ordinal))
                     {
                         RevexDiagnostics.Info("ENERGY-SYNC", $"Cloud handoff confirmed for {(_pendingEngineeringSync.Revision)}; local retry handle released.");
                         _pendingEngineeringSync = null;
                     }
+                    else if (_pendingEngineeringSync != null)
+                    {
+                        RevexDiagnostics.Warn("ENERGY-SYNC", $"Ignored cloud handoff confirmation for {managedRevision}; pending exact revision is {_pendingEngineeringSync.Revision}.");
+                    }
                 }
 
-                if (string.Equals(stage, "BROKER_COMPLETE", StringComparison.OrdinalIgnoreCase))
+                bool exactUnifiedTerminal = _activeUnifiedSyncAttemptId != null &&
+                                            string.Equals(managedProjectId, _activeUnifiedProjectId, StringComparison.Ordinal) &&
+                                            string.Equals(managedRevision, _activeUnifiedEngineeringRevision, StringComparison.Ordinal);
+                if (string.Equals(stage, "COMPLETE", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(stage, "BROKER_COMPLETE", StringComparison.OrdinalIgnoreCase))
+                {
                     SendEnergyStatus("complete", true, managedMessage, ReadString(root, "resultRevision", managedRevision));
+                    if (exactUnifiedTerminal)
+                        EndUnifiedSyncAttempt(_activeUnifiedSyncAttemptId);
+                }
+                else if (string.Equals(stage, "EVIDENCE_ONLY", StringComparison.OrdinalIgnoreCase))
+                {
+                    SendEnergyStatus("evidence-only", true, managedMessage, managedRevision);
+                    if (exactUnifiedTerminal)
+                        EndUnifiedSyncAttempt(_activeUnifiedSyncAttemptId);
+                }
                 else if (string.Equals(stage, "BROKER_FAILED", StringComparison.OrdinalIgnoreCase))
+                {
                     SendEnergyStatus("server-failed", false, managedMessage, managedRevision);
+                    if (exactUnifiedTerminal)
+                        EndUnifiedSyncAttempt(_activeUnifiedSyncAttemptId);
+                }
                 return;
             }
 
@@ -1837,7 +2226,7 @@ public sealed class RendairWindow : Window
                 }
                 RevexDiagnostics.Info("WALLT-REVIT", $"Accepted Energy repair/evidence request for project={requestedProjectId}; priorRevision={requestedRevision}; {repairMessage}");
                 SetMode(true);
-                SetStatus("WALLT requested a fresh authoritative Revit evidence block. REVEX is running SYNC ENGINEERING now; the resulting immutable revision will continue the managed Energy chain automatically.");
+                SetStatus("WALLT requested fresh authoritative Revit evidence. REVEX is running the Engineering stage of SYNC PROJECT now; the resulting immutable revision will continue the managed Energy chain automatically.");
                 Dispatcher.BeginInvoke(new Action(() => _ = RunEnergySyncToCompanionAsync()));
                 return;
             }
@@ -1845,7 +2234,7 @@ public sealed class RendairWindow : Window
             if (kind == "liber:revex-energy-run")
             {
                 RevexDiagnostics.Warn("ENERGY", "Ignored legacy Companion local-run request. Managed server execution is authoritative in r31.");
-                SendEnergyStatus("server-only", false, "Local OpenStudio execution is disabled. SYNC ENGINEERING publishes the verified revision to the managed REVEX Energy server automatically.");
+                SendEnergyStatus("server-only", false, "Local OpenStudio execution is disabled. The Engineering stage of SYNC PROJECT publishes the verified revision to the managed REVEX Energy server automatically.");
                 return;
             }
 
@@ -1908,6 +2297,23 @@ public sealed class RendairWindow : Window
             if (kind != "liber:revex-sync-result")
                 return;
 
+            string resultAttemptId = ReadString(root, "attemptId", "").Trim();
+            string resultProjectId = ReadString(root, "projectId", "").Trim();
+            string resultRevision = ReadString(root, "revision", "").Trim();
+            string resultDocumentUniqueId = ReadString(root, "documentUniqueId", "").Trim();
+            string resultDocumentFingerprint = ReadString(root, "documentFingerprint", "").Trim();
+            string resultIdentityEvidenceDigest = ReadString(root, "identityEvidenceDigest", "").Trim();
+            bool exactSourceAck = IsCurrentUnifiedAttempt(resultAttemptId, resultProjectId) &&
+                                  string.Equals(resultRevision, _lastSourceRevision, StringComparison.Ordinal) &&
+                                  string.Equals(resultDocumentUniqueId, _activeUnifiedDocumentUniqueId, StringComparison.Ordinal) &&
+                                  string.Equals(resultDocumentFingerprint, _activeUnifiedDocumentFingerprint, StringComparison.Ordinal) &&
+                                  string.Equals(resultIdentityEvidenceDigest, _activeUnifiedIdentityEvidenceDigest, StringComparison.Ordinal);
+            if (!exactSourceAck)
+            {
+                RevexDiagnostics.Warn("SYNC", $"Ignored stale or incomplete Companion source result attempt={resultAttemptId}; project={resultProjectId}; revision={resultRevision}.");
+                return;
+            }
+
             bool ok = root.TryGetProperty("ok", out JsonElement okValue) && okValue.GetBoolean();
             if (!ok)
             {
@@ -1921,13 +2327,28 @@ public sealed class RendairWindow : Window
                 return;
             }
 
-            string revision = root.TryGetProperty("revision", out JsonElement revValue)
-                ? revValue.GetString() ?? "revision"
-                : "revision";
+            string revision = resultRevision;
             bool cloud = root.TryGetProperty("cloud", out JsonElement cloudValue) && cloudValue.GetBoolean();
             SetStatus(cloud
                 ? $"{revision} is live in REVEX Companion. RVT remained unchanged."
                 : $"{revision} is a complete local REVEX revision: BIM, Design Book, Spec Book and Docs are available on this device. Open LIBER Account, sign in, then use RETRY LAST PUBLISH to share it across devices.");
+
+            if (_continueUnifiedSyncToEngineering &&
+                string.Equals(revision, _lastSourceRevision, StringComparison.Ordinal) &&
+                string.Equals(resultProjectId, _projectId.Text.Trim(), StringComparison.Ordinal))
+            {
+                if (cloud)
+                {
+                    _confirmedLiveSourceRevision = revision;
+                    RevexDiagnostics.Info("SYNC", $"Exact source revision {revision} is live; starting its aligned Engineering stage.");
+                    await ContinueUnifiedSyncToEngineeringAsync();
+                }
+                else
+                {
+                    RevexDiagnostics.Warn("SYNC", $"Exact source revision {revision} is local-only; Engineering remains paused until that same revision is published.");
+                    SetStatus($"Sync project paused after stage 1: {revision} is preserved locally. Sign in and retry its publish; Engineering will start only after this exact source revision is live.");
+                }
+            }
         }
         catch
         {
@@ -1944,12 +2365,12 @@ public sealed class RendairWindow : Window
         }
 
         string correlationId = RevexDiagnostics.NewCorrelationId("energy-auto");
-        using var workflow = RevexDiagnostics.BeginWorkflow("AUTOMATIC_ENERGY_PACKAGE", "SYNC ENGINEERING automatic downstream", correlationId);
+        using var workflow = RevexDiagnostics.BeginWorkflow("AUTOMATIC_ENERGY_PACKAGE", "SYNC PROJECT automatic downstream", correlationId);
         var request = new EnergyPipelineRequest
         {
             CorrelationId = correlationId,
             ParentCorrelationId = parentCorrelationId,
-            Initiator = "SYNC ENGINEERING automatic downstream",
+            Initiator = "SYNC PROJECT automatic downstream",
             ProjectId = source.ProjectId,
             ProjectName = string.IsNullOrWhiteSpace(_activeProjectName) ? source.ProjectId : _activeProjectName,
             OpenStudioCli = "",
@@ -2011,7 +2432,7 @@ public sealed class RendairWindow : Window
         EngineeringSyncOutput? source = _lastEngineeringSync;
         if (source == null)
         {
-            SendEnergyStatus("blocked", false, "Run SYNC ENGINEERING from Revit first.");
+            SendEnergyStatus("blocked", false, "Run SYNC PROJECT from Revit first.");
             workflow.Complete(false, "blocked because no Engineering Sync source is loaded");
             return;
         }
@@ -2117,7 +2538,6 @@ public sealed class RendairWindow : Window
             CorrelationId = string.IsNullOrWhiteSpace(renderJobId) ? RevexDiagnostics.NewCorrelationId("render") : "render-" + renderJobId,
             Initiator = "Companion Render request"
         });
-        _externalEvent.Raise();
     }
 
     private async Task HandleNativeRenderCaptureAsync(RevitRequestResult result, string renderJobId, string prompt)

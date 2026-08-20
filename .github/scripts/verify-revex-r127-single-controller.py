@@ -53,7 +53,7 @@ engineering_sync = read("src/Liber.Revex.Revit/Services/EngineeringSyncService.c
 assert release["schema"] == "liber.revex.current-release.v2"
 assert release["authority"] == "canonical-current-files"
 assert release["operatorEntrypoint"] == "FINALIZE_REVEX.cmd"
-assert release["acceptanceAction"] == "one fresh SYNC ENGINEERING after successful finalization"
+assert release["acceptanceAction"] == "one fresh SYNC PROJECT after successful finalization"
 for principle in (
     "oneSourceCommitPerRelease",
     "versionedImplementationsAreShadows",
@@ -67,8 +67,8 @@ for principle in (
 ):
     assert release["principles"].get(principle) is True, principle
 assert release["current"]["energyDeployer"] == "server/revex-energy-worker/deploy-current.ps1"
-assert release["current"]["renderDeployer"] == "server/revex-render-worker/deploy-current.ps1"
 assert release["current"]["reportDeployer"] == "server/revex-report-functions/deploy-current.ps1"
+assert release["current"]["renderRuntime"] == "docs/liber-apps/apps/revex/render-agent.js"
 for category in ("projectIdentity","bim","mobile","designBook","specBook","docs","issues","history","blocks","render","energy"):
     assert category in release["requiredCapabilities"], f"release contract lost capability category {category}"
 
@@ -85,28 +85,25 @@ require(launcher,
         "pause >nul")
 require(controller,
         '"clone","--depth","1","--branch","main","--single-branch"',
-        '$SourceSha = $sha.Text.ToLowerInvariant()',
+        '$SourceSha=$sha.Text.ToLowerInvariant()',
         "server\\revex-energy-worker\\deploy-current.ps1",
-        "server\\revex-render-worker\\deploy-current.ps1",
         "server\\revex-report-functions\\deploy-current.ps1",
         "Stage and verify current Energy candidate without broker cutover",
-        "Stage, warm and verify current Render candidate without broker cutover",
-        "Verify current Companion UI is live before any broker cutover",
-        "Deploy source-bound Report and Daily Report",
-        "Cut Render broker to the already-warm current candidate",
+        "Verify current Companion UI and Render runtime are live before access/Energy cutover",
+        "Deploy preserved source-bound project access rules",
+        "Deploy preserved source-bound Storage access rules",
+        "Deploy source-bound Report, Daily Report, Project Chat and secure device services",
         "Cut Energy broker to the already-verified current candidate",
-        "Verify every mutable live service is bound to the exact release source",
+        "Verify mutable live issuance services are bound to the exact release source",
         "Compile exact-source Revit 2026 add-in",
         "Install-AddinAtomically",
         "Wait-RevitClosed",
         "App.before-finalize.",
         "previousInstalledRevisionShadow",
-        "run ONE fresh SYNC ENGINEERING")
+        "run ONE fresh SYNC PROJECT")
 # Energy is intentionally the final broker cutover because a failed candidate never touches live Energy.
-assert controller.index("Stage and verify current Energy candidate") < controller.index("Verify current Companion UI is live before any broker cutover")
-assert controller.index("Stage, warm and verify current Render candidate") < controller.index("Verify current Companion UI is live before any broker cutover")
-assert controller.index("Deploy source-bound Report and Daily Report") < controller.index("Cut Render broker to the already-warm current candidate")
-assert controller.index("Cut Render broker to the already-warm current candidate") < controller.index("Cut Energy broker to the already-verified current candidate")
+assert controller.index("Stage and verify current Energy candidate") < controller.index("Verify current Companion UI and Render runtime")
+assert controller.index("Deploy source-bound Report, Daily Report, Project Chat and secure device services") < controller.index("Cut Energy broker to the already-verified current candidate")
 assert controller.index("Cut Energy broker to the already-verified current candidate") < controller.index("Install the exact same source revision into Revit")
 forbid(controller,
        "DEPLOY_ENERGY_R127.ps1",
@@ -123,13 +120,16 @@ require(energy_deploy,
         "Build exact current Energy worker image",
         "Deploy private current Energy candidate",
         "Energy candidate is not Ready; broker remains unchanged.",
-        "Cut authenticated Energy broker over to verified candidate",
+        "Deploy only the authenticated Energy and Google Render brokers",
+        "functions:revex-energy:runRevexEnergy,functions:revex-energy:runRevexGoogleRender",
         "CandidateOnly",
         "BrokerOnly",
         "REVEX_SOURCE_CANDIDATE",
+        "REVEX_STORAGE_BUCKET",
         "REVEX_VERTEX_PROJECT",
         "roles/datastore.user",
         "roles/storage.objectAdmin",
+        "roles/serviceusage.serviceUsageConsumer",
         "roles/aiplatform.user")
 forbid(energy_deploy,
        "DEPLOY_ENERGY_CURRENT.ps1",
@@ -139,26 +139,12 @@ forbid(energy_deploy,
        "CanonicalSourceCommit",
        "REVEX_R49_SOURCE_")
 
-# Canonical Render deployer owns worker build, warm proof and source-bound broker directly.
-require(render_deploy,
-        "Build exact current Render worker image",
-        "Deploy private warm Render candidate",
-        "CandidateOnly",
-        "BrokerOnly",
-        "REVEX_SOURCE_CANDIDATE",
-        "REVEX_WARM_TOKEN",
-        "--min-instances=1",
-        "Assert-Warm",
-        "Cut authenticated Render broker over to verified candidate",
-        "REVEX_RENDER_WORKER_URL",
-        "nodejs22")
-forbid(render_deploy, "DEPLOY_RENDER_SERVER.ps1")
-
 # Report/Daily Report is current-source bound and verifies both deployed functions.
 require(report_deploy,
         "REVEX_SOURCE_CANDIDATE",
         "Deploy source-bound post-sync revision documentation trigger",
         "Deploy source-bound authenticated Daily Report finalizer",
+        "Deploy source-bound authenticated Project Chat resolver",
         "documentRevexRevision",
         "finalizeRevexDailyReport",
         "nodejs22")
@@ -190,7 +176,7 @@ require(design_versions,
         "liber.revex.design-property-versions.v1",
         "lightweight-property-overlay",
         "Sync to Design Book",
-        "syncPreservesVersion:true")
+        "Version retained.")
 forbid(design_versions, "versionKind: 'design-book-release'", "immutable: true")
 
 # r126 convergence coverage must remain part of current acceptance.

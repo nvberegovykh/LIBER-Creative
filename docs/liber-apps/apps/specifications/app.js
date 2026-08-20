@@ -14,19 +14,25 @@
   };
 
   /* ---------------- utils ---------------- */
-  let toastT;
+  let toastT, modalInvoker = null;
   function toast(msg, ms) {
     const t = $('#toast'); t.textContent = msg; t.hidden = false;
     clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, ms || 2600);
   }
   function modal(html, onMount) {
     const m = $('#modal'), c = $('#modal-card');
+    modalInvoker = document.activeElement;
     c.innerHTML = html; m.hidden = false;
+    c.setAttribute('role', 'dialog'); c.setAttribute('aria-modal', 'true'); c.setAttribute('tabindex', '-1');
+    const heading = c.querySelector('h1,h2,h3');
+    if (heading) { if (!heading.id) heading.id = 'spec-modal-title'; c.setAttribute('aria-labelledby', heading.id); c.removeAttribute('aria-label'); }
+    else { c.removeAttribute('aria-labelledby'); c.setAttribute('aria-label', 'Specification dialog'); }
     m.onclick = (e) => { if (e.target === m) closeModal(); };
     if (onMount) onMount(c);
+    setTimeout(() => (c.querySelector('input:not([disabled]),select:not([disabled]),textarea:not([disabled]),button:not([disabled]),[href],[tabindex]:not([tabindex="-1"])') || heading || c).focus?.(), 0);
     return c;
   }
-  function closeModal() { $('#modal').hidden = true; $('#modal-card').innerHTML = ''; }
+  function closeModal() { const m = $('#modal'), c = $('#modal-card'); if (!m || m.hidden) return; m.hidden = true; c.innerHTML = ''; const target = modalInvoker; modalInvoker = null; setTimeout(() => { const visible = (node) => Boolean(node?.isConnected && !node.hidden && node.getClientRects?.().length); const fallback = [$('#btn-menu'), $('#btn-home'), $('.sp-seg button.active'), $('#content')].find(visible); if (visible(target) && target !== document.body && target !== document.documentElement) target.focus?.(); else if (fallback) { if (fallback.tabIndex < 0) fallback.setAttribute('tabindex', '-1'); fallback.focus?.(); } else { document.body.setAttribute('tabindex', '-1'); document.body.focus?.(); } }, 0); }
   function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms || 250); }; }
   const num = (v) => (v == null || v === '' ? '' : v);
 
@@ -171,7 +177,7 @@
     const host = $('#projects-list');
     $('#projects-empty').hidden = list.length > 0;
     host.innerHTML = list.map((p) => `
-      <div class="sp-card" data-id="${p.id}">
+      <div class="sp-card" data-id="${p.id}" role="button" tabindex="0" aria-label="Open specification project ${esc(p.name)}">
         <h3>${esc(p.name)}</h3>
         <p>${esc(p.code || '')}${p.linkedProjectName ? ' · linked to ' + esc(p.linkedProjectName) : ''}</p>
         <div class="sp-meta">
@@ -179,7 +185,7 @@
           <span class="sp-tag">${(p.memberIds || []).length + 1} participant(s)</span>
         </div>
       </div>`).join('');
-    $$('.sp-card', host).forEach((c) => c.onclick = () => openProject(c.dataset.id));
+    $$('.sp-card', host).forEach((c) => {const activate=()=>openProject(c.dataset.id);c.onclick=activate;c.onkeydown=(event)=>{if(!['Enter',' '].includes(event.key))return;event.preventDefault();activate();};});
     $('#crumb').textContent = '';
   }
 
@@ -263,17 +269,17 @@
           const n = itemsOf(s.id).filter((i) => S.showRemoved || i.status !== 'removed').length;
           const warn = s.needsMapping && !s.numberOverride;
           const g = gapCount(s.id);
-          return `<div class="sp-sec ${S.activeSec === s.id ? 'active' : ''}" data-id="${s.id}">
+          return `<div class="sp-sec ${S.activeSec === s.id ? 'active' : ''}" data-id="${s.id}" role="button" tabindex="0" aria-label="Open section ${esc(s.scheduleName)}">
             <code>${secNum(s) ? MF.fmt(secNum(s)) : '– – –'}</code>
             <span class="n">${esc(s.scheduleName)}</span>
             <span class="sp-pill ${warn || g ? 'warn' : ''}" title="${warn ? 'Needs a MasterFormat number' : g ? g + ' of ' + n + ' rows still have blanks' : n + ' rows, all complete'}">${warn ? '!' : g ? '!' + g : n}</span></div>`;
         }).join('')}
       </div>`).join('');
-    $$('.sp-sec', host).forEach((el) => el.onclick = () => {
+    $$('.sp-sec', host).forEach((el) => {const activate=()=>{
       if (window.innerWidth <= 860) setRail(false);
       S.activeSec = el.dataset.id; renderRail(); renderContent();
       $('#content').scrollTop = 0; saveUI();
-    });
+    };el.onclick=activate;el.onkeydown=(event)=>{if(!['Enter',' '].includes(event.key))return;event.preventDefault();activate();};});
     const issues = S.sections.filter((s) => s.needsMapping && !s.numberOverride).length + S.items.filter((i) => i.mismatch).length;
     $('#issue-count').textContent = issues;
   }
@@ -627,9 +633,16 @@
         $$('a', td).forEach((a) => a.onclick = (e) => e.stopPropagation());
         return;
       }
+      td.tabIndex = 0;
+      td.setAttribute('role', 'button');
+      td.setAttribute('aria-label', `Edit ${td.dataset.field || td.dataset.col || 'specification'} cell`);
       td.onclick = (e) => {
         if (td.classList.contains('editing')) return;
         e.stopPropagation(); startCellEdit(td, type);
+      };
+      td.onkeydown = (e) => {
+        if (td.classList.contains('editing') || !['Enter', ' ', 'F2'].includes(e.key)) return;
+        e.preventDefault(); e.stopPropagation(); startCellEdit(td, type);
       };
     });
   }

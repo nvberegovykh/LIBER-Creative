@@ -2,7 +2,7 @@
   "schema": "liber.revex.current-release.v2",
   "authority": "canonical-current-files",
   "operatorEntrypoint": "FINALIZE_REVEX.cmd",
-  "acceptanceAction": "one fresh SYNC ENGINEERING after successful finalization",
+  "acceptanceAction": "one fresh SYNC PROJECT after successful finalization",
   "principles": {
     "oneSourceCommitPerRelease": true,
     "versionedImplementationsAreShadows": true,
@@ -20,14 +20,26 @@
     "releaseVerifier": ".github/scripts/verify-revex-current-release.py",
     "companionRoot": "docs/liber-apps/apps/revex/index.html",
     "companionIntegrityOwner": "docs/liber-apps/apps/revex/ui-integrity.js",
+    "experienceRuntime": "docs/liber-apps/apps/revex/experience-r144.js",
+    "viewerInteractionRuntime": "docs/liber-apps/apps/revex/viewer-interaction-r85.js",
     "walltControlRuntime": "docs/liber-apps/apps/revex/wallt-control-plane.js",
     "walltFixerAdaptersRuntime": "docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js",
     "walltCycleHistoryRuntime": "docs/liber-apps/apps/revex/wallt-cycle-history.js",
     "walltUiRuntime": "docs/liber-apps/apps/revex/wallt-ui-r138.js",
     "chatBoundaryRuntime": "docs/liber-apps/apps/revex/chat-convergence-r136.js",
+    "secureChatRuntime": "docs/liber-apps/apps/secure-chat/chat.js",
+    "secureChatCryptoRuntime": "docs/liber-apps/apps/secure-chat/chat-crypto.js",
+    "firebaseServiceRuntime": "docs/liber-apps/js/firebase-service.js",
+    "projectRuntimeFunctions": "server/firebase-functions/main.js",
+    "projectRuntimeSecurity": "server/firebase-functions/project-chat.js",
     "renderRuntime": "docs/liber-apps/apps/revex/render-agent.js",
+    "renderBrokerRuntime": "server/firebase-functions/index.js",
+    "renderBrokerFunction": "runRevexGoogleRender",
+    "renderBrokerRegion": "us-central1",
     "revitAddinProject": "src/Liber.Revex.Revit/Liber.Revex.Revit.csproj",
     "engineeringSync": "src/Liber.Revex.Revit/Services/EngineeringSyncService.cs",
+    "familyMutationReceipts": "src/Liber.Revex.Revit/Services/FamilyMutationReceiptService.cs",
+    "geometryEvidenceValidator": "server/revex-energy-worker/revex_geometry_evidence.py",
     "energyPipeline": "server/revex-energy-worker/revex_energy_pipeline_current.py",
     "energyContracts": "src/Liber.Revex.Revit/Engineering/Energy/revex_energy_contracts.py",
     "energyPublicationPolicy": "src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups.py",
@@ -35,7 +47,8 @@
     "energyDeployer": "server/revex-energy-worker/deploy-current.ps1",
     "reportDeployer": "server/revex-report-functions/deploy-current.ps1",
     "accessDeployer": "firebase/deploy-current-access.ps1",
-    "storageAccessDeployer": "firebase/deploy-current-storage-access.ps1"
+    "storageAccessDeployer": "firebase/deploy-current-storage-access.ps1",
+    "legacyDownloadTokenRevoker": "server/firebase-functions/revoke-revex-download-tokens.js"
   },
   "requiredCapabilities": {
     "projectIdentity": "one REVEX project identity shared by Revit, BIM, Design Book, Spec Book, Docs, Chat, History, Render and Energy under project owner/member/admin access",
@@ -59,6 +72,8 @@
       "design color fallback behind texture",
       "six-face section box",
       "ACC-like Walk",
+      "two-point architectural feet-and-inches measurement",
+      "section-aware picking rejects clipped geometry and respects the nearest surviving visible surface",
       "spatial Rooms/Spaces invisible as geometry",
       "affected-plan export from authoritative current revision"
     ],
@@ -87,7 +102,8 @@
       "legacy detached printing-sheet records fold into the matching Full Set revision instead of becoming standalone documents",
       "sheets are linked pages not detached standalone documents",
       "manual Record In and Record Out documents remain in the same project library",
-      "affected native Revit plan PDFs remain synchronized with their authoritative source revision"
+      "affected native Revit plan PDFs remain synchronized with their authoritative source revision",
+      "mobile document groups are expandable disclosures with persisted state"
     ],
     "chat": [
       "Secure Chat remains the message and storage owner",
@@ -98,6 +114,9 @@
       "BIM and Design Book context is delivered only to the iframe bound to the active project",
       "new direct messages use P-256 ECDH plus HKDF and new group/project messages use per-participant wrapped random AES keys with immutable epochs",
       "device identity private keys are non-exportable WebCrypto keys stored in IndexedDB and legacy fingerprints migrate without replacement",
+      "device identity recovery requires recent non-anonymous authentication and a server-side compare-and-swap; only a public P-256 key is published and private keys are never uploaded or escrowed",
+      "a device that still holds a historical private key may read its compatible history, while a lost private key is explicitly unrecoverable and never replaced by fabricated decryption",
+      "push registration is top-level, best-effort and bearer-authenticated, with raw FCM tokens confined to a server-only bounded subcollection",
       "new encrypted attachments use authenticated Storage SDK reads without permanent download tokens",
       "project Chat membership is synchronized only by the source-bound server controller and every membership change requires key rotation",
       "browser configuration exposes only public Firebase routing fields; provider, admin and system credentials remain server-only"
@@ -115,20 +134,29 @@
       "affected plan evidence remains synchronized"
     ],
     "blocks": [
-      "Walk-only placement UI",
+      "always-discoverable family placement entry with an explicit Revit/Walk readiness state",
+      "placement execution enabled only in the Revit add-in with an active Walk target",
       "three-foot intended placement distance from the active Walk camera",
       "exact Walk target elevation survives the Three-to-Revit coordinate conversion",
       "provider file path remains local and browser JavaScript receives only an opaque placement token",
       "Revit ExternalEvent placement",
+      "family mutations use a two-phase local receipt plus a per-command in-transaction Revit DataStorage witness before exact committed status is accepted",
+      "family mutation recovery binds command operation context and request by digest, reconstructs missing local receipts from the model witness, and blocks altered replay",
+      "family mutation acknowledgement publishes the terminal acknowledged receipt before deleting pending state and source sync fails closed on conflicting evidence",
       "bounded nearest face-host and element-host fallback for supported hosted/work-plane families",
       "downloaded ZIP families use bounded entry, expansion and path-containment checks",
       "unsupported adaptive, detail, view and curve family placement fails closed"
     ],
     "render": [
       "current BIM viewport and camera authority",
-      "canonical Google Gemini 3.1 Flash Image client through the existing authenticated Google user session",
-      "OAuth token remains session-local and no API key is embedded in the browser",
+      "canonical Google Gemini 3.1 Flash Image request through the Firebase-authenticated runRevexGoogleRender project broker",
+      "every requesting Firebase user must be an owner, member or admin of the exact active REVEX project",
+      "ordinary users receive no Google Cloud IAM, Google OAuth token or provider API key in the browser",
+      "a controlled source-bound service account meters the provider call and stores private source/result objects under the exact project and job path",
+      "a fresh caller-owned PREPARED library job and separate server-only one-shot lease prevent replay or cross-project substitution",
       "geometry and camera lock applied to every render request",
+      "bounded PNG, JPEG or WebP source and result payloads with provider response, prompt, dimension and byte limits",
+      "durable records persist authenticated Storage paths and digests, never permanent tokenized download URLs",
       "no client model cache",
       "no external Rendair routing",
       "saved results attach to Design Book and project render history",
@@ -136,6 +164,8 @@
     ],
     "energy": [
       "immutable Engineering revision",
+      "one user-facing Sync project action publishes source then aligned Engineering stages with independent immutable retry points",
+      "engineering manifest binds the exact source revision when invoked by unified project sync",
       "active Revit T/Z identity evidence",
       "native Revit schedule evidence",
       "current gbXML plus EPW evidence",
@@ -176,7 +206,7 @@
       "UPDATE_REVEX_ADDIN_CURRENT.ps1"
     ],
     "ui": "Version-suffixed UI modules remain preserved behind the canonical index/ui-integrity authority and are guarded by current convergence QA.",
-    "cloud": "Previous Cloud Run/Functions revisions are not deleted by FINALIZE_REVEX. The Qwen Render worker remains preserved as a non-owning enhancement; the canonical Render path is the Companion Google client."
+    "cloud": "Previous Cloud Run/Functions revisions are not deleted by FINALIZE_REVEX. The Qwen Render worker remains preserved as a non-owning enhancement; the canonical Render path is the Firebase-authenticated Companion client plus the source-bound runRevexGoogleRender server broker."
   },
   "energyPolicy": {
     "actualVtWins": true,

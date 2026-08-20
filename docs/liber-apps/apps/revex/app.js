@@ -156,6 +156,7 @@ function showView(name) {
     if (name === 'history') window.dispatchEvent(new CustomEvent('revex:history-open', { detail: { projectId: state.projectId } }));
     if (name === 'energy') window.dispatchEvent(new CustomEvent('revex:energy-open', { detail: { projectId: state.projectId } }));
   }
+  window.dispatchEvent(new CustomEvent('revex:view-changed', { detail: { view: name, projectId: state.projectId || null } }));
 }
 
 function currentWorkspaceRail() {
@@ -672,7 +673,7 @@ function openRenderDialog() {
   setRenderStatus('The source view, project and Design Book context stay attached to this render.');
   // Keep the complete context stack visible when the bottom-sheet opens on mobile.
   // Desktop still gets the prompt-first keyboard workflow.
-  if (window.matchMedia('(min-width: 861px)').matches) setTimeout(() => $('#render-prompt').focus(), 0);
+  setTimeout(() => (window.matchMedia('(min-width: 861px)').matches ? $('#render-prompt') : ($('#render-sheet-handle') || $('#render-close')))?.focus?.(), 0);
 }
 
 function closeRenderDialog() {
@@ -759,10 +760,10 @@ async function saveRenderResult(event) {
     state.activeChapter = chapter.id;
     if (state.activeRenderJob) {
       const result = images[images.length - 1];
-      await Store.updateRenderJob(state.projectId, state.activeRenderJob.id, { status: 'saved', resultUrl: result?.url || null, resultName: file.name, chapterId: chapter.id });
-      state.activeRenderJob = { ...state.activeRenderJob, status: 'saved', resultUrl: result?.url || null, resultName: file.name };
+      await Store.updateRenderJob(state.projectId, state.activeRenderJob.id, { status: 'saved', resultPath: result?.path || null, resultName: file.name, chapterId: chapter.id });
+      state.activeRenderJob = { ...state.activeRenderJob, status: 'saved', resultPath: result?.path || null, resultUrl: result?.url || null, resultName: file.name };
       state.renderJobs = state.renderJobs.map((row) => row.id === state.activeRenderJob.id ? state.activeRenderJob : row);
-      try { await Store.appendHistory(state.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'render', operation: 'save-result', label: `Render saved · ${chapter.title}`, before: null, after: { renderJobId: state.activeRenderJob.id, resultUrl: result?.url || null, resultName: file.name, chapterId: chapter.id }, relatedId: state.activeRenderJob.id }); } catch (historyError) { console.warn('[REVEX] Render result history', historyError); }
+      try { await Store.appendHistory(state.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'render', operation: 'save-result', label: `Render saved · ${chapter.title}`, before: null, after: { renderJobId: state.activeRenderJob.id, resultPath: result?.path || null, resultName: file.name, chapterId: chapter.id }, relatedId: state.activeRenderJob.id }); } catch (historyError) { console.warn('[REVEX] Render result history', historyError); }
     }
     renderDesign(); renderRenderHistory();
     setRenderStatus(`Saved to ${chapter.title} · Renderings.`, 'good');
@@ -998,13 +999,44 @@ async function activateProject(projectId,{explicitUserSelection=false,view=null}
   }catch(error){if(state.activationToken!==activationToken||state.projectId!==projectId)return;setSync('Project unavailable','bad');toast(error.message,true);}
 }
 
-async function handleSyncFiles(files) {
+function nativeSyncEnvelope(input){
+  const d=input?.dataset||{},armed=window.__liberRevexNativeSyncEnvelope||{},take=(value)=>String(value||'').trim()||null;
+  return {
+    attemptId:take(d.liberRevexNativeAttemptId||armed.attemptId),
+    projectId:take(armed.projectId),revision:take(armed.revision),
+    documentUniqueId:take(armed.documentUniqueId),
+    documentFingerprint:take(armed.documentFingerprint),
+    identityEvidenceDigest:take(armed.identityEvidenceDigest)
+  };
+}
+function packageSyncEnvelope(projectManifest,integrityManifest,native={}){
+  const central=projectManifest?.central||{},take=(value)=>String(value||'').trim()||null;
+  const exact={
+    attemptId:take(native.attemptId),
+    projectId:take(central.projectId||native.projectId),
+    revision:take(integrityManifest?.revision||projectManifest?.revision||native.revision),
+    documentUniqueId:take(central.documentUniqueId||native.documentUniqueId),
+    documentFingerprint:take(central.documentFingerprint||native.documentFingerprint),
+    identityEvidenceDigest:take(central.identityEvidenceDigest||native.identityEvidenceDigest)
+  };
+  for(const field of['projectId','revision','documentUniqueId','documentFingerprint','identityEvidenceDigest']){
+    const armed=take(native[field]),pack=take(exact[field]);
+    if(armed&&pack&&armed!==pack)throw new Error(`Native sync ${field} does not match the attached Revit package.`);
+  }
+  return exact;
+}
+
+async function handleSyncFiles(files,native={}) {
   if (!files?.length) return;
+  let exact=packageSyncEnvelope(null,null,native);
   try {
     setSync('Validating Revit package…', 'busy');
     const projectFile=[...files].find(file=>String(file.name||'').toLowerCase()==='project.json');
     if(!projectFile)throw new Error('The active Revit package is missing project.json.');
     const projectManifest=JSON.parse(await projectFile.text());
+    const integrityFile=[...files].find(file=>String(file.name||'').toLowerCase()==='integrity.json');
+    const integrityManifest=integrityFile?JSON.parse(await integrityFile.text()):null;
+    exact=packageSyncEnvelope(projectManifest,integrityManifest,native);
     const packageProjectId=String(projectManifest?.central?.projectId||'').trim();
     if(!packageProjectId)throw new Error('The active Revit package has no exact evidence-bound project ID.');
     const packageSpecId=`spec_${packageProjectId.replace(/[^a-zA-Z0-9._-]+/g,'_').slice(0,120).replace(/\./g,'_')}`;
@@ -1017,10 +1049,11 @@ async function handleSyncFiles(files) {
     if(result.cloud){state.unsubscribe?.();state.unsubscribe=Store.subscribeState(result.projectId,next=>{if(next?.revision&&next.revision!==state.cloudState?.revision)loadCloudState(next);});startLiveProjectSubscriptions(result.projectId);}
     showView('bim');
     toast(result.cloud ? 'Revit revision published to the live Companion.' : 'Local preview loaded. Sign in to publish it across devices.');
-    try { window.chrome?.webview?.postMessage({ type: 'liber:revex-sync-result', ok: true, projectId: result.projectId, revision: result.revision, cloud: result.cloud }); } catch (_) {}
+    const resultEnvelope=packageSyncEnvelope(result.project||projectManifest,result.integrity||integrityManifest,{...native,projectId:result.projectId,revision:result.revision});
+    try { window.chrome?.webview?.postMessage({ type: 'liber:revex-sync-result', ok: true, cloud: result.cloud, ...resultEnvelope }); } catch (_) {}
   } catch (error) {
     setSync('Sync failed', 'bad'); toast(error.message || 'REVEX sync failed.', true);
-    try { window.chrome?.webview?.postMessage({ type: 'liber:revex-sync-result', ok: false, error: error.message }); } catch (_) {}
+    try { window.chrome?.webview?.postMessage({ type: 'liber:revex-sync-result', ok: false, error: error.message, ...exact }); } catch (_) {}
   } finally { $('#revex-sync-upload').value = ''; }
 }
 
@@ -1106,7 +1139,12 @@ $('#project-cancel').addEventListener('click', closeProjectDialog);
 $('#project-dialog').addEventListener('click', (event) => { if (event.target === event.currentTarget) closeProjectDialog(); });
 $('#sync-button').addEventListener('click', () => $('#revex-sync-upload').click());
 $('#empty-sync-button').addEventListener('click', () => $('#revex-sync-upload').click());
-$('#revex-sync-upload').addEventListener('change', (event) => handleSyncFiles(event.target.files));
+$('#revex-sync-upload').addEventListener('change', (event) => {
+  const input=event.currentTarget,envelope=nativeSyncEnvelope(input);
+  delete input.dataset.liberRevexNativeAttemptId;
+  try{delete window.__liberRevexNativeSyncEnvelope}catch(_){window.__liberRevexNativeSyncEnvelope=null}
+  handleSyncFiles(event.target.files,envelope);
+});
 $('#element-search').addEventListener('input', renderModelTree);
 $('#show-hidden-elements')?.addEventListener('click', (event) => {
   state.showHiddenOnly = !state.showHiddenOnly;
@@ -1166,6 +1204,8 @@ document.addEventListener('keydown', (event) => {
 });
 window.addEventListener('resize', () => { if (innerWidth > 860) closeWorkspaceRail(); });
 $('#docs-search')?.addEventListener('input', renderLibrary);
+$('#docs-upload-in-button')?.addEventListener('click', () => $('#docs-upload-in')?.click());
+$('#docs-upload-out-button')?.addEventListener('click', () => $('#docs-upload-out')?.click());
 $('#docs-upload-in')?.addEventListener('change', (event) => { uploadDocsFiles(event.target.files, 'in'); event.target.value=''; });
 $('#docs-upload-out')?.addEventListener('change', (event) => { uploadDocsFiles(event.target.files, 'out'); event.target.value=''; });
 $('#docs-copy-ref')?.addEventListener('click', copyDocumentReference);

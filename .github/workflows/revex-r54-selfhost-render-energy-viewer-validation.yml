@@ -1,4 +1,4 @@
-name: REVEX r54 self-host render + Energy + viewer validation
+name: REVEX current server-broker Render + Energy + viewer validation
 
 on:
   push:
@@ -20,6 +20,8 @@ on:
       - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
       - 'DEPLOY_REVEX_CURRENT_SERVICES.cmd'
       - '.github/scripts/verify-revex-r54-selfhost-render.js'
+      - '.github/scripts/verify-revex-google-render-broker.js'
+      - '.github/scripts/verify-revex-r144-experience.js'
       - '.github/scripts/verify-revex-current-generation-r53.js'
       - '.github/workflows/revex-r54-selfhost-render-energy-viewer-validation.yml'
   pull_request:
@@ -37,6 +39,8 @@ on:
       - 'DEPLOY_REVEX_CURRENT_SERVICES_BOOTSTRAP.ps1'
       - 'DEPLOY_REVEX_CURRENT_SERVICES.cmd'
       - '.github/scripts/verify-revex-r54-selfhost-render.js'
+      - '.github/scripts/verify-revex-google-render-broker.js'
+      - '.github/scripts/verify-revex-r144-experience.js'
       - '.github/scripts/verify-revex-current-generation-r53.js'
       - '.github/workflows/revex-r54-selfhost-render-energy-viewer-validation.yml'
 
@@ -45,7 +49,7 @@ permissions:
 
 jobs:
   validate:
-    name: Self-host renderer, Energy and BIM viewer contracts
+    name: Server-broker Render, preserved shadows, Energy and BIM viewer contracts
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -61,6 +65,8 @@ jobs:
           node --check docs/liber-apps/apps/revex/render-selfhost-r54.js
           node --check docs/liber-apps/apps/revex/render-agent.js
           node --check server/revex-render-functions/index.js
+          node --check .github/scripts/verify-revex-google-render-broker.js
+          node --check .github/scripts/verify-revex-r144-experience.js
           node --check .github/scripts/verify-revex-r54-selfhost-render.js
       - name: Python worker syntax
         run: python -m py_compile server/revex-render-worker/app.py server/revex-energy-worker/app.py
@@ -74,7 +80,7 @@ jobs:
           json.loads(Path('server/revex-render-functions/firebase.json').read_text())
           print('render JSON manifests: PASS')
           PY
-      - name: Reject renderer, Energy or viewer regressions
+      - name: Reject current Render broker, preserved shadow, Energy or viewer regressions
         run: node .github/scripts/verify-revex-r54-selfhost-render.js
       - name: Preserve current-generation guard
         run: node .github/scripts/verify-revex-current-generation-r53.js

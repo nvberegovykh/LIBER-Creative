@@ -8,20 +8,21 @@ const energy=read('docs/liber-apps/apps/revex/energy-diagnostics-r68.js');
 const ui=read('docs/liber-apps/apps/revex/ui-integrity.js');
 const must=(text,needle,label)=>assert(text.includes(needle),label||`Missing ${needle}`);
 
-must(energy,"const BUILD='20260816r89-energy-replay2'",'r89 diagnostics build must be active');
+must(energy,"const BUILD='20260816r95-manual-identity1'",'current diagnostics build must be active');
 must(energy,"function replayOwnsRevision(current)",'Replay state must explicitly own the current revision while the broker is running');
 must(energy,"mode!=='current-failure'",'Historical reads must be distinguishable from a new current-run failure');
 must(energy,"PREVIOUS ATTEMPT FAILURE",'Preserved failure evidence must be labeled historical on page load');
 must(energy,"ENERGY_PREVIOUS_FAILURE_SUPPRESSED",'Historical failure must be suppressed while replay owns the revision');
 must(energy,"ENERGY_PREVIOUS_FAILURE_AVAILABLE",'Historical failure may be surfaced as information, not an error');
-must(energy,"if(currentFailure){\n        diagnostic('ERROR','ENERGY_EXACT_FAILURE'",'ERROR diagnostics must only be emitted for a current replay failure');
-must(energy,"if(stage==='BROKER_FAILED')setTimeout(()=>inspect('current-failure'),250)",'BROKER_FAILED must be the transition that authorizes current-failure rendering');
-must(energy,"else if(['BROKER_RUNNING','BROKER_PASSED','RESULT_WAIT','CLOUD_UPLOAD_PASSED','CONSENT_REQUIRED','CONSENT_RECORDED'].includes(stage))setTimeout(()=>inspect('historical'),150)",'All non-failure managed stages must keep previous evidence historical');
-must(ui,"energy-diagnostics-r68.js?v=20260816r89-energy-replay2",'Companion must cache-bust to corrected r89 diagnostics');
+must(energy,"if(currentFailure){diagnostic('ERROR','ENERGY_EXACT_FAILURE'",'ERROR diagnostics must only be emitted for a current replay failure');
+must(energy,"if(stage==='BROKER_FAILED'){updateRequiredIdentityFallback(event.detail?.message||'');setTimeout(()=>inspect('current-failure'),250);}",'BROKER_FAILED must be the transition that authorizes current-failure rendering and identity recovery');
+must(energy,"else if(['BROKER_RUNNING','BROKER_STARTING','BROKER_JOB','BROKER_PASSED','RESULT_WAIT','CLOUD_UPLOAD_PASSED','CONSENT_REQUIRED','CONSENT_RECORDED'].includes(stage))setTimeout(()=>inspect('historical'),150)",'All non-failure managed stages must keep previous evidence historical');
+must(ui,"loadScript('energy-diagnostics-r68.js?v=20260816r95-manual-identity1','energy-diagnostics-r68')",'Companion must load the current corrected diagnostics build, not a compatibility label');
 
 console.log(JSON.stringify({
   schema:'liber.revex.r89-energy-failure-semantics.v1',
   status:'PASSED',
+  currentBuild:'20260816r95-manual-identity1',
   pageLoad:{previousFailureIsError:false,preservedEvidence:true},
   replay:{previousFailureSuppressedWhileRunning:true,currentFailureRequiresBrokerFailed:true},
   revit:{rerunRequired:false}
