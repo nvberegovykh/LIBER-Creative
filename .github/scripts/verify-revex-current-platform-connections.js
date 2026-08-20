@@ -154,7 +154,9 @@ must(projectChat,
   "const CHAT_SCHEMA = 'liber.revex.project-chat.v1'",
   "getAuth().verifyIdToken",
   'projectAccessRole(project, user, uid)',
-  "db.collection('users').where('role', '==', 'admin')",
+  'const participants = projectParticipants(access.project)',
+  'const chatAdmins = projectChatAdmins(access.project, participants)',
+  'const keyRotationRequired = membershipChanged || Boolean(existing.keyRotationRequired)',
   'project.chatConnId',
   "db.collection('chatConnections').where('projectId', '==', projectId)",
   'return `revex_project_${projectId}`',
@@ -167,6 +169,7 @@ must(projectChat,
   'participants,',
   'memberIds: participants',
   'admins: chatAdmins',
+  'keyRotationRequired,',
   'batch.set(selected.ref, chatPatch, { merge: true })',
   'chatConnId: connId',
   "region: ['us-central1', 'europe-west1']",
@@ -177,7 +180,8 @@ forbid(projectChat,
   'delete(',
   'recursiveDelete',
   "collection('messages')",
-  "collection('chatMessages')"
+  "collection('chatMessages')",
+  "db.collection('users').where('role', '==', 'admin')"
 );
 
 // The one-command release must deploy that exact source-bound resolver; browser isolation alone is not enough.

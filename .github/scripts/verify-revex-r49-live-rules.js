@@ -33,6 +33,14 @@ async function verifyProjectLane(db, project, lane, identity) {
   await assertSucceeds(deleteDoc(ref));
 }
 
+async function verifyAppendOnlyLane(db, project, lane, identity) {
+  const ref = doc(db, ...projectPath(project, lane, identity));
+  await assertSucceeds(setDoc(ref, { schema: `liber.revex.${lane}.qa.v1`, hidden: false }));
+  await assertSucceeds(getDoc(ref));
+  await assertFails(updateDoc(ref, { hidden: true }));
+  await assertFails(deleteDoc(ref));
+}
+
 (async () => {
   let env;
   try {
@@ -50,6 +58,9 @@ async function verifyProjectLane(db, project, lane, identity) {
       await setDoc(doc(db, 'projects', 'alpha', 'library', 'revex_engineering'), {
         schema: 'liber.revex.engineering-sync.v1', revision: 'eng_alpha'
       });
+      await setDoc(doc(db, 'projects', 'alpha', 'revexEnergyJobs', 'server_job'), {
+        schema: 'liber.revex.energy-job.v1', status: 'RUNNING'
+      });
       await setDoc(doc(db, 'projects', 'beta'), {
         name: 'Beta', ownerId: 'other_owner', memberIds: ['other_owner'], status: 'Active'
       });
@@ -59,6 +70,17 @@ async function verifyProjectLane(db, project, lane, identity) {
       });
       await setDoc(doc(db, 'specProjects', 'spec_alpha', 'sources', 'revex-revit'), {
         revision: 'bim_alpha', payloadEncoding: 'revex-storage-index-v1'
+      });
+      await setDoc(doc(db, 'chatConnections', 'owner_member'), {
+        participants: ['owner', 'member'], admins: ['owner'], type: 'direct'
+      });
+      await setDoc(doc(db, 'chatConnections', 'project_alpha'), {
+        schema: 'liber.revex.project-chat.v1', source: 'revex-project-chat',
+        projectId: 'alpha', participants: ['owner', 'member'], memberIds: ['owner', 'member'],
+        admins: ['owner'], type: 'project', keyRotationRequired: true
+      });
+      await setDoc(doc(db, 'chatMessages', 'owner_member', 'messages', 'seed'), {
+        sender: 'owner', connId: 'owner_member', cipher: { iv: '00', data: '00' }
       });
     });
 
@@ -75,9 +97,16 @@ async function verifyProjectLane(db, project, lane, identity) {
       await verifyProjectLane(db, 'alpha', 'library', `qa_${label}`);
       await verifyProjectLane(db, 'alpha', 'revexDesignItems', `qa_${label}`);
       await verifyProjectLane(db, 'alpha', 'revexIssues', `qa_${label}`);
-      await verifyProjectLane(db, 'alpha', 'revexHistory', `qa_${label}`);
-      await verifyProjectLane(db, 'alpha', 'revexEnergyJobs', `qa_${label}`);
-      await verifyProjectLane(db, 'alpha', 'revexEnergyConsents', `qa_${label}`);
+      await verifyAppendOnlyLane(db, 'alpha', 'revexRevisions', `qa_${label}`);
+      await verifyAppendOnlyLane(db, 'alpha', 'revexHistory', `qa_${label}`);
+      const immutableLibrary = doc(db, 'projects', 'alpha', 'library', `revex_engineering_revision_qa_${label}`);
+      await assertSucceeds(setDoc(immutableLibrary, { immutable: true, revision: `qa_${label}` }));
+      await assertSucceeds(getDoc(immutableLibrary));
+      await assertFails(updateDoc(immutableLibrary, { immutable: false }));
+      await assertFails(deleteDoc(immutableLibrary));
+      await assertSucceeds(getDoc(doc(db, 'projects', 'alpha', 'revexEnergyJobs', 'server_job')));
+      await assertFails(setDoc(doc(db, 'projects', 'alpha', 'revexEnergyJobs', `forged_${label}`), { status: 'COMPLETE' }));
+      await assertFails(updateDoc(doc(db, 'projects', 'alpha', 'revexEnergyJobs', 'server_job'), { status: 'COMPLETE' }));
       await assertSucceeds(getDoc(doc(db, 'specProjects', 'spec_alpha')));
       await assertSucceeds(getDoc(doc(db, 'specProjects', 'spec_alpha', 'sources', 'revex-revit')));
       await assertSucceeds(setDoc(doc(db, 'specProjects', 'spec_alpha', 'items', `qa_${label}`), { finish: 'bronze' }));
@@ -87,9 +116,67 @@ async function verifyProjectLane(db, project, lane, identity) {
     await assertSucceeds(updateDoc(doc(member, 'projects', 'alpha'), { status: 'Review' }));
     await assertFails(updateDoc(doc(member, 'projects', 'alpha'), { memberIds: ['member', 'outsider'] }));
     await assertFails(updateDoc(doc(member, 'projects', 'alpha'), { ownerId: 'member' }));
+    await assertFails(updateDoc(doc(member, 'projects', 'alpha'), { chatConnId: 'attacker_room' }));
+    await assertFails(updateDoc(doc(admin, 'projects', 'alpha'), { chatConnId: 'attacker_room' }));
     await assertFails(updateDoc(doc(member, 'specProjects', 'spec_alpha'), { linkedProjectId: 'beta' }));
     await assertSucceeds(updateDoc(doc(owner, 'projects', 'alpha'), { memberIds: ['owner', 'member'] }));
     await assertSucceeds(updateDoc(doc(admin, 'projects', 'alpha'), { memberIds: ['owner', 'member', 'new_member'] }));
+
+    const consent = doc(member, 'projects', 'alpha', 'revexEnergyConsents', 'eng_alpha', 'approvers', 'member');
+    await assertSucceeds(setDoc(consent, {
+      schema: 'liber.revex.comcheck-consent.v1', approved: true,
+      approvedByUid: 'member', projectId: 'alpha', sourceEngineeringRevision: 'eng_alpha',
+      service: 'PNNL_COMCHECK_BACKSTOP', endpoint: 'https://legacy-comcheck.energycode.pnl.gov/CheckWeb/',
+      scope: 'GENERATED_CURRENT_PROJECT_CXL_ONLY'
+    }));
+    await assertSucceeds(updateDoc(consent, {
+      projectIdentityOverride: { city: 'Brooklyn', state: 'NY', zip: '11225' },
+      projectIdentityOverrideAuthority: 'explicit-user-input-during-revision-scoped-comcheck-authorization'
+    }));
+    await assertFails(updateDoc(consent, { approved: false }));
+    await assertFails(deleteDoc(consent));
+
+    const ownerPublicKey = doc(owner, 'userPublicKeys', 'owner');
+    await assertSucceeds(setDoc(ownerPublicKey, {
+      uid: 'owner', publicJwk: { kty: 'EC', crv: 'P-256', x: 'x', y: 'y' },
+      fingerprint: 'test-fingerprint', cryptoVersion: 'liber.secure-chat.identity-p256.v2',
+      createdAt: '2026-08-20T00:00:00.000Z'
+    }));
+    await assertSucceeds(getDoc(doc(member, 'userPublicKeys', 'owner')));
+    await assertFails(updateDoc(ownerPublicKey, { fingerprint: 'replacement' }));
+    await assertFails(deleteDoc(ownerPublicKey));
+    await assertFails(setDoc(doc(member, 'userPublicKeys', 'owner'), {
+      uid: 'owner', publicJwk: {}, fingerprint: 'forged',
+      cryptoVersion: 'liber.secure-chat.identity-p256.v2', createdAt: '2026-08-20T00:00:00.000Z'
+    }));
+
+    await assertSucceeds(getDoc(doc(owner, 'chatConnections', 'owner_member')));
+    await assertSucceeds(getDoc(doc(member, 'chatMessages', 'owner_member', 'messages', 'seed')));
+    await assertSucceeds(updateDoc(doc(owner, 'chatConnections', 'owner_member'), {
+      groupKeyVersion: 'liber.secure-chat.group-key-envelopes.v1',
+      groupKeyEpoch: 1,
+      groupKeyParticipantDigest: 'digest',
+      groupKeyIssuerUid: 'owner',
+      groupKeyEnvelopes: { owner: { wrappedKey: { iv: '00', data: '00' } } },
+      groupKeyHistory: { '1': { issuerUid: 'owner', envelopes: {} } },
+      groupKeyRotatedAt: '2026-08-20T00:00:00.000Z',
+      keyRotationRequired: false
+    }));
+    await assertFails(updateDoc(doc(member, 'chatConnections', 'owner_member'), { groupKeyEpoch: 2 }));
+    await assertFails(updateDoc(doc(member, 'chatConnections', 'owner_member'), { keyRotationRequired: true }));
+    await assertFails(getDoc(doc(admin, 'chatConnections', 'owner_member')));
+    await assertFails(getDoc(doc(admin, 'chatMessages', 'owner_member', 'messages', 'seed')));
+    await assertFails(getDoc(doc(outsider, 'chatConnections', 'owner_member')));
+    await assertSucceeds(updateDoc(doc(owner, 'chatConnections', 'project_alpha'), {
+      groupKeyVersion: 'liber.secure-chat.group-key-envelopes.v1',
+      groupKeyEpoch: 'qa-epoch', groupKeyParticipantDigest: 'digest',
+      groupKeyIssuerUid: 'owner', groupKeyEnvelopes: { owner: { wrappedKey: { iv: '00', data: '00' } } },
+      groupKeyHistory: { 'qa-epoch': { issuerUid: 'owner', envelopes: {} } },
+      groupKeyRotatedAt: '2026-08-20T00:00:00.000Z', keyRotationRequired: false
+    }));
+    await assertFails(updateDoc(doc(owner, 'chatConnections', 'project_alpha'), {
+      participants: ['owner', 'member', 'outsider'], memberIds: ['owner', 'member', 'outsider']
+    }));
 
     for (const denied of [outsider, anonymous]) {
       await assertFails(getDoc(doc(denied, 'projects', 'alpha')));
@@ -118,7 +205,13 @@ async function verifyProjectLane(db, project, lane, identity) {
       outsiderDenied: true,
       anonymousDenied: true,
       crossProjectDenied: true,
-      ordinaryMemberAclEscalationDenied: true
+      ordinaryMemberAclEscalationDenied: true,
+      immutableRevisionUpdateDeleteDenied: true,
+      appendOnlyHistoryUpdateDeleteDenied: true,
+      energyConsentScopeImmutable: true,
+      secureChatNoGlobalAdminBypass: true,
+      secureChatPublicKeyCreateOnce: true,
+      secureChatGroupKeyAdminOnly: true
     }, null, 2));
   } finally {
     if (env) await env.cleanup();

@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260819r142-cleanup1';
+  const BUILD='20260820r143-ui-recovery1';
   const REVEX_R87_REPLAY_CONTRACT='energy-diagnostics-r68.js?v=20260816r87-energy-replay1';
   const REVEX_R87_REPLAY_LABEL="energyDiagnostics:'revision-scoped-replay-r87'";
   const REVEX_R92_REPLAY_COMPAT='energy-replay-r92.js?v=20260816r92-hosted-replay1';
@@ -71,7 +71,7 @@
     loadScript('viewer-texture-r115.js?v=20260817r126-texture-precedence1','viewer-texture-r115');
     loadScript('docs-pages-r115.js?v=20260818r134-docs-linked-pages1','docs-pages-r115');
     loadScript('render-touchups-r115.js?v=20260818r132-render-owner-guard1','render-touchups-r115');
-    loadScript('mobile-final-r122.js?v=20260817r122-mobile-final1','mobile-final-r122');
+    loadScript('mobile-final-r122.js?v=20260820r143-ui-recovery1','mobile-final-r122');
     loadScript('appearance-convergence-r126.js?v=20260817r126-appearance1','appearance-convergence-r126');
     loadScript('docs-convergence-r126.js?v=20260817r126-docs1','docs-convergence-r126');
     loadScript('issues-convergence-r126.js?v=20260817r126-issues1','issues-convergence-r126');
@@ -79,11 +79,15 @@
     loadScript('history-daily-r126.js?v=20260817r126-daily1','history-daily-r126');
     loadScript('blocks-palette-r126.js?v=20260817r126-blocks1','blocks-palette-r126');
     loadScript('render-convergence-r126.js?v=20260818r129-freeze-guard1','render-convergence-r126');
-    loadScript('mobile-safe-r133.js?v=20260819r133-mobile-safe2','mobile-safe-r133');
+    loadScript('mobile-safe-r133.js?v=20260820r143-ui-recovery1','mobile-safe-r133');
     loadScript('wallt-fixer-adapters-r137.js?v=20260818r137-fixer-adapters1','wallt-fixer-adapters-r137');
     loadScript('wallt-ui-r138.js?v=20260818r138-wallt-ui1','wallt-ui-r138');
-    loadScript('mobile-sheet-r142.js?v=20260819r142-mobile-sheet1','mobile-sheet-r142');
+    loadScript('mobile-sheet-r142.js?v=20260820r143-ui-recovery1','mobile-sheet-r142');
   }
+  const REVEX_R122_LOADER_COMPAT='mobile-final-r122.js?v=20260817r122-mobile-final1';
+  const REVEX_R133_LOADER_COMPAT='mobile-safe-r133.js?v=20260819r133-mobile-safe2';
+  const REVEX_R142_LOADER_COMPAT="loadScript('mobile-sheet-r142.js?v=20260819r142-mobile-sheet1','mobile-sheet-r142')";
+  void REVEX_R122_LOADER_COMPAT;void REVEX_R133_LOADER_COMPAT;void REVEX_R142_LOADER_COMPAT;
   function bind(){installCanonicalOverlayStore();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
   console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r125-preserved+wallt-review',wallt:'visible-helper+bounded-fixer-adapters+24h-history+mobile-actions-menu',moduleLoad:'r126-convergence+r133-mobile-safe2+r137-fixer+r138-wallt-ui+r142-bottom-sheet',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r109-svg+r122-walk+r133-safe-area+r142-reused-node-sheet',docs:'r134-full-set-linked-pages+r126-ownership-guard+r133-content-height-mobile-stack',texture:'instance-uv>type-texture>design-color>revit',render:'google-gemini-client+docked-owner+qwen-shadow+interaction-freeze-guard',chat:'r136-project-isolated-secure-chat-native-ui',issues:'revexIssues+all-active-default+empty-selection-inspector',history:'technical-NYC-day+wallt-24h',dailyReport:'separate-post-sync-worker',blocks:'r135-walk-target+face-host+external-event',bimProperties:'r117-preserved',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});

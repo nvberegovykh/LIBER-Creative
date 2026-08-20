@@ -46,9 +46,14 @@ energy_deploy = read("server/revex-energy-worker/deploy-current.ps1")
 render_deploy = read("server/revex-render-worker/deploy-current.ps1")
 report_deploy = read("server/revex-report-functions/deploy-current.ps1")
 access_deploy = read("firebase/deploy-current-access.ps1")
+storage_access_deploy = read("firebase/deploy-current-storage-access.ps1")
 contracts = read("src/Liber.Revex.Revit/Engineering/Energy/revex_energy_contracts.py")
 touchups = read("src/Liber.Revex.Revit/Engineering/Energy/revex_final_touchups.py")
 pipeline = read("server/revex-energy-worker/revex_energy_pipeline_current.py")
+energy_docker = read("server/revex-energy-worker/Dockerfile")
+energy_entry = read("server/revex-energy-worker/app_entry.py")
+energy_app = read("server/revex-energy-worker/app.py")
+identity_boundary = read("server/revex-energy-worker/verify_r95_consumer_boundary.py")
 gbxml = read("src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.py")
 dyn = json.loads(read("src/Liber.Revex.Revit/Engineering/Gbxml/LIBER_gbXML_Preflight_and_Export.dyn"))
 ui = read("docs/liber-apps/apps/revex/ui-integrity.js")
@@ -85,12 +90,14 @@ assert release["current"]["chatBoundaryRuntime"] == "docs/liber-apps/apps/revex/
 assert release["current"]["energyDeployer"] == "server/revex-energy-worker/deploy-current.ps1"
 assert release["current"]["reportDeployer"] == "server/revex-report-functions/deploy-current.ps1"
 assert release["current"]["accessDeployer"] == "firebase/deploy-current-access.ps1"
+assert release["current"]["storageAccessDeployer"] == "firebase/deploy-current-storage-access.ps1"
 for principle in (
     "oneSourceCommitPerRelease", "versionedImplementationsAreShadows",
     "shadowFilesAreNeverDeletedByFinalization", "shadowControllersAreNeverInvokedByFinalization",
     "installedPreviousAddinBecomesTimestampedShadow", "immutableProjectRevisionsAreNeverRewritten",
     "currentRuntimeUsesCanonicalFacades", "packageFilenamesAreBoundaryAdaptersNotInternalArchitecture",
     "candidateWorkersProveReadyBeforeBrokerCutover", "liveFirestoreRulesArePreservedBeforeRevexAccessPatch",
+    "liveStorageRulesArePreservedBeforeRevexAccessPatch",
 ):
     assert release["principles"].get(principle) is True, principle
 
@@ -109,10 +116,17 @@ must(finalizer,
      "server\\revex-energy-worker\\deploy-current.ps1",
      "server\\revex-report-functions\\deploy-current.ps1",
      "firebase\\deploy-current-access.ps1",
+     "firebase\\deploy-current-storage-access.ps1",
      "REVEX one-command full current release finalizer",
      "Scope: Companion + WALLT Helper/Fixer + BIM + Design Book + Spec Book + Docs + Chat + Issues + History + Blocks + Render + Revit add-in + Energy + Report + access.",
      "Docs Full Set + linked-page behavioral contract",
      "Project-isolated Secure Chat contract",
+     "Project Chat membership isolation contract",
+     "REVEX and Secure Chat Storage access contract",
+     "Secure Chat direct/group encryption contract",
+     "Browser credential and authenticated proxy boundary contract",
+     "Responsive and accessible UI recovery contract",
+     "Non-destructive Revit Space recovery contract",
      "Executable WALLT Helper/Fixer adapter contract",
      "Visible WALLT Helper/Fixer UI contract",
      "docs-pages-r115.js",
@@ -124,6 +138,7 @@ must(finalizer,
      "Stage and verify current Energy candidate without broker cutover",
      "Verify current Companion UI and Render runtime are live before access/Energy cutover",
      "Deploy preserved source-bound project access rules",
+     "Deploy preserved source-bound Storage access rules",
      "Deploy source-bound Report, Daily Report and Project Chat resolver",
      "ensureProjectChatHttp",
      "Cut Energy broker to the already-verified current candidate",
@@ -136,16 +151,35 @@ forbid(finalizer,
        "RECOVER_REVEX_ENERGY_CURRENT", "FINALIZE_REVEX_CURRENT", "PUBLISH_REVEX_R49")
 assert finalizer.index("Stage and verify current Energy candidate") < finalizer.index("Verify current Companion UI and Render runtime")
 assert finalizer.index("Deploy preserved source-bound project access rules") < finalizer.index("Cut Energy broker to the already-verified current candidate")
+assert finalizer.index("Deploy preserved source-bound Storage access rules") < finalizer.index("Cut Energy broker to the already-verified current candidate")
 assert finalizer.index("Cut Energy broker to the already-verified current candidate") < finalizer.index("Install the exact same source revision into Revit")
 
 for deployer in (energy_deploy, report_deploy, access_deploy):
     must(deployer, "$Verifier = Join-Path $Root", "verify-revex-current-release.py", "Validate full current REVEX revision")
     forbid(deployer, "PUBLISH_REVEX_R49")
+must(storage_access_deploy,
+     "patch-live-storage-rules.js", "REVEX_SOURCE_CANDIDATE=$SourceCandidate",
+     "Expected exactly one live Storage release", "Previous Storage ruleset restored",
+     "firebaserules.googleapis.com/v1/projects/$ProjectId/rulesets")
+forbid(storage_access_deploy, "firebase deploy --only storage", "PUBLISH_REVEX_R49")
 must(energy_deploy,
      "CandidateOnly", "BrokerOnly", "REVEX_SOURCE_CANDIDATE",
+     "REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_current.py",
+     "REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py",
      "Energy candidate is not Ready; broker remains unchanged.",
      "Build exact current Energy worker image",
      "Cut authenticated Energy broker over to verified candidate")
+must(energy_docker,
+     "REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_current.py",
+     "REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py",
+     "assert app.PIPELINE==Path('/opt/revex/server/revex_energy_pipeline_current.py')")
+must(energy_entry,
+     'os.environ.setdefault("REVEX_PIPELINE", "/opt/revex/server/revex_energy_pipeline_current.py")',
+     'os.environ.setdefault("REVEX_PIPELINE_IMPL", "/opt/revex/energy/revex_energy_pipeline.py")')
+must(energy_app,
+     'PIPELINE = Path(os.environ.get("REVEX_PIPELINE", "/opt/revex/server/revex_energy_pipeline_current.py"))')
+must(identity_boundary,
+     "REVEX_R95_CONSUMER_BOUNDARY", "REVEX_PIPELINE_IMPL", "identity['missing']==[]")
 must(report_deploy,
      "REVEX_SOURCE_CANDIDATE", "documentRevexRevision", "finalizeRevexDailyReport", "nodejs22",
      "$ChatSource = Join-Path $Root 'server\\firebase-functions'",
@@ -157,7 +191,8 @@ must(report_deploy,
 must(access_deploy,
      "firebaserules.googleapis.com", "patch-live-firestore-rules.js", "revex-project-access-r43.rules",
      "REVEX_SOURCE_CANDIDATE=", "firestore:rules", "preserve the live ruleset",
-     "allow read, write: if revexR43ProjectMember(projectId);")
+     "function revexR43ImmutableProjectLane(projectCollection)",
+     "immutableRevisionUpdateDeleteDenied")
 # The self-hosted Qwen implementation remains preserved and independently valid, but is not a release owner.
 must(render_deploy,
      "CandidateOnly", "BrokerOnly", "REVEX_SOURCE_CANDIDATE", "REVEX_WARM_TOKEN",

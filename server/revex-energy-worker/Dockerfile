@@ -33,7 +33,9 @@ RUN curl -fL --retry 4 "https://github.com/NatLabRockies/OpenStudio/releases/dow
 WORKDIR /opt/revex
 # Canonical Energy modules live beside the managed server facade. Keep both roots
 # importable during image QA and at runtime so the exact packaged environment is exercised.
-ENV PYTHONPATH=/opt/revex/energy:/opt/revex/server
+ENV PYTHONPATH=/opt/revex/energy:/opt/revex/server \
+    REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_current.py \
+    REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py
 # The Energy folder carries canonical current modules plus preserved version-shadow files.
 COPY src/Liber.Revex.Revit/Engineering/Energy /opt/revex/energy
 ENV REVEX_APPROVED_ENVELOPE_REFERENCE=/opt/revex/energy/References/79_WINTHROP_APPROVED_PROPOSED.osm
@@ -62,6 +64,7 @@ COPY server/revex-energy-worker/verify_failure_evidence_r55.py /opt/revex/server
 COPY server/revex-energy-worker/verify_identity_normalizer.py /opt/revex/server/verify_identity_normalizer.py
 COPY server/revex-energy-worker/verify_identity_content_agent.py /opt/revex/server/verify_identity_content_agent.py
 COPY server/revex-energy-worker/verify_user_identity_en1_r89.py /opt/revex/server/verify_user_identity_en1_r89.py
+COPY server/revex-energy-worker/verify_r95_consumer_boundary.py /opt/revex/server/verify_r95_consumer_boundary.py
 COPY server/revex-energy-worker/verify_vertex_project_binding_r98.py /opt/revex/server/verify_vertex_project_binding_r98.py
 COPY server/revex-energy-worker/verify_comcheck_evidence_r100.py /opt/revex/server/verify_comcheck_evidence_r100.py
 COPY server/revex-energy-worker/verify_structured_schedule_evidence_r101.py /opt/revex/server/verify_structured_schedule_evidence_r101.py
@@ -125,6 +128,7 @@ RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
       /opt/revex/server/verify_identity_normalizer.py \
       /opt/revex/server/verify_identity_content_agent.py \
       /opt/revex/server/verify_user_identity_en1_r89.py \
+      /opt/revex/server/verify_r95_consumer_boundary.py \
       /opt/revex/server/verify_vertex_project_binding_r98.py \
       /opt/revex/server/verify_comcheck_evidence_r100.py \
       /opt/revex/server/verify_structured_schedule_evidence_r101.py \
@@ -158,7 +162,7 @@ RUN python3 -m pip install --no-cache-dir \
 # Import the production entry point with the same project/location binding used by deployment.
 RUN cd /opt/revex/server \
  && REVEX_VERTEX_PROJECT=liber-apps-cca20 REVEX_VERTEX_LOCATION=global \
-    python3 -c "import os, app_entry; assert app_entry.APP is not None; assert os.environ['REVEX_VERTEX_PROJECT']=='liber-apps-cca20'; assert os.environ['REVEX_VERTEX_LOCATION']=='global'"
+    python3 -c "from pathlib import Path; import os, app, app_entry; assert app_entry.APP is not None; assert app.PIPELINE==Path('/opt/revex/server/revex_energy_pipeline_current.py'); assert os.environ['REVEX_PIPELINE_IMPL']=='/opt/revex/energy/revex_energy_pipeline.py'; assert os.environ['REVEX_VERTEX_PROJECT']=='liber-apps-cca20'; assert os.environ['REVEX_VERTEX_LOCATION']=='global'"
 
 # Prove the browser dependency COMcheck uses is runnable in the exact image.
 RUN python3 -c "from selenium import webdriver; o=webdriver.ChromeOptions(); o.binary_location='/usr/bin/google-chrome'; o.add_argument('--headless=new'); o.add_argument('--no-sandbox'); o.add_argument('--disable-dev-shm-usage'); d=webdriver.Chrome(options=o); d.get('data:text/plain,REVEX-COMCHECK-DRIVER-READY'); d.quit()"
@@ -170,6 +174,7 @@ RUN python3 /opt/revex/energy/verify_revex_r49_energy.py \
  && python3 /opt/revex/server/verify_identity_normalizer.py \
  && python3 /opt/revex/server/verify_identity_content_agent.py \
  && python3 /opt/revex/server/verify_user_identity_en1_r89.py \
+ && python3 /opt/revex/server/verify_r95_consumer_boundary.py \
  && python3 /opt/revex/server/verify_vertex_project_binding_r98.py \
  && python3 /opt/revex/server/verify_comcheck_evidence_r100.py \
  && python3 /opt/revex/server/verify_structured_schedule_evidence_r101.py \

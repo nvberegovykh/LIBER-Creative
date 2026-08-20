@@ -7,7 +7,7 @@ from google.cloud import storage
 from werkzeug.exceptions import HTTPException
 
 APP = Flask(__name__)
-PIPELINE = Path(os.environ.get("REVEX_PIPELINE", "/opt/revex/energy/revex_energy_pipeline.py"))
+PIPELINE = Path(os.environ.get("REVEX_PIPELINE", "/opt/revex/server/revex_energy_pipeline_current.py"))
 TOKEN = os.environ.get("REVEX_ENERGY_RUNNER_TOKEN", "").strip()  # optional defense-in-depth; Cloud Run IAM is primary
 SOURCE_CANDIDATE = os.environ.get("REVEX_SOURCE_CANDIDATE", "").strip()
 MIN_INTEGRITY = 0.80

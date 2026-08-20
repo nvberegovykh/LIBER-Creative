@@ -455,7 +455,17 @@ class SpaceCreationFailureGuard(IFailuresPreprocessor):
                     or ("multiple spaces" in text and "same enclosed region" in text)
                     or "redundant space" in text
                 )
-                if protected_id or overlap_warning:
+                zero_height_warning = (
+                    "space" in text
+                    and "height" in text
+                    and (
+                        "greater than 0" in text
+                        or "greater than zero" in text
+                        or "negative" in text
+                        or "zero" in text
+                    )
+                )
+                if protected_id or overlap_warning or zero_height_warning:
                     rollback = True
                     self.failures.append(
                         {
@@ -467,6 +477,7 @@ class SpaceCreationFailureGuard(IFailuresPreprocessor):
                                 )
                             ],
                             "overlap_warning": bool(overlap_warning),
+                            "zero_height_warning": bool(zero_height_warning),
                         }
                     )
             except Exception:
@@ -474,6 +485,21 @@ class SpaceCreationFailureGuard(IFailuresPreprocessor):
         if rollback:
             return FailureProcessingResult.ProceedWithRollBack
         return FailureProcessingResult.Continue
+
+
+def attach_space_failure_guard(transaction):
+    """Make an automated REVEX transaction fail closed without a Revit modal.
+
+    The preprocessor never resolves a failure by changing or deleting a Space. A
+    protected spatial failure rolls back the complete isolated transaction and
+    leaves the source document untouched.
+    """
+    guard = SpaceCreationFailureGuard()
+    options = transaction.GetFailureHandlingOptions()
+    options.SetFailuresPreprocessor(guard)
+    options.SetClearAfterRollback(True)
+    transaction.SetFailureHandlingOptions(options)
+    return guard
 
 
 def edit_distance(a, b):
@@ -2095,6 +2121,269 @@ def _apply_space_vertical_target_nonzero(space, target_base_offset, target_upper
     except Exception: pass
     bounds=_space_vertical_bounds(space)
     return bool(bounds is not None and float(bounds[1])>float(bounds[0])+0.25 and abs(float(bounds[0])-target_bottom)<=0.10 and abs(float(bounds[1])-target_top)<=0.20)
+
+
+def _space_room_link_identity(space):
+    try:
+        room = space.Room
+        if room is not None:
+            return (
+                eid_value(room.Id),
+                str(safe_attr(room, "UniqueId", "") or ""),
+            )
+    except Exception:
+        pass
+    return (-1, "")
+
+
+def _native_space_integrity_snapshot(model_doc, space, calculator):
+    """Capture identity, linkage, placement, and native solid evidence.
+
+    A snapshot is returned only when Revit proves that the object is the same
+    document-owned Space and has positive placed geometry. This is deliberately
+    stricter than ordinary audit acceptance because it authorizes a model write.
+    """
+    try:
+        element_id = eid_value(space.Id)
+        unique_id = str(safe_attr(space, "UniqueId", "") or "").strip()
+        level_id = eid_value(safe_attr(space, "LevelId", None))
+        if element_id <= 0 or not unique_id or level_id < 0:
+            return None
+        resolved = model_doc.GetElement(unique_id)
+        if resolved is None or eid_value(resolved.Id) != element_id:
+            return None
+
+        location = safe_attr(safe_attr(space, "Location", None), "Point", None)
+        if location is None:
+            return None
+        point = (float(location.X), float(location.Y), float(location.Z))
+        area = float(safe_attr(space, "Area", 0.0) or 0.0)
+        volume = float(safe_attr(space, "Volume", 0.0) or 0.0)
+        if area <= AREA_EPSILON_FT2 or volume <= 1.0e-9:
+            return None
+
+        if not SpatialElementGeometryCalculator.CanCalculateGeometry(space):
+            return None
+        result = calculator.CalculateSpatialElementGeometry(space)
+        solid = result.GetGeometry()
+        solid_volume = float(safe_attr(solid, "Volume", 0.0) or 0.0)
+        face_count = int(safe_attr(safe_attr(solid, "Faces", None), "Size", 0) or 0)
+        if solid is None or solid_volume <= 1.0e-9 or face_count < 4:
+            return None
+
+        actual_bounds = _source_space_actual_z_bounds(space)
+        if actual_bounds is None or float(actual_bounds[1]) <= float(actual_bounds[0]) + 0.25:
+            return None
+        room_id, room_unique_id = _space_room_link_identity(space)
+        return {
+            "element_id": element_id,
+            "unique_id": unique_id,
+            "level_id": level_id,
+            "created_phase_id": eid_value(safe_attr(space, "CreatedPhaseId", None)),
+            "demolished_phase_id": eid_value(safe_attr(space, "DemolishedPhaseId", None)),
+            "room_id": room_id,
+            "room_unique_id": room_unique_id,
+            "point": point,
+            "area": area,
+            "volume": volume,
+            "solid_volume": solid_volume,
+            "solid_face_count": face_count,
+            "actual_z_bounds": (float(actual_bounds[0]), float(actual_bounds[1])),
+        }
+    except Exception:
+        return None
+
+
+def _space_integrity_snapshot_matches(before, after):
+    if before is None or after is None:
+        return False, "native_geometry_or_identity_unavailable"
+    for field in (
+        "element_id",
+        "unique_id",
+        "level_id",
+        "created_phase_id",
+        "demolished_phase_id",
+        "room_id",
+        "room_unique_id",
+        "solid_face_count",
+    ):
+        if before.get(field) != after.get(field):
+            return False, "{}_changed".format(field)
+    before_point = before.get("point") or ()
+    after_point = after.get("point") or ()
+    if len(before_point) != 3 or len(after_point) != 3:
+        return False, "location_unavailable"
+    if math.sqrt(sum((float(a) - float(b)) ** 2 for a, b in zip(before_point, after_point))) > 0.01:
+        return False, "location_changed"
+    for field, absolute_tolerance, relative_tolerance in (
+        ("area", 0.01, 0.001),
+        ("volume", 0.01, 0.005),
+        ("solid_volume", 0.01, 0.005),
+    ):
+        old_value = float(before.get(field) or 0.0)
+        new_value = float(after.get(field) or 0.0)
+        tolerance = max(absolute_tolerance, abs(old_value) * relative_tolerance)
+        if abs(old_value - new_value) > tolerance:
+            return False, "{}_changed".format(field)
+    for old_value, new_value in zip(
+        before.get("actual_z_bounds") or (), after.get("actual_z_bounds") or ()
+    ):
+        if abs(float(old_value) - float(new_value)) > 0.10:
+            return False, "actual_z_bounds_changed"
+    return True, "preserved"
+
+
+def repair_reused_checkpoint_vertical_metadata(model_doc, spaces, changes, messages):
+    """Repair only provably stale vertical metadata on a reused Space checkpoint.
+
+    Every candidate is isolated in its own rollback-guarded transaction. Positive
+    native solid geometry is treated as the authority; ElementId/UniqueId, level,
+    Room linkage, phase, location, area, volume, face count, and z-bounds must be
+    unchanged before commit. Anything unprovable remains untouched and requires
+    the source-geometry serializer instead of EADM creation.
+    """
+    ordered = sorted(
+        [item for item in list(spaces or []) if item is not None],
+        key=lambda item: eid_value(item.Id),
+    )
+    source_ids = [eid_value(item.Id) for item in ordered]
+    source_unique_ids = {
+        eid_value(item.Id): str(safe_attr(item, "UniqueId", "") or "")
+        for item in ordered
+    }
+    candidates = []
+    repaired = []
+    unsafe = []
+    calculator = None
+    try:
+        calculator = SpatialElementGeometryCalculator(model_doc)
+        for space in ordered:
+            parameter_height, _, _ = space_height(space)
+            if parameter_height is not None and float(parameter_height) > 0.25:
+                continue
+            space_id = eid_value(space.Id)
+            candidates.append(space_id)
+            before = _native_space_integrity_snapshot(model_doc, space, calculator)
+            if before is None:
+                unsafe.append({
+                    "element_id": space_id,
+                    "reason": "positive_native_geometry_and_source_identity_not_proven",
+                })
+                continue
+
+            base_level = _space_base_level(space)
+            if base_level is None:
+                unsafe.append({"element_id": space_id, "reason": "base_level_unavailable"})
+                continue
+            actual_bottom, actual_top = before["actual_z_bounds"]
+            target_upper = _space_upper_level(space) or base_level
+            target_base_offset = float(actual_bottom) - float(level_elevation(base_level))
+            tx = Transaction(
+                model_doc,
+                "LIBER gbXML: repair existing Space vertical metadata {}".format(space_id),
+            )
+            guard = None
+            try:
+                tx.Start()
+                guard = attach_space_failure_guard(tx)
+                if not _apply_space_vertical_target_nonzero(
+                    space,
+                    target_base_offset,
+                    target_upper,
+                    actual_top,
+                ):
+                    raise Exception("positive vertical transition was not accepted")
+                model_doc.Regenerate()
+                after = _native_space_integrity_snapshot(model_doc, space, calculator)
+                preserved, reason = _space_integrity_snapshot_matches(before, after)
+                if not preserved:
+                    raise Exception("authoritative Space evidence mismatch: {}".format(reason))
+                repaired_height, _, _ = space_height(space)
+                if repaired_height is None or float(repaired_height) <= 0.25:
+                    raise Exception("vertical parameter remained nonpositive")
+                status = tx.Commit()
+                if status != TransactionStatus.Committed:
+                    raise Exception("isolated repair transaction did not commit: {}".format(status))
+                repaired.append({
+                    "element_id": space_id,
+                    "unique_id": before["unique_id"],
+                    "room_id": before["room_id"],
+                    "parameter_height_before_ft": parameter_height,
+                    "parameter_height_after_ft": float(repaired_height),
+                    "actual_z_bounds_ft": list(before["actual_z_bounds"]),
+                })
+                changes.append({
+                    "action": "repair_reused_space_vertical_metadata",
+                    "element_id": space_id,
+                    "unique_id": before["unique_id"],
+                    "room_id": before["room_id"],
+                    "authoritative_geometry_preserved": True,
+                })
+            except Exception as ex:
+                try:
+                    if tx.GetStatus() == TransactionStatus.Started:
+                        tx.RollBack()
+                except Exception:
+                    pass
+                unsafe.append({
+                    "element_id": space_id,
+                    "reason": str(ex),
+                    "revit_failures": list(safe_attr(guard, "failures", []) or [])[:10],
+                })
+    finally:
+        try:
+            if calculator is not None:
+                calculator.Dispose()
+        except Exception:
+            pass
+
+    preserved_ids = []
+    for space_id in source_ids:
+        try:
+            resolved = model_doc.GetElement(ElementId(int(space_id)))
+            if (
+                resolved is not None
+                and isinstance(resolved, Space)
+                and str(safe_attr(resolved, "UniqueId", "") or "") == source_unique_ids.get(space_id)
+            ):
+                preserved_ids.append(space_id)
+        except Exception:
+            pass
+    ids_preserved = preserved_ids == source_ids
+    if not ids_preserved:
+        unsafe.append({
+            "reason": "checkpoint_space_identity_set_changed",
+            "expected_count": len(source_ids),
+            "preserved_count": len(preserved_ids),
+        })
+    result = {
+        "candidate_count": len(candidates),
+        "candidate_ids": candidates,
+        "repaired_count": len(repaired),
+        "repaired": repaired,
+        "unsafe_count": len(unsafe),
+        "unsafe": unsafe,
+        "existing_space_ids_preserved": bool(ids_preserved),
+        "preserved_space_id_count": len(preserved_ids),
+        "authoritative_spaces_deleted": 0,
+        "source_geometry_fallback_required": bool(unsafe),
+        "modal_suppressed_by_rollback_guard": True,
+    }
+    messages.append({
+        "severity": "WARNING" if unsafe else "INFO",
+        "code": "REUSED_SPACE_VERTICAL_METADATA_RECOVERY",
+        "candidate_count": len(candidates),
+        "repaired_count": len(repaired),
+        "unsafe_count": len(unsafe),
+        "existing_space_ids_preserved": bool(ids_preserved),
+        "preserved_space_id_count": len(preserved_ids),
+        "authoritative_spaces_deleted": 0,
+        "message": (
+            "Reused Space vertical metadata was repaired only where native geometry and identity stayed exact. "
+            "Unsafe entries remain untouched and use source-geometry fallback."
+        ),
+    })
+    return result
 
 
 def set_created_space_vertical_extent(space, upper_level, changes, covering_spaces=None):
@@ -3974,8 +4263,10 @@ def build_energy_model_with_fallbacks(model_doc, phase, changes, messages, expec
     for tier_name in ("Final","SecondLevelBoundaries","FirstLevelBoundaries"):
         tx=Transaction(model_doc,"LIBER gbXML: build energy model {}".format(tier_name))
         attempt={"tier":tier_name,"status":"started"}
+        guard=None
         try:
             tx.Start()
+            guard=attach_space_failure_guard(tx)
             configure_area_volume(model_doc,changes)
             energy_settings=configure_energy_settings(model_doc,phase,changes)
             delete_main_energy_model(model_doc,changes)
@@ -4019,9 +4310,26 @@ def build_energy_model_with_fallbacks(model_doc, phase, changes, messages, expec
             try:
                 if tx.GetStatus()==TransactionStatus.Started: tx.RollBack()
             except Exception: pass
-            attempt.update({"status":"failed","error_type":type(ex).__name__,"error":str(ex)})
+            attempt.update({
+                "status":"failed",
+                "error_type":type(ex).__name__,
+                "error":str(ex),
+                "revit_failures":list(safe_attr(guard,"failures",[]) or [])[:25],
+                "authoritative_spaces_deleted":0,
+                "transaction_rolled_back":True,
+                "modal_suppressed":True,
+            })
             attempts.append(attempt)
-            messages.append({"severity":"WARNING","code":"ENERGY_MODEL_TIER_FAILED","tier":tier_name,"message":"{}: {}".format(type(ex).__name__,ex)})
+            messages.append({
+                "severity":"WARNING",
+                "code":"ENERGY_MODEL_TIER_FAILED",
+                "tier":tier_name,
+                "revit_failures":attempt["revit_failures"],
+                "authoritative_spaces_deleted":0,
+                "transaction_rolled_back":True,
+                "modal_suppressed":True,
+                "message":"{}: {}".format(type(ex).__name__,ex),
+            })
     return None,None,attempts
 
 
@@ -10597,6 +10905,7 @@ def run_tool():
     exportable_spaces = []
     physical_manifest = {"surfaces": [], "openings": [], "counts": {}}
     analytical_manifest = {"spaces": [], "surfaces": [], "openings": [], "counts": {}}
+    force_source_geometry_fallback = False
     # Once this flips True, Room/Space topology has independently passed the global
     # preservation gate. Late EADM/export/software failures must not erase that valid
     # spatial reconstruction. The failure handler removes any partial EADM, then
@@ -10989,6 +11298,37 @@ def run_tool():
             doc, phase, targets, messages
         )
 
+        # The C# entry point disables topology mutation when an existing placed
+        # checkpoint is complete. Repair stale vertical parameters only after that
+        # source topology is in hand, and only through per-Space proof transactions.
+        reused_checkpoint_for_vertical_recovery = bool(
+            not AUDIT_ONLY
+            and len(phase_spaces_for_topology) > 0
+            and len(created_ids) == 0
+            and (
+                not APPLY_SAFE_FIXES
+                or REUSE_VERIFIED_SPATIAL_CHECKPOINT_ACTIVE
+            )
+        )
+        if reused_checkpoint_for_vertical_recovery:
+            vertical_recovery = repair_reused_checkpoint_vertical_metadata(
+                doc, phase_spaces_for_topology, changes, messages
+            )
+            report["reused_space_vertical_metadata"] = vertical_recovery
+            force_source_geometry_fallback = bool(
+                vertical_recovery.get("source_geometry_fallback_required", False)
+            )
+            reuse_report = report.setdefault("existing_revex_space_reuse", {})
+            reuse_report["reused"] = True
+            reuse_report["candidate_count"] = len(phase_spaces_for_topology)
+            reuse_report["existing_space_ids_preserved"] = bool(
+                vertical_recovery.get("existing_space_ids_preserved", False)
+            )
+            reuse_report["preserved_space_id_count"] = int(
+                vertical_recovery.get("preserved_space_id_count", 0) or 0
+            )
+            reuse_report["authoritative_spaces_deleted"] = 0
+
         report["spaces_created"] = len(created_ids)
         report["spaces_created_attempted"] = report.get(
             "space_creation", {}
@@ -11089,7 +11429,24 @@ def run_tool():
         energy_settings = None
         energy_model_attempts = []
         temporary_energy_model = None
+        if force_source_geometry_fallback:
+            energy_model_attempts.append({
+                "tier":"EADM_SKIPPED",
+                "status":"source_geometry_fallback",
+                "reason":"unsafe_reused_space_vertical_metadata",
+                "authoritative_spaces_deleted":0,
+                "modal_suppressed":True,
+            })
+            messages.append({
+                "severity":"WARNING",
+                "code":"EADM_SKIPPED_FOR_UNSAFE_REUSED_SPACE_METADATA",
+                "authoritative_spaces_deleted":0,
+                "modal_suppressed":True,
+                "message":"At least one reused Space could not be repaired with exact identity/geometry preservation. It remains untouched; REVEX is using the source-native geometry serializer without asking Revit to build an EADM.",
+            })
         reuse_eadm = bool(
+            not force_source_geometry_fallback
+            and
             (report.get("existing_revex_space_reuse") or {}).get("reused")
             and not bool(report.get("spatial_checkpoint_geometry_mutated", False))
         )
@@ -11132,7 +11489,7 @@ def run_tool():
                 })
                 temporary_energy_model = None
 
-        if temporary_energy_model is None:
+        if temporary_energy_model is None and not force_source_geometry_fallback:
             temporary_energy_model, energy_settings, energy_model_attempts = build_energy_model_with_fallbacks(
                 doc, phase, changes, messages, expected_spaces=len(exportable_spaces)
             )
@@ -11192,8 +11549,10 @@ def run_tool():
                 # Rebuild once at Final tier because Revit's gbXML exporter consumes the
                 # stored main energy model. This is a quality fallback, not a shortcut.
                 retry_tx=Transaction(doc,"LIBER gbXML: rebuild Final energy model for export")
+                retry_guard=None
                 try:
                     retry_tx.Start()
+                    retry_guard=attach_space_failure_guard(retry_tx)
                     delete_main_energy_model(doc, changes)
                     doc.Regenerate()
                     temporary_energy_model=create_energy_model_for_tier(doc,"Final",changes)
@@ -11224,6 +11583,10 @@ def run_tool():
                     export_errors.append(str(ex2))
                     messages.append({
                         "severity":"WARNING", "code":"NATIVE_GBXML_EXPORT_FAILED_AFTER_REBUILD",
+                        "revit_failures":list(safe_attr(retry_guard,"failures",[]) or [])[:25],
+                        "authoritative_spaces_deleted":0,
+                        "transaction_rolled_back":True,
+                        "modal_suppressed":True,
                         "message":str(ex2),
                     })
                     report["native_export_errors"] = export_errors

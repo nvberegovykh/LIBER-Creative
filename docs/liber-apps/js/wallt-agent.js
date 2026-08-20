@@ -73,18 +73,17 @@
         if (legacy) {
           this.model = String(legacy.responsesModel || this.model);
           this.proxyUrl = String(legacy.proxyUrl || '');
-          this.proxyAuth = String(legacy.proxyAuth || '');
-          this.apiKey = String(legacy.apiKey || '');
+          this.proxyAuth = '';
+          this.apiKey = '';
         }
         if ((!this.proxyUrl && !this.apiKey) && root.secureKeyManager?.getKeys) {
           try {
             const keys = await root.secureKeyManager.getKeys();
             const region = keys?.firebase?.functionsRegion || DEFAULT_REGION;
             const projectId = keys?.firebase?.projectId || DEFAULT_PROJECT;
-            this.proxyUrl = String(keys?.aiProxyUrl || `https://${region}-${projectId}.cloudfunctions.net/openaiProxy`);
-            this.proxyAuth = String(keys?.aiProxyAuth || '');
-            this.apiKey = String(keys?.openai?.apiKey || '');
-            this.model = String(keys?.openai?.responsesModel || this.model);
+            this.proxyUrl = `https://${region}-${projectId}.cloudfunctions.net/openaiProxy`;
+            this.proxyAuth = '';
+            this.apiKey = '';
           } catch (_) {}
         }
         if (!this.proxyUrl && !this.apiKey) {
@@ -106,8 +105,10 @@
       const url = path.startsWith('http') ? path : `${base}${path}`;
       const headers = { ...(init.headers || {}) };
       if (init.json !== false && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-      if (!this.proxyUrl && this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
-      if (this.proxyUrl && this.proxyAuth) headers['X-Proxy-Auth'] = this.proxyAuth;
+      if (root.firebaseService?.auth?.currentUser?.getIdToken) {
+        const token = await root.firebaseService.auth.currentUser.getIdToken();
+        if (token) headers.Authorization = `Bearer ${token}`;
+      }
       return fetch(url, { ...init, headers });
     }
 

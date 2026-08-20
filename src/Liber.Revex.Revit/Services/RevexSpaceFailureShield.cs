@@ -5,8 +5,10 @@ using Autodesk.Revit.DB.Mechanical;
 namespace Liber.Revex.Revit.Services;
 
 /// <summary>
-/// Handles only REVEX gbXML transaction failures caused by transient MEP Spaces
-/// whose vertical extent is invalid before the exporter can normalize/recreate them.
+/// Handles only REVEX gbXML transaction failures caused by MEP Spaces whose
+/// vertical extent is invalid. Space elements are authoritative project evidence:
+/// this shield never deletes, replaces, or detaches them. The only safe response is
+/// to roll the owning REVEX transaction back before Revit can present a modal dialog.
 /// It never touches user transactions or unrelated Revit failures.
 /// </summary>
 public static class RevexSpaceFailureShield
@@ -23,8 +25,8 @@ public static class RevexSpaceFailureShield
                 return;
 
             Document doc = accessor.GetDocument();
-            bool handled = false;
-            var deleted = new HashSet<ElementId>();
+            bool rollbackRequired = false;
+            var protectedSpaceIds = new HashSet<ElementId>();
 
             foreach (FailureMessageAccessor failure in accessor.GetFailureMessages())
             {
@@ -38,36 +40,30 @@ public static class RevexSpaceFailureShield
                 if (!zeroHeight)
                     continue;
 
-                var transientSpaceIds = failure.GetFailingElementIds()
+                var authoritativeSpaceIds = failure.GetFailingElementIds()
                     .Where(id => id != ElementId.InvalidElementId)
                     .Where(id => doc.GetElement(id) is Space)
                     .Distinct()
                     .ToList();
 
-                if (transientSpaceIds.Count == 0)
+                if (authoritativeSpaceIds.Count == 0)
                     continue;
 
-                try
-                {
-                    accessor.DeleteElements(transientSpaceIds);
-                    foreach (ElementId id in transientSpaceIds) deleted.Add(id);
-                    handled = true;
-                }
-                catch (Exception ex)
-                {
-                    RevexDiagnostics.Warn("GBXML", $"Could not remove transient zero-height Spaces during failure processing: {ex.Message}");
-                }
+                foreach (ElementId id in authoritativeSpaceIds)
+                    protectedSpaceIds.Add(id);
+                rollbackRequired = true;
             }
 
-            if (!handled)
+            if (!rollbackRequired)
                 return;
 
             RevexDiagnostics.Warn("GBXML",
-                $"Removed {deleted.Count} transient zero-height Space(s) before Revit could show a blocking failure dialog. " +
-                "Existing Rooms/Spaces remain authoritative; bounded residual placement continues afterward.");
-            RevexDiagnostics.Stage("GBXML", "ZERO_HEIGHT_SPACE_SHIELD", "PASSED",
-                $"transaction={transaction}; deletedTransientSpaces={deleted.Count}; userTransactionsUntouched=true");
-            args.SetProcessingResult(FailureProcessingResult.ProceedWithCommit);
+                $"Rolling back REVEX transaction '{transaction}' because {protectedSpaceIds.Count} authoritative Space(s) " +
+                "reported invalid vertical extent. No Space is deleted; the exporter will use source-geometry fallback.");
+            RevexDiagnostics.Stage("GBXML", "ZERO_HEIGHT_SPACE_ROLLBACK_SHIELD", "PASSED",
+                $"transaction={transaction}; protectedSpaceIds={string.Join(",", protectedSpaceIds.Select(id => id.Value))}; " +
+                "authoritativeSpacesDeleted=0; transactionRolledBack=true; modalSuppressed=true; userTransactionsUntouched=true");
+            args.SetProcessingResult(FailureProcessingResult.ProceedWithRollBack);
         }
         catch (Exception ex)
         {

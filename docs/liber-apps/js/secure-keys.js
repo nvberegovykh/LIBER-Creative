@@ -1,13 +1,10 @@
 /**
- * Secure Key Management for Liber Apps Control Panel
- * Fetches decryption keys from Google Drive to decrypt sensitive data
+ * Managed public-client configuration for LIBER Apps.
+ * Provider credentials, admin passwords and master keys are server-only.
  */
 
 class SecureKeyManager {
     constructor() {
-        // Deprecated Gist path removed in favor of server-provided config via Cloud Function
-        this.gistId = null;
-        this.gistFilename = null;
         this.apiCacheExpiry = 5 * 60 * 1000; // 5 mins
         this.lastApiFetch = 0;
         this.cachedResponse = null;
@@ -33,21 +30,18 @@ class SecureKeyManager {
         }
     }
 
-    /**
-     * Set the secure keys URL (GitHub Gist, private repo, etc.)
-     * This should be called by admin during setup
-     */
-    setKeySource(url) { this.keyUrl = url; localStorage.setItem('liber_keys_url', url); }
+    /** Runtime config is deployment-owned; browser users cannot redirect token-bearing clients. */
+    setKeySource() {
+        localStorage.removeItem('liber_keys_url');
+        this.keyUrl = null;
+        return false;
+    }
 
     /**
      * Get the key source URL
      */
     getKeySource() {
-        if (!this.keyUrl) {
-            this.keyUrl = localStorage.getItem('liber_keys_url') || null;
-        }
-        // Default to Cloud Function endpoint that serves public client config from Secret Manager
-        return this.keyUrl || this.getDefaultRawUrl();
+        return this.getDefaultRawUrl();
     }
 
     getDefaultRawUrl(){
@@ -57,37 +51,11 @@ class SecureKeyManager {
     }
 
     /**
-     * Generate default admin credentials for fallback
-     */
-    async generateDefaultCredentials() {
-        // Use environment variables or generate random fallback
-        const adminPassword = 'FALLBACK_PASSWORD_' + Math.random().toString(36).substring(2, 15);
-        const adminHash = await this.generateAdminHash(adminPassword);
-        
-        return {
-            admin: {
-                username: 'admin_fallback',
-                email: 'admin@fallback.local',
-                passwordHash: adminHash,
-                role: 'admin'
-            },
-            system: {
-                masterKeyHash: 'fallback_system_key_' + Math.random().toString(36).substring(2, 15)
-            }
-        };
-    }
-
-    /**
      * Clear all encrypted data when keys change
      */
     clearAllEncryptedData() {
-        const keysToRemove = [
-            'liber_users',
-            'liber_session',
-            'liber_current_user',
-            'liber_user_password',
-            'liber_keys_url' // Also clear the cached URL
-        ];
+        // Public-config repair must never erase project/user/session data.
+        const keysToRemove = [this.cacheKeyName, this.deviceSecretKeyName, 'liber_keys_url'];
         
         keysToRemove.forEach(key => {
             localStorage.removeItem(key);
@@ -101,19 +69,15 @@ class SecureKeyManager {
         if (window.__DEBUG_KEYS__) console.log('Cleared all encrypted data due to key change');
     }
 
-    /**
-     * Force refresh of keys from Gist
-     */
+    /** Force refresh of keys from the managed endpoint. */
     forceRefreshKeys() {
         this.cachedKeys = null;
         this.lastFetch = 0;
         this.keyUrl = null;
-        if (window.__DEBUG_KEYS__) console.log('Forced refresh of keys from Gist');
+        if (window.__DEBUG_KEYS__) console.log('Forced refresh of managed keys');
     }
 
-    /**
-     * Fetch keys from secure source (GitHub Gist, private repo, etc.)
-     */
+    /** Fetch keys from the managed endpoint. */
     async fetchKeys() {
         // 1) Return in-memory cache if still fresh
         if (this.cachedResponse && Date.now() - this.lastFetch < this.keyCacheExpiry) {
@@ -128,36 +92,28 @@ class SecureKeyManager {
                 const parsed = JSON.parse(cached);
                 if (parsed && parsed.iv && parsed.ct && parsed.ts && (Date.now() - parsed.ts < this.keyCacheExpiry)) {
                     const plain = await this.decryptAtRest(parsed);
-                    if (plain) {
-                        this.cachedResponse = plain;
+                    const publicConfig = this.sanitizePublicConfig(plain);
+                    if (publicConfig.firebase) {
+                        this.cachedResponse = publicConfig;
                         this.lastFetch = Date.now();
                         if (window.__DEBUG_KEYS__) console.log('Loaded keys from encrypted local cache');
-                        return plain;
+                        return publicConfig;
                     }
                 }
             }
         } catch(_) { /* ignore cache errors */ }
 
-        // 3) Fetch from remote: prefer explicit keyUrl (raw Gist) else fallback to GitHub API
+        // 3) Fetch public client config from the deployment-owned Cloud Function.
         const maxRetries = 3; let attempt = 0;
         while (attempt < maxRetries) {
             try {
-                const overrideUrl = this.getKeySource();
-                let keysData = null;
-                if (overrideUrl) {
-                    if (window.__DEBUG_KEYS__) console.log('Fetching keys from override URL (attempt ' + (attempt + 1) + ')');
-                    const resp = await fetch(overrideUrl, { cache: 'no-store' });
-                    if (!resp.ok) throw new Error(`Override URL failed: ${resp.status}`);
-                    keysData = await resp.json();
-                } else {
-                    // Directly call our function endpoint
-                    const resp = await fetch(this.getDefaultRawUrl(), { cache: 'no-store' });
-                    if (!resp.ok) throw new Error(`Config endpoint failed: ${resp.status}`);
-                    keysData = await resp.json();
-                }
+                const endpoint = this.getKeySource();
+                if (window.__DEBUG_KEYS__) console.log('Fetching managed public config (attempt ' + (attempt + 1) + ')');
+                const resp = await fetch(endpoint, { cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer' });
+                if (!resp.ok) throw new Error(`Config endpoint failed: ${resp.status}`);
+                const keysData = this.sanitizePublicConfig(await resp.json());
 
-                // Accept public-only config from server function: firebase (+ optional messaging)
-                if (!keysData || !keysData.firebase) throw new Error('Invalid Gist structure');
+                if (!keysData || !keysData.firebase) throw new Error('Invalid public client configuration');
 
                 // Save to caches
                 this.cachedResponse = keysData; this.lastFetch = Date.now();
@@ -171,7 +127,10 @@ class SecureKeyManager {
                     console.warn('All retries failed - using cached or limited mode');
                     const cached = localStorage.getItem(this.cacheKeyName);
                     if (cached) {
-                        try { const plain = await this.decryptAtRest(JSON.parse(cached)); if (plain) return plain; } catch(_){}
+                        try {
+                            const plain = this.sanitizePublicConfig(await this.decryptAtRest(JSON.parse(cached)));
+                            if (plain.firebase) return plain;
+                        } catch(_){}
                     }
                     return {};
                 }
@@ -192,69 +151,54 @@ class SecureKeyManager {
         return true;
     }
 
+    sanitizePublicConfig(input) {
+        if (!input || typeof input !== 'object' || !input.firebase || typeof input.firebase !== 'object') return {};
+        const allowedFirebaseFields = [
+            'apiKey', 'authDomain', 'projectId', 'storageBucket', 'messagingSenderId',
+            'appId', 'measurementId', 'databaseURL', 'functionsRegion', 'region'
+        ];
+        const firebase = {};
+        allowedFirebaseFields.forEach((field) => {
+            const value = input.firebase[field];
+            if (typeof value === 'string' && value.trim()) firebase[field] = value.trim();
+        });
+        if (!firebase.projectId) return {};
+        const output = { firebase };
+        const vapidPublicKey = input.messaging?.vapidPublicKey;
+        if (typeof vapidPublicKey === 'string' && vapidPublicKey.trim()) {
+            output.messaging = { vapidPublicKey: vapidPublicKey.trim() };
+        }
+        const functionsRegion = input.functionsRegion;
+        if (typeof functionsRegion === 'string' && /^[a-z]+-[a-z]+\d$/i.test(functionsRegion)) {
+            output.functionsRegion = functionsRegion;
+        }
+        return output;
+    }
+
     /**
      * Get admin credentials from secure keys
      */
     async getAdminCredentials() {
-        const keys = await this.fetchKeys();
-        return keys.admin;
+        throw new Error('Admin authentication is Firebase-only; browser credentials are disabled.');
     }
 
     /**
      * Get system master key from secure keys
      */
     async getSystemKey() {
-        const keys = await this.fetchKeys();
-        return keys.system.masterKeyHash;
+        throw new Error('System keys are server-only and are never returned to the browser.');
     }
 
     /**
      * Get all keys (for Firebase service)
      */
     async getKeys() {
-        return await this.fetchKeys();
+        return this.sanitizePublicConfig(await this.fetchKeys());
     }
 
-    /**
-     * Generate admin password hash for comparison
-     */
     async generateAdminHash(password) {
-        const salt = 'liber_admin_salt_2024';
-        const encoder = new TextEncoder();
-        const data = encoder.encode(password + salt);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    }
-
-    /**
-     * Get the correct hash for the admin password
-     * This is the hash that should be in your Gist file
-     */
-    async getCorrectAdminHash() {
-        // This method should be called with the actual password
-        // For security, we don't hardcode the password here
-        if (window.__devWarn) window.__devWarn('Please provide the actual admin password to generate the correct hash');
-        return 'HASH_NOT_AVAILABLE';
-    }
-
-    /**
-     * Generate correct admin hash for the default admin password
-     * This is the hash that should be in your Gist configuration
-     */
-    async generateCorrectAdminHash() {
-        try {
-            // The default admin password is likely 'admin' or similar
-            // You can change this to match your actual admin password
-            const adminPassword = 'admin'; // Change this to your actual admin password
-            const hash = await this.generateAdminHash(adminPassword);
-            console.log('Correct admin hash for password "' + adminPassword + '":', hash);
-            console.log('Copy this hash to your Gist configuration file');
-            return hash;
-        } catch (error) {
-            console.error('Error generating admin hash:', error);
-            return null;
-        }
+        void password;
+        throw new Error('Browser-admin password hashing is disabled; use Firebase Authentication.');
     }
 
     /**
@@ -266,15 +210,15 @@ class SecureKeyManager {
             const url = this.getKeySource();
             
             if (!url) {
-                return { success: true, message: 'Using default credentials (no Gist configured)' };
+                return { success: false, message: 'Managed public-config endpoint is unavailable.' };
             }
             
-            // Try to fetch from Gist
-            const response = await fetch(url);
+            const response = await fetch(url, { cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer' });
             if (response.ok) {
-                return { success: true, message: 'Keys accessible from Gist' };
+                const config = this.sanitizePublicConfig(await response.json());
+                return config.firebase ? { success: true, message: 'Managed public configuration is available.' } : { success: false, message: 'Managed endpoint returned invalid public configuration.' };
             } else {
-                return { success: false, message: `Gist returned ${response.status}. Using fallback credentials.` };
+                return { success: false, message: `Managed endpoint returned ${response.status}.` };
             }
         } catch (error) {
             return { success: false, message: `Connection failed: ${error.message}. Using fallback credentials.` };
@@ -282,21 +226,21 @@ class SecureKeyManager {
     }
 
     /**
-     * Debug Gist configuration
+     * Debug managed public configuration without logging values.
      */
     async debugGistConfig() {
-        console.log('=== Debugging Gist Configuration (redacted) ===');
+        console.log('=== Debugging managed public configuration (redacted) ===');
         try {
             const data = await this.fetchKeys();
             if (data && typeof data === 'object') {
-                console.log('Gist data structure (redacted):', Object.keys(data));
+                console.log('Public configuration fields:', Object.keys(data));
                 console.log('Has Firebase config:', !!data.firebase);
             } else {
                 console.warn('No keys available to debug');
             }
             return data;
         } catch (error) {
-            console.error('Gist debug error:', error);
+            console.error('Managed configuration debug error:', error);
             return null;
         }
     }
@@ -348,47 +292,13 @@ class SecureKeyManager {
     }
 
     /**
-     * Get Mailgun configuration from secure Gist
-     * 
-     * PRODUCTION SETUP:
-     * 1. Add your own domain to Mailgun (not sandbox)
-     * 2. Configure DNS records as provided by Mailgun
-     * 3. Update the domain below to your production domain
-     * 4. Update the Gist with your production API key
-     * 
-     * SANDBOX LIMITATIONS:
-     * - Can only send to 5 authorized recipients per month
-     * - Cannot send to any email address
-     * - For testing only
+     * Provider credentials are deliberately unavailable to browser code.
+     * Email must be sent by Firebase Auth or an authenticated server handler whose
+     * provider secret is held in Secret Manager. Keep this compatibility method
+     * fail-closed so an old caller cannot re-introduce a client credential path.
      */
     async getMailgunConfig() {
-        try {
-            const mailgunGistUrl = this.decodeUrl('aHR0cHM6Ly9naXN0LmdpdGh1YnVzZXJjb250ZW50LmNvbS9udmJlcmVnb3Z5a2gvNjBkYTlmNWFkODA4YWYxNjJkM2M1NzAwYjgzYTEyZWYvcmF3L2JlY2NjNGY2NjBiNWVhMTAzNGU1MDFlOGI3ODM3YjQ5ZDUzNWNkNGEvbWFpbGd1bi1jb25maWcuanNvbg==');
-            console.log('Fetching Mailgun config from separate Gist...');
-            const response = await fetch(mailgunGistUrl);
-            if (!response.ok) {
-                throw new Error(`Failed to fetch Mailgun config: ${response.status} ${response.statusText}`);
-            }
-            const config = await response.json();
-            console.log('Mailgun config loaded successfully:', { hasMailgun: !!config.mailgun, hasApiKey: !!config.mailgun?.apiKey });
-            if (!config.mailgun || !config.mailgun.apiKey) {
-                throw new Error('Invalid Mailgun configuration format - missing mailgun.apiKey');
-            }
-            
-            // PRODUCTION: Replace with your own domain
-            const domain = 'mail.liberpict.com'; // Your production domain
-            
-            // SANDBOX: For testing only (limited to authorized recipients)
-            // const domain = 'sandbox96d3d2543629448cba4e500e0da88a60.mailgun.org';
-            
-            return {
-                apiKey: config.mailgun.apiKey,
-                domain: domain
-            };
-        } catch (error) {
-            console.error('Error loading Mailgun config from Gist:', error);
-            throw new Error('Mailgun configuration not available. Please check your Gist configuration.');
-        }
+        throw new Error('Email provider credentials are server-only. Use Firebase Auth email delivery.');
     }
 
 }

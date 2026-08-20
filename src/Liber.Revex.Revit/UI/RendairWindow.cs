@@ -7,6 +7,7 @@ using Microsoft.Web.WebView2.Wpf;
 using Microsoft.Win32;
 using System.Diagnostics;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using WpfTextBox = System.Windows.Controls.TextBox;
 using WpfComboBox = System.Windows.Controls.ComboBox;
@@ -50,6 +51,8 @@ public sealed class RendairWindow : Window
     private readonly CheckBox _gbxmlForce = new();
     private readonly TextBlock _gbxmlLastResult = new();
     private ColumnDefinition? _controlsColumn;
+    private FrameworkElement? _diagnosticsPanel;
+    private Button? _diagnosticsToggle;
 
     private readonly List<TransferPackage> _packages = new();
     private readonly List<CoreWebView2Frame> _renderFrames = new();
@@ -111,8 +114,11 @@ public sealed class RendairWindow : Window
         var root = new Grid();
         _controlsColumn = new ColumnDefinition { Width = new GridLength(390) };
         root.ColumnDefinitions.Add(_controlsColumn);
-        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(370) });
+        root.ColumnDefinitions.Add(new ColumnDefinition
+        {
+            Width = new GridLength(1, GridUnitType.Star),
+            MinWidth = 720
+        });
 
         var leftScroll = new ScrollViewer
         {
@@ -236,7 +242,7 @@ public sealed class RendairWindow : Window
         webRoot.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         webRoot.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-        var nav = new StackPanel
+        var nav = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
             Margin = new Thickness(8)
@@ -252,6 +258,10 @@ public sealed class RendairWindow : Window
         nav.Children.Add(MakeNavButton("Chat", (_, _) => OpenCompanion("chat")));
         nav.Children.Add(MakeNavButton("Render", (_, _) => OpenRenderBridge()));
         nav.Children.Add(MakeNavButton("LIBER Account", (_, _) => _web.Source = new Uri(_bridgeSettings.LiberAppsUrl)));
+        _diagnosticsToggle = MakeNavButton("Diagnostics", (_, _) =>
+            SetDiagnosticsVisible(_diagnosticsPanel?.Visibility != Visibility.Visible));
+        AutomationProperties.SetName(_diagnosticsToggle, "Show diagnostics");
+        nav.Children.Add(_diagnosticsToggle);
 
         webRoot.Children.Add(nav);
 
@@ -261,9 +271,13 @@ public sealed class RendairWindow : Window
         Grid.SetColumn(webRoot, 1);
         root.Children.Add(webRoot);
 
-        UIElement diagnostics = BuildDiagnosticsPanel();
-        Grid.SetColumn(diagnostics, 2);
-        root.Children.Add(diagnostics);
+        _diagnosticsPanel = (FrameworkElement)BuildDiagnosticsPanel();
+        _diagnosticsPanel.Visibility = Visibility.Collapsed;
+        _diagnosticsPanel.Width = 370;
+        _diagnosticsPanel.HorizontalAlignment = HorizontalAlignment.Right;
+        Grid.SetRow(_diagnosticsPanel, 1);
+        Panel.SetZIndex(_diagnosticsPanel, 20);
+        webRoot.Children.Add(_diagnosticsPanel);
 
         return root;
     }
@@ -368,8 +382,11 @@ public sealed class RendairWindow : Window
         copy.MinWidth = 62;
         var clear = MakeNavButton("CLEAR", (_, _) => _diagnostics.Clear());
         clear.MinWidth = 62;
+        var close = MakeNavButton("CLOSE", (_, _) => SetDiagnosticsVisible(false));
+        close.MinWidth = 62;
         buttons.Children.Add(copy);
         buttons.Children.Add(clear);
+        buttons.Children.Add(close);
         DockPanel.SetDock(buttons, Dock.Right);
         header.Children.Add(buttons);
         panel.Children.Add(header);
@@ -387,7 +404,7 @@ public sealed class RendairWindow : Window
 
         _diagnostics.IsReadOnly = true;
         _diagnostics.AcceptsReturn = true;
-        _diagnostics.AcceptsTab = true;
+        _diagnostics.AcceptsTab = false;
         _diagnostics.TextWrapping = TextWrapping.NoWrap;
         _diagnostics.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
         _diagnostics.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
@@ -402,6 +419,15 @@ public sealed class RendairWindow : Window
         panel.Children.Add(_diagnostics);
 
         return panel;
+    }
+
+    private void SetDiagnosticsVisible(bool visible)
+    {
+        if (_diagnosticsPanel == null) return;
+        _diagnosticsPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        if (_diagnosticsToggle == null) return;
+        _diagnosticsToggle.Content = visible ? "Hide Diagnostics" : "Diagnostics";
+        AutomationProperties.SetName(_diagnosticsToggle, visible ? "Hide diagnostics" : "Show diagnostics");
     }
 
     private void CopyDiagnostics()
@@ -2246,9 +2272,11 @@ public sealed class RendairWindow : Window
         {
             Content = text,
             MinWidth = 60,
-            Height = 30,
-            Margin = new Thickness(2, 0, 2, 0)
+            MinHeight = 34,
+            Padding = new Thickness(10, 0, 10, 0),
+            Margin = new Thickness(2)
         };
+        AutomationProperties.SetName(b, text);
         b.Click += handler;
         return b;
     }

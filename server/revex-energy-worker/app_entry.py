@@ -10,6 +10,8 @@ from revex_cloud_project import resolve_vertex_project
 
 os.environ["REVEX_VERTEX_PROJECT"] = resolve_vertex_project()
 os.environ.setdefault("REVEX_VERTEX_LOCATION", "global")
+os.environ.setdefault("REVEX_PIPELINE", "/opt/revex/server/revex_energy_pipeline_current.py")
+os.environ.setdefault("REVEX_PIPELINE_IMPL", "/opt/revex/energy/revex_energy_pipeline.py")
 
 from app import APP  # noqa: E402 - cloud routing must be bound before app import
 

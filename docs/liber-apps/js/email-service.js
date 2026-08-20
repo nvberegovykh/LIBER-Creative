@@ -5,61 +5,15 @@
 
 class EmailService {
     constructor() {
-        this.mailgunDomain = null;
-        this.mailgunApiKey = null;
-        // Update baseUrl to point to your control panel
         this.baseUrl = window.location.origin + window.location.pathname;
-        this.init();
-    }
-
-    async init() {
-        try {
-            await this.loadMailgunConfig();
-            // Test the configuration
-            await this.testMailgunConfig();
-        } catch (error) {
-            console.error('Failed to load Mailgun configuration:', error);
-        }
-    }
-
-    /**
-     * Test Mailgun configuration
-     */
-    async testMailgunConfig() {
-        try {
-            console.log('Testing Mailgun configuration...');
-            await this.loadMailgunConfig();
-            console.log('✅ Mailgun configuration test successful');
-            console.log('Domain:', this.mailgunDomain);
-            console.log('API Key available:', !!this.mailgunApiKey);
-            return true;
-        } catch (error) {
-            console.error('❌ Mailgun configuration test failed:', error);
-            return false;
-        }
-    }
-
-    /**
-     * Load Mailgun configuration from secure storage
-     */
-    async loadMailgunConfig() {
-        try {
-            // Get Mailgun config from secure storage
-            const config = await window.secureKeyManager.getMailgunConfig();
-            this.mailgunDomain = config.domain;
-            this.mailgunApiKey = config.apiKey;
-            console.log('Mailgun configuration loaded successfully');
-        } catch (error) {
-            console.error('Error loading Mailgun config:', error);
-            throw new Error('Mailgun configuration not available');
-        }
     }
 
     /**
      * Send email via Mailgun API
      */
     async sendEmail(to, subject, htmlContent) {
-        // Prefer secure server-side callable if Functions available
+        // Custom mail is server-only. Never download or use a provider credential in
+        // the browser, and never fall back after an authenticated server failure.
         try{
             if (window.firebaseService && window.firebaseService.functions && window.firebaseModular && window.firebaseModular.httpsCallable){
                 const callable = window.firebaseModular.httpsCallable(window.firebaseService.functions, 'sendMail');
@@ -69,20 +23,10 @@ class EmailService {
                 const res = await window.firebaseService.callFunction('sendMail', { to, subject, html: htmlContent });
                 if (res) return res;
             }
-        }catch(e){ console.warn('Server email fallback to client:', e?.message||e); }
-
-        // Fallback: direct Mailgun if configured locally
-        if (!this.mailgunDomain || !this.mailgunApiKey) {
-            throw new Error('Email unavailable (no functions and Mailgun not configured)');
+        }catch(_){
+            throw new Error('Secure email delivery is temporarily unavailable. Use Firebase account verification or password reset.');
         }
-        const url = new URL(`https://api.mailgun.net/v3/${this.mailgunDomain}/messages`);
-        url.searchParams.append('from', `Liber Apps <postmaster@${this.mailgunDomain}>`);
-        url.searchParams.append('to', to);
-        url.searchParams.append('subject', subject);
-        url.searchParams.append('html', htmlContent);
-        const response = await fetch(url.toString(), { method:'POST', headers:{ 'Authorization': `Basic ${btoa(`api:${this.mailgunApiKey}`)}` } });
-        if (!response.ok) { const t = await response.text(); throw new Error(`Mailgun API error: ${response.status} - ${t}`); }
-        return await response.json();
+        throw new Error('Secure email delivery is not configured. Use Firebase account verification or password reset.');
     }
 
     /**
@@ -103,7 +47,7 @@ class EmailService {
 
     /**
      * Send verification email to new user
-     * 
+     *
      * IMPORTANT: Mailgun sandbox domains can only send to authorized recipients.
      * To add authorized recipients:
      * 1. Go to https://app.mailgun.com/
@@ -113,7 +57,7 @@ class EmailService {
      */
     async sendVerificationEmail(email, username, token) {
         const verificationUrl = `${this.baseUrl}?action=verify&token=${token}&email=${encodeURIComponent(email)}`;
-        
+
         const htmlContent = `
             <!DOCTYPE html>
             <html>
@@ -163,7 +107,7 @@ class EmailService {
      */
     async sendPasswordResetEmail(email, username, token) {
         const resetUrl = `${this.baseUrl}?action=reset&token=${token}&email=${encodeURIComponent(email)}`;
-        
+
         const htmlContent = `
             <!DOCTYPE html>
             <html>
@@ -213,26 +157,12 @@ class EmailService {
      */
     async verifyToken(token, email) {
         try {
-            console.log('Verifying token for email:', email);
-            console.log('Token received:', token);
-            
             const users = await window.authManager.getUsers();
-            console.log('Total users in storage:', users.length);
-            console.log('All users:', users);
-            
             const user = users.find(u => u.email === email && u.verificationToken === token);
-            console.log('User found:', !!user);
-            console.log('User data:', user);
-            
             if (!user) {
                 // Try to find user by email only to see if user exists
                 const userByEmail = users.find(u => u.email === email);
-                console.log('User by email only:', userByEmail);
                 if (userByEmail) {
-                    console.log('User exists but token mismatch. Expected:', userByEmail.verificationToken, 'Received:', token);
-                    console.log('User verification status:', userByEmail.isVerified);
-                    console.log('User status:', userByEmail.status);
-                    
                     // If user is already verified, show appropriate message
                     if (userByEmail.isVerified) {
                         throw new Error('Email is already verified. You can login directly.');
@@ -243,7 +173,6 @@ class EmailService {
 
             // Check if token is expired (24 hours)
             const tokenAge = Date.now() - user.verificationTokenCreated;
-            console.log('Token age (hours):', tokenAge / (60 * 60 * 1000));
             if (tokenAge > 24 * 60 * 60 * 1000) {
                 throw new Error('Verification token has expired');
             }
@@ -258,12 +187,9 @@ class EmailService {
             // Update user in storage
             const updatedUsers = users.map(u => u.email === email ? user : u);
             await window.authManager.saveUsers(updatedUsers);
-            
-            console.log('User verified successfully:', user);
 
             return user;
         } catch (error) {
-            console.error('Token verification error:', error);
             throw error;
         }
     }
@@ -275,7 +201,7 @@ class EmailService {
         try {
             const users = await window.authManager.getUsers();
             const user = users.find(u => u.email === email && u.resetToken === token);
-            
+
             if (!user) {
                 throw new Error('Invalid or expired reset token');
             }
@@ -288,7 +214,6 @@ class EmailService {
 
             return user;
         } catch (error) {
-            console.error('Reset token verification error:', error);
             throw error;
         }
     }
@@ -300,14 +225,14 @@ class EmailService {
         try {
             const users = await window.authManager.getUsers();
             const user = users.find(u => u.email === email);
-            
+
             if (!user) {
                 throw new Error('User not found');
             }
 
             // Hash the new password
             const hashedPassword = await window.cryptoManager.hashPassword(newPassword);
-            
+
             // Update user password
             user.passwordHash = hashedPassword;
             user.resetToken = null;
@@ -320,7 +245,6 @@ class EmailService {
 
             return user;
         } catch (error) {
-            console.error('Password update error:', error);
             throw error;
         }
     }

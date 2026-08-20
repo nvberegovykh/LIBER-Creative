@@ -27,6 +27,7 @@
       this.activeConnection = null;
       this.connections = [];
       this.sharedKeyCache = {}; // connId -> CryptoKey
+      this._cryptoMetaByConn = new Map();
       this.me = null; // cached profile
       this.usernameCache = new Map(); // uid -> {username, avatarUrl}
       this.userUnsubs = new Map(); // uid -> unsubscribe
@@ -2126,10 +2127,16 @@
     }
     async editMessage(connId, msgId, text){
       try{
-        const key = await this.getFallbackKeyForConn(connId);
+        const key = await this.getEncryptionKeyForConn(connId);
+        const cryptoMeta = this.getEncryptionMetadataForConn(connId);
         const cipher = await chatCrypto.encryptWithKey(text, key);
-        await firebase.updateDoc(firebase.doc(this.db,'chatMessages',connId,'messages',msgId),{ cipher, updatedAt: new Date().toISOString() });
-      }catch(_){ alert('Failed to edit'); }
+        await firebase.updateDoc(firebase.doc(this.db,'chatMessages',connId,'messages',msgId),{
+          cipher,
+          cryptoVersion: cryptoMeta.cryptoVersion,
+          cryptoEpoch: cryptoMeta.cryptoEpoch,
+          updatedAt: new Date().toISOString()
+        });
+      }catch(err){ alert(err?.message || 'Failed to edit'); }
     }
     async deleteMessage(connId, msgId, el){
       if (!confirm('Delete this message?')) return;
@@ -2144,15 +2151,22 @@
       p.onchange = async ()=>{
         try{
           const f = p.files[0]; if (!f) return;
-          const aesKey2 = await this.getFallbackKey();
+          const aesKey2 = await this.getEncryptionKeyForConn(connId);
+          const cryptoMeta = this.getEncryptionMetadataForConn(connId);
           const base64 = await new Promise((r,e)=>{ const fr = new FileReader(); fr.onload=()=>r(String(fr.result||'').split(',')[1]); fr.onerror=e; fr.readAsDataURL(f); });
           const cipherF = await chatCrypto.encryptWithKey(base64, aesKey2);
           const blob = new Blob([JSON.stringify(cipherF)],{type:'application/json'});
-          const sref = firebase.ref(this.storage, `chat/${connId}/${Date.now()}_${f.name.replace(/[^a-zA-Z0-9._-]/g,'_')}.enc.json`);
+          const storagePath = `chat/${connId}/${Date.now()}_${f.name.replace(/[^a-zA-Z0-9._-]/g,'_')}.enc.json`;
+          const sref = firebase.ref(this.storage, storagePath);
           await firebase.uploadBytes(sref, blob, { contentType:'application/json' });
-          const url = await firebase.getDownloadURL(sref);
-          await firebase.updateDoc(firebase.doc(this.db,'chatMessages',connId,'messages',msgId),{ fileUrl:url, fileName:f.name, updatedAt: new Date().toISOString() });
-        }catch(_){ alert('Failed'); }
+          await firebase.updateDoc(firebase.doc(this.db,'chatMessages',connId,'messages',msgId),{
+            fileUrl:`storage://${storagePath}`,
+            fileName:f.name,
+            attachmentCryptoVersion:cryptoMeta.cryptoVersion,
+            attachmentCryptoEpoch:cryptoMeta.cryptoEpoch,
+            updatedAt:new Date().toISOString()
+          });
+        }catch(err){ alert(err?.message || 'Failed'); }
         finally{ document.body.removeChild(p); }
       };
       p.click();
@@ -2971,16 +2985,6 @@
         'stun:stun.l.google.com:19302',
         'stun:stun1.l.google.com:19302'
       ];
-      const emergencyRelay = {
-        urls: [
-          'turn:openrelay.metered.ca:80?transport=udp',
-          'turn:openrelay.metered.ca:80?transport=tcp',
-          'turn:openrelay.metered.ca:443?transport=tcp',
-          'turns:openrelay.metered.ca:443?transport=tcp'
-        ],
-        username: 'openrelayproject',
-        credential: 'openrelayproject'
-      };
       const asArray = (urls)=> Array.isArray(urls) ? urls : (urls ? [urls] : []);
       const keepTurnOnly = (servers = [])=>{
         const out = [];
@@ -2992,28 +2996,19 @@
       };
       const hasAuthUser = !!(window.firebaseService && window.firebaseService.auth && window.firebaseService.auth.currentUser);
       try{
-        // 1) Optional static TURN from secure keys (fallback only)
+        // TURN credentials are ephemeral and server-issued only.
         let regionPref = 'europe-west1';
-        let staticTurn = null;
         if (window.secureKeyManager && typeof window.secureKeyManager.getKeys === 'function'){
           const keys = await window.secureKeyManager.getKeys();
           regionPref = (keys && keys.firebase && (keys.firebase.functionsRegion || keys.firebase.region)) || regionPref;
-          const turn = keys && keys.turn;
-          if (turn && Array.isArray(turn.uris) && turn.username && turn.credential){
-            staticTurn = { urls: turn.uris, username: turn.username, credential: turn.credential };
-          }
         }
-        // 2) Fetch Twilio ephemeral ice_servers from our backend.
+        // Fetch Twilio ephemeral ice_servers from our authenticated backend.
         //    Keep as close as possible to Twilio docs: use returned list as-is.
         if (hasAuthUser){
           const idToken = await window.firebaseService.auth.currentUser.getIdToken(true);
-          let runAppUrl = null;
-          try{ const keys = await window.secureKeyManager.getKeys(); runAppUrl = keys && (keys.turnFunctionUrl || keys.turn?.functionUrl) || null; }catch(_){ runAppUrl = null; }
           const knownRunHost = 'https://getturnconfig-hkhtxasofa-ew.a.run.app';
           const regions = [regionPref, 'europe-west1', 'us-central1'];
-          const candidates = [];
-          if (runAppUrl) candidates.push(runAppUrl);
-          candidates.push(knownRunHost);
+          const candidates = [knownRunHost];
           regions.forEach(r=> candidates.push(`https://${r}-liber-apps-cca20.cloudfunctions.net/getTurnConfig`));
           for (const url of candidates){
             try{
@@ -3045,14 +3040,11 @@
             }catch(e){ this._showErrorOnScreen('TURN fetch error: ' + (e?.message || e), false); }
           }
         }
-        // 3) Static TURN fallback (if present)
-        if (!hasAuthUser && typeof staticTurn === 'object' && staticTurn){
-          return this._forceRelay ? keepTurnOnly([staticTurn, emergencyRelay]) : [ { urls: baseStun }, staticTurn, emergencyRelay ];
-        }
       }catch(_){ /* ignore */ }
-      // In authenticated relay mode, fail closed instead of silently using non-Twilio fallback.
+      // Never fall back to shared public TURN credentials. Direct STUN remains
+      // available outside relay-only mode; relay-only calls fail closed.
       if (hasAuthUser && this._forceRelay) return [];
-      return this._forceRelay ? keepTurnOnly([ emergencyRelay ]) : [ { urls: baseStun }, emergencyRelay ];
+      return this._forceRelay ? [] : [ { urls: baseStun } ];
     }
 
     async getRequiredIceServers(){
@@ -4188,6 +4180,12 @@
           else window.location.href = 'index.html?returnTo=chat';
         }
         return;
+      }
+
+      // Publish only this device's public identity. Group administrators can
+      // then build per-participant envelopes without ever receiving a private key.
+      try { await this.ensurePublishedChatIdentity(); } catch (error) {
+        console.warn('Secure Chat identity enrollment is incomplete:', error?.message || 'unknown error');
       }
 
       this.loadChatCategories();
@@ -6212,12 +6210,17 @@
                 const aesKey = await getKeyForConn(sourceConnId);
                 let text='';
                 if (typeof m.text === 'string' && !m.cipher){ text = m.text; } else {
-                  try{ text = await chatCrypto.decryptWithKey(m.cipher, aesKey); }catch(_){
+                  const secureVersion = m.cryptoVersion === 'liber.secure-chat.ecdh-p256.v2'
+                    || m.cryptoVersion === 'liber.secure-chat.group-aes-gcm.v1';
+                  if (secureVersion){
+                    try { const secureKey = await this.getMessageDecryptionKeyForConn(m, sourceConnId); text = await chatCrypto.decryptWithKey(m.cipher, secureKey); }
+                    catch(_){ text='[unable to decrypt]'; }
+                  } else try{ text = await chatCrypto.decryptWithKey(m.cipher, aesKey); }catch(_){
                     let ok = false;
                     try{ const candidates = await this.getFallbackKeyCandidatesForConn(sourceConnId);
                       for (const k of candidates){ try{ text = await chatCrypto.decryptWithKey(m.cipher, k); ok = true; break; }catch(_){ } }
                     }catch(_){ }
-                    if (!ok){ try { const ecdh = await this.getOrCreateSharedAesKey(); text = await chatCrypto.decryptWithKey(m.cipher, ecdh);} catch(_){ text='[unable to decrypt]'; } }
+                    if (!ok){ try { const secureKey = await this.getMessageDecryptionKeyForConn(m, sourceConnId); text = await chatCrypto.decryptWithKey(m.cipher, secureKey);} catch(_){ text='[unable to decrypt]'; } }
                   }
                 }
                 const el = document.createElement('div');
@@ -6284,7 +6287,7 @@
                   m.media.forEach((mediaItem, idx)=>{
                     const container = el.querySelector(`.msg-media-item[data-media-index="${idx}"] .file-preview`);
                     if (container){
-                      const msgProxy = { ...m, fileUrl: mediaItem.fileUrl, fileName: mediaItem.fileName, attachmentKeySalt: mediaItem.attachmentKeySalt, isVideoRecording: mediaItem.isVideoRecording ?? m.isVideoRecording, isVoiceRecording: mediaItem.isVoiceRecording ?? m.isVoiceRecording, text, id: d.id };
+                      const msgProxy = { ...m, fileUrl: mediaItem.fileUrl, fileName: mediaItem.fileName, attachmentKeySalt: mediaItem.attachmentKeySalt, attachmentSourceConnId: mediaItem.attachmentSourceConnId || m.attachmentSourceConnId, attachmentCryptoVersion: mediaItem.attachmentCryptoVersion || m.attachmentCryptoVersion, attachmentCryptoEpoch: mediaItem.attachmentCryptoEpoch || m.attachmentCryptoEpoch, isVideoRecording: mediaItem.isVideoRecording ?? m.isVideoRecording, isVoiceRecording: mediaItem.isVoiceRecording ?? m.isVoiceRecording, text, id: d.id };
                       this.enqueueAttachmentPreview(()=>{
                         const c = box.querySelector(`[data-msg-id="${domMsgId.replace(/"/g,'\\"')}"] .msg-media-item[data-media-index="${idx}"] .file-preview`);
                         if (c?.isConnected) this.renderEncryptedAttachment(c, mediaItem.fileUrl, mediaItem.fileName, attachmentAesKey, attachmentSourceConnId, senderName, msgProxy);
@@ -6380,13 +6383,19 @@
             }
             const decryptMessageText = async (m, cid)=>{
               if (typeof m.text === 'string' && !m.cipher) return m.text;
+              const secureVersion = m.cryptoVersion === 'liber.secure-chat.ecdh-p256.v2'
+                || m.cryptoVersion === 'liber.secure-chat.group-aes-gcm.v1';
+              if (secureVersion){
+                try{ const secureKey = await this.getMessageDecryptionKeyForConn(m, cid); return await chatCrypto.decryptWithKey(m.cipher, secureKey); }
+                catch(_){ return '[unable to decrypt]'; }
+              }
               const aesKey = await getKeyForConn(cid);
               try{ return await chatCrypto.decryptWithKey(m.cipher, aesKey); }catch(_){}
               try{
                 const candidates = await this.getFallbackKeyCandidatesForConn(cid);
                 for (const k of candidates){ try{ return await chatCrypto.decryptWithKey(m.cipher, k); }catch(_){ } }
               }catch(_){}
-              try{ const ecdh = await this.getOrCreateSharedAesKey(); return await chatCrypto.decryptWithKey(m.cipher, ecdh); }catch(_){}
+              try{ const secureKey = await this.getMessageDecryptionKeyForConn(m, cid); return await chatCrypto.decryptWithKey(m.cipher, secureKey); }catch(_){}
               return '[unable to decrypt]';
             };
             const renderOne = async (d, sourceConnId = activeConnId, opts = {})=>{
@@ -6506,7 +6515,7 @@
                 m.media.forEach((mediaItem, idx)=>{
                   const container = el.querySelector(`.msg-media-item[data-media-index="${idx}"] .file-preview`);
                   if (container){
-                    const msgProxy = { ...m, fileUrl: mediaItem.fileUrl, fileName: mediaItem.fileName, attachmentKeySalt: mediaItem.attachmentKeySalt, isVideoRecording: mediaItem.isVideoRecording ?? m.isVideoRecording, isVoiceRecording: mediaItem.isVoiceRecording ?? m.isVoiceRecording, text, id: d.id };
+                    const msgProxy = { ...m, fileUrl: mediaItem.fileUrl, fileName: mediaItem.fileName, attachmentKeySalt: mediaItem.attachmentKeySalt, attachmentSourceConnId: mediaItem.attachmentSourceConnId || m.attachmentSourceConnId, attachmentCryptoVersion: mediaItem.attachmentCryptoVersion || m.attachmentCryptoVersion, attachmentCryptoEpoch: mediaItem.attachmentCryptoEpoch || m.attachmentCryptoEpoch, isVideoRecording: mediaItem.isVideoRecording ?? m.isVideoRecording, isVoiceRecording: mediaItem.isVoiceRecording ?? m.isVoiceRecording, text, id: d.id };
                     this.enqueueAttachmentPreview(()=>{
                       const c = box.querySelector(`[data-msg-id="${domMsgId.replace(/"/g,'\\"')}"] .msg-media-item[data-media-index="${idx}"] .file-preview`);
                       if (c?.isConnected) this.renderEncryptedAttachment(c, mediaItem.fileUrl, mediaItem.fileName, attachmentAesKey, attachmentSourceConnId, senderName, msgProxy);
@@ -6787,7 +6796,12 @@
             if (typeof m.text === 'string' && !m.cipher){
               text = m.text;
             } else {
-              try{
+              const secureVersion = m.cryptoVersion === 'liber.secure-chat.ecdh-p256.v2'
+                || m.cryptoVersion === 'liber.secure-chat.group-aes-gcm.v1';
+              if (secureVersion){
+                try { const secureKey = await this.getMessageDecryptionKeyForConn(m, activeConnId); text = await chatCrypto.decryptWithKey(m.cipher, secureKey); }
+                catch(_){ text='[unable to decrypt]'; }
+              } else try{
                 text = await chatCrypto.decryptWithKey(m.cipher, aesKey);
               }catch(_){
                 let ok = false;
@@ -6802,7 +6816,7 @@
                   }
                 }catch(_){ }
                 if (!ok){
-                  try { const ecdh = await this.getOrCreateSharedAesKey(); text = await chatCrypto.decryptWithKey(m.cipher, ecdh);}
+                  try { const secureKey = await this.getMessageDecryptionKeyForConn(m, activeConnId); text = await chatCrypto.decryptWithKey(m.cipher, secureKey);}
                   catch(_){ text='[unable to decrypt]'; }
                 }
               }
@@ -6894,7 +6908,7 @@
               m.media.forEach((mediaItem, idx)=>{
                 const container = el.querySelector(`.msg-media-item[data-media-index="${idx}"] .file-preview`);
                 if (container){
-                  const msgProxy = { ...m, fileUrl: mediaItem.fileUrl, fileName: mediaItem.fileName, attachmentKeySalt: mediaItem.attachmentKeySalt, isVideoRecording: mediaItem.isVideoRecording ?? m.isVideoRecording, isVoiceRecording: mediaItem.isVoiceRecording ?? m.isVoiceRecording, text, id: d.id };
+                  const msgProxy = { ...m, fileUrl: mediaItem.fileUrl, fileName: mediaItem.fileName, attachmentKeySalt: mediaItem.attachmentKeySalt, attachmentSourceConnId: mediaItem.attachmentSourceConnId || m.attachmentSourceConnId, attachmentCryptoVersion: mediaItem.attachmentCryptoVersion || m.attachmentCryptoVersion, attachmentCryptoEpoch: mediaItem.attachmentCryptoEpoch || m.attachmentCryptoEpoch, isVideoRecording: mediaItem.isVideoRecording ?? m.isVideoRecording, isVoiceRecording: mediaItem.isVoiceRecording ?? m.isVoiceRecording, text, id: d.id };
                   const msgId = String(d.id || m.id || '');
                   this.enqueueAttachmentPreview(()=>{
                     const c = box.querySelector(`[data-msg-id="${msgId.replace(/"/g,'\\"')}"] .msg-media-item[data-media-index="${idx}"] .file-preview`);
@@ -7695,7 +7709,9 @@
               fileUrl: r.fileUrl,
               fileName: r.fileName,
               attachmentKeySalt: String(msg.attachmentKeySalt || '').trim() || null,
-              attachmentSourceConnId: this.activeConnection,
+              attachmentSourceConnId: this.resolveAttachmentSourceConnId(msg, this.activeConnection),
+              attachmentCryptoVersion: msg.attachmentCryptoVersion || msg.cryptoVersion || null,
+              attachmentCryptoEpoch: msg.attachmentCryptoEpoch || msg.cryptoEpoch || null,
               isVideoRecording: !!msg.isVideoRecording,
               isVoiceRecording: !!msg.isVoiceRecording
             });
@@ -7720,7 +7736,9 @@
               text: `[file] ${r.fileName}`,
               fileUrl: r.fileUrl,
               fileName: r.fileName,
-              attachmentSourceConnId: this.activeConnection,
+              attachmentSourceConnId: this.resolveAttachmentSourceConnId(msg, this.activeConnection),
+              attachmentCryptoVersion: msg.attachmentCryptoVersion || msg.cryptoVersion || null,
+              attachmentCryptoEpoch: msg.attachmentCryptoEpoch || msg.cryptoEpoch || null,
               attachmentKeySalt: String(msg.attachmentKeySalt || '').trim() || null,
               isVideoRecording: !!msg.isVideoRecording,
               isVoiceRecording: !!msg.isVoiceRecording,
@@ -7780,6 +7798,8 @@
         fileName: inferredName || null,
         sharedAsset: derivedSharedAsset,
         attachmentSourceConnId: sourceConnId || null,
+        attachmentCryptoVersion: src.attachmentCryptoVersion || src.cryptoVersion || null,
+        attachmentCryptoEpoch: src.attachmentCryptoEpoch || src.cryptoEpoch || null,
         attachmentKeySalt: String(attachmentKeySalt || '').trim() || null,
         isVideoRecording,
         isVoiceRecording,
@@ -7850,26 +7870,31 @@
       try { return JSON.parse(JSON.stringify(val)); } catch(_){ return null; }
     }
 
-    async saveMessageToConnection(connId, { text, fileUrl, fileName, sharedAsset, media, attachmentSourceConnId, attachmentKeySalt, isVideoRecording, isVoiceRecording, isShared, sharedFromConnId, sharedFromMessageId, sharedOriginalAuthorUid, sharedOriginalAuthorName }){
-      const aesKey = await this.getFallbackKeyForConn(connId);
+    async saveMessageToConnection(connId, { text, fileUrl, fileName, sharedAsset, media, attachmentSourceConnId, attachmentKeySalt, attachmentCryptoVersion, attachmentCryptoEpoch, isVideoRecording, isVoiceRecording, isShared, sharedFromConnId, sharedFromMessageId, sharedOriginalAuthorUid, sharedOriginalAuthorName }){
+      const aesKey = await this.getEncryptionKeyForConn(connId);
+      const cryptoMeta = this.getEncryptionMetadataForConn(connId);
       const cipher = await chatCrypto.encryptWithKey(text, aesKey);
       const mediaArr = Array.isArray(media) && media.length ? this.toPlainObject(media) : null;
       const firstMedia = mediaArr && mediaArr[0] ? mediaArr[0] : null;
       const legacyFileUrl = fileUrl || (firstMedia && firstMedia.fileUrl) || null;
       const legacyFileName = fileName || (firstMedia && firstMedia.fileName) || null;
-      const previewText = this.stripPlaceholderText(text) || (legacyFileName ? `[Attachment] ${legacyFileName}` : (mediaArr ? `[${mediaArr.length} attachments]` : ''));
+      const previewText = legacyFileName || mediaArr ? '[Encrypted attachment]' : '[Encrypted message]';
       const msgRef = firebase.doc(firebase.collection(this.db,'chatMessages',connId,'messages'));
       const doc = {
         id: msgRef.id,
         connId,
         sender: this.currentUser.uid,
         cipher,
+        cryptoVersion: cryptoMeta.cryptoVersion,
+        cryptoEpoch: cryptoMeta.cryptoEpoch,
         fileUrl: legacyFileUrl,
         fileName: legacyFileName,
         sharedAsset: (sharedAsset && typeof sharedAsset === 'object') ? this.toPlainObject(sharedAsset) : null,
         media: mediaArr,
         attachmentSourceConnId: String(attachmentSourceConnId || connId || '').trim() || null,
         attachmentKeySalt: String(attachmentKeySalt || (firstMedia && firstMedia.attachmentKeySalt) || '').trim() || null,
+        attachmentCryptoVersion: attachmentCryptoVersion || (firstMedia && firstMedia.attachmentCryptoVersion) || cryptoMeta.cryptoVersion,
+        attachmentCryptoEpoch: attachmentCryptoEpoch || (firstMedia && firstMedia.attachmentCryptoEpoch) || cryptoMeta.cryptoEpoch,
         isVideoRecording: isVideoRecording === true || (firstMedia && firstMedia.isVideoRecording === true),
         isVoiceRecording: isVoiceRecording === true || (firstMedia && firstMedia.isVoiceRecording === true),
         isShared: !!isShared,
@@ -7888,7 +7913,9 @@
       plainDoc.createdAtTS = ts;
       await firebase.setDoc(msgRef, plainDoc);
       await firebase.updateDoc(firebase.doc(this.db,'chatConnections',connId),{
-        lastMessage: String(text || '').slice(0,200),
+        lastMessage: '[Encrypted message]',
+        lastMessageCryptoVersion: cryptoMeta.cryptoVersion,
+        lastMessageCryptoEpoch: cryptoMeta.cryptoEpoch,
         updatedAt: new Date().toISOString()
       });
       // Push sent by onChatMessageWrite Firestore trigger only (avoids duplicates)
@@ -8176,7 +8203,8 @@
       if (!files || !files.length || !targetConnId || !this.storage) return result;
       try{
         const salts = await this.getConnSaltForConn(targetConnId);
-        const aesKey = await this.getFallbackKeyForConn(targetConnId);
+        const aesKey = await this.getEncryptionKeyForConn(targetConnId);
+        const cryptoMeta = this.getEncryptionMetadataForConn(targetConnId);
         const salt = String(salts?.stableSalt || targetConnId || '');
         for (const f of files){
           try{
@@ -8189,14 +8217,16 @@
             const cipher = await chatCrypto.encryptWithKey(base64, aesKey);
             const blob = new Blob([JSON.stringify(cipher)], { type: 'application/json' });
             const safeName = f.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-            const r = firebase.ref(this.storage, `chat/${targetConnId}/${Date.now()}_${safeName}.enc.json`);
+            const storagePath = `chat/${targetConnId}/${Date.now()}_${safeName}.enc.json`;
+            const r = firebase.ref(this.storage, storagePath);
             await firebase.uploadBytes(r, blob, { contentType: 'application/json' });
-            const url = await firebase.getDownloadURL(r);
             result.uploaded.push({
-              fileUrl: url,
+              fileUrl: `storage://${storagePath}`,
               fileName: f.name,
               attachmentKeySalt: salt,
               attachmentSourceConnId: targetConnId,
+              attachmentCryptoVersion: cryptoMeta.cryptoVersion,
+              attachmentCryptoEpoch: cryptoMeta.cryptoEpoch,
               isVideoRecording: false
             });
           }catch(_){ result.failedFiles.push(f); }
@@ -8248,7 +8278,7 @@
         try {
           console.log('Sending file:', f.name);
           const salts = await this.getConnSaltForConn(targetConnId);
-          const aesKey = await this.getFallbackKeyForConn(targetConnId);
+          const aesKey = await this.getEncryptionKeyForConn(targetConnId);
           // Read file as base64 via FileReader to avoid large argument spreads
           const base64 = await new Promise((resolve, reject)=>{
             try{
@@ -8267,10 +8297,11 @@
           // Store encrypted JSON payload with .json extension to aid CORS/content-type and preview
           const blob = new Blob([JSON.stringify(cipher)], {type:'application/json'});
           const safeName = f.name.replace(/[^a-zA-Z0-9._-]/g,'_');
-          const r = firebase.ref(this.storage, `chat/${targetConnId}/${Date.now()}_${safeName}.enc.json`);
+          const storagePath = `chat/${targetConnId}/${Date.now()}_${safeName}.enc.json`;
+          const r = firebase.ref(this.storage, storagePath);
           console.log('File upload started');
           await firebase.uploadBytes(r, blob, { contentType: 'application/json' });
-          const url = await firebase.getDownloadURL(r);
+          const url = `storage://${storagePath}`;
           console.log('File upload completed');
           const text = `[file] ${f.name}`;
           const useReplyTo = (replyTo && result.sentCount === 0) ? replyTo : undefined;
@@ -8360,6 +8391,13 @@
         return obj;
       }catch(_){ return { packs: [] }; }
     }
+    async getStickerDecryptionKey(item){
+      if (item?.cryptoVersion === 'liber.secure-chat.ecdh-p256.v2'
+        || item?.cryptoVersion === 'liber.secure-chat.group-aes-gcm.v1') {
+        return this.getMessageDecryptionKeyForConn(item, item.encryptionConnectionId || this.activeConnection);
+      }
+      return this.getFallbackKey();
+    }
     async setStickerIndex(idx){ localStorage.setItem('liber_stickerpacks', JSON.stringify(idx)); }
 
     async addStickerFiles(fileList){
@@ -8368,19 +8406,26 @@
       // Current pack is timestamp-based
       const packId = 'pack_'+Date.now();
       const pack = { id: packId, name: 'My pack '+new Date().toLocaleDateString(), items: [] };
-      // Store PNGs to Firebase Storage encrypted, keep manifest locally with storage URLs
+      // Store encrypted sticker paths. Authenticated SDK reads preserve Storage rules;
+      // permanent Firebase download tokens are never minted for new chat media.
       for (const f of fileList){
         if (!/^image\//i.test(f.type || '')) continue;
         const safeName = (f.name || 'sticker.png').replace(/[^a-zA-Z0-9._-]/g,'_');
         try{
-          const aesKey = await this.getFallbackKey();
+          const aesKey = await this.getEncryptionKeyForConn(this.activeConnection);
+          const cryptoMeta = this.getEncryptionMetadataForConn(this.activeConnection);
           const base64 = await new Promise((resolve,reject)=>{ const r=new FileReader(); r.onload=()=>{ const s=String(r.result||''); resolve(s.includes(',')?s.split(',')[1]:''); }; r.onerror=reject; r.readAsDataURL(f); });
           const cipher = await chatCrypto.encryptWithKey(base64, aesKey);
           const path = `stickers/${this.currentUser.uid}/${Date.now()}_${safeName}.enc.json`;
           const sref = firebase.ref(this.storage, path);
           await firebase.uploadBytes(sref, new Blob([JSON.stringify(cipher)], {type:'application/json'}), { contentType: 'application/json' });
-          const url = await firebase.getDownloadURL(sref);
-          pack.items.push({ name: safeName, url });
+          pack.items.push({
+            name: safeName,
+            url: `storage://${path}`,
+            encryptionConnectionId: this.activeConnection,
+            cryptoVersion: cryptoMeta.cryptoVersion,
+            cryptoEpoch: cryptoMeta.cryptoEpoch
+          });
         }catch(_){
           try{
             const localDataUrl = await new Promise((resolve,reject)=>{ const r=new FileReader(); r.onload=()=> resolve(String(r.result||'')); r.onerror=reject; r.readAsDataURL(f); });
@@ -8477,9 +8522,8 @@
           (async()=>{
             try{
               if (p.items[0].local && p.items[0].dataUrl){ thumb.src = p.items[0].dataUrl; return; }
-              const res = await fetch(p.items[0].url);
-              const payload = await res.json();
-              const b64 = await chatCrypto.decryptWithKey(payload, await this.getFallbackKey());
+              const payload = await this.fetchEncryptedAttachmentPayload(p.items[0].url);
+              const b64 = await chatCrypto.decryptWithKey(payload, await this.getStickerDecryptionKey(p.items[0]));
               thumb.src = URL.createObjectURL(this.base64ToBlob(b64, 'image/png'));
             }catch(_){ }
           })();
@@ -8498,7 +8542,6 @@
         grid.innerHTML = '<div style="opacity:.8;padding:8px">Add a pack to start using stickers.</div>';
         return;
       }
-      const aesKey = await this.getFallbackKey();
       for (const it of pack.items){
         const cell = document.createElement('div');
         const img = document.createElement('img');
@@ -8506,8 +8549,8 @@
         (async()=>{
           try{
             if (it.local && it.dataUrl){ img.src = it.dataUrl; return; }
-            const res = await fetch(it.url); const payload = await res.json();
-            const b64 = await chatCrypto.decryptWithKey(payload, aesKey);
+            const payload = await this.fetchEncryptedAttachmentPayload(it.url);
+            const b64 = await chatCrypto.decryptWithKey(payload, await this.getStickerDecryptionKey(it));
             img.src = URL.createObjectURL(this.base64ToBlob(b64, 'image/png'));
           }catch(_){ img.src='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGMAAQAABQABdQh3VwAAAABJRU5ErkJggg=='; }
         })();
@@ -8546,14 +8589,20 @@
             if (!/^image\//i.test(f.type || '')) continue;
             const safeName = (f.name || 'sticker.png').replace(/[^a-zA-Z0-9._-]/g,'_');
             try{
-              const aesKey = await this.getFallbackKey();
+              const aesKey = await this.getEncryptionKeyForConn(this.activeConnection);
+              const cryptoMeta = this.getEncryptionMetadataForConn(this.activeConnection);
               const base64 = await new Promise((resolve,reject)=>{ const r=new FileReader(); r.onload=()=>{ const s=String(r.result||''); resolve(s.includes(',')?s.split(',')[1]:''); }; r.onerror=reject; r.readAsDataURL(f); });
               const cipher = await chatCrypto.encryptWithKey(base64, aesKey);
               const path = `stickers/${this.currentUser.uid}/${Date.now()}_${safeName}.enc.json`;
               const sref = firebase.ref(this.storage, path);
               await firebase.uploadBytes(sref, new Blob([JSON.stringify(cipher)], {type:'application/json'}), { contentType: 'application/json' });
-              const url = await firebase.getDownloadURL(sref);
-              pack.items.push({ name: safeName, url });
+              pack.items.push({
+                name: safeName,
+                url: `storage://${path}`,
+                encryptionConnectionId: this.activeConnection,
+                cryptoVersion: cryptoMeta.cryptoVersion,
+                cryptoEpoch: cryptoMeta.cryptoEpoch
+              });
             }catch(_){
               try{
                 const localDataUrl = await new Promise((resolve,reject)=>{ const r=new FileReader(); r.onload=()=> resolve(String(r.result||'')); r.onerror=reject; r.readAsDataURL(f); });
@@ -8584,8 +8633,8 @@
         (async()=>{
           try{
             if (it.local && it.dataUrl){ img.src = it.dataUrl; return; }
-            const res = await fetch(it.url); const payload = await res.json();
-            const b64 = await chatCrypto.decryptWithKey(payload, await this.getFallbackKey());
+            const payload = await this.fetchEncryptedAttachmentPayload(it.url);
+            const b64 = await chatCrypto.decryptWithKey(payload, await this.getStickerDecryptionKey(it));
             img.src = URL.createObjectURL(this.base64ToBlob(b64, 'image/png'));
           }catch(_){ }
         })();
@@ -8619,27 +8668,32 @@
       }catch(_){ alert('Failed to send sticker'); }
     }
 
-    async saveMessage({text,fileUrl,fileName, sharedAsset, media, connId, attachmentSourceConnId, attachmentKeySalt, isVideoRecording, isVoiceRecording, replyTo}){
+    async saveMessage({text,fileUrl,fileName, sharedAsset, media, connId, attachmentSourceConnId, attachmentKeySalt, attachmentCryptoVersion, attachmentCryptoEpoch, isVideoRecording, isVoiceRecording, replyTo}){
       const targetConnId = connId || this.activeConnection;
       if (!targetConnId) return;
-      const aesKey = await this.getFallbackKeyForConn(targetConnId);
+      const aesKey = await this.getEncryptionKeyForConn(targetConnId);
+      const cryptoMeta = this.getEncryptionMetadataForConn(targetConnId);
       const cipher = await chatCrypto.encryptWithKey(text, aesKey);
       const mediaArr = Array.isArray(media) && media.length ? this.toPlainObject(media) : null;
       const firstMedia = mediaArr && mediaArr[0] ? mediaArr[0] : null;
       const legacyFileUrl = fileUrl || (firstMedia && firstMedia.fileUrl) || null;
       const legacyFileName = fileName || (firstMedia && firstMedia.fileName) || null;
-      const previewText = this.stripPlaceholderText(text) || (legacyFileName ? `[Attachment] ${legacyFileName}` : (mediaArr ? `[${mediaArr.length} attachments]` : ''));
+      const previewText = legacyFileName || mediaArr ? '[Encrypted attachment]' : '[Encrypted message]';
       const msgRef = firebase.doc(firebase.collection(this.db,'chatMessages',targetConnId,'messages'));
       const doc = {
         id: msgRef.id,
         connId: targetConnId,
         sender: this.currentUser.uid,
         cipher,
+        cryptoVersion: cryptoMeta.cryptoVersion,
+        cryptoEpoch: cryptoMeta.cryptoEpoch,
         fileUrl: legacyFileUrl,
         fileName: legacyFileName,
         sharedAsset: (sharedAsset && typeof sharedAsset === 'object') ? this.toPlainObject(sharedAsset) : null,
         attachmentSourceConnId: String(attachmentSourceConnId || targetConnId || '').trim() || null,
         attachmentKeySalt: String(attachmentKeySalt || (firstMedia && firstMedia.attachmentKeySalt) || '').trim() || null,
+        attachmentCryptoVersion: attachmentCryptoVersion || (firstMedia && firstMedia.attachmentCryptoVersion) || cryptoMeta.cryptoVersion,
+        attachmentCryptoEpoch: attachmentCryptoEpoch || (firstMedia && firstMedia.attachmentCryptoEpoch) || cryptoMeta.cryptoEpoch,
         isVideoRecording: isVideoRecording === true || (firstMedia && firstMedia.isVideoRecording === true),
         isVoiceRecording: isVoiceRecording === true || (firstMedia && firstMedia.isVoiceRecording === true),
         previewText: previewText.slice(0, 220),
@@ -8651,7 +8705,7 @@
         doc.replyTo = {
           messageId: String(replyTo.messageId),
           connId: String(replyTo.connId || targetConnId),
-          textPreview: String(replyTo.textPreview || '').slice(0, 50),
+          textPreview: '[Encrypted reply]',
           senderName: String(replyTo.senderName || '').slice(0, 80)
         };
       }
@@ -8661,7 +8715,9 @@
       plainDoc.createdAtTS = ts;
       await firebase.setDoc(msgRef, plainDoc);
       await firebase.updateDoc(firebase.doc(this.db,'chatConnections',targetConnId),{
-        lastMessage: text.slice(0,200),
+        lastMessage: '[Encrypted message]',
+        lastMessageCryptoVersion: cryptoMeta.cryptoVersion,
+        lastMessageCryptoEpoch: cryptoMeta.cryptoEpoch,
         lastMessageSender: this.currentUser.uid,
         updatedAt: new Date().toISOString()
       });
@@ -8708,11 +8764,19 @@
         <input id="group-name-input" class="input" type="text" maxlength="80" placeholder="Group name">
         <input id="group-cover-input" class="input" type="url" placeholder="Group cover image URL">
         <button class="btn secondary" id="save-group-meta-btn">Save group settings</button>
+        <button class="btn secondary" id="rotate-group-key-btn">Initialize / rotate encryption key</button>
       </div>
       <ul id="group-list" class="group-list"></ul><div class="group-actions"><button class="btn secondary" id="add-member-btn">Add member</button><button class="btn secondary" id="close-group-btn">Close</button></div>`;
       document.querySelector('.main').appendChild(panel);
       document.getElementById('close-group-btn').onclick = ()=> panel.remove();
       document.getElementById('save-group-meta-btn').onclick = async ()=>{ await this.saveGroupMeta(); };
+      document.getElementById('rotate-group-key-btn').onclick = async ()=>{
+        try{
+          await this.rotateGroupKeyForConn(this.activeConnection);
+          alert('Group encryption key rotated for the current participant set.');
+          await this.renderGroupPanel();
+        }catch(error){ alert(error?.message || 'Failed to rotate the group encryption key.'); }
+      };
       document.getElementById('add-member-btn').onclick = async ()=>{
         const s=document.getElementById('user-search');
         try{
@@ -8743,11 +8807,16 @@
         const nameInput = document.getElementById('group-name-input');
         const coverInput = document.getElementById('group-cover-input');
         const saveMetaBtn = document.getElementById('save-group-meta-btn');
+        const rotateKeyBtn = document.getElementById('rotate-group-key-btn');
         if (nameInput) nameInput.value = String(conn.groupName || '');
         if (coverInput) coverInput.value = String(conn.groupCoverUrl || '');
         if (nameInput) nameInput.disabled = !amAdmin;
         if (coverInput) coverInput.disabled = !amAdmin;
         if (saveMetaBtn) saveMetaBtn.disabled = !amAdmin;
+        if (rotateKeyBtn) rotateKeyBtn.disabled = !amAdmin;
+        if (summary && conn.groupKeyEpoch){
+          summary.innerHTML += ` · Encryption epoch ${String(conn.groupKeyEpoch)}`;
+        }
         for (let i=0;i<participants.length;i++){
           const uid = participants[i]; const name = usernames[i] || uid;
           const li = document.createElement('li');
@@ -8804,10 +8873,22 @@
         const names = (conn.participantUsernames||[]).filter((_,i)=> (conn.participants||[])[i]!==uid);
         let admins = Array.isArray(conn.admins)? conn.admins: [];
         admins = admins.filter(x=> x!==uid);
-        await firebase.updateDoc(ref, { participants: parts, participantUsernames: names, admins, updatedAt: new Date().toISOString() });
-        // Recompute key and possibly merge with existing connection with same set
         const key = this.computeConnKey(parts);
-        await firebase.updateDoc(ref, { key });
+        const rotation = await this.buildGroupKeyRotation(this.activeConnection, conn, parts);
+        await firebase.updateDoc(ref, {
+          participants: parts,
+          participantUsernames: names,
+          admins,
+          key,
+          ...rotation.fields,
+          [`groupKeyHistory.${rotation.state.epoch}`]: rotation.state,
+          updatedAt: new Date().toISOString()
+        });
+        this.sharedKeyCache[`${this.activeConnection}:group:${rotation.state.epoch}`] = rotation.groupKey;
+        this._cryptoMetaByConn.set(this.activeConnection, {
+          cryptoVersion: 'liber.secure-chat.group-aes-gcm.v1',
+          cryptoEpoch: rotation.state.epoch
+        });
         await this.renderGroupPanel(); await this.loadConnections();
       }catch(_){ alert('Failed to remove member'); }
     }
@@ -8846,31 +8927,252 @@
 
     async getOrCreateSharedAesKey(){
       if (!this.activeConnection) throw new Error('No active connection');
-      if (this.sharedKeyCache[this.activeConnection]) return this.sharedKeyCache[this.activeConnection];
+      return this.getEncryptionKeyForConn(this.activeConnection);
+    }
 
-      // Load my identity keys (ECDH)
-      const myUid = this.currentUser.uid;
-      const myId = await chatCrypto.loadOrCreateIdentity(myUid);
+    async ensurePublishedChatIdentity(){
+      const myUid = String(this.currentUser?.uid || '').trim();
+      if (!myUid) throw new Error('Sign in before initializing encrypted chat.');
+      const identity = await chatCrypto.loadOrCreateIdentity(myUid);
+      const fingerprint = await chatCrypto.fingerprintPublicJwk(identity.publicJwk);
+      const ref = firebase.doc(this.db, 'userPublicKeys', myUid);
+      const published = await firebase.getDoc(ref);
+      if (!published.exists()){
+        await firebase.setDoc(ref, {
+          uid: myUid,
+          publicJwk: identity.publicJwk,
+          fingerprint,
+          cryptoVersion: 'liber.secure-chat.identity-p256.v2',
+          createdAt: new Date().toISOString()
+        });
+      } else {
+        const publishedFingerprint = await chatCrypto.fingerprintPublicJwk(published.data()?.publicJwk);
+        if (publishedFingerprint !== fingerprint) {
+          throw new Error('This device does not match your published chat identity. Re-enroll it before sending.');
+        }
+      }
+      return { identity, fingerprint };
+    }
 
-      // Store my public key in Firestore under users collection for discovery
-      const pubRef = firebase.doc(this.db, 'userPublicKeys', myUid);
-      await firebase.setDoc(pubRef, { uid: myUid, publicJwk: myId.publicJwk, updatedAt: new Date().toISOString() }, { merge: true });
+    pinChatIdentity(uid, fingerprint){
+      const myUid = String(this.currentUser?.uid || '').trim();
+      const peerUid = String(uid || '').trim();
+      const value = String(fingerprint || '').trim();
+      if (!myUid || !peerUid || !value) throw new Error('Invalid chat identity fingerprint.');
+      const pinKey = `liber_secure_chat_peer_pin_v2:${myUid}:${peerUid}`;
+      const pinned = String(localStorage.getItem(pinKey) || '').trim();
+      if (pinned && pinned !== value) throw new Error(`The encryption key for ${peerUid} changed. Verify their identity before continuing.`);
+      if (!pinned) localStorage.setItem(pinKey, value);
+    }
 
-      // Determine peer uid
-      const peerUid = await this.getPeerUid();
+    async groupParticipantDigest(participants){
+      const normalized = Array.from(new Set((participants || []).map(String).filter(Boolean))).sort();
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(normalized.join('|')));
+      return Array.from(new Uint8Array(digest), b=>b.toString(16).padStart(2,'0')).join('');
+    }
 
-      // Fetch peer public key
+    getEncryptionMetadataForConn(connId){
+      return this._cryptoMetaByConn.get(String(connId || '')) || {
+        cryptoVersion: 'liber.secure-chat.ecdh-p256.v2',
+        cryptoEpoch: null
+      };
+    }
+
+    async buildGroupKeyRotation(connId, conn, nextParticipants){
+      const cid = String(connId || '').trim();
+      const myUid = String(this.currentUser?.uid || '').trim();
+      const participants = Array.from(new Set((nextParticipants || []).map(String).filter(Boolean))).sort();
+      const admins = Array.isArray(conn?.admins) ? conn.admins.map(String) : [];
+      if (!cid || !participants.includes(myUid) || !admins.includes(myUid)) {
+        throw new Error('Only a current chat admin can initialize or rotate the group encryption key.');
+      }
+      const { fingerprint: issuerFingerprint } = await this.ensurePublishedChatIdentity();
+      const issuerPrivateKey = await chatCrypto.getPrivateKey(myUid);
+      const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte)=> byte.toString(16).padStart(2, '0')).join('');
+      const epoch = `${Date.now().toString(36)}-${nonce}`;
+      const participantDigest = await this.groupParticipantDigest(participants);
+      const groupKey = await chatCrypto.generateGroupAesKey();
+      const envelopes = {};
+      for (const participantUid of participants){
+        const keySnap = await firebase.getDoc(firebase.doc(this.db, 'userPublicKeys', participantUid));
+        if (!keySnap.exists()) throw new Error(`Group key rotation is blocked until ${participantUid} opens Secure Chat and publishes an encryption identity.`);
+        const participantJwk = keySnap.data()?.publicJwk;
+        const recipientFingerprint = await chatCrypto.fingerprintPublicJwk(participantJwk);
+        this.pinChatIdentity(participantUid, recipientFingerprint);
+        const wrappingKey = await chatCrypto.deriveSharedAesKey(
+          issuerPrivateKey,
+          participantJwk,
+          `liber-secure-chat-group-wrap:${cid}:${epoch}:${participantUid}`
+        );
+        envelopes[participantUid] = {
+          recipientFingerprint,
+          wrappedKey: await chatCrypto.wrapGroupAesKey(groupKey, wrappingKey)
+        };
+      }
+      const state = {
+        schema: 'liber.secure-chat.group-key-epoch.v1',
+        epoch,
+        participantDigest,
+        issuerUid: myUid,
+        issuerFingerprint,
+        envelopes,
+        createdAt: new Date().toISOString()
+      };
+      return {
+        groupKey,
+        state,
+        fields: {
+          groupKeyVersion: 'liber.secure-chat.group-key-envelopes.v1',
+          groupKeyEpoch: epoch,
+          groupKeyParticipantDigest: participantDigest,
+          groupKeyIssuerUid: myUid,
+          groupKeyEnvelopes: envelopes,
+          groupKeyRotatedAt: state.createdAt,
+          keyRotationRequired: false
+        }
+      };
+    }
+
+    async rotateGroupKeyForConn(connId, suppliedConn = null, nextParticipants = null){
+      const cid = String(connId || '').trim();
+      let conn = suppliedConn;
+      if (!conn){
+        const snap = await firebase.getDoc(firebase.doc(this.db, 'chatConnections', cid));
+        if (!snap.exists()) throw new Error('Chat connection not found.');
+        conn = snap.data() || {};
+      }
+      const participants = nextParticipants || this.getConnParticipants(conn);
+      const rotation = await this.buildGroupKeyRotation(cid, conn, participants);
+      await firebase.updateDoc(firebase.doc(this.db, 'chatConnections', cid), {
+        ...rotation.fields,
+        [`groupKeyHistory.${rotation.state.epoch}`]: rotation.state,
+        updatedAt: new Date().toISOString()
+      });
+      this.sharedKeyCache[`${cid}:group:${rotation.state.epoch}`] = rotation.groupKey;
+      this._cryptoMetaByConn.set(cid, {
+        cryptoVersion: 'liber.secure-chat.group-aes-gcm.v1',
+        cryptoEpoch: rotation.state.epoch
+      });
+      return rotation;
+    }
+
+    async unwrapGroupKeyForConn(connId, conn, epoch){
+      const cid = String(connId || '').trim();
+      const wantedEpoch = String(epoch || conn?.groupKeyEpoch || '').trim();
+      if (!wantedEpoch) throw new Error('The encrypted group message has no key epoch.');
+      const cacheKey = `${cid}:group:${wantedEpoch}`;
+      if (this.sharedKeyCache[cacheKey]) return this.sharedKeyCache[cacheKey];
+      const history = (conn?.groupKeyHistory && typeof conn.groupKeyHistory === 'object') ? conn.groupKeyHistory : {};
+      const state = history[wantedEpoch] || (String(conn?.groupKeyEpoch || '') === wantedEpoch ? {
+        epoch: wantedEpoch,
+        participantDigest: conn?.groupKeyParticipantDigest,
+        issuerUid: conn?.groupKeyIssuerUid,
+        envelopes: conn?.groupKeyEnvelopes
+      } : null);
+      const myUid = String(this.currentUser?.uid || '').trim();
+      const envelope = state?.envelopes?.[myUid];
+      if (!state || !envelope?.wrappedKey || !state.issuerUid) throw new Error(`No group-key envelope is available for epoch ${wantedEpoch}.`);
+      await this.ensurePublishedChatIdentity();
+      const issuerSnap = await firebase.getDoc(firebase.doc(this.db, 'userPublicKeys', String(state.issuerUid)));
+      if (!issuerSnap.exists()) throw new Error('The group-key issuer identity is unavailable.');
+      const issuerJwk = issuerSnap.data()?.publicJwk;
+      const issuerFingerprint = await chatCrypto.fingerprintPublicJwk(issuerJwk);
+      if (state.issuerFingerprint && state.issuerFingerprint !== issuerFingerprint) throw new Error('The group-key issuer fingerprint does not match the published epoch metadata.');
+      this.pinChatIdentity(state.issuerUid, issuerFingerprint);
+      const privateKey = await chatCrypto.getPrivateKey(myUid);
+      const wrappingKey = await chatCrypto.deriveSharedAesKey(
+        privateKey,
+        issuerJwk,
+        `liber-secure-chat-group-wrap:${cid}:${wantedEpoch}:${myUid}`
+      );
+      const groupKey = await chatCrypto.unwrapGroupAesKey(envelope.wrappedKey, wrappingKey);
+      this.sharedKeyCache[cacheKey] = groupKey;
+      return groupKey;
+    }
+
+    async getGroupEncryptionKeyForConn(connId, conn){
+      const cid = String(connId || '').trim();
+      const participants = this.getConnParticipants(conn || {}).map(String).filter(Boolean);
+      const expectedDigest = await this.groupParticipantDigest(participants);
+      const admins = Array.isArray(conn?.admins) ? conn.admins.map(String) : [];
+      let activeConn = conn || {};
+      if (activeConn.keyRotationRequired === true || !activeConn.groupKeyEpoch || activeConn.groupKeyParticipantDigest !== expectedDigest){
+        if (!admins.includes(String(this.currentUser?.uid || ''))) {
+          throw new Error('Group encryption key rotation is required. Ask a chat or project admin to rotate the key.');
+        }
+        const rotation = await this.rotateGroupKeyForConn(cid, activeConn, participants);
+        activeConn = {
+          ...activeConn,
+          ...rotation.fields,
+          groupKeyHistory: {
+            ...((activeConn.groupKeyHistory && typeof activeConn.groupKeyHistory === 'object') ? activeConn.groupKeyHistory : {}),
+            [String(rotation.state.epoch)]: rotation.state
+          }
+        };
+      }
+      const key = await this.unwrapGroupKeyForConn(cid, activeConn, activeConn.groupKeyEpoch);
+      this._cryptoMetaByConn.set(cid, {
+        cryptoVersion: 'liber.secure-chat.group-aes-gcm.v1',
+        cryptoEpoch: String(activeConn.groupKeyEpoch)
+      });
+      return key;
+    }
+
+    async getEncryptionKeyForConn(connId){
+      const cid = String(connId || '').trim();
+      const myUid = String(this.currentUser?.uid || '').trim();
+      if (!cid || !myUid) throw new Error('Sign in and select a chat before sending.');
+
+      let conn = (this.connections || []).find((row)=> row && row.id === cid) || null;
+      // Encryption always uses the live membership/key epoch. A cached sidebar
+      // row must never authorize a write after a participant change.
+      const snap = await firebase.getDoc(firebase.doc(this.db, 'chatConnections', cid));
+      if (snap.exists()) conn = { id: snap.id, ...(snap.data() || {}) };
+      if (!conn) throw new Error('Chat connection not found.');
+      const participants = this.getConnParticipants(conn || {});
+      if (!participants.includes(myUid)) throw new Error('You are not a participant in this encrypted conversation.');
+      const isGroupOrProject = participants.length !== 2
+        || !!String(conn?.projectId || '').trim()
+        || conn?.type === 'project'
+        || !!String(conn?.groupName || '').trim()
+        || conn?.groupKeyVersion === 'liber.secure-chat.group-key-envelopes.v1';
+      if (isGroupOrProject) return this.getGroupEncryptionKeyForConn(cid, conn || {});
+      const peerUid = participants.find((uid)=> uid !== myUid);
+      if (!peerUid) throw new Error('The recipient identity could not be verified.');
+
+      await this.ensurePublishedChatIdentity();
+
       const peerSnap = await firebase.getDoc(firebase.doc(this.db, 'userPublicKeys', peerUid));
-      if (!peerSnap.exists()) throw new Error('Peer public key not found, ask peer to open chat');
-      const peerJwk = peerSnap.data().publicJwk;
+      if (!peerSnap.exists()) throw new Error('The recipient must open Secure Chat once before encrypted messages can be sent.');
+      const peerJwk = peerSnap.data()?.publicJwk;
+      const peerFingerprint = await chatCrypto.fingerprintPublicJwk(peerJwk);
+      this.pinChatIdentity(peerUid, peerFingerprint);
 
-      // Import my private key
+      const cached = this.sharedKeyCache[cid];
+      if (cached && cached.peerFingerprint === peerFingerprint && cached.aesKey) return cached.aesKey;
       const myPriv = await chatCrypto.getPrivateKey(myUid);
-
-      // Derive shared AES key
-      const aesKey = await chatCrypto.deriveSharedAesKey(myPriv, peerJwk);
-      this.sharedKeyCache[this.activeConnection] = aesKey;
+      const aesKey = await chatCrypto.deriveSharedAesKey(myPriv, peerJwk, `liber-secure-chat:${cid}`);
+      this.sharedKeyCache[cid] = { aesKey, peerFingerprint, cryptoVersion:'liber.secure-chat.ecdh-p256.v2' };
+      this._cryptoMetaByConn.set(cid, { cryptoVersion:'liber.secure-chat.ecdh-p256.v2', cryptoEpoch:null });
       return aesKey;
+    }
+
+    async getMessageDecryptionKeyForConn(message, connId){
+      if (message?.cryptoVersion === 'liber.secure-chat.group-aes-gcm.v1') {
+        const cid = String(connId || message?.connId || '').trim();
+        const epoch = String(message?.cryptoEpoch || '').trim();
+        let conn = (this.connections || []).find((row)=> row && row.id === cid) || null;
+        const hasEpoch = !!(epoch && conn?.groupKeyHistory?.[epoch]) || String(conn?.groupKeyEpoch || '') === epoch;
+        if (!conn || !hasEpoch){
+          const snap = await firebase.getDoc(firebase.doc(this.db, 'chatConnections', cid));
+          if (snap.exists()) conn = snap.data() || {};
+        }
+        return this.unwrapGroupKeyForConn(cid, conn || {}, epoch);
+      }
+      if (message?.cryptoVersion === 'liber.secure-chat.ecdh-p256.v2') {
+        return this.getEncryptionKeyForConn(connId);
+      }
+      return this.getFallbackKeyForConn(connId);
     }
 
     async getPeerUid(){
@@ -8973,7 +9275,7 @@
     }
 
     async getFallbackKeyCandidatesForConn(connId){
-      // Recompute per call to avoid stale wrong-key cache poisoning across chat switches.
+      // Legacy decrypt compatibility only. New writes call getEncryptionKeyForConn().
       const out = [];
       const add = (k)=>{ if (k && !out.includes(k)) out.push(k); };
       const tryAdd = async (factory)=>{
@@ -9021,6 +9323,7 @@
     }
 
     async getFallbackKeyForConn(connId){
+      // Legacy decrypt compatibility only. Do not use this for encryption.
       try{
         const keys = await this.getFallbackKeyCandidatesForConn(connId);
         if (keys && keys.length) return keys[0];
@@ -9945,6 +10248,36 @@
       return null;
     }
 
+    encryptedStoragePath(fileUrl){
+      const raw = String(fileUrl || '').trim();
+      const direct = /^storage:\/\/(.+)$/i.exec(raw);
+      if (direct?.[1]) return decodeURIComponent(direct[1]);
+      const firebaseUrl = /\/o\/([^?#]+)/i.exec(raw);
+      if (firebaseUrl?.[1]) return decodeURIComponent(firebaseUrl[1]);
+      return '';
+    }
+
+    async fetchEncryptedAttachmentPayload(fileUrl){
+      const rawUrl = String(fileUrl || '').trim();
+      const storagePath = this.encryptedStoragePath(rawUrl);
+      if (storagePath && this.storage && firebase.getBlob){
+        try{
+          const blob = await firebase.getBlob(firebase.ref(this.storage, storagePath));
+          const raw = await blob.text();
+          return raw ? JSON.parse(raw) : null;
+        }catch(error){
+          // Tokenized historical URLs stay decrypt-only compatible. New storage://
+          // references never fall through to an unauthenticated network fetch.
+          if (/^storage:\/\//i.test(rawUrl)) throw error;
+        }
+      }
+      if (/^storage:\/\//i.test(rawUrl)) throw new Error('authenticated-attachment-fetch-unavailable');
+      const response = await fetch(rawUrl, { mode:'cors', cache:'default' });
+      if (!response.ok) throw new Error('attachment-fetch-failed');
+      const raw = await response.text();
+      return raw ? JSON.parse(raw) : null;
+    }
+
     async renderEncryptedAttachment(containerEl, fileUrl, fileName, aesKey, sourceConnId = this.activeConnection, senderDisplayName = '', message = null){
       try {
         if (!containerEl?.isConnected) return;
@@ -9967,25 +10300,17 @@
             }
           }catch(_){}
         }
-        let payload;
-        const isRec = this.isVideoRecordingMessage(message, fileName) || this.isVoiceRecordingMessage(message, fileName);
-        const storagePathMatch = /\/o\/([^?#]+)/i.exec(String(fileUrl || ''));
-        if (!isRec && this.storage && firebase.getBlob && storagePathMatch?.[1]) {
-          try {
-            const pathDecoded = decodeURIComponent(storagePathMatch[1]);
-            const sref = firebase.ref(this.storage, pathDecoded);
-            const blob = await firebase.getBlob(sref);
-            const raw = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsText(blob); });
-            payload = (typeof raw === 'string' && raw) ? (()=>{ try{ return JSON.parse(raw); }catch(_){ return null; } })() : null;
-          } catch (_) {}
+        const attachmentCryptoVersion = message?.attachmentCryptoVersion || message?.cryptoVersion;
+        const attachmentCryptoEpoch = message?.attachmentCryptoEpoch || message?.cryptoEpoch;
+        if (attachmentCryptoVersion === 'liber.secure-chat.ecdh-p256.v2'
+          || attachmentCryptoVersion === 'liber.secure-chat.group-aes-gcm.v1') {
+          aesKey = await this.getMessageDecryptionKeyForConn({
+            ...message,
+            cryptoVersion: attachmentCryptoVersion,
+            cryptoEpoch: attachmentCryptoEpoch
+          }, sourceConnId || cid);
         }
-        if (!payload) {
-          const res = await fetch(fileUrl, { mode: 'cors', cache: 'default' });
-          if (!res.ok) throw new Error('attachment-fetch-failed');
-          const raw = await res.text();
-          try{ payload = raw ? JSON.parse(raw) : null; }
-          catch(_){}
-        }
+        const payload = await this.fetchEncryptedAttachmentPayload(fileUrl);
         const payloadCands = this.extractEncryptedPayloadCandidates(payload || {});
         let found = payload && typeof payload.iv === 'string' && typeof payload.data === 'string' ? payload : null;
         if (!found && payloadCands.length){
@@ -10428,9 +10753,9 @@
           }
           if (!decrypted && (isVideoRecording || isVoiceRecording)){
             try{
-              const ecdh = await this.getOrCreateSharedAesKey();
-              if (ecdh) {
-                b64 = await chatCrypto.decryptWithKey(payload, ecdh);
+              const secureKey = await this.getMessageDecryptionKeyForConn(message || {}, sourceConnId || this.activeConnection);
+              if (secureKey) {
+                b64 = await chatCrypto.decryptWithKey(payload, secureKey);
                 decrypted = true;
               }
             }catch(_){}
@@ -13411,7 +13736,7 @@ window.secureChatApp.showRecordingReview = function(blob, filename){
         return;
       }
       try {
-        const aesKey = await self.getFallbackKeyForConn(targetConnId);
+        const aesKey = await self.getEncryptionKeyForConn(targetConnId);
         const salts = await self.getConnSaltForConn(targetConnId);
         let base64;
         if (isVideoSend) {
@@ -13427,13 +13752,12 @@ window.secureChatApp.showRecordingReview = function(blob, filename){
           base64 = await new Promise((resolve,reject)=>{ const r=new FileReader(); r.onload=()=>{ const s=String(r.result||''); resolve(s.includes(',')?s.split(',')[1]:''); }; r.onerror=reject; r.readAsDataURL(blob); });
         }
         const cipher = await chatCrypto.encryptWithKey(base64, aesKey);
-        const safe = `chat/${targetConnId}/${Date.now()}_${filename}`;
-        const sref = firebase.ref(self.storage, `${safe}.enc.json`);
+        const storagePath = `chat/${targetConnId}/${Date.now()}_${filename}.enc.json`;
+        const sref = firebase.ref(self.storage, storagePath);
         await firebase.uploadBytes(sref, new Blob([JSON.stringify(cipher)], {type:'application/json'}), { contentType: 'application/json' });
-        const url2 = await firebase.getDownloadURL(sref);
         await self.saveMessage({
           text: isVideoSend ? '[video message]' : '[voice message]',
-          fileUrl: url2,
+          fileUrl: `storage://${storagePath}`,
           fileName: filename,
           connId: targetConnId,
           attachmentSourceConnId: targetConnId,

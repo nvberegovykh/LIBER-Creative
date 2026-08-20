@@ -38,9 +38,16 @@
     return { projectId: packageProjectId, specProjectId: expectedSpecProjectId };
   }
 
-  async function publishSpecScheduleSources(store, specProjectId, projectId, specPush, project, storagePath, revision) {
+  async function publishSpecScheduleSources(store, specProjectId, projectId, specPush, project, storagePath, revision, batch = null) {
     const collection = store.api.collection(store.db, 'specProjects', specProjectId, 'sources');
     const manifestRef = store.api.doc(collection, 'revex-revit');
+    const write = async (ref, value, options) => {
+      if (batch) {
+        batch.set(ref, value, options);
+        return;
+      }
+      await store.api.setDoc(ref, value, options);
+    };
     let previousIds = [];
     try {
       const previous = await store.api.getDoc(manifestRef);
@@ -55,7 +62,7 @@
       const identity = schedule?.sourceScheduleId || schedule?.presentation?.scheduleUniqueId || schedule?.schedule || `schedule-${sourceIds.length + 1}`;
       const sourceId = `revex-revit-${docId(identity)}`;
       sourceIds.push(sourceId);
-      await store.api.setDoc(store.api.doc(collection, sourceId), plain({
+      await write(store.api.doc(collection, sourceId), plain({
         type: 'revit', name: schedule?.schedule || 'REVEX Revit schedule',
         rev: specPush?.rev || revision, pushedAt: specPush?.pushedAt || iso(), payload: [schedule],
         linkedProjectId: projectId, sourceScheduleId: identity,
@@ -63,8 +70,11 @@
       }), plain({ merge: false }));
     }
 
-    for (const sourceId of previousIds.filter((id) => !sourceIds.includes(id))) {
-      await store.api.setDoc(store.api.doc(collection, sourceId), plain({
+    const retiredIds = previousIds.filter((id) => !sourceIds.includes(id));
+    if (batch && sourceIds.length + retiredIds.length + 3 > 500)
+      throw new Error('This BIM/Spec publication exceeds Firestore\'s atomic 500-write limit. Split the schedule package before publishing; no current pointer was changed.');
+    for (const sourceId of retiredIds) {
+      await write(store.api.doc(collection, sourceId), plain({
         type: 'revit', name: 'Retired REVEX Revit schedule', rev: specPush?.rev || revision,
         pushedAt: specPush?.pushedAt || iso(), payload: [], linkedProjectId: projectId,
         retired: true, retiredAt: iso(), storagePath
@@ -77,7 +87,7 @@
       linkedProjectId: projectId, scheduleSourceIds: sourceIds, scheduleCount: sourceIds.length,
       centralDocumentUniqueId: project?.central?.documentUniqueId || null, storagePath
     });
-    await store.api.setDoc(manifestRef, manifest, plain({ merge: false }));
+    await write(manifestRef, manifest, plain({ merge: false }));
     return manifest;
   }
 
@@ -202,6 +212,38 @@
     user: null,
     mode: 'local',
     lastLocalPackage: null,
+    authSettled: false,
+    _lastAuthUid: null,
+
+    _applyAuthState(user, source = 'auth') {
+      const previousMode = this.mode;
+      const previousUid = this._lastAuthUid;
+      this.user = user || null;
+      this._lastAuthUid = this.user?.uid || null;
+      this.mode = this.user ? 'cloud' : 'local';
+      this.authSettled = true;
+      if (previousMode === this.mode && previousUid === this._lastAuthUid) return this.mode;
+      const pending = this.lastLocalPackage?.cloud === false ? {
+        projectId: this.lastLocalPackage.projectId,
+        revision: this.lastLocalPackage.revision,
+        syncedAt: this.lastLocalPackage.syncedAt
+      } : null;
+      try {
+        root.dispatchEvent(new CustomEvent('revex:auth-mode-changed', { detail: {
+          mode: this.mode, uid: this._lastAuthUid, source, pendingLocalRevision: pending
+        } }));
+      } catch (_) {}
+      return this.mode;
+    },
+
+    _reconcileAuthState(source = 'live-auth-check') {
+      const live = this.fs?.auth?.currentUser || null;
+      const uid = live?.uid || null;
+      if (uid !== this._lastAuthUid || (live && this.mode !== 'cloud') || (!live && this.authSettled && this.mode !== 'local')) {
+        this._applyAuthState(live, source);
+      }
+      return this.mode;
+    },
 
     // Firebase's modular SDK rejects otherwise-plain objects created in a
     // different Window realm. Keep every REVEX writer on the SDK's own realm.
@@ -217,24 +259,26 @@
       if (this.fs?.db && this.api?.collection) {
         this.db = this.api.firestore && this.fs.app ? this.api.firestore(this.fs.app) : this.fs.db;
         this.user = this.fs.auth?.currentUser || null;
-        if (!this.user && this.api.onAuthStateChanged && this.fs.auth) {
+        if (this.api.onAuthStateChanged && this.fs.auth) {
           await new Promise((resolve) => {
             let settled = false;
-            const timer = setTimeout(() => { if (!settled) { settled = true; resolve(); } }, 2500);
+            const timer = setTimeout(() => {
+              if (!settled) { settled = true; this._applyAuthState(this.fs.auth?.currentUser || null, 'auth-timeout'); resolve(); }
+            }, 2500);
             try {
               this.api.onAuthStateChanged(this.fs.auth, (user) => {
-                this.user = user || null;
+                this._applyAuthState(user, 'auth-listener');
                 if (!settled) { settled = true; clearTimeout(timer); resolve(); }
               });
-            } catch (_) { clearTimeout(timer); resolve(); }
+            } catch (_) { clearTimeout(timer); this._applyAuthState(this.fs.auth?.currentUser || null, 'auth-listener-error'); resolve(); }
           });
         }
-        if (this.user) this.mode = 'cloud';
+        else this._applyAuthState(this.user, 'auth-initial');
       }
       return this.mode;
     },
 
-    isCloud() { return this.mode === 'cloud'; },
+    isCloud() { return this._reconcileAuthState() === 'cloud'; },
 
     async listProjects() {
       if (!this.isCloud()) {
@@ -468,6 +512,12 @@
           elementCount: integrity?.counts?.elements || viewer?.elements?.length || 0,
           localOnly: true
         }));
+        try {
+          localStorage.setItem(`liber.revex.pending.${projectId}`, JSON.stringify({
+            schema: 'liber.revex.pending-cloud-sync.v1', projectId, revision,
+            syncedAt: localPackage.syncedAt, reason: this.authSettled ? 'offline-or-signed-out' : 'auth-pending'
+          }));
+        } catch (_) {}
         return localPackage;
       }
       if (!this.fs.storage) throw new Error('LIBER Storage is not available in this session.');
@@ -478,11 +528,12 @@
       for (const file of uploadFiles) uploads[file.name] = await this.uploadFile(`${base}/${safe(file.name)}`, file);
 
       const specProjectId = await this.ensureSpecProject(projectId, packageBinding.specProjectId);
+      const publicationBatch = this.api.writeBatch ? this.api.writeBatch(this.db) : null;
       let specSync = { status: 'unlinked', projectId: null, rev: specPush?.rev || revision };
       if (specProjectId) {
         const source = await publishSpecScheduleSources(
           this, specProjectId, projectId, specPush, project,
-          uploads['spec-revit-push.json']?.path || null, revision);
+          uploads['spec-revit-push.json']?.path || null, revision, publicationBatch);
         specSync = { status: 'published', projectId: specProjectId, rev: source.rev, pushedAt: source.pushedAt, scheduleCount: source.scheduleCount };
       }
 
@@ -511,14 +562,29 @@
         writeBackToRvt: false
       });
 
-      await this.api.setDoc(this.api.doc(this.db, 'projects', projectId, 'revex', 'state'), state, plain({ merge: true }));
-      await this.api.setDoc(this.api.doc(this.db, 'projects', projectId, 'revexRevisions', revision), plain({
+      const currentRef = this.api.doc(this.db, 'projects', projectId, 'revex', 'state');
+      const revisionRef = this.api.doc(this.db, 'projects', projectId, 'revexRevisions', revision);
+      const revisionState = plain({
         ...state,
         viewerUrl: state.viewerUrl,
         designUrl: state.designUrl,
         projectUrl: state.projectUrl,
         createdAt: state.syncedAt
-      }), plain({ merge: false }));
+      });
+      if (publicationBatch) {
+        // Spec sources, immutable BIM revision, and current pointer become visible
+        // together. A failed publish therefore cannot expose mixed revisions.
+        publicationBatch.set(revisionRef, revisionState, plain({ merge: false }));
+        publicationBatch.set(currentRef, state, plain({ merge: true }));
+        await publicationBatch.commit();
+      } else {
+        // Legacy SDK fallback keeps the current pointer last. An orphan immutable
+        // revision is recoverable; a current pointer without its source is not.
+        await this.api.setDoc(revisionRef, revisionState, plain({ merge: false }));
+        await this.api.setDoc(currentRef, state, plain({ merge: true }));
+      }
+
+      try { localStorage.removeItem(`liber.revex.pending.${projectId}`); } catch (_) {}
 
       return { ...localPackage, ...state, cloud: true, specProjectId };
     },

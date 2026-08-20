@@ -124,8 +124,10 @@ must(app,'FailuresProcessing -= RevexSpaceFailureShield.OnFailuresProcessing','z
 must(spaceShield,'TransactionPrefix = "LIBER gbXML"','failure shield limited to REVEX gbXML transactions');
 must(spaceShield,'normalized.Contains("greater than 0")','native zero-height Space failure match');
 must(spaceShield,'doc.GetElement(id) is Space','failure shield limited to MEP Spaces');
-must(spaceShield,'accessor.DeleteElements(transientSpaceIds)','transient invalid Space removal');
-must(spaceShield,'FailureProcessingResult.ProceedWithCommit','bounded REVEX transaction continuation');
+must(spaceShield,'authoritativeSpacesDeleted=0','authoritative Space preservation marker');
+must(spaceShield,'FailureProcessingResult.ProceedWithRollBack','bounded REVEX transaction rollback');
+mustNot(spaceShield,'DeleteElements','failure shield may not delete authoritative Spaces');
+mustNot(spaceShield,'ProceedWithCommit','zero-height transaction may not commit');
 
 const tabs=(index.match(/data-view="(?:bim|design|spec|docs|energy|chat|history)"/g)||[]).length;
 if(tabs<7)throw new Error(`main module tabs missing: ${tabs}`);
