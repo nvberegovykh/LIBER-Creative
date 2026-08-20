@@ -33,13 +33,16 @@ vm.runInNewContext(source,context,{filename:'docs-pages-r115.js'});
 
 const api=root.__revexDocsPagesR115;
 assert.ok(api,'canonical Docs owner did not install');
-assert.equal(api.build,'20260818r134-docs-linked-pages1');
+assert.equal(api.build,'20260820r144-docs-disclosure1');
 assert.equal(api.fullSetAuthority,true);
 assert.equal(api.legacySheetProjection,true);
 assert.equal(typeof api.projectRows,'function');
 assert.equal(typeof api.orderedSheets,'function');
-assert.ok(ui.includes("docs-pages-r115.js?v=20260818r134-docs-linked-pages1"),'current UI owner does not load the linked-page Docs build');
+assert.ok(ui.includes("docs-pages-r115.js?v=20260820r147-release1"),'current UI owner does not load the disclosure-enabled linked-page Docs build');
 assert.ok(source.includes('const rows=projectRows(s.library)'),'canonical Docs renderer does not consume the projected library');
+assert.ok(source.includes('data-r115-disclosure'),'canonical Docs renderer does not use native disclosure controls');
+assert.ok(source.includes('liber.revex.docs-disclosures.v1.'),'Docs disclosure state is not project-scoped and persisted');
+assert.ok(!source.includes('setInterval('),'Docs must not poll for lifecycle state');
 
 const fullSet={
   id:'permit-r2',revexDocKind:'printing-set',printingSetId:'permit',printingSetName:'Permit Set',revision:'r2',createdAt:'2026-08-18T12:00:00Z',

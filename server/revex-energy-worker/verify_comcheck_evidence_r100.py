@@ -77,6 +77,38 @@ assert r100._extract_height("Building Height above grade plane 85'-0\" 65'-0\"")
 assert r100._extract_height("MAX BUILDING HEIGHT 85' 65'") is None
 assert r100._extract_zoning_gross_area('Zoning analysis Area Calculation Gross Area Totals: 100 SF 90 SF') is None
 assert r100._extract_zoning_gross_area(ZTEXT) == 10451.65
+
+# Midwood-style EN evidence is commonly split: diagram sheets own area/orientation,
+# while a separate current EN schedule owns U/SHGC/R. Both halves must survive the
+# evidence gate and remain joinable by the exact current assembly tag.
+selected = [
+    {'source':'revex_page_en_en-005.00_boundary.pdf','path':Path('REVEX_PAGE_EN_EN-005.00_BOUNDARY.pdf')},
+    {'source':'revex_page_en_en-008.00_schedule.pdf','path':Path('REVEX_PAGE_EN_EN-008.00_SCHEDULE.pdf')},
+]
+visible = {
+    selected[0]['source']:'EN-005 WALL W1 NORTH 1600 SF',
+    selected[1]['source']:'EN-008 WALL W1 R-13 R-8',
+}
+split_candidate = {'rows':[
+    {'sourceFile':selected[0]['path'].name,'kind':'wall','assemblyType':'W1','description':'Boundary region','orientation':'NORTH','grossAreaFt2':1600,'uFactor':None,'shgc':None,'cavityR':None,'continuousR':None,'confidence':.99,'evidence':'WALL W1 NORTH 1600 SF'},
+    {'sourceFile':selected[1]['path'].name,'kind':'wall','assemblyType':'W1','description':'Current wall schedule','orientation':None,'grossAreaFt2':None,'uFactor':None,'shgc':None,'cavityR':13,'continuousR':8,'confidence':.99,'evidence':'WALL W1 R-13 R-8'},
+]}
+split_rows, split_rejected = r100._validate_envelope_rows(split_candidate, selected, visible)
+assert len(split_rows) == 2, split_rejected
+assert r100._row_has_geometry(split_rows[0])
+assert r100._row_has_thermal(split_rows[1])
+
+# Conflicting current thermal signatures for the same exact assembly tag are never
+# averaged or guessed; the geometry row and its candidates fail closed together.
+conflicting = {'rows':split_candidate['rows'] + [
+    {'sourceFile':selected[1]['path'].name,'kind':'wall','assemblyType':'W1','description':'Conflicting scan','orientation':None,'grossAreaFt2':None,'uFactor':None,'shgc':None,'cavityR':19,'continuousR':5,'confidence':.99,'evidence':'WALL W1 R-19 R-5'},
+]}
+conflict_rows, conflict_rejected = r100._validate_envelope_rows(conflicting, selected, {
+    **visible, selected[1]['source']:'EN-008 WALL W1 R-13 R-8 WALL W1 R-19 R-5',
+})
+assert not conflict_rows
+assert any('conflicting thermal-property matches' in reason for reason in conflict_rejected)
+
 source = Path(r100.__file__).read_text(encoding='utf-8').upper()
 assert '250 MIDWOOD' not in source
 assert '79 WINTHROP' not in source
@@ -88,4 +120,6 @@ print(json.dumps({
     'qaFloor': r100.MIN_CONFIDENCE,
     'projectSpecificHardcode': False,
     'sourceEvidenceMutated': False,
+    'splitEnvelopeRowsJoinable': True,
+    'conflictingAssemblyFailsClosed': True,
 }))

@@ -19,7 +19,8 @@ const project = {
 const users = {
   owner: { uid: 'owner-a', profile: { role: 'user' } },
   member: { uid: 'member-a', profile: { role: 'user' } },
-  admin: { uid: 'admin-a', profile: { role: 'admin' } },
+  admin: { uid: 'admin-a', profile: { revexAdmin: true } },
+  selfPromoted: { uid: 'self-promoted-a', profile: {}, userDocument: { role: 'admin' } },
   outsider: { uid: 'outsider-a', profile: { role: 'user' } },
   anonymous: { uid: '', profile: {} },
   crossProjectMember: { uid: 'member-b', profile: { role: 'user' } }
@@ -52,6 +53,7 @@ const admin = assertFullFunctionalParity('admin', 'liber-admin');
 assertDenied('outsider');
 assertDenied('anonymous');
 assertDenied('crossProjectMember');
+assertDenied('selfPromoted');
 
 assert.equal(canMutateProjectAcl(project, users.owner.profile, users.owner.uid), true);
 assert.equal(canMutateProjectAcl(project, users.admin.profile, users.admin.uid), true);
@@ -70,6 +72,7 @@ console.log(JSON.stringify({
     liberAdmin: admin.role
   },
   denied: ['outsider', 'anonymous', 'cross-project-member'],
+  userProfileRoleIsNotAuthority: true,
   aclMutation: ['owner', 'liber-admin'],
   ordinaryMemberFunctionalParity: true
 }, null, 2));

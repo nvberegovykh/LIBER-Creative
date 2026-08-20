@@ -21,6 +21,7 @@ public sealed class GbxmlEngineeringService
     private const string EngineVersion = "1.1.9";
     private const string GraphFileName = "LIBER_gbXML_Preflight_and_Export.dyn";
     private const string PythonFileName = "LIBER_gbXML_Preflight_and_Export.py";
+    private const string GeometryEvidenceName = "REVIT-ENERGY-GEOMETRY.json";
 
     private static readonly IReadOnlyDictionary<string, string> InputNodes = new Dictionary<string, string>
     {
@@ -104,6 +105,24 @@ public sealed class GbxmlEngineeringService
         if (string.Equals(status, "EXPORTED", StringComparison.OrdinalIgnoreCase) &&
             (string.IsNullOrWhiteSpace(gbxmlPath) || !File.Exists(gbxmlPath)))
             status = "EXPORTED_MISSING_XML";
+
+        // The Dynamo exporter writes its geometry graph beside the gbXML, while an
+        // immutable Engineering revision is assembled exclusively from this run's
+        // private folder. Promote only the evidence named and digest-bound by this
+        // exact fresh report; never scan for or accept a prior run's fixed filename.
+        if (!settings.AuditOnly && string.Equals(status, "EXPORTED", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                PromoteGeometryEvidence(reportPath, gbxmlPath!, outputFolder, runFolder, doc, started);
+            }
+            catch (Exception ex)
+            {
+                status = "EXPORTED_MISSING_OR_INVALID_GEOMETRY_EVIDENCE";
+                summary = (summary + Environment.NewLine + "Geometry evidence: " + ex.Message).Trim();
+                RevexDiagnostics.Error("GBXML", "The fresh EXPORTED result could not be bound to immutable processed geometry evidence.", ex);
+            }
+        }
 
         RevexDiagnostics.Info("GBXML", $"Dynamo automation returned. status={status}; report={Display(reportPath, "none")}; xml={Display(gbxmlPath, "none")}; elapsed={(finished-started).TotalSeconds:F1}s");
         RevexDiagnostics.Dependency("GBXML", "Authoritative report", reportPath != null && File.Exists(reportPath), Display(reportPath, "none"));
@@ -644,6 +663,88 @@ public sealed class GbxmlEngineeringService
         }
     }
 
+    private static void PromoteGeometryEvidence(
+        string? reportPath,
+        string gbxmlPath,
+        string outputFolder,
+        string runFolder,
+        Document doc,
+        DateTime started)
+    {
+        if (string.IsNullOrWhiteSpace(reportPath) || !File.Exists(reportPath))
+            throw new InvalidDataException("The authoritative fresh report is missing.");
+        if (File.GetLastWriteTime(reportPath) < started.AddSeconds(-3))
+            throw new InvalidDataException("The authoritative report predates this gbXML run.");
+
+        string canonicalOutput = Path.GetFullPath(outputFolder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string canonicalXml = Path.GetFullPath(gbxmlPath);
+        string expectedSource = Path.GetFullPath(Path.Combine(canonicalOutput, GeometryEvidenceName));
+        using JsonDocument report = JsonDocument.Parse(File.ReadAllText(reportPath));
+        JsonElement root = report.RootElement;
+        string Text(JsonElement owner, string name) =>
+            owner.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString() ?? ""
+                : "";
+
+        if (!string.Equals(Text(root, "status"), "EXPORTED", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("The authoritative report does not claim an EXPORTED result.");
+        string reportXml = Text(root, "gbxml_path");
+        if (string.IsNullOrWhiteSpace(reportXml) ||
+            !string.Equals(Path.GetFullPath(reportXml), canonicalXml, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("The authoritative report belongs to different gbXML bytes.");
+        if (!root.TryGetProperty("geometry_evidence", out JsonElement metadata) || metadata.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("The authoritative report has no processed-geometry binding.");
+
+        string sourceValue = Text(metadata, "path");
+        if (string.IsNullOrWhiteSpace(sourceValue))
+            throw new InvalidDataException("The authoritative report has no processed-geometry path.");
+        string sourcePath = Path.GetFullPath(sourceValue);
+        if (!string.Equals(sourcePath, expectedSource, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(Path.GetFileName(sourcePath), GeometryEvidenceName, StringComparison.Ordinal))
+            throw new InvalidDataException("The processed-geometry path is outside this run's canonical output folder.");
+        if (!File.Exists(sourcePath) || File.GetLastWriteTime(sourcePath) < started.AddSeconds(-3))
+            throw new InvalidDataException("The processed-geometry file is missing or stale.");
+
+        string geometrySha = Sha256(sourcePath);
+        string xmlSha = Sha256(canonicalXml);
+        if (!string.Equals(Text(metadata, "schema"), "liber.revex.revit-energy-geometry.v1", StringComparison.Ordinal) ||
+            !string.Equals(Text(metadata, "sha256"), geometrySha, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(Text(metadata, "gbxmlSha256"), xmlSha, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("The report's processed-geometry digests do not match the fresh files.");
+
+        using (JsonDocument evidence = JsonDocument.Parse(File.ReadAllText(sourcePath)))
+        {
+            JsonElement facts = evidence.RootElement;
+            if (!string.Equals(Text(facts, "schema"), "liber.revex.revit-energy-geometry.v1", StringComparison.Ordinal) ||
+                !string.Equals(Text(facts, "authority"), "active-revit-document-processed-energy-geometry", StringComparison.Ordinal))
+                throw new InvalidDataException("The processed-geometry schema or authority is incompatible.");
+            if (!facts.TryGetProperty("sourceDocument", out JsonElement sourceDocument) ||
+                sourceDocument.ValueKind != JsonValueKind.Object ||
+                !string.Equals(Text(sourceDocument, "title"), doc.Title, StringComparison.Ordinal) ||
+                !string.Equals(Text(sourceDocument, "documentFingerprint"), CentralModelBindingService.ResolveDocumentFingerprint(doc), StringComparison.Ordinal))
+                throw new InvalidDataException("The processed geometry belongs to a different active Revit document.");
+            if (!facts.TryGetProperty("gbxml", out JsonElement evidenceXml) || evidenceXml.ValueKind != JsonValueKind.Object ||
+                !string.Equals(Text(evidenceXml, "sha256"), xmlSha, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The processed geometry is bound to different gbXML bytes.");
+        }
+
+        string destination = Path.Combine(runFolder, GeometryEvidenceName);
+        string temporary = Path.Combine(runFolder, $".{GeometryEvidenceName}.tmp-{Guid.NewGuid():N}");
+        try
+        {
+            File.Copy(sourcePath, temporary, overwrite: false);
+            if (!string.Equals(Sha256(temporary), geometrySha, StringComparison.OrdinalIgnoreCase))
+                throw new IOException("The private geometry-evidence copy failed digest verification.");
+            File.Move(temporary, destination, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary)) File.Delete(temporary);
+        }
+        RevexDiagnostics.Dependency("GBXML", "Immutable processed geometry evidence", true,
+            $"{destination}; sha256={geometrySha}; gbxmlSha256={xmlSha}");
+    }
+
     private static string? FindNewestSuccessfulXml(string folder, DateTime started)
     {
         if (!Directory.Exists(folder)) return null;
@@ -671,11 +772,15 @@ public sealed class GbxmlEngineeringService
             authority = "active-revit-document-t-z-title-evidence",
             generatedAt = DateTime.UtcNow,
             model = doc.Title,
+            documentUniqueId = doc.ProjectInformation?.UniqueId ?? "",
+            documentFingerprint = CentralModelBindingService.ResolveDocumentFingerprint(doc),
             identity.Digest,
             identity.DisplayName,
             identity.Sheets,
             identity.Fields,
             identity.Tokens,
+            normalized = identity.Normalized,
+            normalizedProvenance = identity.NormalizedProvenance,
             prohibitedSources = new[] { "browser-last-project", "prior-revision", "reference-project", "file-path-guess" }
         }, CreateJsonOptions(writeIndented: true)));
         string pageFolder = Path.Combine(runFolder, "REVIT-PAGES");

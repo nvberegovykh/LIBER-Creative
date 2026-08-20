@@ -26,6 +26,7 @@ from typing import Any
 import revex_publication_resume_r124 as _r124
 import revex_energy_pipeline_guard_r118 as _r118
 import revex_final_touchups as _current_touchups
+import revex_en1_amendment as _en1_amendment
 
 VERSION = "20260818-current-publication-resume3"
 _ORIGINAL_JSON_BLOB = _r124._json_blob
@@ -153,6 +154,9 @@ def install_publication_resume(app) -> None:
     _r124._prior_is_reusable = _prior_is_reusable
     _r124._pipeline = _pipeline
     _r124.install_publication_resume(app)
+    # Install after r124 so publication-only EN-1 amendments are intercepted before
+    # the general resume/full-pipeline owner. Normal requests delegate unchanged.
+    _en1_amendment.install(app)
 
 
 # Expose the proven surface for existing imports/tests.

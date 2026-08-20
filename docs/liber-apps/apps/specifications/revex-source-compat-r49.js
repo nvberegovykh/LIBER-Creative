@@ -9,12 +9,23 @@
   const cache=new Map();
   const forcedRefresh=new Set();
 
-  async function packageJson(url){
-    const key=String(url||'').trim();
+  function revexStore(){
+    try{return root.parent?.RevexStore||root.top?.RevexStore||null;}catch(_){return null;}
+  }
+
+  async function packageJson(source){
+    const storagePath=String(source?.storagePath||'').trim();
+    const legacyUrl=String(source?.payloadUrl||'').trim();
+    const key=storagePath?`storage://${storagePath}`:legacyUrl;
     if(!key) return null;
     if(cache.has(key)) return cache.get(key);
     const promise=(async()=>{
-      const response=await fetch(key,{cache:'no-store'});
+      const bridge=revexStore();
+      const url=storagePath
+        ? await bridge?.fileUrl?.(storagePath)
+        : (typeof bridge?.assertEphemeralUrl==='function'?bridge.assertEphemeralUrl(legacyUrl,'legacy Spec payload'):legacyUrl);
+      if(!url)throw new Error('REVEX schedule package has no authenticated Storage path.');
+      const response=await fetch(url,{cache:'no-store'});
       if(!response.ok) throw new Error(`REVEX schedule package returned ${response.status}.`);
       return response.json();
     })();
@@ -24,9 +35,9 @@
 
   async function hydrate(source){
     if(!source||source.type!=='revit'||source.retired||Array.isArray(source.payload)&&source.payload.length) return source;
-    if(source.payloadEncoding!=='revex-storage-index-v1'||!source.payloadUrl) return source;
+    if(source.payloadEncoding!=='revex-storage-index-v1'||(!source.storagePath&&!source.payloadUrl)) return source;
     try{
-      const pack=await packageJson(source.payloadUrl);
+      const pack=await packageJson(source);
       const schedules=Array.isArray(pack?.payload)?pack.payload:[];
       const index=Number(source.payloadIndex);
       let schedule=Number.isInteger(index)&&index>=0?schedules[index]:null;
@@ -40,7 +51,7 @@
       return {
         ...source,
         payload:[schedule],
-        payloadHydratedFrom:source.payloadUrl,
+        payloadHydratedFrom:source.storagePath?`storage://${source.storagePath}`:source.payloadUrl,
         ...(needsOneRefresh?{appliedRev:'__revex-r49-native-presentation-refresh__'}:{})
       };
     }catch(error){

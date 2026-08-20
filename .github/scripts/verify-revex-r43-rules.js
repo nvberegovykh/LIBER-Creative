@@ -29,6 +29,7 @@ const projectId = 'demo-revex-r43';
     const db = context.firestore();
     await setDoc(doc(db, 'users', 'admin'), { role: 'admin' });
     await setDoc(doc(db, 'users', 'member'), { role: 'user' });
+    await setDoc(doc(db, 'users', 'self-promoted'), { role: 'admin' });
     await setDoc(doc(db, 'projects', 'alpha'), {
       name: 'Alpha', ownerId: 'owner', memberIds: ['owner', 'member'], status: 'Active'
     });
@@ -54,7 +55,8 @@ const projectId = 'demo-revex-r43';
   const member = env.authenticatedContext('member').firestore();
   const owner = env.authenticatedContext('owner').firestore();
   const outsider = env.authenticatedContext('outsider').firestore();
-  const admin = env.authenticatedContext('admin').firestore();
+  const admin = env.authenticatedContext('admin', { revexAdmin: true }).firestore();
+  const selfPromoted = env.authenticatedContext('self-promoted').firestore();
   const anonymous = env.unauthenticatedContext().firestore();
 
   await assertSucceeds(getDoc(doc(member, 'projects', 'alpha')));
@@ -110,6 +112,7 @@ const projectId = 'demo-revex-r43';
   await assertFails(setDoc(doc(outsider, 'projects', 'alpha', 'revexIssues', 'forbidden'), { title: 'No' }));
   await assertFails(getDoc(doc(member, 'projects', 'beta', 'library', 'private')));
   await assertFails(getDoc(doc(anonymous, 'projects', 'alpha')));
+  await assertFails(getDoc(doc(selfPromoted, 'projects', 'alpha')));
 
   const memberProjectQuery = await getDocs(query(collection(member, 'projects'), where('memberIds', 'array-contains', 'member')));
   assert.equal(memberProjectQuery.size, 1);
@@ -131,6 +134,7 @@ const projectId = 'demo-revex-r43';
     outsiderDenied: true,
     crossProjectDenied: true,
     adminAccess: true
+    ,userProfileAdminSelfEscalationDenied: true
   });
   } finally {
     if (env) await env.cleanup();

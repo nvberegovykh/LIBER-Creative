@@ -74,12 +74,31 @@ public sealed class RevexSyncService
                 projectBinding.IdentityEvidenceSheets,
                 DateTime.UtcNow);
 
+            IReadOnlyList<JsonElement> familyMutations = FamilyMutationReceiptService.CompletedForSync(
+                doc,
+                binding.ProjectId ?? "",
+                binding.DocumentFingerprint);
+            string[] mutationBaseRevisions = familyMutations
+                .Select(row => row.GetProperty("context").GetProperty("baseSourceRevision").GetString() ?? "")
+                .Where(value => value.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(value => value, StringComparer.Ordinal)
+                .ToArray();
+
             string bindingPath = Path.Combine(staging, "project.json");
             File.WriteAllText(bindingPath, JsonSerializer.Serialize(new
             {
                 schema = "liber.revex.project.v2",
                 revision,
                 central = binding,
+                sourceMutations = new
+                {
+                    schema = "liber.revex.source-mutations.v1",
+                    projectId = binding.ProjectId,
+                    documentFingerprint = binding.DocumentFingerprint,
+                    baseSourceRevisions = mutationBaseRevisions,
+                    items = familyMutations
+                },
                 rules = new
                 {
                     dataOwnership = "user-owned",
@@ -115,6 +134,7 @@ public sealed class RevexSyncService
                 printingResult.SheetCount,
                 affectedPlanResult.ViewCount,
                 affectedPlanResult.ChangedElementCount,
+                familyMutations.Count,
                 binding);
 
             string finalFolder = AppPaths.CommitSyncRevision(staging, revision);
@@ -185,6 +205,7 @@ public sealed class RevexSyncService
         int printingSheetCount,
         int affectedPlanViewCount,
         int changedElementCount,
+        int familyMutationCount,
         RevexCentralBinding binding)
     {
         var coreNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -227,7 +248,7 @@ public sealed class RevexSyncService
                 binding.ProjectId,
                 binding.SpecProjectId
             },
-            counts = new { schedules = scheduleCount, elements = elementCount, printingSets = printingSetCount, printingSheets = printingSheetCount, affectedPlanViews = affectedPlanViewCount, changedElements = changedElementCount },
+            counts = new { schedules = scheduleCount, elements = elementCount, printingSets = printingSetCount, printingSheets = printingSheetCount, affectedPlanViews = affectedPlanViewCount, changedElements = changedElementCount, familyMutations = familyMutationCount },
             files
         }, JsonOptions), Encoding.UTF8);
     }

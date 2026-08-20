@@ -10,7 +10,9 @@ public sealed record ProjectIdentityEvidence(
     string DisplayName,
     IReadOnlyList<string> Sheets,
     IReadOnlyDictionary<string, string> Fields,
-    IReadOnlyList<string> Tokens);
+    IReadOnlyList<string> Tokens,
+    IReadOnlyDictionary<string, string> Normalized,
+    IReadOnlyDictionary<string, string> NormalizedProvenance);
 
 /// <summary>
 /// Reads current-project identity only from the active Revit document. Project
@@ -65,8 +67,12 @@ public static class ProjectIdentityEvidenceService
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(token => token, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        (IReadOnlyDictionary<string, string> normalized,
+         IReadOnlyDictionary<string, string> normalizedProvenance) = NormalizeProjectFields(fields);
         RevexDiagnostics.Info("PROJECT", $"Captured active-document T/Z identity evidence: document={doc.Title}; sheets={sheets.Count}; fields={fields.Count}; digest={digest[..16]}…");
-        return new ProjectIdentityEvidence(digest, displayName, sheets, fields, tokens);
+        return new ProjectIdentityEvidence(
+            digest, displayName, sheets, fields, tokens,
+            normalized, normalizedProvenance);
     }
 
     public static bool ProjectNameMatches(ProjectIdentityEvidence evidence, string? projectName)
@@ -131,6 +137,53 @@ public static class ProjectIdentityEvidenceService
         foreach (string key in keys)
             if (fields.TryGetValue(key, out string? value) && !string.IsNullOrWhiteSpace(value)) return value;
         return "";
+    }
+
+    private static (IReadOnlyDictionary<string, string> Values, IReadOnlyDictionary<string, string> Provenance)
+        NormalizeProjectFields(IReadOnlyDictionary<string, string> fields)
+    {
+        var values = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var provenance = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        void Set(string name, params string[] acceptedKeys)
+        {
+            foreach (string key in acceptedKeys)
+            {
+                if (!fields.TryGetValue(key, out string? value) || string.IsNullOrWhiteSpace(value))
+                    continue;
+                values[name] = value.Trim();
+                provenance[name] = key;
+                return;
+            }
+
+            // A title block may expose an explicit Project-prefixed field. Generic
+            // Address/City fields are deliberately excluded because they frequently
+            // identify the architect or consultant instead of the project site.
+            foreach (string key in acceptedKeys.Where(row => row.StartsWith("project.Project", StringComparison.OrdinalIgnoreCase)))
+            {
+                string parameter = key["project.".Length..];
+                KeyValuePair<string, string>? match = fields.FirstOrDefault(row =>
+                    row.Key.StartsWith("sheet.", StringComparison.OrdinalIgnoreCase) &&
+                    row.Key.EndsWith("." + parameter, StringComparison.OrdinalIgnoreCase) &&
+                    !string.IsNullOrWhiteSpace(row.Value));
+                if (match is { } found && !string.IsNullOrWhiteSpace(found.Key))
+                {
+                    values[name] = found.Value.Trim();
+                    provenance[name] = found.Key;
+                    return;
+                }
+            }
+        }
+
+        Set("title", "project.Project Name", "project.Building Name", "document.title");
+        Set("address", "project.Project Address");
+        Set("city", "project.Project City", "project.Project City/Town", "project.City", "project.City/Town");
+        Set("state", "project.Project State", "project.Project State/Province", "project.State", "project.State/Province");
+        Set("zip", "project.Project ZIP", "project.Project Zip Code", "project.Project Postal Code", "project.ZIP", "project.Zip Code", "project.Postal Code");
+        Set("projectNumber", "project.Project Number", "project.Number");
+        Set("buildingName", "project.Building Name");
+        Set("clientName", "project.Client Name", "project.Owner Name");
+        return (values, provenance);
     }
 
     private static string SafeKey(string? value) => Regex.Replace(value?.Trim() ?? "sheet", "[^A-Za-z0-9._-]+", "_");

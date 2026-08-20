@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import hashlib, json, os, re, subprocess, sys, tempfile, threading, time, uuid
+import hashlib, json, os, re, subprocess, sys, tempfile, threading, time
 from pathlib import Path
 from flask import Flask, jsonify, request
 from google.cloud import storage
+from revex_geometry_evidence import validate_geometry_evidence
 from werkzeug.exceptions import HTTPException
 
 APP = Flask(__name__)
 PIPELINE = Path(os.environ.get("REVEX_PIPELINE", "/opt/revex/server/revex_energy_pipeline_current.py"))
 TOKEN = os.environ.get("REVEX_ENERGY_RUNNER_TOKEN", "").strip()  # optional defense-in-depth; Cloud Run IAM is primary
 SOURCE_CANDIDATE = os.environ.get("REVEX_SOURCE_CANDIDATE", "").strip()
+STORAGE_BUCKET = os.environ.get("REVEX_STORAGE_BUCKET", "").strip()
 MIN_INTEGRITY = 0.80
 QUALITY_TARGET = 0.95
 COMCHECK_CONSENT_SCHEMA = "liber.revex.comcheck-consent.v1"
@@ -93,17 +95,20 @@ def require_comcheck_consent(data: dict, project_id: str, source_revision: str) 
     return consent
 
 
-def firebase_url(bucket_name: str, object_path: str, token: str) -> str:
-    from urllib.parse import quote
-    return f"https://firebasestorage.googleapis.com/v0/b/{quote(bucket_name,safe='')}/o/{quote(object_path,safe='')}?alt=media&token={quote(token,safe='')}"
+def upload_private(bucket, local: Path, object_path: str, content_type: str | None = None) -> dict:
+    """Publish a project artifact by authenticated Storage path only.
 
-
-def upload_with_token(bucket, local: Path, object_path: str, content_type: str | None = None) -> dict:
-    token = str(uuid.uuid4())
+    Overwrites replace any legacy download-token custom metadata on this exact
+    object. Firebase Storage rules remain the sole browser access boundary.
+    """
     blob = bucket.blob(object_path)
-    blob.metadata = {"firebaseStorageDownloadTokens": token}
+    blob.metadata = {
+        "revexAccess": "firebase-authenticated-path-only",
+        "revexSourceCandidate": SOURCE_CANDIDATE or "unbound",
+    }
+    blob.cache_control = "private, max-age=0, no-store"
     blob.upload_from_filename(str(local), content_type=content_type)
-    return {"path": object_path, "url": firebase_url(bucket.name, object_path, token), "bytes": local.stat().st_size, "sha256": sha256(local)}
+    return {"path": object_path, "bytes": local.stat().st_size, "sha256": sha256(local)}
 
 
 COMCHECK_SEMANTIC_VERSION = "20260815r49-schedule2"
@@ -183,19 +188,88 @@ PAGE_FACT_SCHEMA = {
 }
 
 
-def _identity_value(fields: dict, aliases: tuple[str, ...], *, reject: tuple[str, ...] = ()) -> str | None:
-    candidates = []
-    for key, raw in fields.items():
-        value = str(raw or "").strip()
-        normalized = "".join(ch.lower() for ch in str(key) if ch.isalnum())
-        if not value or any(token in normalized for token in reject):
+_NORMALIZED_IDENTITY_PROJECT_PROVENANCE = {
+    "title": {"project.project name", "project.building name"},
+    "address": {"project.project address"},
+    "city": {"project.project city", "project.project city/town", "project.city", "project.city/town"},
+    "state": {
+        "project.project state", "project.project state/province",
+        "project.state", "project.state/province",
+    },
+    "zip": {
+        "project.project zip", "project.project zip code", "project.project postal code",
+        "project.zip", "project.zip code", "project.postal code",
+    },
+    "projectNumber": {"project.project number", "project.number"},
+    "buildingName": {"project.building name"},
+    "clientName": {"project.client name", "project.owner name"},
+}
+_NORMALIZED_IDENTITY_SHEET_SUFFIX = {
+    "title": {"project name"},
+    "address": {"project address"},
+    "city": {"project city", "project city/town"},
+    "state": {"project state", "project state/province"},
+    "zip": {"project zip", "project zip code", "project postal code"},
+    "projectNumber": {"project number"},
+}
+
+
+def _allowed_normalized_identity_provenance(field: str, provenance: str) -> bool:
+    source = str(provenance or "").strip()
+    folded = source.casefold()
+    if folded in _NORMALIZED_IDENTITY_PROJECT_PROVENANCE.get(field, set()):
+        return True
+    if not folded.startswith("sheet.") or not any(
+        token in folded for token in (".parameter.", ".titleblock.", ".titleblocktype.")
+    ):
+        return False
+    return any(
+        folded.endswith("." + suffix)
+        for suffix in _NORMALIZED_IDENTITY_SHEET_SUFFIX.get(field, set())
+    )
+
+
+def _load_vetted_normalized_identity(identity: dict) -> tuple[dict, dict]:
+    normalized = identity.get("normalized")
+    if normalized is None:
+        normalized = identity.get("Normalized")
+    provenance = identity.get("normalizedProvenance")
+    if provenance is None:
+        provenance = identity.get("NormalizedProvenance")
+    if not isinstance(normalized, dict) or not isinstance(provenance, dict):
+        raise ValueError("active-document project identity is missing normalized values with field provenance")
+
+    raw_fields = identity.get("fields")
+    if raw_fields is None:
+        raw_fields = identity.get("Fields")
+    if not isinstance(raw_fields, dict):
+        raise ValueError("active-document project identity has no raw field graph for provenance verification")
+    folded_fields: dict[str, tuple[str, str]] = {}
+    for raw_key, raw_value in raw_fields.items():
+        key = str(raw_key or "").strip()
+        value = str(raw_value or "").strip()
+        folded = key.casefold()
+        if not key or not value:
             continue
-        match = max((len(alias) for alias in aliases if alias in normalized), default=0)
-        if not match:
+        if folded in folded_fields and folded_fields[folded] != (key, value):
+            raise ValueError("active-document project identity contains ambiguous field provenance")
+        folded_fields[folded] = (key, value)
+
+    values: dict[str, str] = {}
+    accepted_provenance: dict[str, str] = {}
+    for field in _NORMALIZED_IDENTITY_PROJECT_PROVENANCE:
+        value = str(normalized.get(field) or "").strip()
+        if not value:
             continue
-        authority = 3 if normalized.startswith("project") else 2 if "titleblock" in normalized else 1
-        candidates.append((authority, match, -len(normalized), value))
-    return sorted(candidates, reverse=True)[0][3] if candidates else None
+        source = str(provenance.get(field) or "").strip()
+        if not _allowed_normalized_identity_provenance(field, source):
+            raise ValueError(f"normalized project identity field {field} has non-project provenance")
+        raw = folded_fields.get(source.casefold())
+        if raw is None or raw[1] != value:
+            raise ValueError(f"normalized project identity field {field} does not match its raw Revit evidence")
+        values[field] = value
+        accepted_provenance[field] = raw[0]
+    return values, accepted_provenance
 
 
 def load_structured_identity(manifest: dict, local_by_name: dict[str, Path]) -> dict:
@@ -216,29 +290,32 @@ def load_structured_identity(manifest: dict, local_by_name: dict[str, Path]) -> 
     expected = str(binding.get("identityEvidenceDigest") or "").strip().lower()
     if not digest or digest != expected:
         raise ValueError("project identity evidence digest does not match the bound active Revit document")
-    fields = dict(identity.get("fields") or identity.get("Fields") or {})
+    vetted, accepted_provenance = _load_vetted_normalized_identity(identity)
     normalized = {
-        "title": _identity_value(fields, ("projectname", "buildingname", "projecttitle"), reject=("uniqu",)),
-        "address": _identity_value(fields, ("projectaddress", "siteaddress", "address"), reject=("business", "email")),
-        "houseNumber": _identity_value(fields, ("housenumber", "houseno", "streetnumber")),
-        "streetName": _identity_value(fields, ("streetname",)),
-        "borough": _identity_value(fields, ("borough",)),
-        "city": _identity_value(fields, ("projectcity", "city"), reject=("business",)),
-        "state": _identity_value(fields, ("projectstate", "stateprovince", "state"), reject=("status",)),
-        "zip": _identity_value(fields, ("zipcode", "postalcode", "projectzip", "zip")),
-        "block": _identity_value(fields, ("taxblock", "block")),
-        "lot": _identity_value(fields, ("taxlot", "lot")),
-        "bin": _identity_value(fields, ("buildingidentificationnumber", "binnumber", "bin")),
-        "communityBoard": _identity_value(fields, ("communityboard", "cbno", "cbnumber")),
-        "jobType": _identity_value(fields, ("jobtype", "filingtype")),
-        "architecturalJobNumber": _identity_value(fields, ("architecturaljobnumber", "architecturaljobno", "dobjobnumber")),
-        "mechanicalJobNumber": _identity_value(fields, ("mechanicaljobnumber", "mechanicaljobno")),
-        "plumbingJobNumber": _identity_value(fields, ("plumbingjobnumber", "plumbingjobno")),
+        "title": vetted.get("title") or None,
+        "address": vetted.get("address") or None,
+        "houseNumber": None,
+        "streetName": None,
+        "borough": None,
+        "city": vetted.get("city") or None,
+        "state": vetted.get("state") or None,
+        "zip": vetted.get("zip") or None,
+        "block": None,
+        "lot": None,
+        "bin": None,
+        "communityBoard": None,
+        "jobType": None,
+        "architecturalJobNumber": None,
+        "mechanicalJobNumber": None,
+        "plumbingJobNumber": None,
+        "projectNumber": vetted.get("projectNumber") or None,
+        "buildingName": vetted.get("buildingName") or None,
+        "clientName": vetted.get("clientName") or None,
     }
-    normalized["title"] = normalized["title"] or str(identity.get("displayName") or identity.get("DisplayName") or "").strip() or None
     normalized["documentModel"] = str(identity.get("model") or "").strip() or None
     normalized["evidenceDigest"] = digest
     normalized["evidenceSheets"] = list(identity.get("sheets") or identity.get("Sheets") or [])
+    normalized["normalizedProvenance"] = accepted_provenance
     return normalized
 
 
@@ -683,7 +760,7 @@ def require_integrity(manifest: dict, project_id: str, source_revision: str) -> 
 def validate_artifact_contract(manifest: dict, local_by_name: dict[str, Path]) -> tuple[Path, Path, Path | None, Path | None]:
     declared = list(manifest.get("artifacts") or [])
     declared_names = set()
-    gbxml = weather = report = summary = None
+    gbxml = weather = report = summary = geometry = None
     for row in declared:
         name = safe_name(row.get("name") or "")
         if not name or name.lower() in declared_names:
@@ -703,12 +780,19 @@ def validate_artifact_contract(manifest: dict, local_by_name: dict[str, Path]) -
         elif role == "weather-epw": weather = local
         elif role == "gbxml-report": report = local
         elif role == "gbxml-summary": summary = local
+        elif role == "revit-energy-geometry-evidence": geometry = local
 
     extras = set(local_by_name) - declared_names - {"engineering-sync.json"}
     if extras:
         raise ValueError("immutable Engineering revision contains undeclared artifact(s): " + ", ".join(sorted(extras)))
     if gbxml is None or weather is None:
         raise ValueError("Engineering manifest must declare one gbXML and one weather-epw artifact")
+
+    geometry_meta = dict(manifest.get("geometryEvidence") or {})
+    if geometry_meta:
+        if geometry is None:
+            raise ValueError("Engineering manifest geometryEvidence metadata has no declared geometry artifact")
+        validate_geometry_evidence(manifest, geometry, gbxml, sha256)
 
     first = weather.open("r", encoding="utf-8", errors="ignore").readline().strip()
     parts = [part.strip() for part in first.split(",")]
@@ -755,6 +839,8 @@ def run_energy():
     artifacts = list(data.get("artifacts") or [])
     if not project_id or not source_revision or not bucket_name or not output_prefix:
         return jsonify({"error": "projectId, sourceRevision, bucket, and outputPrefix are required"}), 400
+    if not STORAGE_BUCKET or bucket_name != STORAGE_BUCKET:
+        return jsonify({"error": "request bucket is not the release-bound REVEX Storage bucket"}), 400
     try:
         comcheck_consent = require_comcheck_consent(data, project_id, source_revision)
     except ValueError as exc:
@@ -924,7 +1010,7 @@ def run_energy():
                 }), 500
 
         manifest_object = f"{output_prefix}/energy-result.json"
-        manifest_upload = upload_with_token(bucket, result_path, manifest_object, "application/json")
+        manifest_upload = upload_private(bucket, result_path, manifest_object, "application/json")
         uploaded = []
         run_root = run_dir.resolve()
         for row in list(result_manifest.get("artifacts") or []):
@@ -938,17 +1024,17 @@ def run_energy():
                 return jsonify({"error": f"pipeline declared a missing Energy artifact: {rel}"}), 500
             if int(row.get("bytes") or 0) != local.stat().st_size or str(row.get("sha256") or "").lower() != sha256(local).lower():
                 return jsonify({"error": f"pipeline Energy artifact integrity mismatch: {rel}"}), 500
-            meta = upload_with_token(bucket, local, f"{output_prefix}/artifacts/{rel}")
+            meta = upload_private(bucket, local, f"{output_prefix}/artifacts/{rel}")
             uploaded.append({**row, **meta, "relativePath": rel, "name": row.get("name") or local.name, "kind": row.get("kind") or "energy-output"})
         if server_log.is_file() and not any(a.get("name") == server_log.name for a in uploaded):
-            meta = upload_with_token(bucket, server_log, f"{output_prefix}/artifacts/{server_log.name}", "text/plain")
+            meta = upload_private(bucket, server_log, f"{output_prefix}/artifacts/{server_log.name}", "text/plain")
             uploaded.append({**meta, "relativePath": server_log.name, "name": server_log.name, "kind": "diagnostic"})
         return jsonify({
             "schema": "liber.revex.energy-server-response.v1",
             "projectId": project_id, "sourceRevision": source_revision,
             "resultRevision": result_manifest.get("resultRevision"), "status": result_manifest.get("status"),
             "error": result_manifest.get("error"), "manifest": result_manifest,
-            "manifestPath": manifest_upload["path"], "manifestUrl": manifest_upload["url"], "artifacts": uploaded
+            "manifestPath": manifest_upload["path"], "artifacts": uploaded
         }), 200
 
 

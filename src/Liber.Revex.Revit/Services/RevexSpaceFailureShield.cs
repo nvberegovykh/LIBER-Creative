@@ -26,30 +26,29 @@ public static class RevexSpaceFailureShield
 
             Document doc = accessor.GetDocument();
             bool rollbackRequired = false;
+            var rawFailingIds = new HashSet<ElementId>();
             var protectedSpaceIds = new HashSet<ElementId>();
 
             foreach (FailureMessageAccessor failure in accessor.GetFailureMessages())
             {
                 string description = (failure.GetDescriptionText() ?? string.Empty).Trim();
-                string normalized = description.ToLowerInvariant();
-                bool zeroHeight =
-                    (normalized.Contains("space") && normalized.Contains("height") &&
-                     (normalized.Contains("greater than 0") || normalized.Contains("greater than zero") ||
-                      normalized.Contains("negative") || normalized.Contains("zero")));
-
-                if (!zeroHeight)
+                if (!IsZeroHeightSpaceFailure(description))
                     continue;
 
-                var authoritativeSpaceIds = failure.GetFailingElementIds()
+                var failureIds = failure.GetFailingElementIds()
                     .Where(id => id != ElementId.InvalidElementId)
-                    .Where(id => doc.GetElement(id) is Space)
                     .Distinct()
                     .ToList();
 
-                if (authoritativeSpaceIds.Count == 0)
-                    continue;
+                foreach (ElementId id in failureIds)
+                    rawFailingIds.Add(id);
 
-                foreach (ElementId id in authoritativeSpaceIds)
+                // Failure processing can run after Revit has already discarded a transient
+                // Space. In that case GetElement(id) legitimately returns null. The exact
+                // failure description and the narrowly-scoped REVEX transaction name remain
+                // sufficient authority to roll the isolated transaction back. Never let a
+                // transient-id lookup failure escape as a modal dialog.
+                foreach (ElementId id in failureIds.Where(id => doc.GetElement(id) is Space))
                     protectedSpaceIds.Add(id);
                 rollbackRequired = true;
             }
@@ -58,10 +57,12 @@ public static class RevexSpaceFailureShield
                 return;
 
             RevexDiagnostics.Warn("GBXML",
-                $"Rolling back REVEX transaction '{transaction}' because {protectedSpaceIds.Count} authoritative Space(s) " +
-                "reported invalid vertical extent. No Space is deleted; the exporter will use source-geometry fallback.");
+                $"Rolling back REVEX transaction '{transaction}' because Revit reported the exact zero-height Space failure " +
+                $"for {rawFailingIds.Count} failing id(s); {protectedSpaceIds.Count} still resolve to authoritative Spaces. " +
+                "No Space is deleted; the exporter will use source-geometry fallback.");
             RevexDiagnostics.Stage("GBXML", "ZERO_HEIGHT_SPACE_ROLLBACK_SHIELD", "PASSED",
-                $"transaction={transaction}; protectedSpaceIds={string.Join(",", protectedSpaceIds.Select(id => id.Value))}; " +
+                $"transaction={transaction}; rawFailingIds={string.Join(",", rawFailingIds.Select(id => id.Value))}; " +
+                $"protectedSpaceIds={string.Join(",", protectedSpaceIds.Select(id => id.Value))}; " +
                 "authoritativeSpacesDeleted=0; transactionRolledBack=true; modalSuppressed=true; userTransactionsUntouched=true");
             args.SetProcessingResult(FailureProcessingResult.ProceedWithRollBack);
         }
@@ -70,5 +71,12 @@ public static class RevexSpaceFailureShield
             // Never interfere with Revit's normal failure UI if this narrowly-scoped shield itself fails.
             RevexDiagnostics.Warn("GBXML", $"Zero-height Space failure shield yielded to Revit: {ex.Message}");
         }
+    }
+
+    private static bool IsZeroHeightSpaceFailure(string description)
+    {
+        string normalized = (description ?? string.Empty).Trim().TrimEnd('.').Trim().ToLowerInvariant();
+        return normalized == "space must have a height greater than 0" ||
+               normalized == "space must have a height greater than zero";
     }
 }

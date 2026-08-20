@@ -16,6 +16,7 @@ NORMALIZER = SERVER / 'revex_energy_identity_normalizer.py'
 CONTENT_AGENT = SERVER / 'revex_identity_content_agent.py'
 CONTENT_QA = SERVER / 'verify_identity_content_agent.py'
 GUARD = SERVER / 'revex_energy_pipeline_guard.py'
+CURRENT_PIPELINE = SERVER / 'revex_energy_pipeline_current.py'
 DOCKER = SERVER / 'Dockerfile'
 DEPLOY = SERVER / 'DEPLOY_ENERGY_WORKER_ONLY_R69.ps1'
 APPEARANCE = ROOT / 'docs/liber-apps/apps/revex/appearance-state-r75.js'
@@ -130,6 +131,7 @@ normalizer_text = NORMALIZER.read_text(encoding='utf-8')
 content_agent_text = CONTENT_AGENT.read_text(encoding='utf-8')
 content_qa_text = CONTENT_QA.read_text(encoding='utf-8')
 guard_text = GUARD.read_text(encoding='utf-8')
+current_pipeline_text = CURRENT_PIPELINE.read_text(encoding='utf-8')
 docker_text = DOCKER.read_text(encoding='utf-8')
 deploy_text = DEPLOY.read_text(encoding='utf-8')
 appearance_text = APPEARANCE.read_text(encoding='utf-8')
@@ -170,8 +172,13 @@ assert 'COPY server/revex-energy-worker/revex_energy_pipeline_r69.py' in docker_
 assert 'COPY server/revex-energy-worker/verify_identity_content_agent.py' in docker_text
 assert 'python3 /opt/revex/server/verify_identity_normalizer.py' in docker_text
 assert 'python3 /opt/revex/server/verify_identity_content_agent.py' in docker_text
-assert 'REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_guard.py' in docker_text
+assert 'REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_current.py' in docker_text
 assert 'REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py' in docker_text
+assert 'COPY server/revex-energy-worker/revex_energy_pipeline_current.py /opt/revex/server/revex_energy_pipeline_current.py' in docker_text
+assert "app.PIPELINE==Path('/opt/revex/server/revex_energy_pipeline_current.py')" in docker_text
+assert 'import revex_energy_pipeline_guard as base' in current_pipeline_text
+assert 'shadow._install_full_pipeline_runner = _install_current_full_pipeline_runner' in current_pipeline_text
+assert 'revex_pipeline_runner.py' in current_pipeline_text
 assert '250 MIDWOOD' not in normalizer_text.upper()
 assert '79 WINTHROP' not in normalizer_text.upper()
 assert '250 MIDWOOD' not in content_agent_text.upper()
@@ -234,7 +241,7 @@ print(json.dumps({
         'r55GuardPreserved': True,
     },
     'energyDiagnostics': {'revisionScoped': True, 'staleFailureHidden': True, 'publishedRevisionReplay': True},
-    'deployment': {'nativeExitCodeAuthoritative': True, 'stderrCannotFalseFail': True, 'workerOnlyPreserved': True},
+    'deployment': {'nativeExitCodeAuthoritative': True, 'stderrCannotFalseFail': True, 'currentPipelineFacade': True, 'workerOnlyPreservedAsShadow': True},
     'docs': {'nativePdfPagePositioning': True, 'mainThreadPdfSplitterDisabled': True},
     'viewer': {'visibilityPersists': True,'appearanceSeparateFromTransform': True,'familyThenTypeFilter': True,'typeFinishSingleRecord': True,'texturePriorityColorFallback': True,'architexturesEmbeddedProperties': True,'restoreAllBatched': True},
 }, indent=2))
