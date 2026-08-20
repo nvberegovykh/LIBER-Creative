@@ -5,7 +5,7 @@
 
 class ChatGPTIntegration {
     constructor() {
-        // Configuration will be loaded from Gist
+        // Provider credentials remain behind the authenticated server proxy.
         this.apiKey = null;
         this.assistantId = null;
         this.proxyUrl = null; // Optional serverless proxy base URL
@@ -106,12 +106,6 @@ class ChatGPTIntegration {
         const headers = {};
         if (json) headers['Content-Type'] = 'application/json';
         if (beta) headers['OpenAI-Beta'] = beta;
-        if (!this.proxyUrl && this.apiKey) {
-            headers['Authorization'] = `Bearer ${this.apiKey}`;
-        }
-        if (this.proxyUrl && this.proxyAuth) {
-            headers['X-Proxy-Auth'] = this.proxyAuth;
-        }
         return headers;
     }
 
@@ -122,6 +116,10 @@ class ChatGPTIntegration {
         const base = this.getOpenAIBase();
         const url = path.startsWith('http') ? path : `${base}${path}`;
         const mergedHeaders = { ...this.buildOpenAIHeaders({ json, beta }), ...headers };
+        if (this.proxyUrl && window.firebaseService?.auth?.currentUser?.getIdToken) {
+            const token = await window.firebaseService.auth.currentUser.getIdToken();
+            if (token) mergedHeaders.Authorization = `Bearer ${token}`;
+        }
         const controller = new AbortController();
         const timer = setTimeout(() => {
             try { controller.abort(); } catch (_) {}
@@ -574,7 +572,7 @@ class ChatGPTIntegration {
     }
 
     /**
-     * Load configuration from GitHub Gist using existing SecureKeyManager
+     * Load public Firebase routing configuration from SecureKeyManager.
      */
     async loadConfiguration() {
         try {
@@ -587,19 +585,11 @@ class ChatGPTIntegration {
             this.projectId = String(projectId || 'liber-apps-cca20');
             this.functionsBaseUrl = `https://${this.functionsRegion}-${this.projectId}.cloudfunctions.net`;
             const defaultProxy = `https://${region}-${projectId}.cloudfunctions.net/openaiProxy`;
-            this.proxyUrl = (keys && keys.aiProxyUrl) || defaultProxy;
+            this.proxyUrl = defaultProxy;
             this.nycResolverUrl = `${this.functionsBaseUrl}/resolveNycZoningContext`;
-
-            // 2) Optional direct keys (not required when proxy is present)
-            if (keys && keys.openai) {
-                if (keys.openai.apiKey) this.apiKey = keys.openai.apiKey;
-                if (keys.openai.assistantId) this.assistantId = keys.openai.assistantId;
-                if (keys.openai.responsesModel) this.responsesModel = String(keys.openai.responsesModel || this.responsesModel);
-                if (keys.openai.chatFallbackModel) this.chatFallbackModel = String(keys.openai.chatFallbackModel || this.chatFallbackModel);
-            }
-
-            // Enable if either proxy or apiKey is available
-            this.isEnabled = !!(this.proxyUrl || this.apiKey);
+            this.apiKey = null;
+            this.proxyAuth = null;
+            this.isEnabled = !!this.proxyUrl;
             this.configLoaded = true;
             if (window.__devLog) window.__devLog(this.isEnabled ? 'WALL-E configured (proxy or key present)' : 'WALL-E not configured');
         } catch (error) {

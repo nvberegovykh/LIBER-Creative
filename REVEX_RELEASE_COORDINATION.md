@@ -83,7 +83,6 @@ Approved-run comparison semantics are therefore fixed as follows:
 
 This distinction is required for REVEX to work on projects whose current Revit geometry legitimately differs from the masked 79 Winthrop approved reference cohort.
 
-
 ## 9. 2026-08-14 GitHub security-gate boundary
 
 The `edb52b3...` local release gate and real 79 acceptance passed before GitHub mutation, including the full Energy chain and official clean-project COMcheck. PR #30 then passed the named `REVEX r49 final gate` but GitHub CodeQL rejected three high-severity inefficient-regular-expression alerts, all in `comcheck_backstop.py` DWR diagnostic/callback parsing.
@@ -122,3 +121,8 @@ The fix is image-packaging-only and must not change the accepted Energy chain:
 
 The Cloud Build Python 3.10 FutureWarning from `google.api_core` is non-fatal and is not the failure boundary. Do not upgrade the worker operating system/Python as part of this packaging fix.
 
+## 12. Cloud Storage access merge readiness
+
+`firebase/revex-secure-chat-storage.rules` is a merge fragment, not a deployable replacement. `.github/scripts/patch-live-storage-rules.js` must merge only the marked REVEX block inside the preserved live `/b/{bucket}/o` match. CI composes that fragment with a representative unrelated namespace and runs both deterministic merge checks and the Firebase Storage emulator access matrix.
+
+`firebase/deploy-current-storage-access.ps1` is the only current Storage rules publisher. It resolves the existing Storage release, downloads its exact active ruleset, applies the idempotent marked-block patch, creates a validated immutable ruleset through the Firebase Rules API, switches only that release, verifies the exact source-candidate marker, and restores the prior ruleset if post-release verification fails. If more than one bucket release exists, the publisher fails closed until `-Bucket`/`-StorageBucket` is supplied. `FINALIZE_REVEX.ps1` deploys and re-verifies this Storage binding before Energy broker cutover or Revit installation. Never deploy the fragment or an unreviewed generated wrapper directly.

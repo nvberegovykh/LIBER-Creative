@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Small r95 smoke gate: explicit identity must survive to the exact r49 consumer."""
 from __future__ import annotations
-import ast, json, re, tempfile
+import ast, json, os, re, tempfile
 from pathlib import Path
 import revex_user_identity_en1 as r89
 import revex_identity_content_agent as r88
@@ -23,7 +23,14 @@ with tempfile.TemporaryDirectory(prefix='revex-r95-boundary-') as td:
     request=json.loads(effective.read_text(encoding='utf-8'))
     projected=json.loads(Path(request['pageFactsPath']).read_text(encoding='utf-8'))
 
-    pipeline=Path(__file__).resolve().parents[2]/'src/Liber.Revex.Revit/Engineering/Energy/revex_energy_pipeline.py'
+    configured=str(os.environ.get('REVEX_PIPELINE_IMPL') or '').strip()
+    candidates=[Path(configured)] if configured else []
+    candidates.extend([
+        Path('/opt/revex/energy/revex_energy_pipeline.py'),
+        Path(__file__).resolve().parents[2]/'src/Liber.Revex.Revit/Engineering/Energy/revex_energy_pipeline.py',
+    ])
+    pipeline=next((candidate.resolve() for candidate in candidates if candidate.is_file()),None)
+    assert pipeline is not None, candidates
     tree=ast.parse(pipeline.read_text(encoding='utf-8'))
     wanted={'_best_page_value','current_project_identity'}
     nodes=[node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name in wanted]

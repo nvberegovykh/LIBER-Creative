@@ -37,6 +37,7 @@ jobs:
             .github/scripts/verify-revex-r127-single-controller.py \
             .github/scripts/verify-revex-current-release.py
           node --check .github/scripts/patch-live-firestore-rules.js
+          node --check .github/scripts/patch-live-storage-rules.js
           node --check .github/scripts/verify-revex-r43-rules.js
           node --check .github/scripts/verify-revex-r134-docs-linked-pages.js
           node --check .github/scripts/verify-revex-r135-blocks-placement.js
@@ -44,6 +45,12 @@ jobs:
           node --check .github/scripts/verify-revex-r137-wallt-fixer-adapters.js
           node --check .github/scripts/verify-revex-r138-wallt-ui.js
           node --check .github/scripts/verify-revex-r142-mobile-sheet.js
+          node --check .github/scripts/verify-revex-r143-ui-recovery.js
+          node --check .github/scripts/verify-revex-project-chat-isolation.js
+          node --check .github/scripts/verify-revex-storage-access.js
+          node --check .github/scripts/verify-revex-storage-live-rules.js
+          node --check .github/scripts/verify-secure-chat-group-crypto.js
+          node --check .github/scripts/verify-revex-security-boundaries.js
           node --check docs/liber-apps/apps/revex/docs-pages-r115.js
           node --check docs/liber-apps/apps/revex/blocks-palette-r126.js
           node --check docs/liber-apps/apps/revex/chat-convergence-r136.js
@@ -52,6 +59,8 @@ jobs:
           node --check docs/liber-apps/apps/revex/wallt-ui-r138.js
           node --check docs/liber-apps/apps/revex/mobile-sheet-r142.js
           node --check server/firebase-functions/project-chat.js
+          node --check docs/liber-apps/apps/secure-chat/chat-crypto.js
+          node --check docs/liber-apps/apps/secure-chat/chat.js
       - name: Current UI and runtime convergence
         run: |
           node .github/scripts/verify-revex-current-generation-r53.js
@@ -63,6 +72,11 @@ jobs:
           node .github/scripts/verify-revex-r137-wallt-fixer-adapters.js
           node .github/scripts/verify-revex-r138-wallt-ui.js
           node .github/scripts/verify-revex-r142-mobile-sheet.js
+          node .github/scripts/verify-revex-r143-ui-recovery.js
+          node .github/scripts/verify-revex-project-chat-isolation.js
+          node .github/scripts/verify-revex-storage-access.js
+          node .github/scripts/verify-secure-chat-group-crypto.js
+          node .github/scripts/verify-revex-security-boundaries.js
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -79,13 +93,20 @@ jobs:
             .github/scripts/fixtures/live-firestore-base.rules \
             firebase/revex-project-access-r43.rules \
             "$RULES/firestore.rules"
+          node .github/scripts/patch-live-storage-rules.js \
+            .github/scripts/fixtures/live-storage-base.rules \
+            firebase/revex-secure-chat-storage.rules \
+            "$RULES/storage.rules"
           cd "$RULES"
           NODE_PATH="$GITHUB_WORKSPACE/$RULES/node_modules" \
             firebase emulators:exec \
-              --only firestore --project demo-revex-r43 \
-              "node $GITHUB_WORKSPACE/.github/scripts/verify-revex-r43-rules.js"
+              --only firestore,storage --project demo-revex-r43 \
+              "REVEX_RULES_TEST_PROJECT=demo-revex-r43 node $GITHUB_WORKSPACE/.github/scripts/verify-revex-r43-rules.js && REVEX_RULES_TEST_PROJECT=demo-revex-r43 node $GITHUB_WORKSPACE/.github/scripts/verify-revex-r49-live-rules.js && REVEX_RULES_TEST_PROJECT=demo-revex-r43 node $GITHUB_WORKSPACE/.github/scripts/verify-revex-storage-live-rules.js"
       - name: Canonical current release contract
-        run: python .github/scripts/verify-revex-current-release.py
+        run: |
+          python .github/scripts/verify-revex-current-release.py
+          python .github/scripts/verify-revex-space-recovery.py
+          PYTHONPATH=server/revex-energy-worker python server/revex-energy-worker/verify_r95_consumer_boundary.py
       - name: Preserve proven r125 Energy shadow behavior
         run: python src/Liber.Revex.Revit/Engineering/Energy/verify_revex_r125_touchups.py
 
@@ -107,7 +128,7 @@ jobs:
             -e REVEX_VERTEX_PROJECT=liber-apps-cca20 \
             -e REVEX_VERTEX_LOCATION=global \
             revex-current-energy:${{ github.sha }} \
-            python3 -c "import os,app_entry,revex_energy_pipeline_current as p,revex_final_touchups as t,revex_energy_contracts as c; assert app_entry.APP is not None; assert p.CURRENT_RELEASE_PACKAGE=='REVEX_ENERGY_RELEASE_PACKAGE.zip'; assert abs(t.MISSING_VT-0.45)<1e-9; assert abs(c.DEFAULT_MISSING_VT-0.45)<1e-9; assert os.environ['REVEX_VERTEX_PROJECT']=='liber-apps-cca20'; print('REVEX_CURRENT_PRODUCTION_IMAGE=PASSED')"
+            python3 -c "from pathlib import Path; import os,app,app_entry,revex_energy_pipeline_current as p,revex_final_touchups as t,revex_energy_contracts as c; assert app_entry.APP is not None; assert app.PIPELINE==Path('/opt/revex/server/revex_energy_pipeline_current.py'); assert os.environ['REVEX_PIPELINE_IMPL']=='/opt/revex/energy/revex_energy_pipeline.py'; assert p.CURRENT_RELEASE_PACKAGE=='REVEX_ENERGY_RELEASE_PACKAGE.zip'; assert abs(t.MISSING_VT-0.45)<1e-9; assert abs(c.DEFAULT_MISSING_VT-0.45)<1e-9; assert os.environ['REVEX_VERTEX_PROJECT']=='liber-apps-cca20'; print('REVEX_CURRENT_PRODUCTION_IMAGE=PASSED')"
 
   windows-release:
     runs-on: windows-latest
@@ -129,6 +150,7 @@ jobs:
           foreach($file in @(
             '.\FINALIZE_REVEX.ps1',
             '.\firebase\deploy-current-access.ps1',
+            '.\firebase\deploy-current-storage-access.ps1',
             '.\server\revex-energy-worker\deploy-current.ps1',
             '.\server\revex-render-worker\deploy-current.ps1',
             '.\server\revex-report-functions\deploy-current.ps1'
@@ -152,6 +174,11 @@ jobs:
           node .github/scripts/verify-revex-r137-wallt-fixer-adapters.js
           node .github/scripts/verify-revex-r138-wallt-ui.js
           node .github/scripts/verify-revex-r142-mobile-sheet.js
+          node .github/scripts/verify-revex-r143-ui-recovery.js
+          node .github/scripts/verify-revex-project-chat-isolation.js
+          node .github/scripts/verify-revex-storage-access.js
+          node .github/scripts/verify-secure-chat-group-crypto.js
+          node .github/scripts/verify-revex-security-boundaries.js
       - name: Re-run canonical current release contract on Windows
         shell: pwsh
         run: python .github/scripts/verify-revex-current-release.py

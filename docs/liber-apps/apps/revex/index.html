@@ -67,7 +67,7 @@
           <option value="">Choose a project</option>
         </select>
       </label>
-      <button class="button ghost compact sp-btn sp-btn-ghost sp-btn-sm" id="new-project-button" type="button">New</button>
+      <button class="button ghost compact sp-btn sp-btn-ghost sp-btn-sm" id="new-project-button" type="button" aria-label="Create REVEX project">New</button>
       <div id="sync-indicator" class="sync-indicator sp-badge" data-tone="quiet">
         <span class="sync-dot"></span><span id="sync-label">Waiting for project</span>
       </div>
@@ -80,14 +80,14 @@
     </header>
 
     <nav class="main-nav sp-toolbar" aria-label="REVEX sections">
-      <div class="sp-seg revex-tabs">
-        <button type="button" data-view="bim" class="active">BIM</button>
-        <button type="button" data-view="design">Design Book</button>
-        <button type="button" data-view="spec">Spec Book</button>
-        <button type="button" data-view="docs">Docs</button>
-        <button type="button" data-view="energy">Energy</button>
-        <button type="button" data-view="chat">Chat</button>
-        <button type="button" data-view="history">History</button>
+      <div class="sp-seg revex-tabs" role="tablist" aria-label="Project workspaces">
+        <button id="revex-tab-bim" type="button" role="tab" aria-selected="true" aria-controls="view-bim" tabindex="0" data-view="bim" class="active"><span class="revex-r110-tab-label">BIM</span><span class="revex-r110-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 4 7v10l8 4 8-4V7z"/><path d="m4 7 8 4 8-4M12 11v10"/></svg></span></button>
+        <button id="revex-tab-design" type="button" role="tab" aria-selected="false" aria-controls="view-design" tabindex="-1" data-view="design"><span class="revex-r110-tab-label">Design Book</span><span class="revex-r110-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5.5A3.5 3.5 0 0 1 7.5 2H11v17H7.5A3.5 3.5 0 0 0 4 22zM20 5.5A3.5 3.5 0 0 0 16.5 2H13v17h3.5A3.5 3.5 0 0 1 20 22z"/></svg></span></button>
+        <button id="revex-tab-spec" type="button" role="tab" aria-selected="false" aria-controls="view-spec" tabindex="-1" data-view="spec"><span class="revex-r110-tab-label">Spec Book</span><span class="revex-r110-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3h12a2 2 0 0 1 2 2v16H4V5a2 2 0 0 1 2-2Z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span></button>
+        <button id="revex-tab-docs" type="button" role="tab" aria-selected="false" aria-controls="view-docs" tabindex="-1" data-view="docs"><span class="revex-r110-tab-label">Docs</span><span class="revex-r110-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3h8l4 4v14H7z"/><path d="M15 3v5h5M4 6v15h12"/></svg></span></button>
+        <button id="revex-tab-energy" type="button" role="tab" aria-selected="false" aria-controls="view-energy" tabindex="-1" data-view="energy"><span class="revex-r110-tab-label">Energy</span><span class="revex-r110-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m13 2-7 12h6l-1 8 7-12h-6z"/></svg></span></button>
+        <button id="revex-tab-chat" type="button" role="tab" aria-selected="false" aria-controls="view-chat" tabindex="-1" data-view="chat"><span class="revex-r110-tab-label">Chat</span><span class="revex-r110-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 4h16v12H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg></span></button>
+        <button id="revex-tab-history" type="button" role="tab" aria-selected="false" aria-controls="view-history" tabindex="-1" data-view="history"><span class="revex-r110-tab-label">History</span><span class="revex-r110-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6"/><path d="M4 4v4.6h4.6M12 7v5l3 2"/></svg></span></button>
       </div>
       <span class="nav-spacer"></span>
       <button type="button" id="invite-project-button" class="utility sp-btn sp-btn-ghost sp-btn-sm" aria-label="Invite people to the active REVEX project" disabled>Invite</button>
@@ -108,7 +108,7 @@
         </div>
       </section>
 
-      <section id="view-bim" class="view bim-view" hidden>
+      <section id="view-bim" class="view bim-view" role="tabpanel" aria-labelledby="revex-tab-bim" hidden>
         <aside class="rail sp-rail" aria-label="Central model navigator">
           <div class="rail-head sp-rail-head">
             <div>
@@ -117,7 +117,7 @@
             </div>
             <button class="icon-button sp-icon-btn" id="fit-model-rail" type="button" title="Fit model" aria-label="Fit model">⌗</button>
           </div>
-          <input id="element-search" class="search sp-inp" type="search" placeholder="Search element, room, material…" />
+          <input id="element-search" class="search sp-inp" type="search" aria-label="Search BIM elements, rooms, or materials" placeholder="Search element, room, material…" />
           <button id="show-hidden-elements" class="button ghost compact" type="button" aria-pressed="false">Show hidden only</button>
           <div id="model-facts" class="facts"></div>
           <div id="element-tree" class="tree"></div>
@@ -163,7 +163,7 @@
         </aside>
       </section>
 
-      <section id="view-design" class="view design-view" hidden>
+      <section id="view-design" class="view design-view" role="tabpanel" aria-labelledby="revex-tab-design" hidden>
         <aside class="chapter-rail sp-rail" aria-label="Design Book chapters">
           <div class="sp-rail-head"><div class="eyebrow">DESIGN BOOK</div><h2>Chapters</h2></div>
           <div id="chapter-list" class="chapter-list"></div>
@@ -187,7 +187,7 @@
         </aside>
       </section>
 
-      <section id="view-spec" class="view spec-view" hidden>
+      <section id="view-spec" class="view spec-view" role="tabpanel" aria-labelledby="revex-tab-spec" hidden>
         <div class="spec-head">
           <div><div class="eyebrow">REVIT SCHEDULES + USER-AUTHORED SPEC DATA</div><h1>Spec Book</h1></div>
           <div id="spec-status" class="resource-status">Connecting this project’s Spec Book…</div>
@@ -197,7 +197,7 @@
           <iframe id="spec-frame" title="REVEX Spec Book" loading="lazy"></iframe>
         </div>
       </section>
-      <section id="view-docs" class="view docs-view" hidden>
+      <section id="view-docs" class="view docs-view" role="tabpanel" aria-labelledby="revex-tab-docs" hidden>
         <div class="docs-toolbar">
           <div><div class="eyebrow">PROJECT DOCUMENT EXPLORER</div><h1>Docs</h1><p>Printing-set revisions, manual files and page references share one project library.</p></div>
           <div class="docs-actions">
@@ -223,7 +223,7 @@
         </div>
       </section>
 
-      <section id="view-energy" class="view energy-view" hidden>
+      <section id="view-energy" class="view energy-view" role="tabpanel" aria-labelledby="revex-tab-energy" hidden>
         <header class="energy-head">
           <div>
             <div class="eyebrow">SEPARATE ENGINEERING REVISION</div>
@@ -299,7 +299,7 @@
       </dialog>
 
 
-      <section id="view-history" class="view history-view" hidden>
+      <section id="view-history" class="view history-view" role="tabpanel" aria-labelledby="revex-tab-history" hidden>
         <div class="history-head">
           <div><div class="eyebrow">APPEND-ONLY PROJECT JOURNAL</div><h1>History</h1><p>Revit source revisions, BIM overlay edits, Design/Spec changes, issues, renders, documents and affected-plan exports.</p></div>
           <div class="history-actions"><button id="history-refresh" class="button ghost" type="button">Refresh</button><button id="history-export-plan" class="button" type="button">Export affected plan</button></div>
@@ -315,7 +315,7 @@
         </div>
       </section>
 
-      <section id="view-chat" class="view chat-view" hidden>
+      <section id="view-chat" class="view chat-view" role="tabpanel" aria-labelledby="revex-tab-chat" hidden>
         <div class="chat-head"><div><div class="eyebrow">PROJECT CHAT</div><h1>Chat</h1></div><div id="chat-context" class="resource-status">No item context selected.</div></div>
         <button id="open-chat" type="button" hidden aria-hidden="true"></button>
         <div class="chat-frame-wrap"><iframe id="chat-frame" title="REVEX project chat" loading="eager"></iframe><div id="chat-placeholder" class="chat-placeholder">Connecting the project conversation…</div></div>
@@ -487,7 +487,7 @@
   <script src="integrity.js?v=20260813r49"></script>
   <script src="firestore-compat.js?v=20260813r49"></script>
   <script src="shell-integrity.js?v=20260813r49-review2"></script>
-  <script src="ui-integrity.js?v=20260819r142-cleanup1"></script>
+  <script src="ui-integrity.js?v=20260820r143-ui-recovery1"></script>
   <script src="projection-integrity.js?v=20260813r49"></script>
   <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.179.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.179.1/examples/jsm/"}}</script>
   <script src="sync-docs-r24.js?v=20260813r49"></script>

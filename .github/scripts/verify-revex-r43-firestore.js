@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { createHash, webcrypto } = require('node:crypto');
 
 const root = path.resolve(__dirname, '../..');
 const appRoot = path.join(root, 'docs/liber-apps/apps/revex');
@@ -26,6 +27,7 @@ vm.runInContext(`
 const memory = new Map();
 const childRealm = vm.createContext({
   console, setTimeout, clearTimeout,
+  crypto: webcrypto, TextEncoder, TextDecoder,
   performance: { now: () => Date.now() },
   parent: parentRealm, top: parentRealm,
   document: { addEventListener() {}, getElementById() { return null; } },
@@ -83,29 +85,44 @@ function load(name) {
   assert.equal(childRealm.RevexStore.api, childRealm.firebase);
   assert.equal(childRealm.RevexStore.user.uid, 'project_member_r43');
 
+  const gbxml = '<gbXML />';
+  const weather = '';
+  const gbxmlHash = createHash('sha256').update(gbxml).digest('hex');
+  const weatherHash = createHash('sha256').update(weather).digest('hex');
   const files = vm.runInContext(`[
     {
-      name: 'engineering-sync.json', size: 512, type: 'application/json',
+      name: 'engineering-sync.json', type: 'application/json',
       async text() { return JSON.stringify({
         schema: 'liber.revex.engineering-sync.v1',
         architecture: 'REVIT_EVIDENCE_GRAPH_V1',
         projectId: 'project_r43', revision: 'eng_preserved_r43', gbxmlStatus: 'EXPORTED',
+        projectBinding: {
+          version: 'active-revit-evidence-v1',
+          identityEvidenceDigest: '${'a'.repeat(64)}',
+          documentUniqueId: 'revit-document-r43'
+        },
         publicationIntegrity: {
           threshold: 0.80, qualityTarget: 0.95,
           ratios: { physical: 0.91, analytical: 1, spatial: 1, openings: 0.97 }
         },
+        artifacts: [
+          { name: 'model.xml', bytes: ${Buffer.byteLength(gbxml)}, sha256: '${gbxmlHash}' },
+          { name: 'weather.epw', bytes: ${Buffer.byteLength(weather)}, sha256: '${weatherHash}' }
+        ],
         writeBackToRevitAfterExport: false, pdfInsertion: false
-      }); }
+      }); },
+      async arrayBuffer() { return new TextEncoder().encode(await this.text()).buffer; },
+      get size() { return new TextEncoder().encode(JSON.stringify({})).byteLength; }
     },
-    { name: 'model.xml', size: 1024, type: 'application/xml', async text() { return '<gbXML />'; } },
-    { name: 'weather.epw', size: 2048, type: 'application/octet-stream', async text() { return ''; } }
+    { name: 'model.xml', size: ${Buffer.byteLength(gbxml)}, type: 'application/xml', async text() { return ${JSON.stringify(gbxml)}; }, async arrayBuffer() { return new TextEncoder().encode(await this.text()).buffer; } },
+    { name: 'weather.epw', size: ${Buffer.byteLength(weather)}, type: 'application/octet-stream', async text() { return ${JSON.stringify(weather)}; }, async arrayBuffer() { return new TextEncoder().encode(await this.text()).buffer; } }
   ]`, childRealm);
 
   const engineering = await childRealm.RevexStore.syncEngineeringPackage(files, 'project_r43');
   assert.equal(engineering.cloud, true);
   assert.deepEqual(Array.from(childRealm.writes, (row) => row.path), [
-    'projects/project_r43/library/revex_engineering',
-    'projects/project_r43/library/revex_engineering_revision_eng_preserved_r43'
+    'projects/project_r43/library/revex_engineering_revision_eng_preserved_r43',
+    'projects/project_r43/library/revex_engineering'
   ]);
 
   load('integrity.js');

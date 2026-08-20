@@ -325,6 +325,10 @@ function verifyStaticContracts() {
   const projectAccess = read(path.join(root,'server/firebase-functions/project-access.js'));
   const projectAccessGate = read(path.join(root,'server/firebase-functions/verify-project-access-r49.js'));
   const projectRules = read(path.join(root,'firebase/revex-project-access-r43.rules'));
+  const secureKeys = read(path.join(root,'docs/liber-apps/js/secure-keys.js'));
+  const emailService = read(path.join(root,'docs/liber-apps/js/email-service.js'));
+  const secureChat = read(path.join(root,'docs/liber-apps/apps/secure-chat/chat.js'));
+  const secureChatCrypto = read(path.join(root,'docs/liber-apps/apps/secure-chat/chat-crypto.js'));
   const brokerPackage = JSON.parse(read(path.join(root,'server/firebase-functions/package.json')));
 
   assert.match(app,/activationToken:\s*0/); assert.match(app,/state\.activationToken!==activationToken\|\|state\.projectId!==projectId/);
@@ -349,6 +353,13 @@ function verifyStaticContracts() {
   assert.match(history,/setOverlays\?\.\(overlays\);publishOverlays\(\);render\(\);toast\('Previous state restored/);
   assert.match(index,/Show hidden only/); assert.match(index,/design-image-lightbox/); assert.match(index,/20260813r49/); assert.match(index,/active Revit document and its T\/Z pages/);
   assert.match(store,/clientBuild:\s*'20260813r49'/); assert.match(store,/liber\.revex\.comcheck-consent\.v1/); assert.match(store,/sha256File\(file\)/); assert.match(store,/this\.api\.writeBatch/); assert.ok(store.indexOf("batch.set(immutableRef") < store.indexOf("batch.set(currentRef"));
+  assert.match(store,/publishSpecScheduleSources\([\s\S]*publicationBatch\)/); assert.ok(store.indexOf('publicationBatch.set(revisionRef') < store.indexOf('publicationBatch.set(currentRef'), 'BIM current pointer must be the final write in the atomic BIM\/Spec publication batch');
+  assert.match(store,/_applyAuthState\(user/); assert.match(store,/_reconcileAuthState/); assert.match(store,/liber\.revex\.pending-cloud-sync\.v1/);
+  assert.match(secureKeys,/Provider credentials are deliberately unavailable to browser code/); assert.doesNotMatch(secureKeys,/api\.mailgun\.net|raw\.githubusercontent\.com\/.*gist/i);
+  assert.doesNotMatch(emailService,/Authorization['"]?:\s*`Basic|mailgunApiKey|mailgunDomain/); assert.doesNotMatch(emailService,/console\.(?:log|error)\([^\n]*(?:token|users|user data)/i);
+  assert.match(secureChat,/getEncryptionKeyForConn\(connId\)/); assert.match(secureChat,/liber\.secure-chat\.ecdh-p256\.v2/);
+  assert.match(secureChat,/liber\.secure-chat\.group-key-envelopes\.v1/); assert.match(secureChat,/Group encryption key rotation is required/);
+  assert.match(secureChat,/lastMessage:\s*'\[Encrypted message\]'/); assert.match(secureChatCrypto,/hash:\s*'SHA-256'/); assert.match(secureChatCrypto,/wrapGroupAesKey/);
   assert.match(worker,/"version": "0\.8\.19-r49"/); assert.match(worker,/REVIT_T_Z_EN_PAGE_SCAN_ONLY/); assert.match(worker,/Downloaded Engineering artifact failed transfer integrity/); assert.match(worker,/BASELINE_UPDATED_GEOMETRY\.osm/); assert.match(worker,/COMcheck_OFFICIAL_BACKSTOP_REPORT\.pdf/);
   assert.match(worker,/publisher-real-revit-evidence/); assert.match(worker,/SOURCE_CANDIDATE/); assert.match(worker,/sourceCandidate/); assert.match(worker,/def index_local_artifacts/); assert.match(worker,/indexed = index_revit_page_rows\(index\)/);
   assert.match(releaseAcceptance,/EXPECTED_REVIEW_ENTRIES/); assert.match(releaseAcceptance,/BEST_WORKING_ITERATION/); assert.match(releaseAcceptance,/worker\.index_local_artifacts\(engineering_root\.iterdir\(\)\)/);
@@ -363,7 +374,9 @@ function verifyStaticContracts() {
   assert.match(broker,/timeoutSeconds:\s*3600/); assert.match(broker,/SOURCE_CANDIDATE/); assert.match(broker,/sourceCandidate/); assert.match(broker,/SHA-256 transfer integrity/); assert.match(broker,/String\(resultManifest\.pipelineVersion \|\| ''\) !== '0\.8\.19-r49'/); assert.match(broker,/corrupt\.map/); assert.match(broker,/pipelineVersion \|\| ''\) === '0\.8\.19-r49'/); assert.doesNotMatch(broker,/legacy.*Engineering revision/i);
   assert.match(projectAccess,/ordinaryProjectMember|PROJECT_FUNCTIONS/); assert.match(projectAccessGate,/ordinaryMemberFunctionalParity/);
   assert.equal((projectRules.match(/REVEX_PROJECT_ACCESS_R43_BEGIN/g)||[]).length,1); assert.equal((projectRules.match(/REVEX_PROJECT_ACCESS_R43_END/g)||[]).length,1);
-  assert.match(projectRules,/allow read, write: if revexR43ProjectMember\(projectId\)/); assert.match(projectRules,/allow read, write: if revexR43SpecMember\(specProjectId\)/);
+  assert.match(projectRules,/function revexR43ImmutableProjectLane\(projectCollection\)/); assert.match(projectRules,/allow read, write: if revexR43SpecMember\(specProjectId\)/);
+  assert.match(projectRules,/secureChatNoGlobalAdminBypass/); assert.match(projectRules,/match \/userPublicKeys\/\{uid\}/); assert.match(projectRules,/allow update, delete, list: if false/);
+  assert.match(projectRules,/'groupKeyEnvelopes'/); assert.match(projectRules,/'groupKeyHistory'/);
   assert.match(projectRules,/request\.resource\.data\.memberIds == resource\.data\.memberIds/); assert.match(projectRules,/revexR43IsAdmin/);
   assert.equal(brokerPackage.engines.node,'22'); assert.equal(brokerPackage.dependencies['firebase-admin'],'14.2.0'); assert.equal(brokerPackage.dependencies['firebase-functions'],'7.3.2'); assert.equal(brokerPackage.overrides.uuid,'11.1.1');
   checkpoint('STATIC_RELEASE_CONTRACTS', { build: '20260813r49', privateWorker: true, authenticatedBroker: true, revisionScopedConsent: true });

@@ -13,7 +13,8 @@
     "currentRuntimeUsesCanonicalFacades": true,
     "packageFilenamesAreBoundaryAdaptersNotInternalArchitecture": true,
     "candidateWorkersProveReadyBeforeBrokerCutover": true,
-    "liveFirestoreRulesArePreservedBeforeRevexAccessPatch": true
+    "liveFirestoreRulesArePreservedBeforeRevexAccessPatch": true,
+    "liveStorageRulesArePreservedBeforeRevexAccessPatch": true
   },
   "current": {
     "releaseVerifier": ".github/scripts/verify-revex-current-release.py",
@@ -33,7 +34,8 @@
     "energyRunner": "src/Liber.Revex.Revit/Engineering/Energy/revex_pipeline_runner.py",
     "energyDeployer": "server/revex-energy-worker/deploy-current.ps1",
     "reportDeployer": "server/revex-report-functions/deploy-current.ps1",
-    "accessDeployer": "firebase/deploy-current-access.ps1"
+    "accessDeployer": "firebase/deploy-current-access.ps1",
+    "storageAccessDeployer": "firebase/deploy-current-storage-access.ps1"
   },
   "requiredCapabilities": {
     "projectIdentity": "one REVEX project identity shared by Revit, BIM, Design Book, Spec Book, Docs, Chat, History, Render and Energy under project owner/member/admin access",
@@ -93,7 +95,12 @@
       "a stale asynchronous connection from a previous project cannot enter the new project state or iframe",
       "a server response naming a different project fails closed",
       "project changes clear stale iframe state and draft context before reconnecting",
-      "BIM and Design Book context is delivered only to the iframe bound to the active project"
+      "BIM and Design Book context is delivered only to the iframe bound to the active project",
+      "new direct messages use P-256 ECDH plus HKDF and new group/project messages use per-participant wrapped random AES keys with immutable epochs",
+      "device identity private keys are non-exportable WebCrypto keys stored in IndexedDB and legacy fingerprints migrate without replacement",
+      "new encrypted attachments use authenticated Storage SDK reads without permanent download tokens",
+      "project Chat membership is synchronized only by the source-bound server controller and every membership change requires key rotation",
+      "browser configuration exposes only public Firebase routing fields; provider, admin and system credentials remain server-only"
     ],
     "issues": [
       "all active issues shown by default",

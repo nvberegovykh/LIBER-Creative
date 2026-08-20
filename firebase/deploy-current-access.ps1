@@ -64,7 +64,8 @@ function Assert-AccessContract([string]$Source,[string]$ExpectedSha="") {
     'REVEX_PROJECT_ACCESS_R43_BEGIN',
     'REVEX_PROJECT_ACCESS_R43_END',
     'function revexR43ProjectMember(projectId)',
-    'allow read, write: if revexR43ProjectMember(projectId);',
+    'function revexR43ImmutableProjectLane(projectCollection)',
+    'immutableRevisionUpdateDeleteDenied',
     'function revexR43SpecMember(specProjectId)',
     'allow read, write: if revexR43SpecMember(specProjectId);'
   )) { if(-not $Source.Contains($marker)){throw "Live REVEX access contract is missing: $marker"} }

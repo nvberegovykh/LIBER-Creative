@@ -129,13 +129,23 @@ async function openProjectChat(context = state.selectedContext) {
 // BIM rendering is owned exclusively by the external lightweight viewer.
 let viewer = null;
 function activeBimViewer(){ return window.__revexViewerR26Instance || window.__revexViewerR25Instance || window.__revexViewerR24Instance || window.__revexViewerR23Instance || window.__revexViewerR22Instance || window.__revexViewerR21Instance || viewer || null; }
+const REVEX_VIEWS = ['bim', 'design', 'spec', 'docs', 'energy', 'chat', 'history'];
 
 function showView(name) {
+  if (!REVEX_VIEWS.includes(name)) name = 'bim';
   closeWorkspaceRail();
   const hasProject = Boolean(state.projectId);
   $('#view-empty').hidden = hasProject;
-  for (const view of ['bim', 'design', 'spec', 'docs', 'energy', 'chat', 'history']) $(`#view-${view}`).hidden = !hasProject || view !== name;
-  $$('.main-nav [data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === name));
+  for (const view of REVEX_VIEWS) {
+    const panel = $(`#view-${view}`);
+    if (panel) panel.hidden = !hasProject || view !== name;
+  }
+  $$('.main-nav [data-view]').forEach((button) => {
+    const active = button.dataset.view === name;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+    button.tabIndex = active ? 0 : -1;
+  });
   if (hasProject) {
     history.replaceState(null, '', `${location.pathname}?${new URLSearchParams({ ...(params.get('inShell') ? { inShell: '1' } : {}), projectId: state.projectId, ...(state.preferredSpecId ? { specProjectId: state.preferredSpecId } : {}), view: name })}`);
     const av = activeBimViewer();
@@ -1057,6 +1067,18 @@ $('#issue-form').addEventListener('submit', async (event) => {
 });
 
 $$('.main-nav [data-view]').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
+$('.main-nav .revex-tabs')?.addEventListener('keydown', (event) => {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+  const tabs = $$('.main-nav [data-view]');
+  if (!tabs.length) return;
+  const current = Math.max(0, tabs.indexOf(document.activeElement));
+  const next = event.key === 'Home' ? 0
+    : event.key === 'End' ? tabs.length - 1
+      : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+  event.preventDefault();
+  tabs[next].focus();
+  showView(tabs[next].dataset.view);
+});
 $('#rail-toggle').addEventListener('click', toggleWorkspaceRail);
 $('#rail-scrim').addEventListener('click', closeWorkspaceRail);
 window.addEventListener('revex:viewer-mode', (event) => {

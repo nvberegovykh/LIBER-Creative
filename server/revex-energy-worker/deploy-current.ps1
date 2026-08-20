@@ -169,7 +169,7 @@ try {
         "run","deploy",$Service,"--project",$ProjectId,"--region",$Region,"--platform","managed",
         "--image",$Image,"--service-account",$WorkerSa,"--no-allow-unauthenticated",
         "--cpu=4","--memory=8Gi","--concurrency=1","--min-instances=0","--max-instances=3","--timeout=3600",
-        "--set-env-vars","REVEX_ENERGY_TIMEOUT_SECONDS=3500,REVEX_SOURCE_CANDIDATE=$SourceCandidate,REVEX_VERTEX_PROJECT=$ProjectId,REVEX_VERTEX_LOCATION=global",
+        "--set-env-vars","REVEX_ENERGY_TIMEOUT_SECONDS=3500,REVEX_SOURCE_CANDIDATE=$SourceCandidate,REVEX_VERTEX_PROJECT=$ProjectId,REVEX_VERTEX_LOCATION=global,REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_current.py,REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py",
         "--quiet"
       )
       $WorkerUrl = Resolve-VerifiedCandidate $GCloud

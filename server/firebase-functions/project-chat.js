@@ -11,7 +11,7 @@ const db = getFirestore();
 const PROJECT_ID_RE = /^[A-Za-z0-9._-]{1,160}$/;
 const SOURCE_RE = /^[0-9a-f]{40}$/i;
 const CHAT_SCHEMA = 'liber.revex.project-chat.v1';
-const BUILD = '20260819-project-chat3';
+const BUILD = '20260820-project-chat4';
 const SOURCE_CANDIDATE = String(process.env.REVEX_SOURCE_CANDIDATE || '').trim();
 
 function fail(status, code, message) {
@@ -87,17 +87,19 @@ async function loadProjectAccess(projectId, uid) {
   return { projectRef, project: { id: projectSnap.id, ...project }, role };
 }
 
-async function adminUids() {
-  const snap = await db.collection('users').where('role', '==', 'admin').limit(200).get();
-  return snap.docs.map((doc) => doc.id);
-}
-
-function projectParticipants(project, admins) {
+function projectParticipants(project) {
   return unique([
     project.ownerId,
-    ...(Array.isArray(project.memberIds) ? project.memberIds : []),
-    ...(admins || [])
+    ...(Array.isArray(project.memberIds) ? project.memberIds : [])
   ]);
+}
+
+function projectChatAdmins(project, participants) {
+  const allowed = new Set(participants || []);
+  return unique([
+    project.ownerId,
+    ...(Array.isArray(project.chatAdminIds) ? project.chatAdminIds : [])
+  ]).filter((uid) => allowed.has(uid));
 }
 
 function projectChatId(projectId) {
@@ -132,7 +134,12 @@ async function resolveExistingChat(projectId, project) {
   }
 
   const query = await db.collection('chatConnections').where('projectId', '==', projectId).limit(10).get();
-  const candidate = newest(query.docs.map((doc) => ({ ref: doc.ref, snap: doc, data: doc.data() || {} })));
+  // A user-created group must not become the project's private room merely by
+  // writing a known projectId. Only rooms previously bound by this controller
+  // are eligible for query-based recovery; explicit legacy links are handled above.
+  const candidate = newest(query.docs
+    .map((doc) => ({ ref: doc.ref, snap: doc, data: doc.data() || {} }))
+    .filter((row) => row.data.schema === CHAT_SCHEMA && row.data.source === 'revex-project-chat'));
   if (candidate) return { ...candidate, linked: false };
 
   const ref = db.doc(`chatConnections/${projectChatId(projectId)}`);
@@ -151,8 +158,10 @@ async function ensureProjectChat(projectId, uid) {
   if (!SOURCE_RE.test(SOURCE_CANDIDATE))
     throw fail(503, 'failed-precondition', 'REVEX Project Chat is not bound to an exact release source.');
   const access = await loadProjectAccess(projectId, uid);
-  const admins = unique(await adminUids());
-  const participants = projectParticipants(access.project, admins);
+  // Project Chat is a project boundary. A platform-wide administrator may manage
+  // project metadata through the project access service, but is never silently
+  // enrolled in a private conversation.
+  const participants = projectParticipants(access.project);
   if (!participants.length) throw fail(409, 'failed-precondition', 'REVEX project has no owner/member identities for Project Chat.');
 
   const selected = await resolveExistingChat(projectId, access.project);
@@ -160,7 +169,7 @@ async function ensureProjectChat(projectId, uid) {
   const existing = selected.data || {};
   const now = new Date().toISOString();
   const groupName = String(access.project.name || access.project.title || access.project.code || 'REVEX Project').trim().slice(0, 180) || 'REVEX Project';
-  const chatAdmins = unique([access.project.ownerId, ...admins]);
+  const chatAdmins = projectChatAdmins(access.project, participants);
   const created = !selected.snap.exists;
   const projectKey = `project:${projectId}`;
   const existingKey = String(existing.key || '').trim();
@@ -168,6 +177,12 @@ async function ensureProjectChat(projectId, uid) {
   // key under which their historical messages were created; project identity is separate.
   const connectionKey = created ? projectKey : (existingKey || projectKey);
   const legacySalts = cryptoLegacySalts(existing, connId, projectKey);
+  const membershipChanged = created ||
+    !sameArray(existing.participants || existing.memberIds || [], participants) ||
+    !sameArray(existing.memberIds || existing.participants || [], participants);
+  // The browser must generate and wrap a fresh random content key for every
+  // current participant before it can send into a new or membership-changed room.
+  const keyRotationRequired = membershipChanged || Boolean(existing.keyRotationRequired);
   const repaired = created ||
     String(access.project.chatConnId || '') !== connId ||
     String(existing.projectId || '') !== projectId ||
@@ -175,8 +190,7 @@ async function ensureProjectChat(projectId, uid) {
     String(existing.projectKey || '') !== projectKey ||
     String(existing.groupName || '') !== groupName ||
     Boolean(existing.archived) ||
-    !sameArray(existing.participants || existing.memberIds || [], participants) ||
-    !sameArray(existing.memberIds || existing.participants || [], participants) ||
+    membershipChanged ||
     !sameArray(existing.admins || [], chatAdmins) ||
     !sameArray(existing.cryptoLegacySalts || [], legacySalts) ||
     String(existing.sourceCandidate || '') !== SOURCE_CANDIDATE;
@@ -192,6 +206,7 @@ async function ensureProjectChat(projectId, uid) {
     participants,
     memberIds: participants,
     admins: chatAdmins,
+    keyRotationRequired,
     archived: false,
     source: 'revex-project-chat',
     sourceBuild: BUILD,
@@ -225,7 +240,8 @@ async function ensureProjectChat(projectId, uid) {
     created,
     accessRole: access.role,
     participantCount: participants.length,
-    cryptoLegacySaltCount: legacySalts.length
+    cryptoLegacySaltCount: legacySalts.length,
+    keyRotationRequired
   };
 }
 
@@ -266,5 +282,6 @@ module.exports._test = Object.freeze({
   participantSalt,
   cryptoLegacySalts,
   projectParticipants,
+  projectChatAdmins,
   projectChatId
 });

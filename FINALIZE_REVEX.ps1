@@ -1,6 +1,7 @@
 param(
   [string]$ProjectId = "liber-apps-cca20",
-  [string]$Region = "us-central1"
+  [string]$Region = "us-central1",
+  [string]$StorageBucket = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -99,9 +100,19 @@ function Assert-CurrentSource([string]$Root,[string]$Node,[string]$Python) {
     ".github\scripts\verify-revex-r137-wallt-fixer-adapters.js",
     ".github\scripts\verify-revex-r138-wallt-ui.js",
     ".github\scripts\verify-revex-r142-mobile-sheet.js",
+    ".github\scripts\verify-revex-r143-ui-recovery.js",
+    ".github\scripts\verify-revex-project-chat-isolation.js",
+    ".github\scripts\verify-revex-storage-access.js",
+    ".github\scripts\verify-revex-storage-live-rules.js",
+    ".github\scripts\verify-secure-chat-group-crypto.js",
+    ".github\scripts\verify-revex-security-boundaries.js",
+    ".github\scripts\verify-revex-space-recovery.py",
     ".github\scripts\patch-live-firestore-rules.js",
+    ".github\scripts\patch-live-storage-rules.js",
     "firebase\revex-project-access-r43.rules",
+    "firebase\revex-secure-chat-storage.rules",
     "firebase\deploy-current-access.ps1",
+    "firebase\deploy-current-storage-access.ps1",
     "docs\liber-apps\apps\revex\workspace-r51.js",
     "docs\liber-apps\apps\revex\docs-pages-r115.js",
     "docs\liber-apps\apps\revex\chat-convergence-r136.js",
@@ -112,6 +123,8 @@ function Assert-CurrentSource([string]$Root,[string]$Node,[string]$Python) {
     "docs\liber-apps\apps\revex\blocks-palette-r126.js",
     "docs\liber-apps\apps\revex\mobile-safe-r133.js",
     "docs\liber-apps\apps\revex\mobile-sheet-r142.js",
+    "docs\liber-apps\apps\secure-chat\chat-crypto.js",
+    "docs\liber-apps\apps\secure-chat\chat.js",
     "docs\liber-apps\apps\revex\render-agent.js",
     "docs\liber-apps\apps\revex\render-convergence-r126.js",
     "src\Liber.Revex.Revit\Services\FamilyPlacementService.cs",
@@ -135,7 +148,8 @@ function Assert-CurrentSource([string]$Root,[string]$Node,[string]$Python) {
   if([string]$release.current.releaseVerifier-ne ".github/scripts/verify-revex-current-release.py" -or
      [string]$release.current.energyDeployer-ne "server/revex-energy-worker/deploy-current.ps1" -or
      [string]$release.current.reportDeployer-ne "server/revex-report-functions/deploy-current.ps1" -or
-     [string]$release.current.accessDeployer-ne "firebase/deploy-current-access.ps1"){
+     [string]$release.current.accessDeployer-ne "firebase/deploy-current-access.ps1" -or
+     [string]$release.current.storageAccessDeployer-ne "firebase/deploy-current-storage-access.ps1"){
     throw "REVEX current release manifest does not point to canonical current controllers."
   }
 
@@ -155,6 +169,12 @@ function Assert-CurrentSource([string]$Root,[string]$Node,[string]$Python) {
   Require-Ok "Executable WALLT Helper/Fixer adapter contract" $Node @(".github\scripts\verify-revex-r137-wallt-fixer-adapters.js") $Root
   Require-Ok "Visible WALLT Helper/Fixer UI contract" $Node @(".github\scripts\verify-revex-r138-wallt-ui.js") $Root
   Require-Ok "Compact BIM/Design mobile sheet contract" $Node @(".github\scripts\verify-revex-r142-mobile-sheet.js") $Root
+  Require-Ok "Responsive and accessible UI recovery contract" $Node @(".github\scripts\verify-revex-r143-ui-recovery.js") $Root
+  Require-Ok "Project Chat membership isolation contract" $Node @(".github\scripts\verify-revex-project-chat-isolation.js") $Root
+  Require-Ok "REVEX and Secure Chat Storage access contract" $Node @(".github\scripts\verify-revex-storage-access.js") $Root
+  Require-Ok "Secure Chat direct/group encryption contract" $Node @(".github\scripts\verify-secure-chat-group-crypto.js") $Root
+  Require-Ok "Browser credential and authenticated proxy boundary contract" $Node @(".github\scripts\verify-revex-security-boundaries.js") $Root
+  Require-Ok "Non-destructive Revit Space recovery contract" $Python @(".github\scripts\verify-revex-space-recovery.py") $Root
   Require-Ok "Canonical full current REVEX release contract" $Python @(".github\scripts\verify-revex-current-release.py") $Root
 }
 
@@ -229,10 +249,38 @@ function Verify-LiveAccessSource([string]$GCloud) {
   $files=@($ruleset.source.files)
   if($files.Count-ne 1){throw "Live Firestore ruleset has $($files.Count) files; expected one preserved source."}
   $source=[string]$files[0].content
-  foreach($marker in @("REVEX_PROJECT_ACCESS_R43_BEGIN","REVEX_PROJECT_ACCESS_R43_END","REVEX_SOURCE_CANDIDATE=$SourceSha","allow read, write: if revexR43ProjectMember(projectId);")){
+  foreach($marker in @("REVEX_PROJECT_ACCESS_R43_BEGIN","REVEX_PROJECT_ACCESS_R43_END","REVEX_SOURCE_CANDIDATE=$SourceSha","function revexR43ImmutableProjectLane(projectCollection)")){
     if(-not $source.Contains($marker)){throw "Live project access binding is missing: $marker"}
   }
   Write-Host "PASS: Firestore project access is source-bound to $SourceSha." -ForegroundColor Green
+}
+
+function Verify-LiveStorageSource([string]$GCloud) {
+  Step "Verify live Storage access rules are bound to the exact release source"
+  $token=Capture-Native $GCloud @("auth","print-access-token")
+  if($token.Code-ne 0-or-not $token.Text){throw "Google Cloud could not issue an access token for final Storage rules verification."}
+  $headers=@{Authorization="Bearer $($token.Text.Trim())";"x-goog-user-project"=$ProjectId}
+  $all=@();$pageToken=""
+  do{
+    $uri="https://firebaserules.googleapis.com/v1/projects/$ProjectId/releases?pageSize=100"
+    if($pageToken){$uri += "&pageToken=$([uri]::EscapeDataString($pageToken))"}
+    $page=Invoke-RestMethod -Method Get -Uri $uri -Headers $headers -TimeoutSec 30
+    $all += @($page.releases)
+    $pageToken=if($page.PSObject.Properties.Name-contains 'nextPageToken'){[string]$page.nextPageToken}else{''}
+  }while($pageToken)
+  $storage=@($all|Where-Object{[string]$_.name-match "/releases/firebase\.storage/"})
+  if($StorageBucket){$storage=@($storage|Where-Object{[string]$_.name-eq "projects/$ProjectId/releases/firebase.storage/$StorageBucket"})}
+  if($storage.Count-ne 1){throw "Live Storage release is ambiguous. Pass -StorageBucket when the project has multiple buckets."}
+  $rulesetName=[string]$storage[0].rulesetName
+  if(-not $rulesetName.StartsWith("projects/$ProjectId/rulesets/")){throw "Live Storage release has no deterministic active ruleset."}
+  $ruleset=Invoke-RestMethod -Method Get -Uri ("https://firebaserules.googleapis.com/v1/"+$rulesetName) -Headers $headers -TimeoutSec 30
+  $files=@($ruleset.source.files)
+  if($files.Count-ne 1){throw "Live Storage ruleset has $($files.Count) files; expected one preserved source."}
+  $source=[string]$files[0].content
+  foreach($marker in @("REVEX_SECURE_STORAGE_ACCESS_BEGIN","REVEX_SECURE_STORAGE_ACCESS_END","REVEX_SOURCE_CANDIDATE=$SourceSha","function revexStorageChatParticipant(connId)")){
+    if(-not $source.Contains($marker)){throw "Live Storage access binding is missing: $marker"}
+  }
+  Write-Host "PASS: Storage access rules are source-bound to $SourceSha." -ForegroundColor Green
 }
 
 function Verify-LiveSourceBindings([string]$GCloud) {
@@ -249,7 +297,8 @@ function Verify-LiveSourceBindings([string]$GCloud) {
     if([string]$fn.serviceConfig.environmentVariables.REVEX_SOURCE_CANDIDATE-ne $SourceSha){throw "$functionName is not bound to exact source $SourceSha."}
   }
   Verify-LiveAccessSource $GCloud
-  Write-Host "PASS: Access, Project Chat, Energy and Report are source-bound to $SourceSha; Render is the verified live Companion client path." -ForegroundColor Green
+  Verify-LiveStorageSource $GCloud
+  Write-Host "PASS: Firestore/Storage access, Project Chat, Energy and Report are source-bound to $SourceSha; Render is the verified live Companion client path." -ForegroundColor Green
 }
 
 function Install-AddinAtomically {
@@ -267,7 +316,7 @@ function Install-AddinAtomically {
     $assembly=Join-Path $InstalledRoot "Liber.Revex.Revit.dll"
     $marker=[ordered]@{
       schema="liber.revex.current-release.v2";repository="nvberegovykh/LIBER-Creative";sourceCommit=$SourceSha;finalizedAtUtc=[DateTime]::UtcNow.ToString("o");
-      energyWorker=$script:EnergyService;renderProvider=$RenderModel;renderRuntime="Companion render-agent.js";missingVt=0.45;actualVtWins=$true;projectAccessSourceBound=$true;
+      energyWorker=$script:EnergyService;renderProvider=$RenderModel;renderRuntime="Companion render-agent.js";missingVt=0.45;actualVtWins=$true;projectAccessSourceBound=$true;storageAccessSourceBound=$true;
       geometryPolicy="whole-door + curtain-panel + physical-cover corrections";uiPolicy="current owners + visible WALLT bounded fixer + compact BIM/Design mobile sheet";previousInstalledRevisionShadow=$BackupRoot
     }|ConvertTo-Json -Depth 8
     [IO.File]::WriteAllText((Join-Path $InstalledRoot "REVEX-CURRENT-SOURCE.json"),$marker,[Text.UTF8Encoding]::new($false))
@@ -329,11 +378,15 @@ try{
   $energyDeploy=Join-Path $SourceRoot "server\revex-energy-worker\deploy-current.ps1"
   $reportDeploy=Join-Path $SourceRoot "server\revex-report-functions\deploy-current.ps1"
   $accessDeploy=Join-Path $SourceRoot "firebase\deploy-current-access.ps1"
+  $storageAccessDeploy=Join-Path $SourceRoot "firebase\deploy-current-storage-access.ps1"
 
   Invoke-ReleaseController "Stage and verify current Energy candidate without broker cutover" $energyDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:EnergyService,"-SourceCandidate",$SourceSha,"-CandidateOnly","-NoPause")
   Step "Verify current Companion UI and Render runtime are live before access/Energy cutover"
   Verify-LiveUi $SourceRoot
   Invoke-ReleaseController "Deploy preserved source-bound project access rules" $accessDeploy @("-ProjectId",$ProjectId,"-SourceCandidate",$SourceSha,"-NoPause")
+  $storageArgs=@("-ProjectId",$ProjectId,"-SourceCandidate",$SourceSha,"-NoPause")
+  if($StorageBucket){$storageArgs += @("-Bucket",$StorageBucket)}
+  Invoke-ReleaseController "Deploy preserved source-bound Storage access rules" $storageAccessDeploy $storageArgs
   Invoke-ReleaseController "Deploy source-bound Report, Daily Report and Project Chat resolver" $reportDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-SourceCandidate",$SourceSha,"-NoPause")
   Invoke-ReleaseController "Cut Energy broker to the already-verified current candidate" $energyDeploy @("-ProjectId",$ProjectId,"-Region",$Region,"-Service",$script:EnergyService,"-SourceCandidate",$SourceSha,"-BrokerOnly","-NoPause")
 
@@ -347,7 +400,7 @@ try{
   Write-Host "Companion/WALLT/BIM/Books/Docs/Chat/Issues/History/Blocks: exact current live runtime verified"
   Write-Host "Render: $RenderModel via canonical Companion render-agent.js; Google Generative Language API enabled"
   Write-Host "Energy: $($script:EnergyService) · actual VT preserved · missing VT 0.45 · complete release package required"
-  Write-Host "Project Chat + Report/Daily Report + access: source-bound $SourceSha"
+  Write-Host "Project Chat + Report/Daily Report + Firestore/Storage access: source-bound $SourceSha"
   Write-Host "Revit add-in: $(Join-Path $InstalledRoot 'Liber.Revex.Revit.dll')"
   Write-Host "Previous installed add-in preserved as shadow: $BackupRoot"
   Write-Host ""

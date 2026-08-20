@@ -225,41 +225,6 @@
     }
   }
 
-  async function getAdminUids() {
-    const fs = getFirebaseService();
-    if (!fs || !fs.db) return [];
-    try {
-      const q = fb().query(fb().collection(fs.db, 'users'), fb().where('role', '==', 'admin'), fb().limit(20));
-      const snap = await fb().getDocs(q);
-      return snap.docs.map((d) => d.id);
-    } catch (_) {}
-    return [];
-  }
-
-  async function createProjectChat(ownerId, projectName, additionalMemberIds) {
-    const fs = getFirebaseService();
-    const me = fs?.auth?.currentUser?.uid;
-    if (!me || !fs?.db) throw new Error('Not authenticated');
-    const memberIds = [ownerId];
-    (additionalMemberIds || []).forEach((id) => { if (!memberIds.includes(id)) memberIds.push(id); });
-    const adminUids = await getAdminUids();
-    adminUids.forEach((id) => { if (!memberIds.includes(id)) memberIds.push(id); });
-    const ownerGenericCount = state.projects.filter(
-      (p) => p.ownerId === ownerId && (!(p.name || '').trim() || /^Project\s*#\d+$/i.test((p.name || '').trim()))
-    ).length;
-    const groupNameResolved = (projectName && projectName.trim()) ? projectName.trim() : `Project #${ownerGenericCount + 1}`;
-    const data = JSON.parse(JSON.stringify({
-      participants: memberIds,
-      memberIds,
-      groupName: groupNameResolved,
-      updatedAt: new Date().toISOString(),
-      participantUsernames: [],
-      type: 'project'
-    }));
-    const connRef = await fb().addDoc(fb().collection(fs.db, 'chatConnections'), data);
-    return connRef.id;
-  }
-
   function renderProjects() {
     const list = byId('projects-list');
     if (!list) return;
@@ -686,32 +651,15 @@
         }
         const ref = fb().doc(fs.db, 'projects', id);
         await fb().updateDoc(ref, { name: displayName, description, status, statusColor: statusColor || null, memberIds, updatedAt: now });
-        const chatConnId = proj?.chatConnId;
-        if (chatConnId) {
-          try {
-            const connRef = fb().doc(fs.db, 'chatConnections', chatConnId);
-            const snap = await fb().getDoc(connRef);
-            if (snap.exists()) {
-              const adminUids = await getAdminUids();
-              const fullMemberIds = [...memberIds];
-              adminUids.forEach((id) => { if (!fullMemberIds.includes(id)) fullMemberIds.push(id); });
-              const connDisplayName = name.trim() || projectForDisplayName(proj?.ownerId || '', id);
-              await fb().updateDoc(connRef, {
-                groupName: connDisplayName,
-                participants: fullMemberIds,
-                memberIds: fullMemberIds,
-                projectId: id,
-                type: 'project',
-                updatedAt: now
-              });
-            }
-          } catch (_) {}
+        try {
+          await fs.callFunction('ensureProjectChat', { projectId: id });
+        } catch (chatError) {
+          console.error('[Project Manager] Chat membership synchronization failed', chatError);
+          notify('Project saved; Chat membership will repair when reopened.', 'warning');
         }
         notify('Project updated');
       } else {
         const finalOwnerId = ownerId || me.uid;
-        const otherMembers = memberIds.filter((uid) => uid !== finalOwnerId);
-        const chatConnId = await createProjectChat(finalOwnerId, displayName, otherMembers);
         const finalMemberIds = memberIds.length ? memberIds : [finalOwnerId];
         const projectData = JSON.parse(JSON.stringify({
           name: displayName,
@@ -720,14 +668,19 @@
           statusColor: statusColor || STATUS_COLORS[status] || null,
           ownerId: finalOwnerId,
           memberIds: finalMemberIds,
-          chatConnId,
           createdAt: now,
           updatedAt: now,
           requestData: null
         }));
         const projectRef = await fb().addDoc(fb().collection(fs.db, 'projects'), projectData);
-        await fb().updateDoc(fb().doc(fs.db, 'chatConnections', chatConnId), { projectId: projectRef.id });
         const projectId = projectRef.id;
+        try {
+          const chat = await fs.callFunction('ensureProjectChat', { projectId });
+          if (chat?.connId) projectData.chatConnId = chat.connId;
+        } catch (chatError) {
+          console.error('[Project Manager] Project Chat creation deferred', chatError);
+          notify('Project created; Chat will initialize when first opened.', 'warning');
+        }
         for (let i = 0; i < Math.min(state.projectFormFiles.length, MAX_FORM_FILES); i++) {
           const file = state.projectFormFiles[i];
           try {
