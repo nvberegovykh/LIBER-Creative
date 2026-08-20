@@ -26,6 +26,7 @@ const placement=read('src/Liber.Revex.Revit/Services/FamilyPlacementService.cs')
 const plans=read('src/Liber.Revex.Revit/Services/AffectedPlanExportService.cs');
 const revitRequests=read('src/Liber.Revex.Revit/Revit/RevitRequestHandler.cs');
 const app=read('src/Liber.Revex.Revit/App.cs');
+const spaceShield=read('src/Liber.Revex.Revit/Services/RevexSpaceFailureShield.cs');
 
 const uiBuild=(ui.match(/const BUILD=['"]([^'"]+)['"]/)||[])[1];
 const rootBuild=(index.match(/ui-integrity\.js\?v=([^"']+)/)||[])[1];
@@ -118,11 +119,17 @@ must(renderClient,"frame.setAttribute('src','about:blank')",'legacy iframe suppr
 must(revitRequests,'ApplyExistingSpatialCheckpointPolicy','Energy spatial checkpoint policy');
 must(revitRequests,'topologyMutation=false','complete existing Spaces are read-only');
 must(revitRequests,'CreateOrFixSpaces = false','complete checkpoint disables NewSpace/NewSpaces2');
-mustNot(app,'RevexSpaceFailureShield','global Space failure handler removed');
+must(app,'FailuresProcessing += RevexSpaceFailureShield.OnFailuresProcessing','zero-height Space shield startup subscription');
+must(app,'FailuresProcessing -= RevexSpaceFailureShield.OnFailuresProcessing','zero-height Space shield shutdown cleanup');
+must(spaceShield,'TransactionPrefix = "LIBER gbXML"','failure shield limited to REVEX gbXML transactions');
+must(spaceShield,'normalized.Contains("greater than 0")','native zero-height Space failure match');
+must(spaceShield,'doc.GetElement(id) is Space','failure shield limited to MEP Spaces');
+must(spaceShield,'accessor.DeleteElements(transientSpaceIds)','transient invalid Space removal');
+must(spaceShield,'FailureProcessingResult.ProceedWithCommit','bounded REVEX transaction continuation');
 
 const tabs=(index.match(/data-view="(?:bim|design|spec|docs|energy|chat|history)"/g)||[]).length;
 if(tabs<7)throw new Error(`main module tabs missing: ${tabs}`);
 for(const forbidden of ['runRevexEnergy','GeometryCo','COMcheck']){
   mustNot(blocks,forbidden,'Blocks scope');mustNot(docs,forbidden,'Docs scope');mustNot(issues,forbidden,'Issues scope');mustNot(renderClient,forbidden,'Render client scope');mustNot(walltUi,forbidden,'WALLT UI scope');
 }
-console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',uiOwner:uiBuild,wallt:'visible-helper-fixer-current-control+mobile-actions-menu',mobile:'proven-r109+r122+r133+r142-reused-node-sheet',docs:'single-final-owner+linked-page-runtime',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active+empty-selection-inspector',history:'NYC-day-technical',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'google-current+qwen-shadow',energy:'complete-existing-space-checkpoint-read-only'}));
+console.log(JSON.stringify({REVEX_R126_FUNCTIONAL_CONVERGENCE:'PASSED',uiOwner:uiBuild,wallt:'visible-helper-fixer-current-control+mobile-actions-menu',mobile:'proven-r109+r122+r133+r142-reused-node-sheet',docs:'single-final-owner+linked-page-runtime',appearance:'instance-uv>type-texture>color>revit',issues:'revexIssues+all-active+empty-selection-inspector',history:'NYC-day-technical',dailyReport:'post-sync-separated',blocks:'walk-only-3ft-revit',render:'google-current+qwen-shadow',energy:'complete-existing-space-checkpoint+revex-zero-height-shield'}));
