@@ -86,10 +86,50 @@ function Invoke-Captured([string]$Command, [string[]]$Arguments, [string]$Workin
   }
 }
 
+function Get-RevitProcessSnapshot {
+  $running = @(Get-Process -Name "Revit" -ErrorAction SilentlyContinue)
+  $interactive = @()
+  foreach ($process in $running) {
+    $hasWindow = $false
+    try {
+      $hasWindow = ($process.MainWindowHandle -ne [IntPtr]::Zero) -or
+                   (-not [string]::IsNullOrWhiteSpace([string]$process.MainWindowTitle))
+    } catch { }
+    if ($hasWindow) { $interactive += $process }
+  }
+  return [pscustomobject]@{ Running=$running; Interactive=$interactive }
+}
+
+function Test-RevexPayloadUnlocked {
+  $assembly = Join-Path $InstalledRoot "Liber.Revex.Revit.dll"
+  if (-not (Test-Path -LiteralPath $assembly -PathType Leaf)) { return $true }
+
+  $stream = $null
+  try {
+    $stream = [System.IO.File]::Open(
+      $assembly,
+      [System.IO.FileMode]::Open,
+      [System.IO.FileAccess]::ReadWrite,
+      [System.IO.FileShare]::None)
+    return $true
+  }
+  catch [System.IO.IOException] { return $false }
+  catch [System.UnauthorizedAccessException] { return $false }
+  finally {
+    if ($null -ne $stream) { try { $stream.Dispose() } catch { } }
+  }
+}
+
 function Wait-RevitClosed([int]$PollMilliseconds = 750) {
   $announced = $false
+  $headlessSafeSince = $null
+  $headlessSafeSeconds = 4.0
+
   while ($true) {
-    $running = @(Get-Process -Name "Revit" -ErrorAction SilentlyContinue)
+    $snapshot = Get-RevitProcessSnapshot
+    $running = @($snapshot.Running)
+    $interactive = @($snapshot.Interactive)
+
     if ($running.Count -eq 0) {
       if ($announced) {
         Write-Host "Revit is closed. Continuing this same update automatically." -ForegroundColor Green
@@ -97,21 +137,52 @@ function Wait-RevitClosed([int]$PollMilliseconds = 750) {
       return
     }
 
-    if (-not $announced) {
-      $ids = ($running | ForEach-Object { $_.Id }) -join ", "
-      Write-Host "Revit 2026 is still running (PID $ids)." -ForegroundColor Yellow
-      Write-Host "Save and close Revit completely. This updater will wait here and continue automatically; do not rerun it." -ForegroundColor Yellow
-      $announced = $true
+    $payloadUnlocked = Test-RevexPayloadUnlocked
+    if ($interactive.Count -eq 0 -and $payloadUnlocked) {
+      if ($null -eq $headlessSafeSince) {
+        $headlessSafeSince = Get-Date
+        $ids = ($running | ForEach-Object { $_.Id }) -join ", "
+        Write-Host "Detected only headless Revit process(es) (PID $ids), but the installed REVEX DLL is not loaded or locked. Verifying the safe state briefly..." -ForegroundColor DarkYellow
+      }
+      if (((Get-Date) - $headlessSafeSince).TotalSeconds -ge $headlessSafeSeconds) {
+        $ids = ($running | ForEach-Object { $_.Id }) -join ", "
+        Write-Host "PASS: no interactive Revit window and the installed REVEX payload is unlocked. Ignoring stale/headless Revit PID(s) $ids and continuing." -ForegroundColor Green
+        return
+      }
     }
+    else {
+      $headlessSafeSince = $null
+      if (-not $announced) {
+        $ids = ($running | ForEach-Object { $_.Id }) -join ", "
+        if ($interactive.Count -gt 0) {
+          Write-Host "Revit 2026 has an interactive window open (PID $ids)." -ForegroundColor Yellow
+        } else {
+          Write-Host "A headless Revit process is still holding the installed REVEX DLL (PID $ids)." -ForegroundColor Yellow
+        }
+        Write-Host "Save and close Revit completely. This updater will wait here and continue automatically; do not rerun it." -ForegroundColor Yellow
+        $announced = $true
+      }
+    }
+
     Start-Sleep -Milliseconds $PollMilliseconds
   }
 }
 
 function Assert-RevitClosed {
-  $running = @(Get-Process -Name "Revit" -ErrorAction SilentlyContinue)
-  if ($running.Count -gt 0) {
+  $snapshot = Get-RevitProcessSnapshot
+  $running = @($snapshot.Running)
+  if ($running.Count -eq 0) { return }
+
+  $interactive = @($snapshot.Interactive)
+  if ($interactive.Count -gt 0) {
     throw "Revit restarted before the atomic install. Close Revit and run the updater again; no installed REVEX files were changed by this install step."
   }
+  if (-not (Test-RevexPayloadUnlocked)) {
+    throw "A headless Revit process still has the installed REVEX DLL locked. Wait for that process to release the add-in, then run the updater again; no installed REVEX files were changed."
+  }
+
+  $ids = ($running | ForEach-Object { $_.Id }) -join ", "
+  Write-Host "PASS: atomic install safety check found only headless Revit PID(s) $ids and the REVEX DLL is unlocked." -ForegroundColor Green
 }
 
 function Assert-SourceContract([string]$Root) {
@@ -133,6 +204,7 @@ function Assert-SourceContract([string]$Root) {
     "src\Liber.Revex.Revit\Services\EngineeringCompanionWebBridge.cs",
     "src\Liber.Revex.Revit\Services\EngineeringScheduleEvidenceService.cs",
     "src\Liber.Revex.Revit\Services\EngineeringSyncService.cs",
+    "src\Liber.Revex.Revit\Services\RevexSpaceFailureShield.cs",
     "src\Liber.Revex.Revit\Revit\RevitRequestHandler.cs",
     $ProjectPath
   )
@@ -146,6 +218,7 @@ function Assert-SourceContract([string]$Root) {
   $handler = Get-Content -LiteralPath (Join-Path $Root "src\Liber.Revex.Revit\Revit\RevitRequestHandler.cs") -Raw
   $scheduleService = Get-Content -LiteralPath (Join-Path $Root "src\Liber.Revex.Revit\Services\EngineeringScheduleEvidenceService.cs") -Raw
   $webBridge = Get-Content -LiteralPath (Join-Path $Root "src\Liber.Revex.Revit\UI\RevexWebIntegrationBridge.cs") -Raw
+  $app = Get-Content -LiteralPath (Join-Path $Root "src\Liber.Revex.Revit\App.cs") -Raw
   if (-not $handler.Contains('new EngineeringScheduleEvidenceService().Export')) {
     throw "Current add-in source does not wire native Revit schedules into Engineering Sync."
   }
@@ -154,6 +227,9 @@ function Assert-SourceContract([string]$Root) {
   }
   if (-not $webBridge.Contains('RevexFamilyPlacementExternalHandler')) {
     throw "Current add-in source does not include the r126 Blocks family-placement ExternalEvent bridge."
+  }
+  if (-not $app.Contains('RevexSpaceFailureShield.OnFailuresProcessing')) {
+    throw "Current add-in source lost the REVEX zero-height Space failure shield subscription."
   }
 }
 
@@ -170,12 +246,11 @@ function Copy-BuildPayload([string]$Root) {
   if (Test-Path -LiteralPath $StagePayload) { Remove-Item -LiteralPath $StagePayload -Recurse -Force }
   Copy-Item -LiteralPath $outputDir -Destination $StagePayload -Recurse -Force
 
-  $requiredPayload = @(
+  foreach ($relative in @(
     "Liber.Revex.Revit.dll",
     "Engineering\Gbxml\LIBER_gbXML_Preflight_and_Export.py",
     "Engineering\Gbxml\LIBER_gbXML_Preflight_and_Export.dyn"
-  )
-  foreach ($relative in $requiredPayload) {
+  )) {
     if (-not (Test-Path -LiteralPath (Join-Path $StagePayload $relative) -PathType Leaf)) {
       throw "Built add-in payload is incomplete: missing $relative."
     }
@@ -267,7 +342,7 @@ try {
   Write-Host "Only the local Revit add-in is changed. No Firebase, Cloud Run, Render, Energy worker/broker, or stale publisher is invoked."
   Write-Host "Persistent log: $LogPath"
 
-  Write-Step "Wait until Revit is closed before any installed-file change"
+  Write-Step "Wait until Revit is safe for local add-in replacement"
   Wait-RevitClosed
 
   if (-not (Test-Path -LiteralPath (Join-Path $RevitDir "RevitAPI.dll") -PathType Leaf)) {
