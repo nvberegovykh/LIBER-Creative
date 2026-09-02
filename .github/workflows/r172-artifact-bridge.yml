@@ -1,0 +1,63 @@
+name: R172 Artifact Bridge
+
+on:
+  push:
+    branches:
+      - r172-artifact-bridge-20260902
+    paths:
+      - 'bridge/r172/**'
+      - '.github/workflows/r172-artifact-bridge.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait until bridge is complete
+        id: ready
+        shell: bash
+        run: |
+          if [[ -f bridge/r172/READY ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Decode and verify exact artifacts
+        if: steps.ready.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/package out/source
+          base64 --decode bridge/r172/package.b64 > /tmp/R172_REVEX_CHAT_WORKER_RECOVERY_20260902.zip
+          base64 --decode bridge/r172/source.b64 > /tmp/R172_REVEX_CHAT_WORKER_PATCH_SOURCE_20260902.zip
+          echo '2f9de2348e7b28afb48a60270c898c1b0874a3f68a3f7f494b9190b99a7ed89f  /tmp/R172_REVEX_CHAT_WORKER_RECOVERY_20260902.zip' | sha256sum --check --strict
+          echo 'a148c4a0ec164dee3d40e929bee7ad7385106d09c3bcdb0cf0bc665c2db90b4e  /tmp/R172_REVEX_CHAT_WORKER_PATCH_SOURCE_20260902.zip' | sha256sum --check --strict
+          test "$(stat -c%s /tmp/R172_REVEX_CHAT_WORKER_RECOVERY_20260902.zip)" = '46667'
+          test "$(stat -c%s /tmp/R172_REVEX_CHAT_WORKER_PATCH_SOURCE_20260902.zip)" = '200662'
+          unzip -q /tmp/R172_REVEX_CHAT_WORKER_RECOVERY_20260902.zip -d out/package
+          unzip -q /tmp/R172_REVEX_CHAT_WORKER_PATCH_SOURCE_20260902.zip -d out/source
+          test -f out/package/revex_release_r172/PREVIEW_AND_ACCEPT_R172.ps1
+          test -f out/source/config/R172_PATCH_MANIFEST.json
+      - name: Upload Drive-ready package artifact
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: R172_REVEX_CHAT_WORKER_RECOVERY_20260902
+          path: out/package/**
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 9
+          include-hidden-files: true
+      - name: Upload Drive-ready source artifact
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: R172_REVEX_CHAT_WORKER_PATCH_SOURCE_20260902
+          path: out/source/**
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 9
+          include-hidden-files: true
