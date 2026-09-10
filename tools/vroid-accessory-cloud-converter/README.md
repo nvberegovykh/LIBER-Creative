@@ -21,3 +21,8 @@ The worker creates Pair / Left / Right variants when left/right mesh names can b
 - No GitHub Actions artifact storage is used; results are returned through the transient private branch.
 
 Production `LIBER-Creative/main` is not part of this workflow.
+
+## Verified test gates
+- Public converter self-test: PASS, GitHub Actions run `34508904785`.
+- Private worker transport + conversion + private result publishing: PASS, run `34509912518`.
+- `OPEN.cmd` starts only a temporary loopback HTTP shell using Windows PowerShell/.NET and opens it in your browser; it installs nothing.
