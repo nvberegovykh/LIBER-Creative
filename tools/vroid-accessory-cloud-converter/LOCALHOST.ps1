@@ -1,13 +1,42 @@
 $ErrorActionPreference = 'Stop'
-$root = [IO.Path]::GetFullPath($PSScriptRoot)
+$sourceRoot = [IO.Path]::GetFullPath($PSScriptRoot)
+$rawBase = 'https://raw.githubusercontent.com/nvberegovykh/LIBER-Creative/vroid-accessory-cloud-converter/tools/vroid-accessory-cloud-converter'
+$cacheRoot = Join-Path ([IO.Path]::GetTempPath()) ('LIBER_VRoid214_' + [Guid]::NewGuid().ToString('N'))
+$serveRoot = $sourceRoot
+
+Write-Host 'VRoid 2.14 Accessory Converter'
+Write-Host 'Refreshing the tiny public UI mirror from GitHub...'
+
+try {
+  New-Item -ItemType Directory -Force -Path $cacheRoot | Out-Null
+  try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+  $headers = @{ 'User-Agent' = 'LIBER-VRoid214-Localhost' }
+  $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+  Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri ($rawBase + '/index.html?v=' + $stamp) -OutFile (Join-Path $cacheRoot 'index.html')
+  Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri ($rawBase + '/VERSION.txt?v=' + $stamp) -OutFile (Join-Path $cacheRoot 'VERSION.txt')
+  $html = [IO.File]::ReadAllText((Join-Path $cacheRoot 'index.html'))
+  if ($html.Length -lt 5000 -or $html -notmatch 'VRoid 2\.14 Accessory Converter') {
+    throw 'Downloaded public UI did not pass the local integrity sanity check.'
+  }
+  $serveRoot = $cacheRoot
+  Write-Host 'UI authority: live public GitHub branch mirror'
+  try {
+    $v = [IO.File]::ReadAllText((Join-Path $cacheRoot 'VERSION.txt')).Trim()
+    if ($v) { Write-Host ($v -split "`r?`n")[0] }
+  } catch {}
+} catch {
+  Write-Warning ('Could not refresh the public branch; using bundled offline fallback. ' + $_.Exception.Message)
+  $serveRoot = $sourceRoot
+}
+
 $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
 $listener.Start()
 $port = ([Net.IPEndPoint]$listener.LocalEndpoint).Port
 $url = "http://127.0.0.1:$port/"
-Write-Host "VRoid 2.14 Accessory Converter"
 Write-Host "Local shell: $url"
-Write-Host "No local 3D toolchain is installed or started."
-Write-Host "Press Ctrl+C to stop this localhost shell."
+Write-Host 'No local 3D toolchain is installed or started.'
+Write-Host 'The local mirror cache is deleted when this shell exits.'
+Write-Host 'Press Ctrl+C to stop this localhost shell.'
 Start-Process $url
 
 $mime = @{
@@ -34,8 +63,8 @@ try {
       $rawPath = [Uri]::UnescapeDataString(($parts[1].Split('?')[0]))
       if ($rawPath -eq '/' -or [string]::IsNullOrWhiteSpace($rawPath)) { $rawPath = '/index.html' }
       $relative = $rawPath.TrimStart('/').Replace('/', [IO.Path]::DirectorySeparatorChar)
-      $file = [IO.Path]::GetFullPath((Join-Path $root $relative))
-      if (-not $file.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $file -PathType Leaf)) {
+      $file = [IO.Path]::GetFullPath((Join-Path $serveRoot $relative))
+      if (-not $file.StartsWith($serveRoot, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $file -PathType Leaf)) {
         $body = [Text.Encoding]::UTF8.GetBytes('Not found')
         $head = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 404 Not Found`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n")
         $stream.Write($head,0,$head.Length); $stream.Write($body,0,$body.Length); continue
@@ -53,4 +82,7 @@ try {
   }
 } finally {
   $listener.Stop()
+  if ($cacheRoot -and (Test-Path -LiteralPath $cacheRoot)) {
+    Remove-Item -LiteralPath $cacheRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
 }
