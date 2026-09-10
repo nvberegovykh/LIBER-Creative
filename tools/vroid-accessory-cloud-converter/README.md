@@ -1,19 +1,23 @@
-# VRoid 2.14 Accessory Cloud Converter
+# VRoid 2.14 Accessory Converter — test build
 
-Zero local Unity/Blender/Python/Node installs. Open `index.html` or `OPEN.cmd`; Pinokio can open the same HTML.
+Zero local toolchain installs. Open `index.html` directly, double-click `OPEN.cmd`, or open the package in Pinokio.
 
-## Authority model
+## First test
+1. Create a GitHub fine-grained personal access token restricted to the private repository `nvberegovykh/archive`.
+2. Give that token only **Contents: Read and write** repository permission.
+3. Paste it into the converter. The token exists only in page memory and is not stored by the app.
+4. Select a `.unitypackage`, or a `.zip` containing exactly one `.unitypackage`.
+5. Leave scale at `1.00` for the first run and click **Convert in private cloud**.
+6. Save the generated `.xwear` files, then press **Delete transient private branch**.
 
-- Public code authority: `nvberegovykh/LIBER-Creative`, branch `vroid-accessory-cloud-converter`.
-- Private worker authority: `nvberegovykh/archive`, branch `vroid-cloud-worker`.
-- Source accessories and outputs never enter the public repository. Each conversion uses a transient private `vroid-job-*` branch.
-- The browser token is held only in page memory. No localStorage/cookies.
-- Recommended fine-grained token: only `nvberegovykh/archive`, `Contents: read/write`. `Secrets: read/write` is optional and only needed for the one-time cloud Unity activation panel.
-- The worker fetches the official XWear Packager at runtime through its VPM feed; the proprietary XWear Packager is not copied into this public project.
-- The browser deletes the transient branch after verified output download. GitHub may retain unreachable Git objects until repository garbage collection, so branch deletion is not a cryptographic erase guarantee.
+The worker creates Pair / Left / Right variants when left/right mesh names can be recognized. For ThreeStarPierce, the neutral model's mirrored `L_01…05` and `R_01…05` objects are recognized.
 
-## One-time Unity CI activation
+## Boundaries
+- Public code: `nvberegovykh/LIBER-Creative`, branch `vroid-accessory-cloud-converter`.
+- Private transient inputs/outputs: `nvberegovykh/archive`, branches `vroid-job-*`.
+- Target: VRoid Studio 2.14.0 XWear v2.
+- Source copyright/license/ownership is not changed by conversion.
+- This test build converts geometry and self-contained Standard material color/metallic/smoothness. lilToon-specific visual effects and texture channels are not redistributed by the converter yet.
+- No GitHub Actions artifact storage is used; results are returned through the transient private branch.
 
-Unity's editor requires an activated license even when it runs only in cloud CI. GameCI's current flow uses `UNITY_EMAIL`, `UNITY_PASSWORD`, plus `UNITY_LICENSE` for Personal or `UNITY_SERIAL` for Pro. If your previous local Unity run activated a Personal license, Windows normally stores the tiny license file at `C:\ProgramData\Unity\Unity_lic.ulf`. Selecting that file in the converter does not install Unity.
-
-The converter encrypts secret values with GitHub's repository public key in-browser and sends them directly to the GitHub Actions Secrets API. They are not committed.
+Production `LIBER-Creative/main` is not part of this workflow.
