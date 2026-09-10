@@ -1,0 +1,47 @@
+name: VRoid XWear Cloud Bootstrap
+
+on:
+  push:
+    branches: [vroid-xwear-cloud]
+    paths:
+      - '.github/workflows/vroid-xwear-cloud-bootstrap.yml'
+      - 'tools/vroid-xwear-cloud/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-xwear:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download official XWear Packager 0.3.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/xwear
+          curl --fail --location --retry 3 \
+            'https://download.vroid.com/dist/XWear/Packages/0.3.4/x3wHlFxdWA/com.pixiv.vroid.xwear-0.3.4.zip' \
+            --output /tmp/xwear.zip
+          echo '8afba437bbc4d269340b11786edc3d6f69cfd73374ff2b796d67ab97fecf4242  /tmp/xwear.zip' | sha256sum -c -
+          unzip -q /tmp/xwear.zip -d /tmp/xwear
+          echo '=== PACKAGE ROOT ==='
+          find /tmp/xwear -maxdepth 3 -type f -printf '%P\n' | sort | head -400
+      - name: Locate format and exporter code
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== CANDIDATE FILES ==='
+          find /tmp/xwear -type f \( -name '*.cs' -o -name '*.json' -o -name '*.asmdef' \) -print | sort | grep -Ei 'xitem|xwear|export|archive|serial|resource|accessory|gltf|io' | head -500 || true
+          echo '=== FORMAT SYMBOLS ==='
+          grep -RInE --include='*.cs' 'XItem|XResourceMaterials|ZipArchive|\.xwear|AccessoryRoot|Export.*Wear|Serialize|Gltf|glTF' /tmp/xwear | head -1000 || true
+      - name: Publish inspection bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: xwear-package-inspection
+          path: |
+            /tmp/xwear
+          retention-days: 1
+          compression-level: 9
