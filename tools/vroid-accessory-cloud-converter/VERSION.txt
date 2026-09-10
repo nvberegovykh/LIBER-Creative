@@ -1,6 +1,7 @@
-VRoid 2.14 Accessory Converter — TEST 3
-Build: 2026-09-10-token-field-visible
+VRoid 2.14 Accessory Converter — TEST
+Build: 2026-09-10-cleanroom-e2e1
 Public code branch: nvberegovykh/LIBER-Creative:vroid-accessory-cloud-converter
 Private worker branch: nvberegovykh/archive:vroid-cloud-worker
-Connection modal: visible password-masked token field; cleared after verification; no persistence.
+Public converter self-test: PASS (run 34508904785)
+Private worker end-to-end synthetic test: PASS (run 34509912518)
 No local Unity / Blender / VPM / Python / Node installation required.
