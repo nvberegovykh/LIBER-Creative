@@ -1,0 +1,75 @@
+name: VRoid XWear cloud research
+
+on:
+  push:
+    branches: [vroid-accessory-cloud-converter]
+    paths:
+      - '.github/workflows/vroid-xwear-research.yml'
+      - 'tools/vroid-accessory-cloud-converter/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-xwear-packager:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Download exact official XWear Packager 0.3.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .work/xwear
+          url='https://download.vroid.com/dist/XWear/Packages/0.3.4/x3wHlFxdWA/com.pixiv.vroid.xwear-0.3.4.zip'
+          curl -fL --retry 3 --retry-delay 2 "$url" -o .work/xwear/package.zip
+          echo '8afba437bbc4d269340b11786edc3d6f69cfd73374ff2b796d67ab97fecf4242  .work/xwear/package.zip' | sha256sum -c -
+          unzip -q .work/xwear/package.zip -d .work/xwear/package
+          find .work/xwear/package -type f | sort > .work/xwear/file-list.txt
+          echo '--- package files ---'
+          cat .work/xwear/file-list.txt
+      - name: Capture license and package metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .work/xwear/package/LICENSE.txt .work/xwear/LICENSE.txt || true
+          cp .work/xwear/package/package.json .work/xwear/package.json || true
+          echo '--- package.json ---'
+          cat .work/xwear/package.json || true
+          echo '--- license head ---'
+          head -80 .work/xwear/LICENSE.txt || true
+      - name: Decompile managed assemblies
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet tool install --global ilspycmd --version 9.*
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          mkdir -p .work/xwear/decompiled
+          mapfile -t dlls < <(find .work/xwear/package -type f -iname '*.dll' | sort)
+          printf '%s\n' "${dlls[@]}" > .work/xwear/dll-list.txt
+          for dll in "${dlls[@]}"; do
+            base="$(basename "$dll" .dll)"
+            out=".work/xwear/decompiled/$base"
+            mkdir -p "$out"
+            echo "Decompiling $dll -> $out"
+            ilspycmd -p -o "$out" "$dll" || true
+          done
+          grep -RniE 'XItem|XResourceMaterial|AccessoryRootComponent|Export.*XWear|\.xwear|ZipArchive|Gltf|glTF' .work/xwear/decompiled > .work/xwear/xwear-symbols.txt || true
+          echo '--- XWear symbols ---'
+          head -1000 .work/xwear/xwear-symbols.txt || true
+      - name: Upload research evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: xwear-packager-0.3.4-research
+          path: |
+            .work/xwear/file-list.txt
+            .work/xwear/dll-list.txt
+            .work/xwear/package.json
+            .work/xwear/LICENSE.txt
+            .work/xwear/xwear-symbols.txt
+            .work/xwear/decompiled/
+          retention-days: 7
