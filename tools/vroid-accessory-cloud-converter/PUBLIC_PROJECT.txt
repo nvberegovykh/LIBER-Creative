@@ -1,0 +1,8 @@
+Public source branch:
+https://github.com/nvberegovykh/LIBER-Creative/tree/vroid-accessory-cloud-converter/tools/vroid-accessory-cloud-converter
+
+Public clean-room self-test:
+https://github.com/nvberegovykh/LIBER-Creative/actions/runs/34508904785
+
+The worker repository and all user accessory jobs remain private.
+Production LIBER-Creative/main is not modified by this test product.
