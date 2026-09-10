@@ -132,8 +132,9 @@ function buildXwear(baseName,variant,meshes,scene,unityMats,author){
   for(const mesh of meshes){ const go=guid(),mg=guid(),bin=meshBinary(mesh);zfiles['Mesh\\'+mg]=new Uint8Array(bin);children.push({Guid:go,Name:mesh.name,Tag:'Untagged',Layer:0,Transform:xform(),Children:[],ActiveSelf:true});components.push({$type:T.meshFilter,MeshGuid:mg,GameObjectGuid:go,ComponentType:10,Mesh:{Name:mesh.name,Guid:mg,IndexFormat:mesh.vertices.length>65535?1:0,VertexCount:mesh.vertices.length,BoneCount:0},RefMaterialGuids:[matByIndex.get(mesh.materialIndex)]}); }
   const resource={Name:baseName+' '+variant,Guid:resourceGuid,RootGameObject:{Guid:rootGuid,Name:baseName+' '+variant,Tag:'Untagged',Layer:0,Transform:xform(),Children:children,ActiveSelf:true},Components:components,XResourceHumanoidMap:null,MaterialGuids:materials.map(x=>x.Guid),TextureGuids:[]};
   const xitem={XItemVersion:2,XResourceMaterials:materials,XResourceTextures:[],XResourceInfoList:[{Guid:resourceGuid,Type:1,License:itemLicense(baseName,author)}]};
-  zfiles['Body\\XResources\\'+resourceGuid]=strToU8(JSON.stringify(resource));zfiles['Body\\XItem.json']=strToU8(JSON.stringify(xitem));
-  const zip=Buffer.from(zipSync(zfiles,{level:6})),opened=unzipSync(new Uint8Array(zip));if(!opened['Body\\XItem.json']||!opened['Body\\XResources\\'+resourceGuid])die('Internal XWear validation failed');const parsed=JSON.parse(strFromU8(opened['Body\\XItem.json']));if(parsed.XItemVersion!==2)die('Bad XItemVersion');return {zip,meshCount:meshes.length,materialCount:materials.length};
+  const xitemPath='Body\\XItem.json\\XItem.json';
+  zfiles['Body\\XResources\\'+resourceGuid]=strToU8(JSON.stringify(resource));zfiles[xitemPath]=strToU8(JSON.stringify(xitem));
+  const zip=Buffer.from(zipSync(zfiles,{level:6})),opened=unzipSync(new Uint8Array(zip));if(!opened[xitemPath]||!opened['Body\\XResources\\'+resourceGuid])die('Internal XWear validation failed');const parsed=JSON.parse(strFromU8(opened[xitemPath]));if(parsed.XItemVersion!==2)die('Bad XItemVersion');return {zip,meshCount:meshes.length,materialCount:materials.length};
 }
 
 (async()=>{
