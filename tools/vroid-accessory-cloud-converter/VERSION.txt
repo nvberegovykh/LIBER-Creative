@@ -1,7 +1,8 @@
-VRoid 2.14 Accessory Converter — TEST
-Build: 2026-09-10-cleanroom-e2e1
+VRoid 2.14 Accessory Converter — TEST 2
+Build: 2026-09-10-guided-access-e2e2
 Public code branch: nvberegovykh/LIBER-Creative:vroid-accessory-cloud-converter
 Private worker branch: nvberegovykh/archive:vroid-cloud-worker
 Public converter self-test: PASS (run 34508904785)
 Private worker end-to-end synthetic test: PASS (run 34509912518)
+Guided GitHub access setup: official prefilled fine-grained token form + clipboard paste + immediate UI clearing.
 No local Unity / Blender / VPM / Python / Node installation required.
