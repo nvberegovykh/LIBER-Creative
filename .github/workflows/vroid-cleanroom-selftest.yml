@@ -1,0 +1,72 @@
+name: VRoid clean-room XWear self-test
+
+on:
+  push:
+    branches: [vroid-accessory-cloud-converter]
+    paths:
+      - 'tools/vroid-accessory-cloud-converter/**'
+      - '.github/workflows/vroid-cleanroom-selftest.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build synthetic Unity-package asset map with real FBX fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/vroidtest/pkg/11111111111111111111111111111111
+          printf '%s\n' 'Assets/Test/Box.fbx' > /tmp/vroidtest/pkg/11111111111111111111111111111111/pathname
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/assimp/assimp/master/test/models/FBX/box.fbx' -o /tmp/vroidtest/pkg/11111111111111111111111111111111/asset
+          mkdir -p /tmp/vroidtest/pkg/22222222222222222222222222222222
+          printf '%s\n' 'Assets/Test/Material.mat' > /tmp/vroidtest/pkg/22222222222222222222222222222222/pathname
+          cat > /tmp/vroidtest/pkg/22222222222222222222222222222222/asset <<'EOF'
+          %YAML 1.1
+          --- !u!21 &2100000
+          Material:
+            m_Name: Material
+            m_CustomRenderQueue: -1
+            m_SavedProperties:
+              m_Floats:
+              - _Metallic: 0.5
+              - _Smoothness: 0.8
+              m_Colors:
+              - _Color: {r: 0.5, g: 0.6, b: 0.8, a: 1}
+          EOF
+      - name: Run clean-room converter
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd /tmp/vroidtest
+          npm init -y >/dev/null
+          npm install --silent --no-audit --no-fund assimpjs@0.0.10 fflate@0.8.2
+          cp "$GITHUB_WORKSPACE/tools/vroid-accessory-cloud-converter/cleanroom-xwear.js" .
+          node cleanroom-xwear.js --package-root pkg --output-dir out --scale 1 --log-file out/converter.log
+          ls -lah out
+      - name: Validate generated XWear v2
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib, zipfile, json
+          files=list(pathlib.Path('/tmp/vroidtest/out').glob('*.xwear'))
+          assert files, 'no xwear output'
+          for p in files:
+              with zipfile.ZipFile(p) as z:
+                  names=z.namelist(); norm=[n.replace('\\','/') for n in names]
+                  xi=names[norm.index('Body/XItem.json')]
+                  item=json.loads(z.read(xi))
+                  assert item['XItemVersion']==2
+                  assert any(n.startswith('Body/XResources/') for n in norm)
+                  assert any(n.startswith('Mesh/') for n in norm)
+          print('VRoid clean-room XWear self-test PASSED:', [p.name for p in files])
+          PY
