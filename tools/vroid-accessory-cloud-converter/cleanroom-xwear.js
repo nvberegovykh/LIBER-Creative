@@ -1,147 +1,66 @@
 #!/usr/bin/env node
 'use strict';
 
-// LIBER VRoid 2.14 XWear clean-room converter.
-// This file contains no pixiv/XWear Packager source code. It writes the
-// interoperable XWear v2 container layout from independently observed I/O.
+// LIBER VRoid 2.14 XWear clean-room converter R2.
+// Interoperability implementation from observed XWear I/O. No proprietary
+// XWear Packager source is included. Source asset rights remain unchanged.
 
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const { zipSync, unzipSync, strToU8, strFromU8 } = require('fflate');
+const fs=require('fs'), path=require('path'), crypto=require('crypto');
+const {zipSync,unzipSync,strToU8,strFromU8}=require('fflate');
+function die(m){throw new Error(m)}
+function arg(n,d=null){const i=process.argv.indexOf(n);return i>=0?process.argv[i+1]:d}
+function narg(n,d=0){const v=Number(arg(n,d));return Number.isFinite(v)?v:Number(d)||0}
+const packageRoot=path.resolve(arg('--package-root')||die('Missing --package-root'));
+const outDir=path.resolve(arg('--output-dir')||die('Missing --output-dir'));
+const requestedScale=narg('--scale',1); if(requestedScale<=0)die('Invalid --scale');
+const fitOffset=[narg('--offset-x',0),narg('--offset-y',0),narg('--offset-z',0)];
+const fitRotDeg=[narg('--rot-x',0),narg('--rot-y',0),narg('--rot-z',0)];
+const licensePathArg=arg('--license-file',''),logPath=arg('--log-file','');
+const logs=[];function log(s){s=String(s);console.log(s);logs.push(s)}
+function guid(){return crypto.randomUUID()} function sha256(b){return crypto.createHash('sha256').update(b).digest('hex')}
+function safeName(s){return String(s||'Accessory').replace(/[<>:"/\\|?*\x00-\x1f]+/g,'_').replace(/\s+/g,' ').trim().slice(0,100)||'Accessory'}
+function median(a){if(!a.length)return 0;const b=[...a].sort((x,y)=>x-y),m=b.length>>1;return b.length%2?b[m]:(b[m-1]+b[m])/2}
 
-function die(m){ throw new Error(m); }
-function arg(name, fallback=null){ const i=process.argv.indexOf(name); return i>=0 ? process.argv[i+1] : fallback; }
-const packageRoot = path.resolve(arg('--package-root') || die('Missing --package-root'));
-const outDir = path.resolve(arg('--output-dir') || die('Missing --output-dir'));
-const requestedScale = Number(arg('--scale','1'));
-if (!Number.isFinite(requestedScale) || requestedScale <= 0) die('Invalid --scale');
-const licensePathArg = arg('--license-file','');
-const logPath = arg('--log-file','');
-const logs=[];
-function log(s){ const line=String(s); console.log(line); logs.push(line); }
-function guid(){ return crypto.randomUUID(); }
-function sha256(b){ return crypto.createHash('sha256').update(b).digest('hex'); }
-function safeName(s){ return String(s||'Accessory').replace(/[<>:"/\\|?*\x00-\x1f]+/g,'_').replace(/\s+/g,' ').trim().slice(0,100)||'Accessory'; }
+function scanUnityPackage(root){const assets=[];for(const ent of fs.readdirSync(root,{withFileTypes:true})){if(!ent.isDirectory())continue;const d=path.join(root,ent.name),pn=path.join(d,'pathname'),ap=path.join(d,'asset');if(!fs.existsSync(pn))continue;assets.push({guid:ent.name,pathname:fs.readFileSync(pn,'utf8').trim(),asset:fs.existsSync(ap)?ap:null,meta:fs.existsSync(path.join(d,'asset.meta'))?path.join(d,'asset.meta'):null})}if(!assets.length)die('No Unity package assets found');return assets}
+function chooseFbx(assets){const f=assets.filter(x=>x.asset&&/\.fbx$/i.test(x.pathname));if(!f.length)die('No FBX model found in Unity package');f.sort((a,b)=>{const pa=/_([A-Za-z0-9]+)\.fbx$/i.test(path.basename(a.pathname))?1:0,pb=/_([A-Za-z0-9]+)\.fbx$/i.test(path.basename(b.pathname))?1:0;return pa-pb||path.basename(a.pathname).length-path.basename(b.pathname).length||a.pathname.localeCompare(b.pathname)});return f[0]}
+function yamlNum(t,k,d){const m=t.match(new RegExp('^\\s*-\\s+'+k.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+':\\s*([-+0-9.eE]+)\\s*$','m')),v=m?Number(m[1]):NaN;return Number.isFinite(v)?v:d}
+function yamlColor(t,k){const m=t.match(new RegExp('^\\s*-\\s+'+k.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+':\\s*\\{r:\\s*([-+0-9.eE]+),\\s*g:\\s*([-+0-9.eE]+),\\s*b:\\s*([-+0-9.eE]+),\\s*a:\\s*([-+0-9.eE]+)\\}','m'));return m?{r:+m[1],g:+m[2],b:+m[3],a:+m[4]}:null}
+function parseUnityMaterials(assets){const map=new Map();for(const a of assets.filter(x=>x.asset&&/\.mat$/i.test(x.pathname))){let t='';try{t=fs.readFileSync(a.asset,'utf8')}catch{continue}const n=(t.match(/^\s*m_Name:\s*(.+)$/m)||[])[1]||path.basename(a.pathname,'.mat'),lower=n.toLowerCase();let color=yamlColor(t,'_Color')||yamlColor(t,'_BaseColor')||(lower.includes('jewel')?{r:.18,g:.32,b:.88,a:1}:{r:.7,g:.7,b:.72,a:1});if(/jewel|gem|stone|sapphire/i.test(lower)&&Math.max(color.r,color.g,color.b)-Math.min(color.r,color.g,color.b)<.08)color={r:.18,g:.32,b:.88,a:color.a??1};let metallic=yamlNum(t,'_Metallic',lower.includes('metal')?.85:0),smooth=yamlNum(t,'_Smoothness',yamlNum(t,'_Glossiness',lower.includes('jewel')?.9:.75));map.set(n.toLowerCase(),{name:n,color,metallic:Math.max(0,Math.min(1,metallic)),smooth:Math.max(0,Math.min(1,smooth)),source:a.pathname})}return map}
+function assimpMaterialName(mat,idx){const p=mat?.properties?.find(x=>x.key==='?mat.name');return p?.value?String(p.value):'Material_'+idx}
+function assimpDiffuse(mat){const p=mat?.properties?.find(x=>x.key==='$clr.diffuse');return p&&Array.isArray(p.value)&&p.value.length>=3?{r:+p.value[0],g:+p.value[1],b:+p.value[2],a:1}:null}
+function assimpShininess(mat){const p=mat?.properties?.find(x=>x.key==='$mat.shininess');return p?Number(p.value):NaN}
+function matchUnityMaterial(name,unity){const k=name.toLowerCase();if(unity.has(k))return unity.get(k);for(const [x,v] of unity)if(k.includes(x)||x.includes(k))return v;if(k.includes('metal'))for(const [x,v]of unity)if(x.includes('metal'))return v;if(/jewel|gem|stone|sapphire/i.test(k))for(const[x,v]of unity)if(/jewel|gem|stone|sapphire/i.test(x))return v;return null}
 
-function scanUnityPackage(root){
-  const assets=[];
-  for(const ent of fs.readdirSync(root,{withFileTypes:true})){
-    if(!ent.isDirectory()) continue;
-    const d=path.join(root,ent.name), pn=path.join(d,'pathname'), ap=path.join(d,'asset');
-    if(!fs.existsSync(pn)) continue;
-    const pathname=fs.readFileSync(pn,'utf8').trim();
-    assets.push({guid:ent.name, pathname, asset:fs.existsSync(ap)?ap:null, meta:fs.existsSync(path.join(d,'asset.meta'))?path.join(d,'asset.meta'):null});
-  }
-  if(!assets.length) die('No Unity package assets found');
-  return assets;
-}
+function parseVec(s,n){const m=s.match(new RegExp(n+': \\{x: ([^,]+), y: ([^,]+), z: ([^}]+)\\}'));return m?m.slice(1).map(Number):null}
+function parseQuat(s,n){const m=s.match(new RegExp(n+': \\{x: ([^,]+), y: ([^,]+), z: ([^,]+), w: ([^}]+)\\}'));return m?m.slice(1).map(Number):null}
+function parsePrefabAsset(asset,fbxGuid){let t='';try{t=fs.readFileSync(asset.asset,'utf8')}catch{return null}if(!t.startsWith('%YAML'))return null;const docs=t.split(/^--- !u!/m).slice(1),goNames=new Map(),transByGo=new Map(),meshGos=new Set();for(const d of docs){const head=d.match(/^(\d+) &(-?\d+)/);if(!head)continue;const typ=+head[1];if(typ===1){const fid=+head[2],nm=(d.match(/^  m_Name: (.*)$/m)||[])[1];if(nm)goNames.set(fid,nm)}else if(typ===4){const go=+(d.match(/m_GameObject: \{fileID: (-?\d+)\}/)||[])[1];if(!go)continue;const pos=parseVec(d,'m_LocalPosition'),rot=parseQuat(d,'m_LocalRotation'),scale=parseVec(d,'m_LocalScale');if(pos&&rot&&scale)transByGo.set(go,{pos,rot,scale})}else if(typ===33){const go=+(d.match(/m_GameObject: \{fileID: (-?\d+)\}/)||[])[1],mm=d.match(/m_Mesh: \{fileID: (-?\d+), guid: ([0-9a-f]+)/);if(go&&mm&&mm[2]===fbxGuid)meshGos.add(go)}}const transforms={};for(const go of meshGos){const name=goNames.get(go),tr=transByGo.get(go);if(name&&tr)transforms[name]=tr}if(Object.keys(transforms).length<2)return null;return {pathname:asset.pathname,transforms,count:Object.keys(transforms).length}}
+function selectReferencePrefab(assets,fbxGuid){const cand=assets.filter(x=>x.asset&&/\.prefab$/i.test(x.pathname)).map(x=>parsePrefabAsset(x,fbxGuid)).filter(Boolean);if(!cand.length)return null;const names=[...new Set(cand.flatMap(c=>Object.keys(c.transforms)))],med={};for(const n of names){const ss=cand.map(c=>c.transforms[n]).filter(Boolean);if(ss.length)med[n]=[0,1,2].map(i=>median(ss.map(s=>s.pos[i])))}let best=null,bestScore=Infinity;for(const c of cand){let score=0,seen=0;for(const[n,m]of Object.entries(med)){const s=c.transforms[n];if(!s){score+=.05;continue}seen++;score+=Math.hypot(s.pos[0]-m[0],s.pos[1]-m[1],s.pos[2]-m[2])}score+=Math.max(0,names.length-seen)*.02;if(score<bestScore){bestScore=score;best=c}}return best}
 
-function chooseFbx(assets){
-  const f=assets.filter(x=>x.asset && /\.fbx$/i.test(x.pathname));
-  if(!f.length) die('No FBX model found in Unity package');
-  f.sort((a,b)=>{
-    const pa=/_[A-Za-z0-9]+\.fbx$/i.test(path.basename(a.pathname))?1:0;
-    const pb=/_[A-Za-z0-9]+\.fbx$/i.test(path.basename(b.pathname))?1:0;
-    return pa-pb || path.basename(a.pathname).length-path.basename(b.pathname).length || a.pathname.localeCompare(b.pathname);
-  });
-  return f[0];
-}
-
-function yamlNum(text,key,fallback){
-  const re=new RegExp('^\\s*-\\s+'+key.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+':\\s*([-+0-9.eE]+)\\s*$','m');
-  const m=text.match(re), n=m?Number(m[1]):NaN; return Number.isFinite(n)?n:fallback;
-}
-function yamlColor(text,key){
-  const re=new RegExp('^\\s*-\\s+'+key.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+':\\s*\\{r:\\s*([-+0-9.eE]+),\\s*g:\\s*([-+0-9.eE]+),\\s*b:\\s*([-+0-9.eE]+),\\s*a:\\s*([-+0-9.eE]+)\\}','m');
-  const m=text.match(re); return m?{r:+m[1],g:+m[2],b:+m[3],a:+m[4]}:null;
-}
-function parseUnityMaterials(assets){
-  const map=new Map();
-  for(const a of assets.filter(x=>x.asset && /\.mat$/i.test(x.pathname))){
-    let t=''; try{t=fs.readFileSync(a.asset,'utf8')}catch{continue}
-    const n=(t.match(/^\s*m_Name:\s*(.+)$/m)||[])[1] || path.basename(a.pathname,'.mat');
-    const lower=n.toLowerCase();
-    let color=yamlColor(t,'_Color')||yamlColor(t,'_BaseColor')||(lower.includes('jewel')?{r:.18,g:.32,b:.88,a:1}:{r:.7,g:.7,b:.72,a:1});
-    if(/jewel|gem|stone|sapphire/i.test(lower) && Math.max(color.r,color.g,color.b)-Math.min(color.r,color.g,color.b)<0.08) color={r:.18,g:.32,b:.88,a:color.a??1};
-    let metallic=yamlNum(t,'_Metallic', lower.includes('metal')?.85:0.0);
-    let smooth=yamlNum(t,'_Smoothness', yamlNum(t,'_Glossiness', lower.includes('jewel')?.9:.75));
-    metallic=Math.max(0,Math.min(1,metallic)); smooth=Math.max(0,Math.min(1,smooth));
-    map.set(n.toLowerCase(),{name:n,color,metallic,smooth,source:a.pathname});
-  }
-  return map;
-}
-
-function assimpMaterialName(mat,idx){ const p=mat?.properties?.find(x=>x.key==='?mat.name'); return p?.value?String(p.value):'Material_'+idx; }
-function assimpDiffuse(mat){ const p=mat?.properties?.find(x=>x.key==='$clr.diffuse'); return p&&Array.isArray(p.value)&&p.value.length>=3?{r:+p.value[0],g:+p.value[1],b:+p.value[2],a:1}:null; }
-function assimpShininess(mat){ const p=mat?.properties?.find(x=>x.key==='$mat.shininess'); return p?Number(p.value):NaN; }
-function matchUnityMaterial(name,unity){
-  const key=name.toLowerCase(); if(unity.has(key)) return unity.get(key);
-  for(const [k,v] of unity) if(key.includes(k)||k.includes(key)) return v;
-  if(key.includes('metal')) for(const [k,v] of unity) if(k.includes('metal')) return v;
-  if(/jewel|gem|stone|sapphire/i.test(key)) for(const [k,v] of unity) if(/jewel|gem|stone|sapphire/i.test(k)) return v;
-  return null;
-}
-
-function mul4(a,b){ const r=new Array(16).fill(0); for(let i=0;i<4;i++)for(let j=0;j<4;j++)for(let k=0;k<4;k++)r[i*4+j]+=a[i*4+k]*b[k*4+j]; return r; }
 const I4=[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1];
-function point(m,v){ return [m[0]*v[0]+m[1]*v[1]+m[2]*v[2]+m[3],m[4]*v[0]+m[5]*v[1]+m[6]*v[2]+m[7],m[8]*v[0]+m[9]*v[1]+m[10]*v[2]+m[11]]; }
-function vec(m,v){ const x=m[0]*v[0]+m[1]*v[1]+m[2]*v[2],y=m[4]*v[0]+m[5]*v[1]+m[6]*v[2],z=m[8]*v[0]+m[9]*v[1]+m[10]*v[2],q=Math.hypot(x,y,z)||1; return [x/q,y/q,z/q]; }
-function flat3(a){ const out=[]; for(let i=0;i<(a||[]).length;i+=3)out.push([+a[i]||0,+a[i+1]||0,+a[i+2]||0]); return out; }
-function flat4(a){ const out=[]; for(let i=0;i<(a||[]).length;i+=4)out.push([+a[i]||0,+a[i+1]||0,+a[i+2]||0,+a[i+3]||0]); return out; }
-function uvChannel(mesh,c){ const a=mesh.texturecoords?.[c]||[], comps=mesh.numuvcomponents?.[c]||2,out=[]; for(let i=0;i<a.length;i+=comps)out.push([+a[i]||0,+a[i+1]||0]); return out; }
-function triangulate(faces){ const out=[]; for(const f of faces||[]){ if(f.length===3)out.push(...f); else if(f.length>3)for(let i=1;i<f.length-1;i++)out.push(f[0],f[i],f[i+1]); } return out; }
-function sideOf(s){
-  const n=String(s||'');
-  if(/(?:three\s*star\s*pierce)?l[_-]?\d+/i.test(n)||/piercel(?:_|-|\d)/i.test(n)||/(?:^|[^a-z])left(?:[^a-z]|$)/i.test(n)||/(?:^|[_ .-])l(?:[_ .-]|$)/i.test(n)) return 'L';
-  if(/(?:three\s*star\s*pierce)?r[_-]?\d+/i.test(n)||/piercer(?:_|-|\d)/i.test(n)||/(?:^|[^a-z])right(?:[^a-z]|$)/i.test(n)||/(?:^|[_ .-])r(?:[_ .-]|$)/i.test(n)) return 'R';
-  return '';
-}
-function flattenMeshes(scene,scale){
-  const out=[];
-  function visit(node,parent){
-    const local=Array.isArray(node.transformation)&&node.transformation.length===16?node.transformation:I4, world=mul4(parent,local);
-    for(const mi of node.meshes||[]){
-      const m=scene.meshes[mi]; if(!m)continue;
-      const verts=flat3(m.vertices).map(v=>point(world,v).map(x=>x*scale));
-      const normals=flat3(m.normals).map(v=>vec(world,v));
-      let colors=[]; if(Array.isArray(m.colors?.[0]))colors=flat4(m.colors[0]); else if(Array.isArray(m.colors))colors=flat4(m.colors);
-      const name=safeName(node.name||m.name||('Mesh_'+mi));
-      out.push({name,side:sideOf(name+' '+(m.name||'')),materialIndex:Number.isInteger(m.materialindex)?m.materialindex:0,vertices:verts,normals,tangents:[],colors,uvs:[uvChannel(m,0),uvChannel(m,1),uvChannel(m,2),uvChannel(m,3)],indices:triangulate(m.faces)});
-    }
-    for(const ch of node.children||[])visit(ch,world);
-  }
-  visit(scene.rootnode||{name:'Root'},I4); if(!out.length)die('FBX import produced no mesh objects'); return out;
-}
+function mul4(a,b){const r=new Array(16).fill(0);for(let i=0;i<4;i++)for(let j=0;j<4;j++)for(let k=0;k<4;k++)r[i*4+j]+=a[i*4+k]*b[k*4+j];return r}
+function point(m,v){return[m[0]*v[0]+m[1]*v[1]+m[2]*v[2]+m[3],m[4]*v[0]+m[5]*v[1]+m[6]*v[2]+m[7],m[8]*v[0]+m[9]*v[1]+m[10]*v[2]+m[11]]}
+function vec(m,v){const x=m[0]*v[0]+m[1]*v[1]+m[2]*v[2],y=m[4]*v[0]+m[5]*v[1]+m[6]*v[2],z=m[8]*v[0]+m[9]*v[1]+m[10]*v[2],q=Math.hypot(x,y,z)||1;return[x/q,y/q,z/q]}
+function qrot(q,v){const[x,y,z,w]=q,[vx,vy,vz]=v,ix=w*vx+y*vz-z*vy,iy=w*vy+z*vx-x*vz,iz=w*vz+x*vy-y*vx,iw=-x*vx-y*vy-z*vz;return[ix*w+iw*-x+iy*-z-iz*-y,iy*w+iw*-y+iz*-x-ix*-z,iz*w+iw*-z+ix*-y-iy*-x]}
+function eulerXYZdeg(r,v){const[a,b,c]=r.map(x=>x*Math.PI/180),ca=Math.cos(a),sa=Math.sin(a),cb=Math.cos(b),sb=Math.sin(b),cc=Math.cos(c),sc=Math.sin(c);let[x,y,z]=v;[y,z]=[y*ca-z*sa,y*sa+z*ca];[x,z]=[x*cb+z*sb,-x*sb+z*cb];[x,y]=[x*cc-y*sc,x*sc+y*cc];return[x,y,z]}
+function flat3(a){const o=[];for(let i=0;i<(a||[]).length;i+=3)o.push([+a[i]||0,+a[i+1]||0,+a[i+2]||0]);return o}
+function flat4(a){const o=[];for(let i=0;i<(a||[]).length;i+=4)o.push([+a[i]||0,+a[i+1]||0,+a[i+2]||0,+a[i+3]||0]);return o}
+function uvChannel(m,c){const a=m.texturecoords?.[c]||[],n=m.numuvcomponents?.[c]||2,o=[];for(let i=0;i<a.length;i+=n)o.push([+a[i]||0,+a[i+1]||0]);return o}
+function triangulate(fs){const o=[];for(const f of fs||[]){if(f.length===3)o.push(...f);else if(f.length>3)for(let i=1;i<f.length-1;i++)o.push(f[0],f[i],f[i+1])}return o}
+function sideOf(s){const n=String(s||'');if(/(?:three\s*star\s*pierce)?l[_-]?\d+/i.test(n)||/piercel(?:_|-|\d)/i.test(n)||/(?:^|[^a-z])left(?:[^a-z]|$)/i.test(n)||/(?:^|[_ .-])l(?:[_ .-]|$)/i.test(n))return'L';if(/(?:three\s*star\s*pierce)?r[_-]?\d+/i.test(n)||/piercer(?:_|-|\d)/i.test(n)||/(?:^|[^a-z])right(?:[^a-z]|$)/i.test(n)||/(?:^|[_ .-])r(?:[_ .-]|$)/i.test(n))return'R';return''}
+function boundsOf(meshes){const vs=meshes.flatMap(m=>m.vertices);if(!vs.length)return{min:[0,0,0],max:[0,0,0],span:[0,0,0],center:[0,0,0]};const min=[0,1,2].map(i=>Math.min(...vs.map(v=>v[i]))),max=[0,1,2].map(i=>Math.max(...vs.map(v=>v[i])));return{min,max,span:max.map((x,i)=>x-min[i]),center:max.map((x,i)=>(x+min[i])/2)}}
+function extractRawMeshes(scene){const out=[];function visit(node,parent){const local=Array.isArray(node.transformation)&&node.transformation.length===16?node.transformation:I4,world=mul4(parent,local);for(const mi of node.meshes||[]){const m=scene.meshes[mi];if(!m)continue;const name=safeName(node.name||m.name||('Mesh_'+mi));out.push({name,side:sideOf(name+' '+(m.name||'')),materialIndex:Number.isInteger(m.materialindex)?m.materialindex:0,rawVertices:flat3(m.vertices),rawNormals:flat3(m.normals),colors:Array.isArray(m.colors?.[0])?flat4(m.colors[0]):Array.isArray(m.colors)?flat4(m.colors):[],uvs:[uvChannel(m,0),uvChannel(m,1),uvChannel(m,2),uvChannel(m,3)],indices:triangulate(m.faces),world})}for(const ch of node.children||[])visit(ch,world)}visit(scene.rootnode||{name:'Root'},I4);return out}
+function reconstructMeshes(scene,prefab){const raw=extractRawMeshes(scene);if(!raw.length)die('FBX import produced no mesh objects');const groups=new Map();for(const m of raw){if(!groups.has(m.name))groups.set(m.name,[]);groups.get(m.name).push(m)}const havePrefab=!!prefab,unit=havePrefab?.01:1;const out=[];for(const[name,parts]of groups){const tr=prefab?.transforms?.[name]||null;let sharedCenter=[0,0,0],recenter=false;if(tr){const all=parts.flatMap(p=>p.rawVertices).map(v=>v.map(x=>x*unit)),b=boundsOf([{vertices:all}]);sharedCenter=b.center;const cm=Math.hypot(...sharedCenter),sp=Math.max(...b.span,.001);recenter=cm>.15&&cm>sp*3}for(const p of parts){let verts=p.rawVertices.map(v=>v.map(x=>x*unit)),normals=p.rawNormals;if(tr){verts=verts.map(v=>{let u=v;if(recenter)u=u.map((x,i)=>x-sharedCenter[i]);u=u.map((x,i)=>x*tr.scale[i]);u=qrot(tr.rot,u);return u.map((x,i)=>x+tr.pos[i])});normals=normals.map(v=>qrot(tr.rot,v))}else{verts=p.rawVertices.map(v=>point(p.world,v));normals=p.rawNormals.map(v=>vec(p.world,v))}out.push({name:p.name,side:p.side,materialIndex:p.materialIndex,vertices:verts,normals,tangents:[],colors:p.colors,uvs:p.uvs,indices:p.indices,prefabTransform:tr||null,recentered:!!(tr&&recenter)})}}return{meshes:out,sourceUnitScale:unit,prefabUsed:prefab?.pathname||null}}
 
-function writer(){ const chunks=[]; return {i32(n){const b=Buffer.alloc(4);b.writeInt32LE(n|0);chunks.push(b)},f32(n){const b=Buffer.alloc(4);b.writeFloatLE(Number(n)||0);chunks.push(b)},str(s){const b=Buffer.from(String(s),'utf8');let n=b.length;const p=[];do{let v=n&0x7f;n>>>=7;if(n)v|=0x80;p.push(v)}while(n);chunks.push(Buffer.from(p),b)},vec2(v){this.f32(v[0]);this.f32(v[1])},vec3(v){this.f32(v[0]);this.f32(v[1]);this.f32(v[2])},vec4(v){this.f32(v[0]);this.f32(v[1]);this.f32(v[2]);this.f32(v[3])},done(){return Buffer.concat(chunks)}}; }
-function meshBinary(mesh){
-  const w=writer(); w.i32(0);w.str(mesh.name);w.i32(mesh.vertices.length);w.i32(mesh.vertices.length);for(const v of mesh.vertices)w.vec3(v);w.i32(mesh.normals.length);for(const v of mesh.normals)w.vec3(v);w.i32(mesh.tangents.length);for(const v of mesh.tangents)w.vec4(v);w.i32(mesh.colors.length);for(const v of mesh.colors)w.vec4(v);for(let c=0;c<4;c++){const uv=mesh.uvs[c]||[];w.i32(uv.length);for(const v of uv)w.vec2(v)}w.i32(0);w.i32(0);w.i32(1);w.i32(0);w.i32(mesh.indices.length);for(const n of mesh.indices)w.i32(n);w.i32(0);w.i32(0);return w.done();
-}
-
+function writer(){const c=[];return{i32(n){const b=Buffer.alloc(4);b.writeInt32LE(n|0);c.push(b)},f32(n){const b=Buffer.alloc(4);b.writeFloatLE(Number(n)||0);c.push(b)},str(s){const b=Buffer.from(String(s),'utf8');let n=b.length,p=[];do{let v=n&127;n>>>=7;if(n)v|=128;p.push(v)}while(n);c.push(Buffer.from(p),b)},vec2(v){this.f32(v[0]);this.f32(v[1])},vec3(v){this.f32(v[0]);this.f32(v[1]);this.f32(v[2])},vec4(v){this.f32(v[0]);this.f32(v[1]);this.f32(v[2]);this.f32(v[3])},done(){return Buffer.concat(c)}}}
+function meshBinary(m){const w=writer();w.i32(0);w.str(m.name);w.i32(m.vertices.length);w.i32(m.vertices.length);for(const v of m.vertices)w.vec3(v);w.i32(m.normals.length);for(const v of m.normals)w.vec3(v);w.i32(m.tangents.length);for(const v of m.tangents)w.vec4(v);w.i32(m.colors.length);for(const v of m.colors)w.vec4(v);for(let c=0;c<4;c++){const uv=m.uvs[c]||[];w.i32(uv.length);for(const v of uv)w.vec2(v)}w.i32(0);w.i32(0);w.i32(1);w.i32(0);w.i32(m.indices.length);for(const n of m.indices)w.i32(n);w.i32(0);w.i32(0);return w.done()}
 const T={meshFilter:'XWear.IO.Runtime.Components.Meshes.XResourceMeshFilter, XWear.IO.Runtime',accessory:'XWear.IO.Runtime.Components.AccessoryRoot.XResourceAccessoryRoot, XWear.IO.Runtime',color:'XWear.IO.Runtime.Materials.Shader.ShaderColorProperty, XWear.IO.Runtime',float:'XWear.IO.Runtime.Materials.Shader.ShaderFloatProperty, XWear.IO.Runtime'};
-function xform(){return {Name:'',Position:{x:0,y:0,z:0},Rotation:{x:0,y:0,z:0,w:1},Scale:{x:1,y:1,z:1},LocalPosition:{x:0,y:0,z:0},LocalRotation:{x:0,y:0,z:0,w:1},LocalScale:{x:1,y:1,z:1},Index:0};}
-function materialJson(name,src){ const g=guid(),c=src.color||{r:.7,g:.7,b:.7,a:1}; return {Name:name,Guid:g,ShaderName:'Standard',ShaderProperties:[{$type:T.color,Color:{r:c.r,g:c.g,b:c.b,a:c.a??1},PropertyName:'_Color'},{$type:T.float,Value:src.metallic??0,PropertyName:'_Metallic'},{$type:T.float,Value:src.smooth??.6,PropertyName:'_Glossiness'}],MaterialTags:[],ShaderKeywords:[],RenderQueue:-1,referencedTextureGuids:[]}; }
-function authorGuess(assets,licenseText){ if(/𝐏𝐫𝐞𝐜𝐢𝐨𝐮𝐬|Precious/i.test(licenseText||''))return 'Precious'; const p=assets.map(x=>x.pathname).find(x=>/^Assets\/[^/]+\//.test(x)); return p?p.split('/')[1]:''; }
-function itemLicense(itemName,author){return {contents:[{itemName,licenseType:0,author,licenseUrls:[]}]};}
-function buildXwear(baseName,variant,meshes,scene,unityMats,author){
-  const used=[...new Set(meshes.map(m=>m.materialIndex))],matByIndex=new Map(),materials=[];
-  for(const idx of used){ const am=scene.materials?.[idx],n=safeName(assimpMaterialName(am,idx)),u=matchUnityMaterial(n,unityMats),diff=assimpDiffuse(am),shin=assimpShininess(am),src=u||{color:diff||(/jewel|gem|stone/i.test(n)?{r:.15,g:.3,b:.85,a:1}:{r:.65,g:.65,b:.68,a:1}),metallic:/metal/i.test(n)?.85:0,smooth:Number.isFinite(shin)?Math.max(0,Math.min(1,shin/1000)):.7},mj=materialJson(n,src); materials.push(mj);matByIndex.set(idx,mj.Guid); }
-  const resourceGuid=guid(),rootGuid=guid(),children=[],components=[],zfiles={};
-  components.push({$type:T.accessory,GameObjectGuid:rootGuid,ComponentType:11,UseDefaultParent:true,DefaultParent:10,FittingOriginGuid:rootGuid});
-  for(const mesh of meshes){ const go=guid(),mg=guid(),bin=meshBinary(mesh);zfiles['Mesh\\'+mg]=new Uint8Array(bin);children.push({Guid:go,Name:mesh.name,Tag:'Untagged',Layer:0,Transform:xform(),Children:[],ActiveSelf:true});components.push({$type:T.meshFilter,MeshGuid:mg,GameObjectGuid:go,ComponentType:10,Mesh:{Name:mesh.name,Guid:mg,IndexFormat:mesh.vertices.length>65535?1:0,VertexCount:mesh.vertices.length,BoneCount:0},RefMaterialGuids:[matByIndex.get(mesh.materialIndex)]}); }
-  const resource={Name:baseName+' '+variant,Guid:resourceGuid,RootGameObject:{Guid:rootGuid,Name:baseName+' '+variant,Tag:'Untagged',Layer:0,Transform:xform(),Children:children,ActiveSelf:true},Components:components,XResourceHumanoidMap:null,MaterialGuids:materials.map(x=>x.Guid),TextureGuids:[]};
-  const xitem={XItemVersion:2,XResourceMaterials:materials,XResourceTextures:[],XResourceInfoList:[{Guid:resourceGuid,Type:1,License:itemLicense(baseName,author)}]};
-  const xitemPath='Body\\XItem.json\\XItem.json';
-  zfiles['Body\\XResources\\'+resourceGuid]=strToU8(JSON.stringify(resource));zfiles[xitemPath]=strToU8(JSON.stringify(xitem));
-  const zip=Buffer.from(zipSync(zfiles,{level:6})),opened=unzipSync(new Uint8Array(zip));if(!opened[xitemPath]||!opened['Body\\XResources\\'+resourceGuid])die('Internal XWear validation failed');const parsed=JSON.parse(strFromU8(opened[xitemPath]));if(parsed.XItemVersion!==2)die('Bad XItemVersion');return {zip,meshCount:meshes.length,materialCount:materials.length};
-}
+function xform(){return{Name:'',Position:{x:0,y:0,z:0},Rotation:{x:0,y:0,z:0,w:1},Scale:{x:1,y:1,z:1},LocalPosition:{x:0,y:0,z:0},LocalRotation:{x:0,y:0,z:0,w:1},LocalScale:{x:1,y:1,z:1},Index:0}}
+function materialJson(name,src){const g=guid(),c=src.color||{r:.7,g:.7,b:.7,a:1};return{Name:name,Guid:g,ShaderName:'Standard',ShaderProperties:[{$type:T.color,Color:{r:c.r,g:c.g,b:c.b,a:c.a??1},PropertyName:'_Color'},{$type:T.float,Value:src.metallic??0,PropertyName:'_Metallic'},{$type:T.float,Value:src.smooth??.6,PropertyName:'_Glossiness'}],MaterialTags:[],ShaderKeywords:[],RenderQueue:-1,referencedTextureGuids:[]}}
+function authorGuess(assets,licenseText){if(/𝐏𝐫𝐞𝐜𝐢𝐨𝐮𝐬|Precious/i.test(licenseText||''))return'Precious';const p=assets.map(x=>x.pathname).find(x=>/^Assets\/[^/]+\//.test(x));return p?p.split('/')[1]:''}
+function itemLicense(itemName,author){return{contents:[{itemName,licenseType:0,author,licenseUrls:[]}]}}
+const DEFAULT_ANCHORS={Pair:[0,.06,0],Left:[-.078,.06,0],Right:[.078,.06,0]};
+function variantSourceAnchor(meshes){const b=boundsOf(meshes);return[b.center[0],b.max[1],b.center[2]]}
+function fittedMeshes(meshes,variant){const srcAnchor=variantSourceAnchor(meshes),dst=DEFAULT_ANCHORS[variant]||DEFAULT_ANCHORS.Pair;return{sourceAnchor:srcAnchor,defaultAnchor:dst,meshes:meshes.map(m=>({...m,vertices:m.vertices.map(v=>{let u=v.map((x,i)=>x-srcAnchor[i]);u=u.map(x=>x*requestedScale);u=eulerXYZdeg(fitRotDeg,u);return u.map((x,i)=>x+dst[i]+fitOffset[i])}),normals:m.normals.map(v=>eulerXYZdeg(fitRotDeg,v))}))}}
+function buildXwear(baseName,variant,sourceMeshes,scene,unityMats,author){const fit=fittedMeshes(sourceMeshes,variant),meshes=fit.meshes,used=[...new Set(meshes.map(m=>m.materialIndex))],matByIndex=new Map(),materials=[];for(const idx of used){const am=scene.materials?.[idx],n=safeName(assimpMaterialName(am,idx)),u=matchUnityMaterial(n,unityMats),diff=assimpDiffuse(am),shin=assimpShininess(am),src=u||{color:diff||(/jewel|gem|stone/i.test(n)?{r:.15,g:.3,b:.85,a:1}:{r:.65,g:.65,b:.68,a:1}),metallic:/metal/i.test(n)?.85:0,smooth:Number.isFinite(shin)?Math.max(0,Math.min(1,shin/1000)):.7},mj=materialJson(n,src);materials.push(mj);matByIndex.set(idx,mj.Guid)}const resourceGuid=guid(),rootGuid=guid(),children=[],components=[],zfiles={};components.push({$type:T.accessory,GameObjectGuid:rootGuid,ComponentType:11,UseDefaultParent:true,DefaultParent:10,FittingOriginGuid:rootGuid});for(const mesh of meshes){const go=guid(),mg=guid(),bin=meshBinary(mesh);zfiles['Mesh\\'+mg]=new Uint8Array(bin);children.push({Guid:go,Name:mesh.name,Tag:'Untagged',Layer:0,Transform:xform(),Children:[],ActiveSelf:true});components.push({$type:T.meshFilter,MeshGuid:mg,GameObjectGuid:go,ComponentType:10,Mesh:{Name:mesh.name,Guid:mg,IndexFormat:mesh.vertices.length>65535?1:0,VertexCount:mesh.vertices.length,BoneCount:0},RefMaterialGuids:[matByIndex.get(mesh.materialIndex)]})}const resource={Name:baseName+' '+variant,Guid:resourceGuid,RootGameObject:{Guid:rootGuid,Name:baseName+' '+variant,Tag:'Untagged',Layer:0,Transform:xform(),Children:children,ActiveSelf:true},Components:components,XResourceHumanoidMap:null,MaterialGuids:materials.map(x=>x.Guid),TextureGuids:[]},xitem={XItemVersion:2,XResourceMaterials:materials,XResourceTextures:[],XResourceInfoList:[{Guid:resourceGuid,Type:1,License:itemLicense(baseName,author)}]},xitemPath='Body\\XItem.json\\XItem.json';zfiles['Body\\XResources\\'+resourceGuid]=strToU8(JSON.stringify(resource));zfiles[xitemPath]=strToU8(JSON.stringify(xitem));const zip=Buffer.from(zipSync(zfiles,{level:6})),opened=unzipSync(new Uint8Array(zip));if(!opened[xitemPath]||!opened['Body\\XResources\\'+resourceGuid])die('Internal XWear validation failed');if(JSON.parse(strFromU8(opened[xitemPath])).XItemVersion!==2)die('Bad XItemVersion');return{zip,meshCount:meshes.length,materialCount:materials.length,sourceAnchor:fit.sourceAnchor,defaultAnchor:fit.defaultAnchor,bounds:boundsOf(meshes)}}
 
-(async()=>{
-  fs.mkdirSync(outDir,{recursive:true});const assets=scanUnityPackage(packageRoot),fbx=chooseFbx(assets),unityMats=parseUnityMaterials(assets);let licenseText='';if(licensePathArg&&fs.existsSync(licensePathArg))try{licenseText=fs.readFileSync(licensePathArg,'utf8')}catch{}
-  const baseName=safeName(path.basename(fbx.pathname,'.fbx').replace(/_[A-Za-z0-9]+$/,'')),author=authorGuess(assets,licenseText);log('[+] LIBER clean-room XWear v2');log('[+] Source FBX: '+fbx.pathname);log('[+] Source materials found: '+unityMats.size);log('[+] Rights metadata author: '+(author||'(unspecified)'));
-  const ajs=await require('assimpjs')(),fl=new ajs.FileList();fl.AddFile(path.basename(fbx.pathname),fs.readFileSync(fbx.asset));const res=ajs.ConvertFileList(fl,'assjson');if(!res.IsSuccess()||res.FileCount()===0)die('Assimp FBX conversion failed: '+res.GetErrorCode());const scene=JSON.parse(new TextDecoder().decode(res.GetFile(0).GetContent())),meshes=flattenMeshes(scene,requestedScale);log('[+] Mesh objects: '+meshes.length);log(`[+] Side classification: L=${meshes.filter(x=>x.side==='L').length} R=${meshes.filter(x=>x.side==='R').length} neutral=${meshes.filter(x=>!x.side).length}`);
-  const variants=[['Pair',meshes]],L=meshes.filter(x=>x.side==='L'),R=meshes.filter(x=>x.side==='R');if(L.length)variants.push(['Left',L]);if(R.length)variants.push(['Right',R]);const outputs=[];
-  for(const [v,ms] of variants){const r=buildXwear(baseName,v,ms,scene,unityMats,author),fn=`${baseName}_${v}.xwear`,fp=path.join(outDir,fn);fs.writeFileSync(fp,r.zip);outputs.push({name:fn,sha256:sha256(r.zip),bytes:r.zip.length,meshCount:r.meshCount,materialCount:r.materialCount});log(`[+] ${fn}: ${r.meshCount} meshes, ${r.zip.length} bytes, sha256=${outputs.at(-1).sha256}`);}
-  const manifest={schema:1,converter:'LIBER clean-room XWear v2',target:'VRoid Studio 2.14.0',sourceFbx:fbx.pathname,sourceRights:'unchanged',author,scale:requestedScale,outputs,warnings:['Test build uses self-contained Unity Standard material colors/metallic/smoothness; source shader-specific effects are intentionally not redistributed.']};fs.writeFileSync(path.join(outDir,'manifest.json'),JSON.stringify(manifest,null,2));if(logPath)fs.writeFileSync(logPath,logs.join('\n')+'\n');
-})().catch(e=>{console.error('FAILED:',e.stack||e);if(logPath)try{fs.writeFileSync(logPath,logs.join('\n')+'\nFAILED: '+(e.stack||e)+'\n')}catch{};process.exit(1);});
+(async()=>{fs.mkdirSync(outDir,{recursive:true});const assets=scanUnityPackage(packageRoot),fbx=chooseFbx(assets),unityMats=parseUnityMaterials(assets);let licenseText='';if(licensePathArg&&fs.existsSync(licensePathArg))try{licenseText=fs.readFileSync(licensePathArg,'utf8')}catch{}const baseName=safeName(path.basename(fbx.pathname,'.fbx').replace(/_[A-Za-z0-9]+$/,'')),author=authorGuess(assets,licenseText);log('[+] LIBER clean-room XWear v2 R2');log('[+] Source FBX: '+fbx.pathname);const prefab=selectReferencePrefab(assets,fbx.guid);log('[+] Creator placement reference: '+(prefab?prefab.pathname+` (${prefab.count} mesh transforms)`:'none; FBX hierarchy fallback'));const ajs=await require('assimpjs')(),fl=new ajs.FileList();fl.AddFile(path.basename(fbx.pathname),fs.readFileSync(fbx.asset));const res=ajs.ConvertFileList(fl,'assjson');if(!res.IsSuccess()||res.FileCount()===0)die('Assimp FBX conversion failed: '+res.GetErrorCode());const scene=JSON.parse(new TextDecoder().decode(res.GetFile(0).GetContent())),rec=reconstructMeshes(scene,prefab),meshes=rec.meshes;log('[+] Mesh objects: '+meshes.length);log(`[+] Side classification: L=${meshes.filter(x=>x.side==='L').length} R=${meshes.filter(x=>x.side==='R').length} neutral=${meshes.filter(x=>!x.side).length}`);log(`[+] Fit: size=${requestedScale} offset=(${fitOffset.join(',')}) rotation=(${fitRotDeg.join(',')})`);const L=meshes.filter(x=>x.side==='L'),R=meshes.filter(x=>x.side==='R'),variants=[['Pair',meshes]];if(L.length)variants.push(['Left',L]);if(R.length)variants.push(['Right',R]);const outputs=[],variantMeta={};for(const[v,ms]of variants){const r=buildXwear(baseName,v,ms,scene,unityMats,author),fn=`${baseName}_${v}.xwear`,fp=path.join(outDir,fn);fs.writeFileSync(fp,r.zip);outputs.push({name:fn,sha256:sha256(r.zip),bytes:r.zip.length,meshCount:r.meshCount,materialCount:r.materialCount});variantMeta[v]={sourceAnchor:r.sourceAnchor,defaultAnchor:r.defaultAnchor,bounds:r.bounds};log(`[+] ${fn}: ${r.meshCount} meshes, ${r.zip.length} bytes`)}const materialPreview={};for(let i=0;i<(scene.materials||[]).length;i++){const am=scene.materials[i],n=safeName(assimpMaterialName(am,i)),u=matchUnityMaterial(n,unityMats),d=assimpDiffuse(am),src=u||{color:d||{r:.68,g:.68,b:.72,a:1}};materialPreview[i]={name:n,color:src.color||{r:.68,g:.68,b:.72,a:1}}}const preview={schema:2,units:'meters',coordinateSystem:{x:'right',y:'up',z:'forward',parentBone:'Head'},reference:'procedural neutral head; preview is a fitting reference, not the target VRoid mesh',source:{fbx:fbx.pathname,prefab:rec.prefabUsed,sourceUnitScale:rec.sourceUnitScale},fit:{scale:requestedScale,offset:{x:fitOffset[0],y:fitOffset[1],z:fitOffset[2]},rotationDeg:{x:fitRotDeg[0],y:fitRotDeg[1],z:fitRotDeg[2]}},variants:variantMeta,materials:materialPreview,meshes:meshes.map(m=>({name:m.name,side:m.side,materialIndex:m.materialIndex,vertices:m.vertices,indices:m.indices,recentered:m.recentered}))};fs.writeFileSync(path.join(outDir,'preview.json'),JSON.stringify(preview));const manifest={schema:2,converter:'LIBER clean-room XWear v2 R2',target:'VRoid Studio 2.14.0',sourceFbx:fbx.pathname,sourceRights:'unchanged',author,reconstruction:{prefab:rec.prefabUsed,sourceUnitScale:rec.sourceUnitScale},fit:preview.fit,outputs,warnings:['Preview uses a procedural neutral head as a coordinate reference; exact target-model fitting still depends on the target rig/head proportions.','Shader-specific source effects are approximated by self-contained Standard material values.']};fs.writeFileSync(path.join(outDir,'manifest.json'),JSON.stringify(manifest,null,2));if(logPath)fs.writeFileSync(logPath,logs.join('\n')+'\n')})().catch(e=>{console.error('FAILED:',e.stack||e);if(logPath)try{fs.writeFileSync(logPath,logs.join('\n')+'\nFAILED: '+(e.stack||e)+'\n')}catch{};process.exit(1)});
