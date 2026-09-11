@@ -3,8 +3,9 @@
 // Bounded patch for the pinned R2.1 clean-room converter. It corrects the
 // cross-space ambiguity between Assimp bind matrices and Unity prefab bone
 // transforms by calibrating each reconstructed skinned renderer to Unity's
-// serialized SkinnedMeshRenderer local AABB. The source topology/weights still
-// determine the shape; Unity's own bounds constrain its scale and location.
+// serialized SkinnedMeshRenderer local AABB. Split Assimp material meshes are
+// associated back to their Unity renderer by exact/prefix match and, for the
+// two earring skin chains, unambiguous left/right renderer ownership.
 
 const fs=require('fs');
 const target=process.argv[2];
@@ -30,9 +31,21 @@ once(
 const start=s.indexOf('function reconstructMeshes(scene,prefab){');
 const end=s.indexOf('\n\nfunction writer()',start);
 if(start<0||end<0) throw new Error('Patch reconstructMeshes: anchors missing');
-const replacement=`function reconstructMeshes(scene,prefab){
+const replacement=`function prefabTransformFor(name,prefab,parts){
+  if(!prefab?.transforms)return null;
+  if(prefab.transforms[name])return prefab.transforms[name];
+  const entries=Object.entries(prefab.transforms),needle=String(name||'').toLowerCase();
+  const related=entries.filter(([k])=>{const x=k.toLowerCase();return needle===x||needle.startsWith(x+'_')||needle.startsWith(x+'.')||x.startsWith(needle+'_')||x.startsWith(needle+'.')});
+  if(related.length===1)return related[0][1];
+  if(parts?.some(p=>p.bones?.length)){
+    const sd=sideOf(name),skin=entries.filter(([k,v])=>v?.kind==='skinned'&&(!sd||sideOf(k)===sd));
+    if(skin.length===1){log('[+] Bound split skinned mesh '+name+' -> '+skin[0][0]);return skin[0][1]}
+  }
+  return null;
+}
+function reconstructMeshes(scene,prefab){
   const raw=extractRawMeshes(scene);if(!raw.length)die('FBX import produced no mesh objects');const groups=new Map();for(const m of raw){if(!groups.has(m.name))groups.set(m.name,[]);groups.get(m.name).push(m)}const havePrefab=!!prefab,unit=havePrefab?.01:1,out=[];let skinnedParts=0,fallbackParts=0,calibratedSkinGroups=0;
-  for(const[name,parts]of groups){const tr=prefab?.transforms?.[name]||null;let sharedCenter=[0,0,0],recenter=false;const nonSkin=parts.filter(p=>!(p.bones?.length));if(tr&&nonSkin.length){const all=nonSkin.flatMap(p=>p.rawVertices).map(v=>v.map(x=>x*unit)),b=boundsOf([{vertices:all}]);sharedCenter=b.center;const cm=Math.hypot(...sharedCenter),sp=Math.max(...b.span,.001);recenter=cm>.15&&cm>sp*3}
+  for(const[name,parts]of groups){const tr=prefabTransformFor(name,prefab,parts);let sharedCenter=[0,0,0],recenter=false;const nonSkin=parts.filter(p=>!(p.bones?.length));if(tr&&nonSkin.length){const all=nonSkin.flatMap(p=>p.rawVertices).map(v=>v.map(x=>x*unit)),b=boundsOf([{vertices:all}]);sharedCenter=b.center;const cm=Math.hypot(...sharedCenter),sp=Math.max(...b.span,.001);recenter=cm>.15&&cm>sp*3}
     const staged=[];
     for(const p of parts){let verts,normals,skinInfo=null;
       if(p.bones?.length){skinInfo=weightedSkin(p,prefab,unit);if(skinInfo){verts=skinInfo.verts;normals=skinInfo.normals;skinnedParts++}}
@@ -56,4 +69,4 @@ s=s.replace(
 "log(`[+] Reconstruction: skinned=${rec.skinnedParts} calibratedSkinGroups=${rec.calibratedSkinGroups} fallback=${rec.fallbackParts}`);");
 
 fs.writeFileSync(target,s);
-console.log('[+] R2.2 skinned-bounds calibration patch applied');
+console.log('[+] R2.3 skinned renderer binding + bounds calibration patch applied');
