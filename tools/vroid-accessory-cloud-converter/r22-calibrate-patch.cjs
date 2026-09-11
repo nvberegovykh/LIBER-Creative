@@ -33,15 +33,19 @@ const end=s.indexOf('\n\nfunction writer()',start);
 if(start<0||end<0) throw new Error('Patch reconstructMeshes: anchors missing');
 const replacement=`function prefabTransformFor(name,prefab,parts){
   if(!prefab?.transforms)return null;
-  if(prefab.transforms[name])return prefab.transforms[name];
-  const entries=Object.entries(prefab.transforms),needle=String(name||'').toLowerCase();
-  const related=entries.filter(([k])=>{const x=k.toLowerCase();return needle===x||needle.startsWith(x+'_')||needle.startsWith(x+'.')||x.startsWith(needle+'_')||x.startsWith(needle+'.')});
-  if(related.length===1)return related[0][1];
-  if(parts?.some(p=>p.bones?.length)){
-    const sd=sideOf(name),skin=entries.filter(([k,v])=>v?.kind==='skinned'&&(!sd||sideOf(k)===sd));
-    if(skin.length===1){log('[+] Bound split skinned mesh '+name+' -> '+skin[0][0]);return skin[0][1]}
+  const entries=Object.entries(prefab.transforms),needle=String(name||'').toLowerCase(),hasSkin=!!parts?.some(p=>p.bones?.length),sd=sideOf(name);
+  if(hasSkin){
+    const skinned=entries.filter(([k,v])=>v?.kind==='skinned');
+    const exact=skinned.find(([k])=>k===name);if(exact)return exact[1];
+    const related=skinned.filter(([k])=>{const x=k.toLowerCase();return needle===x||needle.startsWith(x+'_')||needle.startsWith(x+'.')||x.startsWith(needle+'_')||x.startsWith(needle+'.')});
+    if(related.length===1)return related[0][1];
+    const sided=skinned.filter(([k])=>!sd||sideOf(k)===sd);
+    if(sided.length===1){log('[+] Bound skinned mesh '+name+' -> '+sided[0][0]);return sided[0][1]}
+    log('[!] No unambiguous prefab skinned renderer for '+name+' side='+sd+' candidates='+skinned.map(x=>x[0]).join(','));return null;
   }
-  return null;
+  if(prefab.transforms[name])return prefab.transforms[name];
+  const related=entries.filter(([k,v])=>v?.kind!=='skinned'&&(()=>{const x=k.toLowerCase();return needle===x||needle.startsWith(x+'_')||needle.startsWith(x+'.')||x.startsWith(needle+'_')||x.startsWith(needle+'.')})());
+  return related.length===1?related[0][1]:null;
 }
 function reconstructMeshes(scene,prefab){
   const raw=extractRawMeshes(scene);if(!raw.length)die('FBX import produced no mesh objects');const groups=new Map();for(const m of raw){if(!groups.has(m.name))groups.set(m.name,[]);groups.get(m.name).push(m)}const havePrefab=!!prefab,unit=havePrefab?.01:1,out=[];let skinnedParts=0,fallbackParts=0,calibratedSkinGroups=0;
@@ -54,9 +58,10 @@ function reconstructMeshes(scene,prefab){
       staged.push({p,verts,normals,skinInfo});
     }
     const skinStages=staged.filter(x=>x.skinInfo);
+    if(skinStages.length){log('[+] Skin group '+name+' renderer='+(tr?.kind||'none')+' aabb='+(tr?.aabb?'yes':'no')+' root='+(tr?.rootBone||0))}
     if(skinStages.length&&tr?.aabb&&tr.rootBone){
       const rootWorld=prefab.worldByTransform?.[String(tr.rootBone)]||prefab.worldByTransform?.[tr.rootBone];
-      if(rootWorld){const invRoot=invAffine(rootWorld),localMeshes=skinStages.map(x=>({x,local:x.verts.map(v=>point(invRoot,v))})),allLocal=localMeshes.flatMap(x=>x.local),cb=boundsOf([{vertices:allLocal}]),tc=tr.aabb.center,te=tr.aabb.extent,ts=te.map(x=>2*x),sf=ts.map((x,i)=>cb.span[i]>1e-8?x/cb.span[i]:1);for(const q of localMeshes){q.x.verts=q.local.map(v=>point(rootWorld,v.map((x,i)=>(x-cb.center[i])*sf[i]+tc[i])));q.x.normals=normalsFromTriangles(q.x.verts,q.x.p.indices)}calibratedSkinGroups++;log('[+] Calibrated skinned bounds '+name+': source span='+cb.span.map(x=>x.toFixed(5)).join(',')+' target span='+ts.map(x=>x.toFixed(5)).join(','))}
+      if(rootWorld){const invRoot=invAffine(rootWorld),localMeshes=skinStages.map(x=>({x,local:x.verts.map(v=>point(invRoot,v))})),allLocal=localMeshes.flatMap(x=>x.local),cb=boundsOf([{vertices:allLocal}]),tc=tr.aabb.center,te=tr.aabb.extent,ts=te.map(x=>2*x),sf=ts.map((x,i)=>cb.span[i]>1e-8?x/cb.span[i]:1);for(const q of localMeshes){q.x.verts=q.local.map(v=>point(rootWorld,v.map((x,i)=>(x-cb.center[i])*sf[i]+tc[i])));q.x.normals=normalsFromTriangles(q.x.verts,q.x.p.indices)}calibratedSkinGroups++;log('[+] Calibrated skinned bounds '+name+': source span='+cb.span.map(x=>x.toFixed(5)).join(',')+' target span='+ts.map(x=>x.toFixed(5)).join(','))}else log('[!] Missing root transform for skin group '+name)}
     }
     for(const x of staged){const p=x.p;out.push({name:p.name,side:p.side,materialIndex:p.materialIndex,vertices:x.verts,normals:x.normals,tangents:[],colors:p.colors,uvs:p.uvs,indices:p.indices,prefabTransform:tr?{kind:tr.kind,pos:tr.pos}:null,recentered:!!(tr&&recenter),skinned:!!x.skinInfo,boneCount:x.skinInfo?.boneCount||0})}
   }
@@ -69,4 +74,4 @@ s=s.replace(
 "log(`[+] Reconstruction: skinned=${rec.skinnedParts} calibratedSkinGroups=${rec.calibratedSkinGroups} fallback=${rec.fallbackParts}`);");
 
 fs.writeFileSync(target,s);
-console.log('[+] R2.3 skinned renderer binding + bounds calibration patch applied');
+console.log('[+] R2.3.1 skinned renderer binding + bounds calibration patch applied');
