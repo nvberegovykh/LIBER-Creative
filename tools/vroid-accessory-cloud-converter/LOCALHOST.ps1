@@ -29,6 +29,9 @@ try {
   $serveRoot = $sourceRoot
 }
 
+$serveRoot = [IO.Path]::GetFullPath($serveRoot)
+$servePrefix = $serveRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+
 $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
 $listener.Start()
 $port = ([Net.IPEndPoint]$listener.LocalEndpoint).Port
@@ -45,6 +48,13 @@ $mime = @{
   '.png'='image/png'; '.jpg'='image/jpeg'; '.jpeg'='image/jpeg'; '.ico'='image/x-icon'
 }
 
+function Send-Response($stream, [int]$status, [string]$reason, [byte[]]$body, [string]$contentType = 'text/plain; charset=utf-8', [bool]$headOnly = $false) {
+  if ($null -eq $body) { $body = [byte[]]::new(0) }
+  $headers = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 $status $reason`r`nContent-Type: $contentType`r`nContent-Length: $($body.Length)`r`nCache-Control: no-store`r`nConnection: close`r`n`r`n")
+  $stream.Write($headers, 0, $headers.Length)
+  if (-not $headOnly -and $body.Length -gt 0) { $stream.Write($body, 0, $body.Length) }
+}
+
 try {
   while ($true) {
     $client = $listener.AcceptTcpClient()
@@ -54,26 +64,44 @@ try {
       $request = $reader.ReadLine()
       if (-not $request) { continue }
       while (($line = $reader.ReadLine()) -ne '') { if ($null -eq $line) { break } }
+
       $parts = $request.Split(' ')
-      if ($parts.Count -lt 2 -or $parts[0] -ne 'GET') {
-        $body = [Text.Encoding]::UTF8.GetBytes('Method not allowed')
-        $head = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 405 Method Not Allowed`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n")
-        $stream.Write($head,0,$head.Length); $stream.Write($body,0,$body.Length); continue
+      if ($parts.Count -lt 2) {
+        Send-Response $stream 400 'Bad Request' ([Text.Encoding]::UTF8.GetBytes('Bad request'))
+        continue
       }
-      $rawPath = [Uri]::UnescapeDataString(($parts[1].Split('?')[0]))
-      if ($rawPath -eq '/' -or [string]::IsNullOrWhiteSpace($rawPath)) { $rawPath = '/index.html' }
-      $relative = $rawPath.TrimStart('/').Replace('/', [IO.Path]::DirectorySeparatorChar)
+
+      $method = $parts[0].ToUpperInvariant()
+      $target = $parts[1]
+      $headOnly = $method -eq 'HEAD'
+      if ($method -ne 'GET' -and -not $headOnly) {
+        Send-Response $stream 405 'Method Not Allowed' ([Text.Encoding]::UTF8.GetBytes('Method not allowed'))
+        continue
+      }
+
+      # Browsers normally send origin-form (/), but local proxies/security software may
+      # forward absolute-form (http://127.0.0.1:PORT/). Normalize both before routing.
+      $pathPart = $target
+      if ($target -match '^[a-zA-Z][a-zA-Z0-9+.-]*://') {
+        try { $pathPart = ([Uri]$target).AbsolutePath } catch { $pathPart = '/' }
+      } else {
+        $pathPart = ($target -split '\?', 2)[0]
+      }
+      try { $rawPath = [Uri]::UnescapeDataString($pathPart) } catch { $rawPath = '/' }
+      if ([string]::IsNullOrWhiteSpace($rawPath) -or $rawPath -eq '/') { $rawPath = '/index.html' }
+
+      $relative = $rawPath.TrimStart('/','\').Replace('/', [IO.Path]::DirectorySeparatorChar).Replace('\', [IO.Path]::DirectorySeparatorChar)
       $file = [IO.Path]::GetFullPath((Join-Path $serveRoot $relative))
-      if (-not $file.StartsWith($serveRoot, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $file -PathType Leaf)) {
-        $body = [Text.Encoding]::UTF8.GetBytes('Not found')
-        $head = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 404 Not Found`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n")
-        $stream.Write($head,0,$head.Length); $stream.Write($body,0,$body.Length); continue
+      if (-not $file.StartsWith($servePrefix, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $file -PathType Leaf)) {
+        Write-Host ("404 local route: target='{0}' normalized='{1}'" -f $target, $rawPath)
+        Send-Response $stream 404 'Not Found' ([Text.Encoding]::UTF8.GetBytes('Not found')) 'text/plain; charset=utf-8' $headOnly
+        continue
       }
+
       $bytes = [IO.File]::ReadAllBytes($file)
       $ext = [IO.Path]::GetExtension($file).ToLowerInvariant()
       $type = if ($mime.ContainsKey($ext)) { $mime[$ext] } else { 'application/octet-stream' }
-      $head = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK`r`nContent-Type: $type`r`nContent-Length: $($bytes.Length)`r`nCache-Control: no-store`r`nConnection: close`r`n`r`n")
-      $stream.Write($head,0,$head.Length); $stream.Write($bytes,0,$bytes.Length)
+      Send-Response $stream 200 'OK' $bytes $type $headOnly
     } catch {
       Write-Warning $_.Exception.Message
     } finally {
