@@ -61,7 +61,7 @@ function reconstructMeshes(scene,prefab){
     if(skinStages.length){log('[+] Skin group '+name+' renderer='+(tr?.kind||'none')+' aabb='+(tr?.aabb?'yes':'no')+' root='+(tr?.rootBone||0))}
     if(skinStages.length&&tr?.aabb&&tr.rootBone){
       const rootWorld=prefab.worldByTransform?.[String(tr.rootBone)]||prefab.worldByTransform?.[tr.rootBone];
-      if(rootWorld){const invRoot=invAffine(rootWorld),localMeshes=skinStages.map(x=>({x,local:x.verts.map(v=>point(invRoot,v))})),allLocal=localMeshes.flatMap(x=>x.local),cb=boundsOf([{vertices:allLocal}]),tc=tr.aabb.center,te=tr.aabb.extent,ts=te.map(x=>2*x),sf=ts.map((x,i)=>cb.span[i]>1e-8?x/cb.span[i]:1);for(const q of localMeshes){q.x.verts=q.local.map(v=>point(rootWorld,v.map((x,i)=>(x-cb.center[i])*sf[i]+tc[i])));q.x.normals=normalsFromTriangles(q.x.verts,q.x.p.indices)}calibratedSkinGroups++;log('[+] Calibrated skinned bounds '+name+': source span='+cb.span.map(x=>x.toFixed(5)).join(',')+' target span='+ts.map(x=>x.toFixed(5)).join(','))}else log('[!] Missing root transform for skin group '+name)}
+      if(rootWorld){const invRoot=invAffine(rootWorld),localMeshes=skinStages.map(x=>({x,local:x.verts.map(v=>point(invRoot,v))})),allLocal=localMeshes.flatMap(x=>x.local),cb=boundsOf([{vertices:allLocal}]),tc=tr.aabb.center,te=tr.aabb.extent,ts=te.map(x=>2*x),sf=ts.map((x,i)=>cb.span[i]>1e-8?x/cb.span[i]:1);for(const q of localMeshes){q.x.verts=q.local.map(v=>point(rootWorld,v.map((x,i)=>(x-cb.center[i])*sf[i]+tc[i])));q.x.normals=normalsFromTriangles(q.x.verts,q.x.p.indices)}calibratedSkinGroups++;log('[+] Calibrated skinned bounds '+name+': source span='+cb.span.map(x=>x.toFixed(5)).join(',')+' target span='+ts.map(x=>x.toFixed(5)).join(','))}else {log('[!] Missing root transform for skin group '+name)}
     }
     for(const x of staged){const p=x.p;out.push({name:p.name,side:p.side,materialIndex:p.materialIndex,vertices:x.verts,normals:x.normals,tangents:[],colors:p.colors,uvs:p.uvs,indices:p.indices,prefabTransform:tr?{kind:tr.kind,pos:tr.pos}:null,recentered:!!(tr&&recenter),skinned:!!x.skinInfo,boneCount:x.skinInfo?.boneCount||0})}
   }
@@ -74,4 +74,4 @@ s=s.replace(
 "log(`[+] Reconstruction: skinned=${rec.skinnedParts} calibratedSkinGroups=${rec.calibratedSkinGroups} fallback=${rec.fallbackParts}`);");
 
 fs.writeFileSync(target,s);
-console.log('[+] R2.3.1 skinned renderer binding + bounds calibration patch applied');
+console.log('[+] R2.3.2 skinned renderer binding + bounds calibration patch applied');
