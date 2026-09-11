@@ -1,6 +1,6 @@
 'use strict';
 
-// R2.5 logical-object preservation patch.
+// R2.5.1 logical-object preservation patch.
 // Assimp can split one Unity renderer into multiple meshes when a source object
 // uses multiple material slots. VRoid/XWear should still see that renderer as
 // one logical child. This patch merges same-name reconstructed parts into one
@@ -33,18 +33,19 @@ once(
 "return{zip,meshCount:meshes.length,rawMeshCount:rawMeshes.length,materialCount:materials.length,sourceAnchor:fit.sourceAnchor,defaultAnchor:fit.defaultAnchor,bounds:boundsOf(meshes)}}",
 'logical mesh count metadata');
 
-once(
-"outputs.push({name:fn,sha256:sha256(r.zip),bytes:r.zip.length,meshCount:r.meshCount,materialCount:r.materialCount});log(`[+] ${fn}: ${r.meshCount} meshes, ${r.zip.length} bytes`)",
-"outputs.push({name:fn,sha256:sha256(r.zip),bytes:r.zip.length,meshCount:r.meshCount,rawMeshCount:r.rawMeshCount,materialCount:r.materialCount});log(`[+] ${fn}: logicalObjects=${r.meshCount} rawMeshes=${r.rawMeshCount} ${r.zip.length} bytes`)",
-'logical object logging');
+// Logging shape changed across calibration revisions, so this is deliberately
+// optional: functionality must not depend on a cosmetic log-string match.
+const logRe=/outputs\.push\(\{name:fn,sha256:sha256\(r\.zip\),bytes:r\.zip\.length,meshCount:r\.meshCount,materialCount:r\.materialCount\}\);log\(`\[\+\] \$\{fn\}: [^`]+`\)/;
+if(logRe.test(s))s=s.replace(logRe,"outputs.push({name:fn,sha256:sha256(r.zip),bytes:r.zip.length,meshCount:r.meshCount,rawMeshCount:r.rawMeshCount,materialCount:r.materialCount});log(`[+] ${fn}: logicalObjects=${r.meshCount} rawMeshes=${r.rawMeshCount} ${r.zip.length} bytes`)");
+else console.log('[i] R2.5.1: converter log signature differs; skipping cosmetic output-log rewrite');
 
 // Add object-level diagnostics to preview without changing the preview renderer's
-// raw-part representation. This lets later validation detect genuinely detached
-// creator objects separately from harmless material submesh splits.
+// raw-part representation. This lets validation distinguish genuinely detached
+// creator objects from harmless material submesh splits.
 once(
 "const preview={schema:2,units:'meters'",
 "const logicalDiagnostics=mergeLogicalMeshes(meshes).map(m=>({name:m.name,side:m.side,mergedParts:m.mergedParts||1,materialIndices:m.materialIndices,bounds:boundsOf([m])}));const preview={schema:3,logicalObjects:logicalDiagnostics,units:'meters'",
 'preview logical diagnostics');
 
 fs.writeFileSync(target,s);
-console.log('[+] R2.5 logical-object/material-split preservation patch applied');
+console.log('[+] R2.5.1 logical-object/material-split preservation patch applied');
