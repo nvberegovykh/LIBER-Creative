@@ -1,39 +1,39 @@
-# VRoid 2.14 Accessory Converter — test build 2
+# VRoid 2.14 Accessory Converter — R2.6.2
 
-Zero local toolchain installs. Double-click `OPEN.cmd` for a temporary localhost shell, or open the package through Pinokio.
+Clean-room Unity-package → XWear v2 conversion for VRoid Studio 2.14.0. The private worker reconstructs the accessory from the source FBX/prefab, preserves creator logical object boundaries, fitting transforms, skinning/bind poses, and translates supported source motion into VRM1 SpringBone metadata.
 
-## First connection
-The main converter no longer exposes an access-token field. Press **Connect GitHub** and use the small setup dialog:
+Produced by ChatGPT 5.6 Sol
 
-1. **Open GitHub key setup** opens GitHub's official fine-grained-token form with resource owner `nvberegovykh`, a 7-day test expiry, and **Contents: Read and write** prefilled.
-2. GitHub does not expose selected-repository choice as a supported URL-prefill parameter. Choose **Repository access → Only select repositories → archive**.
-3. Press **Generate token** on GitHub and copy it.
-4. Back in the converter press **Paste copied key & connect**. If clipboard access is blocked, use **Paste manually**.
-5. After verification the visible field is cleared. The key remains only in the JavaScript memory of that tab: no cookies, localStorage, registry entry, environment variable, or config file is used. **Forget access** drops it immediately.
+## Use
 
-Official GitHub token template behavior is documented at:
-https://docs.github.com/en/enterprise-cloud@latest/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#pre-filling-fine-grained-personal-access-token-details-using-url-parameters
+1. Open `OPEN.cmd` (or the Pinokio package) and connect the temporary browser session to the private `nvberegovykh/archive` worker repository.
+2. Select a `.unitypackage`, or a `.zip` containing exactly one `.unitypackage`.
+3. Convert in private cloud, inspect the generated preview, then save Pair / Left / Right `.xwear` variants as applicable.
+4. Delete the transient private `vroid-job-*` branch after verified download.
 
-## Conversion test
-1. Select a `.unitypackage`, or a `.zip` containing exactly one `.unitypackage`.
-2. Leave scale at `1.00` for the first run and click **Convert in private cloud**.
-3. Save the generated `.xwear` files.
-4. Press **Delete transient private branch** after saving results.
+The browser keeps the GitHub credential only in the JavaScript memory of that tab; no converter token is written to localStorage, cookies, registry, environment variables, or a config file.
 
-The worker creates Pair / Left / Right variants when left/right mesh names can be recognized. For ThreeStarPierce, the neutral model's mirrored `L_01…05` and `R_01…05` objects are recognized.
+## R2.6.2 behavior
+
+- Preserves creator static-vs-skinned renderer identity rather than trusting unstable `_04` / `_05` names. This fixes the ThreeStarPierce floating-star failure without deleting any source object: a raw static mesh is mapped to a static prefab renderer slot, and the skinned mesh is mapped to the corresponding skinned slot.
+- Emits real XWear `SkinnedMeshRenderer` resources with per-vertex weights, bone references, and bind poses. Static objects remain `MeshFilter` resources and carry no fake skin payload.
+- Uses `Earring_Root` as the fitting/rig origin for the adaptive hierarchy.
+- Treats the ear attachment as the constrained/root region and allows motion only along the downstream source bone branches. Source `EarringL##`, `EarringR##`, and `EarringRU##` naming is classified explicitly so a right-hand chain cannot leak into a Left-only export.
+- Converts source VRC PhysBone-like settings to VRM1 SpringBone approximately: stiffness uses the stronger source pull/stiffness term, drag is derived from spring, gravity and joint radius are preserved where available. Source `immobile` has no direct VRM1 equivalent and is not fabricated.
+- Keeps the R2.5.2 XWear mesh binary fix: bone weights → bind poses → submeshes.
+
+## Real ThreeStarPierce validation
+
+Production worker run `34664398106` completed successfully with `errors: []` using the established fit: scale `1.17`, offset `(0.0159, 0.2277, 0.0319)`, rotation `(-0.9, -56.95, -1.29)` degrees.
+
+- Left: 5 logical objects, 1 skinned object, 1 spring / 4 joints. SHA-256 `eb7be96852be54cc1613eb3af6e185e8ba3a8c9402f757ac6bd90e93b4c746e7`.
+- Pair: 10 logical objects, 2 skinned objects, 3 springs / 11 joints. SHA-256 `479d34e3766266bc675789c1bc7d9a42d4da87996fa6ffbeb0d1d3b5cadb1f67`.
+- Right: 5 logical objects, 1 skinned object, 2 springs / 7 joints. SHA-256 `0df6751cdfb5681041919b0c07d56d422bec2e06b7b6c634727436bb6ad3ca0c`.
+
+For the dynamic meshes, the real run validated weight count == vertex count and bind-pose count == bone count (Left 1176/1176 weights with 6 bind poses; Right 3398/3398 with 9 bind poses). The worker also validates that Left/Right spring references do not cross sides.
 
 ## Boundaries
-- Public code: `nvberegovykh/LIBER-Creative`, branch `vroid-accessory-cloud-converter`.
-- Private transient inputs/outputs: `nvberegovykh/archive`, branches `vroid-job-*`.
-- Target: VRoid Studio 2.14.0 XWear v2.
-- Source copyright/license/ownership is not changed by conversion.
-- This test build converts geometry and self-contained Standard material color/metallic/smoothness. lilToon-specific visual effects and texture channels are not redistributed by the converter yet.
-- No GitHub Actions artifact storage, Unity editor, GPU runner, Blender, VPM, local Python, or local Node is required.
-- Current private compute is a small standard Linux GitHub Actions job using Node + assimpjs. It still counts as normal private-repository Actions usage according to the account's GitHub plan; there is no separate GPU/Unity cost in this path.
 
-Production `LIBER-Creative/main` is not part of this workflow.
+Public code: `nvberegovykh/LIBER-Creative`, branch `vroid-accessory-cloud-converter`. Private transient inputs/outputs: `nvberegovykh/archive`, branches `vroid-job-*`. Private worker authority: `nvberegovykh/archive:vroid-cloud-worker`.
 
-## Verified gates
-- Public clean-room XWear writer self-test: PASS, GitHub Actions run `34508904785`.
-- Private worker transport + conversion + private result publishing: PASS, run `34509912518`.
-- `OPEN.cmd` starts only a temporary loopback HTTP shell using Windows PowerShell/.NET and opens the page in your browser; it installs nothing.
+The conversion path is schema-, binary-, hierarchy-, and worker-validated. It does **not** run VRoid Studio itself, so the final visual/import check should still be performed locally in VRoid Studio 2.14.0. Shader-specific source effects are approximated by self-contained material values; source copyright/license/ownership is unchanged.
