@@ -1,0 +1,10 @@
+const fs = require('fs');
+const file = process.argv[2];
+if (!file) throw new Error('Usage: node r26-static-weight-fix.cjs <cleanroom-xwear.js>');
+let s = fs.readFileSync(file, 'utf8');
+const oldText = "const weights=(m.weights||[]).length===m.vertices.length?m.weights:[];";
+const newText = "const weights=m.skinned&&(m.weights||[]).length===m.vertices.length?m.weights:[];";
+if (!s.includes(oldText)) throw new Error('R2.6 static-weight repair anchor missing');
+s = s.replace(oldText, newText);
+fs.writeFileSync(file, s);
+console.log('Applied VRoid Accessory Converter R2.6 static mesh weight suppression');
