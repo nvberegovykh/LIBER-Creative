@@ -1,7 +1,12 @@
-VRoid 2.14 Accessory Converter — TEST
-Build: 2026-09-10-cleanroom-e2e1
+VRoid 2.14 Accessory Converter — R2.6.2
+Build: 2026-09-11-r2.6.2-adaptive-constrained
 Public code branch: nvberegovykh/LIBER-Creative:vroid-accessory-cloud-converter
 Private worker branch: nvberegovykh/archive:vroid-cloud-worker
-Public converter self-test: PASS (run 34508904785)
-Private worker end-to-end synthetic test: PASS (run 34509912518)
-No local Unity / Blender / VPM / Python / Node installation required.
+Target: VRoid Studio 2.14.0 / XWear v2
+Real ThreeStarPierce production-worker validation: PASS (run 34664398106)
+Validated outputs: Left 5 objects / 1 spring; Pair 10 objects / 3 springs; Right 5 objects / 2 springs; errors: []
+Renderer-kind remap: PASS
+Skinned weights + bind poses: PASS
+Side-constrained spring branch isolation: PASS
+README credit: Produced by ChatGPT 5.6 Sol
+No local Unity / Blender / VPM / Python / Node installation required for the cloud path.
