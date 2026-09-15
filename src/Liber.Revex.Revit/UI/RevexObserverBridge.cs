@@ -146,10 +146,11 @@ internal static class RevexObserverBridge
         string focusId = ReadString(root, "focusId");
         string action = ReadString(root, "action");
         string requestId = RequestId(root, "workshop");
-        ElevatorWorkshopService.InfillGeometry? infill = null;
-        if (string.Equals(action, "infill-right-opening", StringComparison.Ordinal))
+
+        ElevatorWorkshopService.InfillGeometry? geometry = null;
+        if (action is "infill-right-opening" or "build-right-frame" or "build-single-car-panel")
         {
-            infill = new ElevatorWorkshopService.InfillGeometry(
+            geometry = new ElevatorWorkshopService.InfillGeometry(
                 ReadString(root, "sourceCandidatePath"),
                 ReadString(root, "planeAxis"),
                 ReadDouble(root, "planeCoordFt"),
@@ -157,7 +158,8 @@ internal static class RevexObserverBridge
                 ReadDoubleArray(root, "viewerRight", 3),
                 ReadDouble(root, "clearLeftUFt"),
                 ReadDouble(root, "clearRightUFt"),
-                ReadDouble(root, "doorHeightFt"));
+                ReadDouble(root, "doorHeightFt"),
+                ReadNullableDouble(root, "cabLeftUFt"));
         }
 
         var request = new ElevatorWorkshopService.WorkshopRequest(
@@ -166,7 +168,7 @@ internal static class RevexObserverBridge
             focusId,
             requestId,
             action,
-            infill);
+            geometry);
         _workshopHandler.Enqueue(new RevexElevatorWorkshopExternalHandler.WorkItem(
             request,
             (result, error) => _ = PostWorkshopResultAsync(web, request, result, error)));
@@ -258,6 +260,17 @@ internal static class RevexObserverBridge
         if (root.TryGetProperty(property, out JsonElement value) && value.TryGetDouble(out double number) && double.IsFinite(number))
             return number;
         if (double.TryParse(root.TryGetProperty(property, out value) ? value.ToString() : "", out number) && double.IsFinite(number))
+            return number;
+        throw new InvalidOperationException($"Invalid {property}.");
+    }
+
+    private static double? ReadNullableDouble(JsonElement root, string property)
+    {
+        if (!root.TryGetProperty(property, out JsonElement value) || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            return null;
+        if (value.TryGetDouble(out double number) && double.IsFinite(number))
+            return number;
+        if (double.TryParse(value.ToString(), out number) && double.IsFinite(number))
             return number;
         throw new InvalidOperationException($"Invalid {property}.");
     }
