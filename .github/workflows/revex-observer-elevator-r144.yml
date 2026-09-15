@@ -6,6 +6,7 @@ on:
     paths:
       - 'docs/liber-apps/apps/revex/observer-focus-api-r143.js'
       - 'docs/liber-apps/apps/revex/observer-elevator-r144.js'
+      - 'docs/liber-apps/apps/revex/observer-elevator-stops-r149.js'
       - 'docs/liber-apps/apps/revex/observer-elevator-workshop-r146.js'
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'src/Liber.Revex.Revit/Services/ObserverFamilyService.cs'
@@ -33,9 +34,10 @@ jobs:
         run: |
           node --check docs/liber-apps/apps/revex/observer-focus-api-r143.js
           node --check docs/liber-apps/apps/revex/observer-elevator-r144.js
+          node --check docs/liber-apps/apps/revex/observer-elevator-stops-r149.js
           node --check docs/liber-apps/apps/revex/observer-elevator-workshop-r146.js
           node --check .github/scripts/verify-revex-observer-elevator-r144.js
-      - name: Verify Observer, planner, and isolated workshop boundary
+      - name: Verify Observer, planner, native stop ladder, and isolated workshop boundary
         run: node .github/scripts/verify-revex-observer-elevator-r144.js
 
   revit-compile:
