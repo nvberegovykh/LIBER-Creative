@@ -6,9 +6,12 @@ on:
     paths:
       - 'docs/liber-apps/apps/revex/observer-focus-api-r143.js'
       - 'docs/liber-apps/apps/revex/observer-elevator-r144.js'
+      - 'docs/liber-apps/apps/revex/observer-elevator-workshop-r146.js'
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'src/Liber.Revex.Revit/Services/ObserverFamilyService.cs'
+      - 'src/Liber.Revex.Revit/Services/ElevatorWorkshopService.cs'
       - 'src/Liber.Revex.Revit/Revit/RevexObserverExternalHandler.cs'
+      - 'src/Liber.Revex.Revit/Revit/RevexElevatorWorkshopExternalHandler.cs'
       - 'src/Liber.Revex.Revit/UI/RevexObserverBridge.cs'
       - 'src/Liber.Revex.Revit/UI/RendairWindowManager.cs'
       - '.github/scripts/verify-revex-observer-elevator-r144.js'
@@ -30,8 +33,9 @@ jobs:
         run: |
           node --check docs/liber-apps/apps/revex/observer-focus-api-r143.js
           node --check docs/liber-apps/apps/revex/observer-elevator-r144.js
+          node --check docs/liber-apps/apps/revex/observer-elevator-workshop-r146.js
           node --check .github/scripts/verify-revex-observer-elevator-r144.js
-      - name: Verify Observer and elevator boundary
+      - name: Verify Observer, planner, and isolated workshop boundary
         run: node .github/scripts/verify-revex-observer-elevator-r144.js
 
   revit-compile:
@@ -41,7 +45,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-      - name: Compile REVEX Revit add-in with Observer
+      - name: Compile REVEX Revit add-in with Observer workshop
         shell: pwsh
         run: |
           dotnet restore src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -p:RevexCiRevitApi=true -p:Platform=x64
