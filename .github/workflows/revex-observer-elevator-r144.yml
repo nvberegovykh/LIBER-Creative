@@ -1,0 +1,48 @@
+name: REVEX Observer elevator r144
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/liber-apps/apps/revex/observer-focus-api-r143.js'
+      - 'docs/liber-apps/apps/revex/observer-elevator-r144.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - 'src/Liber.Revex.Revit/Services/ObserverFamilyService.cs'
+      - 'src/Liber.Revex.Revit/Revit/RevexObserverExternalHandler.cs'
+      - 'src/Liber.Revex.Revit/UI/RevexObserverBridge.cs'
+      - 'src/Liber.Revex.Revit/UI/RendairWindowManager.cs'
+      - '.github/scripts/verify-revex-observer-elevator-r144.js'
+      - '.github/workflows/revex-observer-elevator-r144.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  observer-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check Observer browser runtimes
+        run: |
+          node --check docs/liber-apps/apps/revex/observer-focus-api-r143.js
+          node --check docs/liber-apps/apps/revex/observer-elevator-r144.js
+          node --check .github/scripts/verify-revex-observer-elevator-r144.js
+      - name: Verify Observer and elevator boundary
+        run: node .github/scripts/verify-revex-observer-elevator-r144.js
+
+  revit-compile:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Compile REVEX Revit add-in with Observer
+        shell: pwsh
+        run: |
+          dotnet restore src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -p:RevexCiRevitApi=true -p:Platform=x64
+          dotnet build src/Liber.Revex.Revit/Liber.Revex.Revit.csproj -c Release -p:RevexCiRevitApi=true -p:Platform=x64 --no-restore
