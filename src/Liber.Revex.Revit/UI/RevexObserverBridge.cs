@@ -146,12 +146,27 @@ internal static class RevexObserverBridge
         string focusId = ReadString(root, "focusId");
         string action = ReadString(root, "action");
         string requestId = RequestId(root, "workshop");
+        ElevatorWorkshopService.InfillGeometry? infill = null;
+        if (string.Equals(action, "infill-right-opening", StringComparison.Ordinal))
+        {
+            infill = new ElevatorWorkshopService.InfillGeometry(
+                ReadString(root, "sourceCandidatePath"),
+                ReadString(root, "planeAxis"),
+                ReadDouble(root, "planeCoordFt"),
+                ReadDoubleArray(root, "outwardNormal", 3),
+                ReadDoubleArray(root, "viewerRight", 3),
+                ReadDouble(root, "clearLeftUFt"),
+                ReadDouble(root, "clearRightUFt"),
+                ReadDouble(root, "doorHeightFt"));
+        }
+
         var request = new ElevatorWorkshopService.WorkshopRequest(
             projectElementId,
             internalElementId,
             focusId,
             requestId,
-            action);
+            action,
+            infill);
         _workshopHandler.Enqueue(new RevexElevatorWorkshopExternalHandler.WorkItem(
             request,
             (result, error) => _ = PostWorkshopResultAsync(web, request, result, error)));
@@ -237,6 +252,29 @@ internal static class RevexObserverBridge
         root.TryGetProperty(property, out JsonElement value) && value.ValueKind == JsonValueKind.String
             ? (value.GetString() ?? "").Trim()
             : "";
+
+    private static double ReadDouble(JsonElement root, string property)
+    {
+        if (root.TryGetProperty(property, out JsonElement value) && value.TryGetDouble(out double number) && double.IsFinite(number))
+            return number;
+        if (double.TryParse(root.TryGetProperty(property, out value) ? value.ToString() : "", out number) && double.IsFinite(number))
+            return number;
+        throw new InvalidOperationException($"Invalid {property}.");
+    }
+
+    private static double[] ReadDoubleArray(JsonElement root, string property, int expected)
+    {
+        if (!root.TryGetProperty(property, out JsonElement value) || value.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException($"Invalid {property}.");
+        double[] values = value.EnumerateArray()
+            .Select(item => item.TryGetDouble(out double number) && double.IsFinite(number)
+                ? number
+                : throw new InvalidOperationException($"Invalid {property} value."))
+            .ToArray();
+        if (values.Length != expected)
+            throw new InvalidOperationException($"{property} must contain {expected} values.");
+        return values;
+    }
 
     private static long ReadLong(JsonElement root, string property)
     {
