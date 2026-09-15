@@ -10,10 +10,11 @@
     "one-concern-one-runtime-owner",
     "revit-remains-model-authority",
     "observe-before-and-after-every-consequential-transition",
-    "focus-keys-are-not-authentication-secrets"
+    "focus-keys-are-not-authentication-secrets",
+    "isolated-workshop-before-production-mutation"
   ],
   "observer": {
-    "status": "candidate-read-only-with-native-family-inspection",
+    "status": "candidate-read-only-core-with-isolated-workshop",
     "source": "docs/liber-apps/apps/revex/observer-focus-api-r143.js",
     "global": "window.RevexObserver",
     "methods": [
@@ -41,19 +42,41 @@
       "opensFamilyWith": "Document.EditFamily",
       "closesFamilyWithSave": false
     },
+    "isolatedWorkshop": {
+      "status": "candidate",
+      "productionMutation": false,
+      "requestType": "liber:revex-observer-elevator-workshop-r146",
+      "responseType": "liber:revex-observer-elevator-workshop-result-r146",
+      "browserRuntime": "docs/liber-apps/apps/revex/observer-elevator-workshop-r146.js",
+      "nativeService": "src/Liber.Revex.Revit/Services/ElevatorWorkshopService.cs",
+      "nativeHandler": "src/Liber.Revex.Revit/Revit/RevexElevatorWorkshopExternalHandler.cs",
+      "artifactRoot": "%TEMP%/LIBER_REVEX/observer-workshops",
+      "rules": [
+        "save-baseline-before-mutation",
+        "one-named-revit-transaction-per-state",
+        "reject-cascading-delete",
+        "regenerate-before-acceptance",
+        "preserve-wall-reference-dimension-nested-family-identities",
+        "never-load-candidate-back-into-active-project"
+      ]
+    },
     "focusKey": {
       "field": "focusId",
       "secret": false,
       "meaning": "Task locator inside the currently authorized REVEX project/session"
     },
-    "mutationAvailable": false
+    "mutationAvailable": false,
+    "isolatedWorkshopAvailable": true
   },
   "provingFocuses": [
     {
       "id": "elevator.single-right",
-      "global": "window.RevexObserverElevator",
-      "startMethod": "start",
+      "observerGlobal": "window.RevexObserverElevator",
+      "observerStartMethod": "start",
+      "workshopGlobal": "window.RevexElevatorWorkshop",
+      "workshopStartMethod": "proveS3",
       "target": "one right-aligned elevator entrance with one sliding panel and left-side panel pocket",
+      "currentState": "S3 isolated rear-glass retirement candidate",
       "purpose": "Develop the Observer and the elevator repair together; missing evidence becomes a bounded Observer capability instead of a one-off script."
     }
   ],
@@ -87,6 +110,11 @@
       "name": "observer-native-family",
       "role": "Read-only deep Family Editor inspection through Revit itself",
       "source": "src/Liber.Revex.Revit/Services/ObserverFamilyService.cs"
+    },
+    {
+      "name": "elevator-workshop",
+      "role": "Detached family candidate transitions only; never active-project authority",
+      "source": "src/Liber.Revex.Revit/Services/ElevatorWorkshopService.cs"
     },
     {
       "name": "wallt-control-plane",
