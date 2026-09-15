@@ -1,6 +1,21 @@
 {
   "schema": "liber.ai.discovery.v1",
   "name": "LIBER / REVEX",
+  "canonicalApi": {
+    "name": "LIBER REVEX Observer API",
+    "shortName": "REVEX Observer",
+    "aliases": [
+      "LIBER Observer API",
+      "REVEX Observer API",
+      "REVEX Focus API",
+      "LIBER REVEX BIM Observer"
+    ],
+    "discoveryUri": "https://liberpict.com/.well-known/liber-ai.json",
+    "humanGuide": "https://github.com/nvberegovykh/LIBER-Creative/blob/main/AI_START_HERE.md",
+    "sourceRepository": "https://github.com/nvberegovykh/LIBER-Creative",
+    "candidateBranch": "agent/revex-observer-focus-20260915",
+    "instruction": "Fetch discoveryUri first. If the live manifest is unavailable or stale, inspect AI_START_HERE.md and docs/.well-known/liber-ai.json on candidateBranch. Never infer credentials or bypass the declared capability boundaries."
+  },
   "sourceRepository": "https://github.com/nvberegovykh/LIBER-Creative",
   "defaultBranch": "main",
   "productionRoot": "https://liberpict.com/liber-apps/",
@@ -74,9 +89,9 @@
       "observerGlobal": "window.RevexObserverElevator",
       "observerStartMethod": "start",
       "workshopGlobal": "window.RevexElevatorWorkshop",
-      "workshopStartMethod": "proveS3",
+      "workshopStartMethod": "proveS7",
       "target": "one right-aligned elevator entrance with one sliding panel and left-side panel pocket",
-      "currentState": "S3 isolated rear-glass retirement candidate",
+      "currentState": "candidate proving lane implemented through S7; compile/runtime gate required before production promotion",
       "purpose": "Develop the Observer and the elevator repair together; missing evidence becomes a bounded Observer capability instead of a one-off script."
     }
   ],
