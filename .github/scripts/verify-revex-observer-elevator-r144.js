@@ -27,7 +27,7 @@ must(elevator,"status:pocketMargin>=0?'READY_FOR_OPENING_PREVIEW':'BLOCKED_POCKE
 must(elevator,"'S3 retire only the rear glass filler; regenerate and observe'",'sequential plan must preserve intermediate states');
 must(ui,"observer-focus-api-r143.js?v=20260915r144-elevator-lab1",'Observer runtime must be loaded');
 must(ui,"observer-elevator-r144.js?v=20260915r145-elevator-plan1",'r145 elevator planner must be loaded');
-must(ui,"observer-elevator-workshop-r146.js?v=20260915r147-workshop2",'r147 isolated workshop must be loaded');
+must(ui,"observer-elevator-workshop-r146.js?v=20260915r148-workshop3",'r148 isolated workshop must be loaded');
 
 must(service,'projectDocument.EditFamily(family)','deep family inspection must use Revit family document');
 must(service,'familyDocument.Close(false)','family observation document must close without save');
@@ -42,19 +42,25 @@ must(handler,'IExternalEventHandler','native observer must run in Revit External
 must(handler,'_service.Inspect(document, item.Request)','ExternalEvent must delegate only to read-only observer service');
 must(bridge,'liber:revex-observer-family-inspect-r144','WebView bridge inspection contract');
 must(bridge,'liber:revex-observer-elevator-workshop-r146','WebView bridge workshop contract');
-must(bridge,'new ElevatorWorkshopService.InfillGeometry','bridge must parse bounded S4 geometry');
+must(bridge,'action is "infill-right-opening" or "build-right-frame" or "build-single-car-panel"','bridge must expose only the current bounded geometry actions');
 must(bridge,'ReadDoubleArray(root, "outwardNormal", 3)','bridge must validate the face normal');
+must(bridge,'ReadNullableDouble(root, "cabLeftUFt")','bridge must accept the measured pocket boundary only when required');
 must(bridge,'PostWebMessageAsJson','WebView bridge must return structured results');
 must(manager,'RevexObserverBridge.Configure();','Observer lifecycle must be configured');
 must(manager,'RevexObserverBridge.Release();','Observer lifecycle must be released');
 
 must(workshopJs,"action:'retire-rear-glass'",'browser workshop must expose bounded S3');
 must(workshopJs,"action:'infill-right-opening'",'browser workshop must expose bounded S4');
+must(workshopJs,"action:'build-right-frame'",'browser workshop must expose bounded S5');
+must(workshopJs,"action:'build-single-car-panel'",'browser workshop must expose bounded S6');
 must(workshopJs,"state:'S3'",'browser workshop must journal S3');
 must(workshopJs,"state:'S4'",'browser workshop must journal S4');
+must(workshopJs,"state:'S5'",'browser workshop must journal S5');
+must(workshopJs,"state:'S6'",'browser workshop must journal S6');
 must(workshopJs,'glass.length!==1','browser workshop must require one proven glass filler');
-must(workshopJs,'sourceCandidatePath','S4 must continue from S3 artifact rather than restart from source');
-must(workshopJs,'proveS4','workshop must expose a sequential S0-through-S4 proving path');
+must(workshopJs,'sourceCandidatePath','later states must continue from verified artifacts rather than restart from source');
+must(workshopJs,'cabLeftUFt','single-panel proof must carry the measured pocket boundary');
+must(workshopJs,'proveS6','workshop must expose a sequential S0-through-S6 proving path');
 
 must(workshopService,'projectDocument.EditFamily(family)','S3 must operate a detached family document');
 must(workshopService,'SaveCopy(familyDocument, baselinePath)','S3 must preserve a pre-mutation baseline copy');
@@ -63,12 +69,23 @@ must(workshopService,'deleted.Count != 1','S3 must reject cascading deletion');
 must(workshopService,'tx.RollBack()','rejected transitions must roll back');
 must(workshopService,'familyDocument.Regenerate()','workshop must regenerate before acceptance');
 must(workshopService,'VerifyS3(before, tentative, target.Id.Value)','S3 must validate invariants before commit');
-must(workshopService,'projectDocument.Application.OpenDocumentFile(sourcePath)','S4 must open the verified S3 artifact, not a second EditFamily copy');
+must(workshopService,'projectDocument.Application.OpenDocumentFile(sourcePath)','later workshop states must open prior detached artifacts');
 must(workshopService,'new Transaction(familyDocument, "LIBER:ELEVATOR:S4:INFILL_RIGHT_OPENING")','S4 must be one named native transaction');
-must(workshopService,'FamilyCreate.NewExtrusion','S4 must form explicit cab-wall infill');
-must(workshopService,'VerifyS4(before, tentative, addedIds.Count)','S4 must validate topology before commit');
-must(workshopService,'TryAssociateCabWallMaterial','S4 must preserve cab-wall material semantics');
-must(workshopService,'ValidateWorkshopSource','S4 source artifact must be bounded to the temp focus lane');
+must(workshopService,'TryAssociateMaterial(familyDocument, extrusion, "_Elevator Cab Walls", "S4")','S4 must preserve cab-wall material semantics');
+must(workshopService,'new Transaction(familyDocument, "LIBER:ELEVATOR:S5:RIGHT_FRAME")','S5 must be one named native transaction');
+must(workshopService,'S5_RIGHT_FRAME.rfa','S5 must materialize a frame checkpoint');
+must(workshopService,'_Elevator Door Frame Finish','S5 must bind the source frame material parameter');
+must(workshopService,'addedIds.Count != 3','S5 must require exactly left jamb, right jamb, and head');
+must(workshopService,'new Transaction(familyDocument, "LIBER:ELEVATOR:S6:SINGLE_CAR_PANEL")','S6 must be one named native transaction');
+must(workshopService,'S6_SINGLE_CAR_PANEL.rfa','S6 must materialize a one-panel checkpoint');
+must(workshopService,'RequireFamilyDouble(familyDocument, "Door Thickness", "S6")','S6 must use the native door thickness');
+must(workshopService,'geometry.CabLeftUFt','S6 must gate on the measured left pocket boundary');
+must(workshopService,'_Elevator Cab Doors','S6 should preserve the cab-door material semantic');
+must(workshopService,'openLeft < cabLeft - Tol','S6 must reject a panel that cannot fully retreat into the pocket');
+must(workshopService,'ValidateWorkshopSource(geometry.SourceCandidatePath, request.FocusId, "S3_REAR_GLASS_RETIRED.rfa", "S4")','S4 must require exactly the S3 artifact');
+must(workshopService,'ValidateWorkshopSource(geometry.SourceCandidatePath, request.FocusId, "S4_RIGHT_OPENING_INFILLED.rfa", "S5")','S5 must require exactly the S4 artifact');
+must(workshopService,'ValidateWorkshopSource(geometry.SourceCandidatePath, request.FocusId, "S5_RIGHT_FRAME.rfa", "S6")','S6 must require exactly the S5 artifact');
+must(workshopService,'VerifyAddedForms','later states must validate topology before acceptance');
 must(workshopService,'SaveCopy(familyDocument, candidatePath)','each state must materialize an isolated candidate');
 must(workshopService,'familyDocument.Close(false)','workshop family document must close without project reload');
 mustNot(workshopService,'.LoadFamily(','workshop must never load the candidate into the active project');
@@ -81,4 +98,4 @@ must(workshopService,'RequireSame(state, "nested families"','nested family ident
 must(workshopHandler,'IExternalEventHandler','workshop must run through Revit ExternalEvent');
 must(workshopHandler,'_service.Execute(document, item.Request)','workshop handler must delegate to bounded workshop service');
 
-console.log('REVEX_OBSERVER_ELEVATOR_R147=PASSED');
+console.log('REVEX_OBSERVER_ELEVATOR_R148=PASSED');
