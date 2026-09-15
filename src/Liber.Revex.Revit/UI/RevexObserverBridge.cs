@@ -148,7 +148,7 @@ internal static class RevexObserverBridge
         string requestId = RequestId(root, "workshop");
 
         ElevatorWorkshopService.InfillGeometry? geometry = null;
-        if (action is "infill-right-opening" or "build-right-frame" or "build-single-car-panel")
+        if (action is "infill-right-opening" or "build-right-frame" or "build-single-car-panel" or "build-landing-stop")
         {
             geometry = new ElevatorWorkshopService.InfillGeometry(
                 ReadString(root, "sourceCandidatePath"),
@@ -159,7 +159,10 @@ internal static class RevexObserverBridge
                 ReadDouble(root, "clearLeftUFt"),
                 ReadDouble(root, "clearRightUFt"),
                 ReadDouble(root, "doorHeightFt"),
-                ReadNullableDouble(root, "cabLeftUFt"));
+                ReadNullableDouble(root, "cabLeftUFt"),
+                ReadNullableDouble(root, "stopBaseZFt"),
+                ReadNullableInt(root, "stopIndex"),
+                ReadNullableString(root, "visibilityParameter"));
         }
 
         var request = new ElevatorWorkshopService.WorkshopRequest(
@@ -255,6 +258,13 @@ internal static class RevexObserverBridge
             ? (value.GetString() ?? "").Trim()
             : "";
 
+    private static string? ReadNullableString(JsonElement root, string property)
+    {
+        if (!root.TryGetProperty(property, out JsonElement value) || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            return null;
+        return value.ValueKind == JsonValueKind.String ? (value.GetString() ?? "").Trim() : value.ToString().Trim();
+    }
+
     private static double ReadDouble(JsonElement root, string property)
     {
         if (root.TryGetProperty(property, out JsonElement value) && value.TryGetDouble(out double number) && double.IsFinite(number))
@@ -272,6 +282,15 @@ internal static class RevexObserverBridge
             return number;
         if (double.TryParse(value.ToString(), out number) && double.IsFinite(number))
             return number;
+        throw new InvalidOperationException($"Invalid {property}.");
+    }
+
+    private static int? ReadNullableInt(JsonElement root, string property)
+    {
+        if (!root.TryGetProperty(property, out JsonElement value) || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            return null;
+        if (value.TryGetInt32(out int number)) return number;
+        if (int.TryParse(value.ToString(), out number)) return number;
         throw new InvalidOperationException($"Invalid {property}.");
     }
 
