@@ -1,0 +1,110 @@
+{
+  "schema": "liber.ai.discovery.v1",
+  "name": "LIBER / REVEX",
+  "sourceRepository": "https://github.com/nvberegovykh/LIBER-Creative",
+  "defaultBranch": "main",
+  "productionRoot": "https://liberpict.com/liber-apps/",
+  "humanGuide": "https://github.com/nvberegovykh/LIBER-Creative/blob/main/AI_START_HERE.md",
+  "principles": [
+    "integrate-do-not-reconstruct",
+    "one-concern-one-runtime-owner",
+    "revit-remains-model-authority",
+    "observe-before-and-after-every-consequential-transition",
+    "focus-keys-are-not-authentication-secrets"
+  ],
+  "observer": {
+    "status": "candidate-read-only",
+    "source": "docs/liber-apps/apps/revex/observer-focus-api-r143.js",
+    "global": "window.RevexObserver",
+    "methods": [
+      "snapshot",
+      "getElement",
+      "query",
+      "graph",
+      "getSelection",
+      "select",
+      "createFocus",
+      "getFocus",
+      "listFocus",
+      "updateFocus",
+      "recordStep",
+      "closeFocus",
+      "preview"
+    ],
+    "focusKey": {
+      "field": "focusId",
+      "secret": false,
+      "meaning": "Task locator inside the currently authorized REVEX project/session"
+    },
+    "mutationAvailable": false
+  },
+  "runtimeOwners": [
+    {
+      "name": "revex-companion",
+      "role": "Companion shell and BIM orchestration",
+      "source": "docs/liber-apps/apps/revex/app.js"
+    },
+    {
+      "name": "revex-store",
+      "role": "Project identity, revision pointers and cloud/local store boundary",
+      "source": "docs/liber-apps/apps/revex/store.js"
+    },
+    {
+      "name": "rvx-export",
+      "role": "Exact Revit geometry export",
+      "source": "src/Liber.Revex.Revit/Services/RevexMeshExportService.cs"
+    },
+    {
+      "name": "revit-request-owner",
+      "role": "Native Revit request and ExternalEvent execution boundary",
+      "source": "src/Liber.Revex.Revit/Revit/RevitRequestHandler.cs"
+    },
+    {
+      "name": "revit-web-bridge",
+      "role": "REVEX WebView2 to native Revit bridge",
+      "source": "src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs"
+    },
+    {
+      "name": "wallt-control-plane",
+      "role": "Helper/fixer orchestration over existing owners",
+      "source": "docs/liber-apps/apps/revex/wallt-control-plane.js"
+    },
+    {
+      "name": "wallt-fixer-adapters",
+      "role": "Bounded local fixer adapters",
+      "source": "docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js"
+    },
+    {
+      "name": "firebase-broker",
+      "role": "Authenticated cloud function and broker boundary",
+      "source": "server/firebase-functions/index.js"
+    },
+    {
+      "name": "energy-worker",
+      "role": "Current managed Energy worker",
+      "source": "server/revex-energy-worker/app.py"
+    }
+  ],
+  "security": {
+    "repositorySecretsAllowed": false,
+    "focusRecordsMayContainSecrets": false,
+    "browserAuth": "existing-authorized-revex-session",
+    "headlessCapabilityToken": {
+      "status": "not-yet-exposed",
+      "requirements": [
+        "server-issued",
+        "short-lived",
+        "project-scoped",
+        "focus-scoped",
+        "action-scoped",
+        "revocable",
+        "never-logged-or-committed"
+      ]
+    }
+  },
+  "sourceParity": {
+    "customDomainSource": "docs/CNAME",
+    "expectedDomain": "liberpict.com",
+    "rule": "Do not assume live byte parity from repository presence alone; verify the live asset fingerprint before production mutation."
+  }
+}
