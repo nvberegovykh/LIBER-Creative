@@ -27,7 +27,7 @@ must(elevator,"status:pocketMargin>=0?'READY_FOR_OPENING_PREVIEW':'BLOCKED_POCKE
 must(elevator,"'S3 retire only the rear glass filler; regenerate and observe'",'sequential plan must preserve intermediate states');
 must(ui,"observer-focus-api-r143.js?v=20260915r144-elevator-lab1",'Observer runtime must be loaded');
 must(ui,"observer-elevator-r144.js?v=20260915r145-elevator-plan1",'r145 elevator planner must be loaded');
-must(ui,"observer-elevator-workshop-r146.js?v=20260915r146-workshop1",'r146 isolated workshop must be loaded');
+must(ui,"observer-elevator-workshop-r146.js?v=20260915r147-workshop2",'r147 isolated workshop must be loaded');
 
 must(service,'projectDocument.EditFamily(family)','deep family inspection must use Revit family document');
 must(service,'familyDocument.Close(false)','family observation document must close without save');
@@ -42,32 +42,43 @@ must(handler,'IExternalEventHandler','native observer must run in Revit External
 must(handler,'_service.Inspect(document, item.Request)','ExternalEvent must delegate only to read-only observer service');
 must(bridge,'liber:revex-observer-family-inspect-r144','WebView bridge inspection contract');
 must(bridge,'liber:revex-observer-elevator-workshop-r146','WebView bridge workshop contract');
+must(bridge,'new ElevatorWorkshopService.InfillGeometry','bridge must parse bounded S4 geometry');
+must(bridge,'ReadDoubleArray(root, "outwardNormal", 3)','bridge must validate the face normal');
 must(bridge,'PostWebMessageAsJson','WebView bridge must return structured results');
 must(manager,'RevexObserverBridge.Configure();','Observer lifecycle must be configured');
 must(manager,'RevexObserverBridge.Release();','Observer lifecycle must be released');
 
-must(workshopJs,"action:'retire-rear-glass'",'browser workshop must expose only the bounded S3 action');
-must(workshopJs,"state:'S3'",'browser workshop must journal the successful S3 state');
+must(workshopJs,"action:'retire-rear-glass'",'browser workshop must expose bounded S3');
+must(workshopJs,"action:'infill-right-opening'",'browser workshop must expose bounded S4');
+must(workshopJs,"state:'S3'",'browser workshop must journal S3');
+must(workshopJs,"state:'S4'",'browser workshop must journal S4');
 must(workshopJs,'glass.length!==1','browser workshop must require one proven glass filler');
-must(workshopJs,'candidatePath:result.candidatePath','candidate artifact must be recorded in the focus');
+must(workshopJs,'sourceCandidatePath','S4 must continue from S3 artifact rather than restart from source');
+must(workshopJs,'proveS4','workshop must expose a sequential S0-through-S4 proving path');
 
-must(workshopService,'projectDocument.EditFamily(family)','workshop must operate a detached family document');
-must(workshopService,'SaveCopy(familyDocument, baselinePath)','workshop must preserve a pre-mutation baseline copy');
-must(workshopService,'new Transaction(familyDocument, "LIBER:ELEVATOR:S3:RETIRE_REAR_GLASS")','workshop mutation must be one named native transaction');
-must(workshopService,'deleted.Count != 1','workshop must reject cascading deletion');
-must(workshopService,'tx.RollBack()','workshop must roll back rejected transitions');
+must(workshopService,'projectDocument.EditFamily(family)','S3 must operate a detached family document');
+must(workshopService,'SaveCopy(familyDocument, baselinePath)','S3 must preserve a pre-mutation baseline copy');
+must(workshopService,'new Transaction(familyDocument, "LIBER:ELEVATOR:S3:RETIRE_REAR_GLASS")','S3 must be one named native transaction');
+must(workshopService,'deleted.Count != 1','S3 must reject cascading deletion');
+must(workshopService,'tx.RollBack()','rejected transitions must roll back');
 must(workshopService,'familyDocument.Regenerate()','workshop must regenerate before acceptance');
-must(workshopService,'VerifyS3(before, tentative, target.Id.Value)','workshop must validate invariants before commit');
-must(workshopService,'SaveCopy(familyDocument, candidatePath)','workshop must materialize an isolated candidate');
-must(workshopService,'familyDocument.Close(false)','workshop family document must close without loading into project');
+must(workshopService,'VerifyS3(before, tentative, target.Id.Value)','S3 must validate invariants before commit');
+must(workshopService,'projectDocument.Application.OpenDocumentFile(sourcePath)','S4 must open the verified S3 artifact, not a second EditFamily copy');
+must(workshopService,'new Transaction(familyDocument, "LIBER:ELEVATOR:S4:INFILL_RIGHT_OPENING")','S4 must be one named native transaction');
+must(workshopService,'FamilyCreate.NewExtrusion','S4 must form explicit cab-wall infill');
+must(workshopService,'VerifyS4(before, tentative, addedIds.Count)','S4 must validate topology before commit');
+must(workshopService,'TryAssociateCabWallMaterial','S4 must preserve cab-wall material semantics');
+must(workshopService,'ValidateWorkshopSource','S4 source artifact must be bounded to the temp focus lane');
+must(workshopService,'SaveCopy(familyDocument, candidatePath)','each state must materialize an isolated candidate');
+must(workshopService,'familyDocument.Close(false)','workshop family document must close without project reload');
 mustNot(workshopService,'.LoadFamily(','workshop must never load the candidate into the active project');
 mustNot(workshopService,'projectDocument.Delete(','workshop must never delete from the active project');
-must(workshopService,'RequireSame("walls"','primary family wall scaffold must be preserved');
-must(workshopService,'RequireSame("reference planes"','reference-plane scaffold must be preserved');
-must(workshopService,'RequireSame("dimensions"','dimension scaffold must be preserved');
-must(workshopService,'RequireSame("nested families"','nested family identities must be preserved');
+must(workshopService,'RequireSame(state, "walls"','primary family wall scaffold must be preserved');
+must(workshopService,'RequireSame(state, "reference planes"','reference-plane scaffold must be preserved');
+must(workshopService,'RequireSame(state, "dimensions"','dimension scaffold must be preserved');
+must(workshopService,'RequireSame(state, "nested families"','nested family identities must be preserved');
 
 must(workshopHandler,'IExternalEventHandler','workshop must run through Revit ExternalEvent');
 must(workshopHandler,'_service.Execute(document, item.Request)','workshop handler must delegate to bounded workshop service');
 
-console.log('REVEX_OBSERVER_ELEVATOR_R146=PASSED');
+console.log('REVEX_OBSERVER_ELEVATOR_R147=PASSED');
