@@ -10,9 +10,9 @@ using System.Windows;
 namespace Liber.Revex.Revit.UI;
 
 /// <summary>
-/// Read-only Observer bridge. It listens alongside the existing REVEX integration
-/// bridge and exposes bounded family inspection through Revit ExternalEvent.
-/// No transaction, save, or project mutation is performed here.
+/// Observer bridge for read-only family inspection plus the explicitly isolated
+/// elevator workshop lane. The workshop may mutate only a detached family
+/// document and may never load that candidate back into the active project.
 /// </summary>
 internal static class RevexObserverBridge
 {
@@ -24,6 +24,8 @@ internal static class RevexObserverBridge
     private static readonly ConditionalWeakTable<WebView2, BridgeState> States = new();
     private static RevexObserverExternalHandler? _handler;
     private static ExternalEvent? _externalEvent;
+    private static RevexElevatorWorkshopExternalHandler? _workshopHandler;
+    private static ExternalEvent? _workshopExternalEvent;
 
     [ModuleInitializer]
     internal static void Install()
@@ -36,17 +38,28 @@ internal static class RevexObserverBridge
 
     internal static void Configure()
     {
-        if (_externalEvent != null) return;
-        _handler = new RevexObserverExternalHandler();
-        _externalEvent = ExternalEvent.Create(_handler);
-        RevexDiagnostics.Info("OBSERVER", "REVEX read-only Observer ExternalEvent ready.");
+        if (_externalEvent == null)
+        {
+            _handler = new RevexObserverExternalHandler();
+            _externalEvent = ExternalEvent.Create(_handler);
+            RevexDiagnostics.Info("OBSERVER", "REVEX read-only Observer ExternalEvent ready.");
+        }
+        if (_workshopExternalEvent == null)
+        {
+            _workshopHandler = new RevexElevatorWorkshopExternalHandler();
+            _workshopExternalEvent = ExternalEvent.Create(_workshopHandler);
+            RevexDiagnostics.Info("ELEVATOR_WORKSHOP", "REVEX isolated elevator workshop ExternalEvent ready.");
+        }
     }
 
     internal static void Release()
     {
         try { _externalEvent?.Dispose(); } catch { }
+        try { _workshopExternalEvent?.Dispose(); } catch { }
         _externalEvent = null;
         _handler = null;
+        _workshopExternalEvent = null;
+        _workshopHandler = null;
     }
 
     private static void OnWebViewLoaded(object sender, RoutedEventArgs args)
@@ -83,39 +96,69 @@ internal static class RevexObserverBridge
             using JsonDocument document = JsonDocument.Parse(json);
             JsonElement root = document.RootElement;
             if (!root.TryGetProperty("type", out JsonElement typeElement)) return;
-
             string type = typeElement.GetString() ?? "";
-            if (!string.Equals(type, "liber:revex-observer-family-inspect-r144", StringComparison.Ordinal))
+
+            if (string.Equals(type, "liber:revex-observer-family-inspect-r144", StringComparison.Ordinal))
+            {
+                QueueInspection(web, root);
                 return;
-
-            if (_handler == null || _externalEvent == null)
-                throw new InvalidOperationException("REVEX Observer is available only inside the active REVEX Revit add-in.");
-
-            long elementId = ReadLong(root, "elementId");
-            string focusId = ReadString(root, "focusId");
-            string requestId = ReadString(root, "requestId");
-            if (string.IsNullOrWhiteSpace(requestId))
-                requestId = "observer-" + Guid.NewGuid().ToString("N")[..12];
-
-            var request = new ObserverFamilyService.InspectRequest(elementId, focusId, requestId);
-            _handler.Enqueue(new RevexObserverExternalHandler.WorkItem(
-                request,
-                (result, error) => _ = PostResultAsync(web, request, result, error)));
-            _externalEvent.Raise();
+            }
+            if (string.Equals(type, "liber:revex-observer-elevator-workshop-r146", StringComparison.Ordinal))
+            {
+                QueueWorkshop(web, root);
+                return;
+            }
         }
         catch (Exception ex)
         {
             RevexDiagnostics.Error("OBSERVER", "Could not queue REVEX Observer request.", ex);
             _ = PostAsync(web, new
             {
-                type = "liber:revex-observer-family-inspection-r144",
+                type = "liber:revex-observer-error-r146",
                 ok = false,
                 message = ex.Message
             });
         }
     }
 
-    private static Task PostResultAsync(
+    private static void QueueInspection(WebView2 web, JsonElement root)
+    {
+        if (_handler == null || _externalEvent == null)
+            throw new InvalidOperationException("REVEX Observer is available only inside the active REVEX Revit add-in.");
+
+        long elementId = ReadLong(root, "elementId");
+        string focusId = ReadString(root, "focusId");
+        string requestId = RequestId(root, "observer");
+        var request = new ObserverFamilyService.InspectRequest(elementId, focusId, requestId);
+        _handler.Enqueue(new RevexObserverExternalHandler.WorkItem(
+            request,
+            (result, error) => _ = PostInspectionResultAsync(web, request, result, error)));
+        _externalEvent.Raise();
+    }
+
+    private static void QueueWorkshop(WebView2 web, JsonElement root)
+    {
+        if (_workshopHandler == null || _workshopExternalEvent == null)
+            throw new InvalidOperationException("REVEX elevator workshop is available only inside the active REVEX Revit add-in.");
+
+        long projectElementId = ReadLong(root, "elementId");
+        long internalElementId = ReadLong(root, "internalElementId");
+        string focusId = ReadString(root, "focusId");
+        string action = ReadString(root, "action");
+        string requestId = RequestId(root, "workshop");
+        var request = new ElevatorWorkshopService.WorkshopRequest(
+            projectElementId,
+            internalElementId,
+            focusId,
+            requestId,
+            action);
+        _workshopHandler.Enqueue(new RevexElevatorWorkshopExternalHandler.WorkItem(
+            request,
+            (result, error) => _ = PostWorkshopResultAsync(web, request, result, error)));
+        _workshopExternalEvent.Raise();
+    }
+
+    private static Task PostInspectionResultAsync(
         WebView2 web,
         ObserverFamilyService.InspectRequest request,
         ObserverFamilyService.InspectResult? result,
@@ -145,6 +188,26 @@ internal static class RevexObserverBridge
         });
     }
 
+    private static Task PostWorkshopResultAsync(
+        WebView2 web,
+        ElevatorWorkshopService.WorkshopRequest request,
+        ElevatorWorkshopService.WorkshopResult? result,
+        string? error)
+    {
+        return PostAsync(web, new
+        {
+            type = "liber:revex-observer-elevator-workshop-result-r146",
+            ok = result != null,
+            focusId = request.FocusId,
+            requestId = request.RequestId,
+            elementId = request.ProjectElementId,
+            internalElementId = request.InternalElementId,
+            action = request.Action,
+            result,
+            message = result == null ? error ?? "Elevator workshop transition failed." : null
+        });
+    }
+
     private static async Task PostAsync(WebView2 web, object payload)
     {
         try
@@ -160,6 +223,14 @@ internal static class RevexObserverBridge
         {
             RevexDiagnostics.Warn("OBSERVER", "Could not return Observer result to Companion: " + ex.Message);
         }
+    }
+
+    private static string RequestId(JsonElement root, string prefix)
+    {
+        string requestId = ReadString(root, "requestId");
+        return string.IsNullOrWhiteSpace(requestId)
+            ? prefix + "-" + Guid.NewGuid().ToString("N")[..12]
+            : requestId;
     }
 
     private static string ReadString(JsonElement root, string property) =>
