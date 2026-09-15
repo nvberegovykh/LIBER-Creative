@@ -93,6 +93,15 @@
       "target": "one right-aligned elevator entrance with one sliding panel and left-side panel pocket",
       "currentState": "candidate proving lane implemented through S7; compile/runtime gate required before production promotion",
       "purpose": "Develop the Observer and the elevator repair together; missing evidence becomes a bounded Observer capability instead of a one-off script."
+    },
+    {
+      "id": "rave289.coffee-area",
+      "observerGlobal": "window.RevexCoffeeAreaObserver",
+      "observerStartMethod": "start",
+      "observerVerifyMethod": "verify",
+      "target": "48in x 96in coffee appliance cabinet behind double pocket doors",
+      "currentState": "candidate read-only focus recipe; live authorized-session start/render/verify gate required",
+      "purpose": "Bind the coordination visualization and actual render to one protected Observer state and reject protected geometry drift."
     }
   ],
   "runtimeOwners": [
