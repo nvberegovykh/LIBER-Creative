@@ -13,7 +13,7 @@
     "focus-keys-are-not-authentication-secrets"
   ],
   "observer": {
-    "status": "candidate-read-only",
+    "status": "candidate-read-only-with-native-family-inspection",
     "source": "docs/liber-apps/apps/revex/observer-focus-api-r143.js",
     "global": "window.RevexObserver",
     "methods": [
@@ -31,6 +31,16 @@
       "closeFocus",
       "preview"
     ],
+    "nativeFamilyInspection": {
+      "requestType": "liber:revex-observer-family-inspect-r144",
+      "responseType": "liber:revex-observer-family-inspection-r144",
+      "browserRecipe": "docs/liber-apps/apps/revex/observer-elevator-r144.js",
+      "nativeService": "src/Liber.Revex.Revit/Services/ObserverFamilyService.cs",
+      "nativeBridge": "src/Liber.Revex.Revit/UI/RevexObserverBridge.cs",
+      "mutation": false,
+      "opensFamilyWith": "Document.EditFamily",
+      "closesFamilyWithSave": false
+    },
     "focusKey": {
       "field": "focusId",
       "secret": false,
@@ -38,6 +48,15 @@
     },
     "mutationAvailable": false
   },
+  "provingFocuses": [
+    {
+      "id": "elevator.single-right",
+      "global": "window.RevexObserverElevator",
+      "startMethod": "start",
+      "target": "one right-aligned elevator entrance with one sliding panel and left-side panel pocket",
+      "purpose": "Develop the Observer and the elevator repair together; missing evidence becomes a bounded Observer capability instead of a one-off script."
+    }
+  ],
   "runtimeOwners": [
     {
       "name": "revex-companion",
@@ -63,6 +82,11 @@
       "name": "revit-web-bridge",
       "role": "REVEX WebView2 to native Revit bridge",
       "source": "src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs"
+    },
+    {
+      "name": "observer-native-family",
+      "role": "Read-only deep Family Editor inspection through Revit itself",
+      "source": "src/Liber.Revex.Revit/Services/ObserverFamilyService.cs"
     },
     {
       "name": "wallt-control-plane",
