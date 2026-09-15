@@ -75,7 +75,11 @@ run.analysis;
 
 The first target is deliberately specific: one entrance, right-aligned at the cab edge, one sliding panel, panel pocket to the left, while preserving project identity, primary host identity, cab extents except the required opening, rails/guides, stop elevations and existing parameter semantics unless a later verified state intentionally replaces them.
 
-This focus is being used to develop the Observer itself: every missing observation needed by the elevator becomes a bounded addition to the Observer rather than another one-off script.
+The elevator and Observer are intentionally developed as a coupled pair:
+
+`elevator need -> missing observation -> bounded Observer capability -> better elevator plan -> next smallest native transition`
+
+The elevator is not a demo detached from the platform. It is the first demanding production focus used to discover what the Observer actually needs. Conversely, Observer additions are accepted only when they reduce uncertainty on the real elevator focus or generalize safely to future BIM focuses.
 
 ## Security boundary
 
