@@ -107,7 +107,7 @@ internal sealed class ElevatorWorkshopService
             SaveCopy(familyDocument, baselinePath);
             string baselineHash = Sha256(baselinePath);
 
-            IReadOnlyCollection<ElementId> deleted;
+            ICollection<ElementId> deleted;
             using (var tx = new Transaction(familyDocument, "LIBER:ELEVATOR:S3:RETIRE_REAR_GLASS"))
             {
                 tx.Start();
