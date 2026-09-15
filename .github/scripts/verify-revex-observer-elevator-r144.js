@@ -18,8 +18,12 @@ must(elevator,"panelCount:1",'single-panel target must be explicit');
 must(elevator,"slideDirection:'left'",'panel pocket direction must be explicit');
 must(elevator,"liber:revex-observer-family-inspect-r144",'elevator lab must use native family observer');
 must(elevator,"state:'S1'",'sequential Observer state must be recorded');
+must(elevator,"strategy:'reuse-existing-opposite-side-panoramic-aperture'",'planner must reuse existing rear aperture before proposing a second cab cut');
+must(elevator,'pocketAvailableFt','planner must measure the sliding-panel pocket');
+must(elevator,"status:pocketMargin>=0?'READY_FOR_OPENING_PREVIEW':'BLOCKED_POCKET'",'planner must gate on real pocket capacity');
+must(elevator,"'S3 retire only the rear glass filler; regenerate and observe'",'sequential plan must preserve intermediate states');
 must(ui,"observer-focus-api-r143.js?v=20260915r144-elevator-lab1",'Observer runtime must be loaded');
-must(ui,"observer-elevator-r144.js?v=20260915r144-elevator-lab1",'elevator lab must be loaded');
+must(ui,"observer-elevator-r144.js?v=20260915r145-elevator-plan1",'r145 elevator planner must be loaded');
 
 must(service,'projectDocument.EditFamily(family)','deep family inspection must use Revit family document');
 must(service,'familyDocument.Close(false)','family observation document must close without save');
@@ -38,4 +42,4 @@ mustNot(bridge,'Transaction','Observer bridge must not mutate Revit');
 must(manager,'RevexObserverBridge.Configure();','Observer lifecycle must be configured');
 must(manager,'RevexObserverBridge.Release();','Observer lifecycle must be released');
 
-console.log('REVEX_OBSERVER_ELEVATOR_R144=PASSED');
+console.log('REVEX_OBSERVER_ELEVATOR_R145=PASSED');
