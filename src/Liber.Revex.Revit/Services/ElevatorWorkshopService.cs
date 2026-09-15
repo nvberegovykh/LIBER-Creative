@@ -20,7 +20,10 @@ internal sealed class ElevatorWorkshopService
         double ClearLeftUFt,
         double ClearRightUFt,
         double DoorHeightFt,
-        double? CabLeftUFt = null);
+        double? CabLeftUFt = null,
+        double? StopBaseZFt = null,
+        int? StopIndex = null,
+        string? VisibilityParameter = null);
 
     internal sealed record WorkshopRequest(
         long ProjectElementId,
@@ -61,7 +64,7 @@ internal sealed class ElevatorWorkshopService
         IReadOnlyList<string> Evidence);
 
     private const double Tol = 1.0 / (12.0 * 64.0); // 1/64 inch
-    private const double PanelFaceGapFt = 0.25 / 12.0; // initial physical clearance for proving geometry
+    private const double PanelFaceGapFt = 0.25 / 12.0;
 
     internal WorkshopResult Execute(Document projectDocument, WorkshopRequest request)
     {
@@ -74,6 +77,7 @@ internal sealed class ElevatorWorkshopService
             "infill-right-opening" => InfillRightOpening(projectDocument, request),
             "build-right-frame" => BuildRightFrame(projectDocument, request),
             "build-single-car-panel" => BuildSingleCarPanel(projectDocument, request),
+            "build-landing-stop" => BuildLandingStop(projectDocument, request),
             _ => throw new InvalidOperationException("Unsupported elevator workshop action: " + request.Action)
         };
     }
@@ -130,16 +134,8 @@ internal sealed class ElevatorWorkshopService
             string candidateHash = Sha256(candidatePath);
 
             return Result(
-                request,
-                "S3",
-                baselinePath,
-                candidatePath,
-                baselineHash,
-                candidateHash,
-                deleted.Select(id => id.Value).ToArray(),
-                Array.Empty<long>(),
-                before,
-                after,
+                request, "S3", baselinePath, candidatePath, baselineHash, candidateHash,
+                deleted.Select(id => id.Value).ToArray(), Array.Empty<long>(), before, after,
                 new[]
                 {
                     "Active project family was not replaced or reloaded.",
@@ -149,10 +145,7 @@ internal sealed class ElevatorWorkshopService
                     "Candidate was saved only to the isolated temp workshop lane."
                 });
         }
-        finally
-        {
-            CloseWorkshop(familyDocument);
-        }
+        finally { CloseWorkshop(familyDocument); }
     }
 
     private WorkshopResult InfillRightOpening(Document projectDocument, WorkshopRequest request)
@@ -235,16 +228,8 @@ internal sealed class ElevatorWorkshopService
             string candidateHash = Sha256(candidatePath);
 
             return Result(
-                request,
-                "S4",
-                sourcePath,
-                candidatePath,
-                baselineHash,
-                candidateHash,
-                Array.Empty<long>(),
-                addedIds,
-                before,
-                after,
+                request, "S4", sourcePath, candidatePath, baselineHash, candidateHash,
+                Array.Empty<long>(), addedIds, before, after,
                 new[]
                 {
                     "S4 opened the verified S3 candidate, not the active project family definition.",
@@ -257,10 +242,7 @@ internal sealed class ElevatorWorkshopService
                     "No candidate was loaded into the active project."
                 });
         }
-        finally
-        {
-            CloseWorkshop(familyDocument);
-        }
+        finally { CloseWorkshop(familyDocument); }
     }
 
     private WorkshopResult BuildRightFrame(Document projectDocument, WorkshopRequest request)
@@ -347,16 +329,8 @@ internal sealed class ElevatorWorkshopService
             string candidateHash = Sha256(candidatePath);
 
             return Result(
-                request,
-                "S5",
-                sourcePath,
-                candidatePath,
-                baselineHash,
-                candidateHash,
-                Array.Empty<long>(),
-                addedIds,
-                before,
-                after,
+                request, "S5", sourcePath, candidatePath, baselineHash, candidateHash,
+                Array.Empty<long>(), addedIds, before, after,
                 new[]
                 {
                     "S5 opened only the verified S4 candidate.",
@@ -368,10 +342,7 @@ internal sealed class ElevatorWorkshopService
                     "No project family was loaded or replaced."
                 });
         }
-        finally
-        {
-            CloseWorkshop(familyDocument);
-        }
+        finally { CloseWorkshop(familyDocument); }
     }
 
     private WorkshopResult BuildSingleCarPanel(Document projectDocument, WorkshopRequest request)
@@ -460,16 +431,8 @@ internal sealed class ElevatorWorkshopService
             string candidateHash = Sha256(candidatePath);
 
             return Result(
-                request,
-                "S6",
-                sourcePath,
-                candidatePath,
-                baselineHash,
-                candidateHash,
-                Array.Empty<long>(),
-                addedIds,
-                before,
-                after,
+                request, "S6", sourcePath, candidatePath, baselineHash, candidateHash,
+                Array.Empty<long>(), addedIds, before, after,
                 new[]
                 {
                     "S6 opened only the verified S5 candidate.",
@@ -485,10 +448,142 @@ internal sealed class ElevatorWorkshopService
                     "No project family was loaded or replaced."
                 });
         }
-        finally
+        finally { CloseWorkshop(familyDocument); }
+    }
+
+    private WorkshopResult BuildLandingStop(Document projectDocument, WorkshopRequest request)
+    {
+        InfillGeometry geometry = RequireGeometry(request, "S7");
+        if (geometry.StopIndex is null || geometry.StopBaseZFt is null)
+            throw new InvalidOperationException("S7 requires a native stop index and base elevation.");
+        int stopIndex = geometry.StopIndex.Value;
+        double stopBase = geometry.StopBaseZFt.Value;
+        if (stopIndex < 1 || stopIndex > 10 || !double.IsFinite(stopBase))
+            throw new InvalidOperationException("S7 stop index/elevation is outside the bounded elevator range.");
+
+        string expectedSource = stopIndex == 1
+            ? "S6_SINGLE_CAR_PANEL.rfa"
+            : $"S7_STOP_{stopIndex - 1:D2}.rfa";
+        string sourcePath = ValidateWorkshopSource(geometry.SourceCandidatePath, request.FocusId, expectedSource, $"S7.{stopIndex:D2}");
+        string folder = Path.GetDirectoryName(sourcePath)
+            ?? throw new InvalidOperationException("S7 source candidate has no parent folder.");
+        string candidatePath = Path.Combine(folder, $"S7_STOP_{stopIndex:D2}.rfa");
+        string baselineHash = Sha256(sourcePath);
+
+        Document? familyDocument = null;
+        try
         {
-            CloseWorkshop(familyDocument);
+            string state = $"S7.{stopIndex:D2}";
+            familyDocument = OpenFamilyCandidate(projectDocument, sourcePath, state);
+            GenericForm aperture = RequireVoidForm(familyDocument, request.InternalElementId, state);
+            BoundingBoxXYZ apertureBox = aperture.get_BoundingBox(null)
+                ?? throw new InvalidOperationException($"{state} aperture has no measurable bounding box.");
+
+            (XYZ outward, XYZ right, _) = ValidateBasis(geometry, state);
+            (double apertureMinU, double apertureMaxU) = URange(apertureBox, right);
+            ValidateOpeningWidthAndNative(familyDocument, geometry, apertureMinU, apertureMaxU, state);
+
+            double frameWidth = RequireFamilyDouble(familyDocument, "Frame Width", state);
+            double frameDepth = RequireFamilyDouble(familyDocument, "Frame Depth", state);
+            double doorThickness = RequireFamilyDouble(familyDocument, "Door Thickness", state);
+            double separation = ResolveLandingSeparation(familyDocument, state);
+            if (stopIndex > 1 && string.IsNullOrWhiteSpace(geometry.VisibilityParameter))
+                throw new InvalidOperationException($"{state} requires the source stop visibility parameter before creating repeated landing geometry.");
+
+            double clearLeft = geometry.ClearLeftUFt;
+            double clearRight = geometry.ClearRightUFt;
+            double clearTop = stopBase + geometry.DoorHeightFt;
+            double leftOuter = clearLeft - frameWidth;
+            double rightOuter = clearRight + frameWidth;
+            double headTop = clearTop + frameWidth;
+            double overlap = Math.Min(frameWidth * 0.25, 0.5 / 12.0);
+            double panelLeft = clearLeft - overlap;
+            double panelRight = clearRight + overlap;
+            double panelTop = clearTop + frameWidth;
+            int expectedAdded = stopIndex == 1 ? 1 : 4;
+
+            FamilyInvariantSnapshot before = Snapshot(familyDocument);
+            var addedIds = new List<long>();
+            using (var tx = new Transaction(familyDocument, $"LIBER:ELEVATOR:S7:LANDING_STOP_{stopIndex:D2}"))
+            {
+                tx.Start();
+                XYZ faceOrigin = PlaneOrigin(geometry.PlaneAxis, geometry.PlaneCoordFt);
+
+                if (stopIndex > 1)
+                {
+                    SketchPlane framePlane = SketchPlane.Create(
+                        familyDocument,
+                        Plane.CreateByNormalAndOrigin(outward, faceOrigin));
+                    void AddFrame(double u0, double u1, double z0, double z1, string label)
+                    {
+                        Extrusion frame = familyDocument.FamilyCreate.NewExtrusion(
+                            true,
+                            RectangleProfile(faceOrigin, right, u0, u1, z0, z1),
+                            framePlane,
+                            frameDepth);
+                        TryAssociateMaterial(familyDocument, frame, "_Elevator Door Frame Finish", state);
+                        AssociateVisibility(familyDocument, frame, geometry.VisibilityParameter, state, true);
+                        TryTag(frame, $"LIBER:ELEVATOR:{state}:FRAME:{label}");
+                        addedIds.Add(frame.Id.Value);
+                    }
+                    AddFrame(leftOuter, clearLeft, stopBase, headTop, "LEFT_JAMB");
+                    AddFrame(clearRight, rightOuter, stopBase, headTop, "RIGHT_JAMB");
+                    AddFrame(clearLeft, clearRight, clearTop, headTop, "HEAD");
+                }
+
+                XYZ panelOrigin = faceOrigin + outward.Multiply(PanelFaceGapFt + separation);
+                SketchPlane panelPlane = SketchPlane.Create(
+                    familyDocument,
+                    Plane.CreateByNormalAndOrigin(outward, panelOrigin));
+                Extrusion panel = familyDocument.FamilyCreate.NewExtrusion(
+                    true,
+                    RectangleProfile(panelOrigin, right, panelLeft, panelRight, stopBase, panelTop),
+                    panelPlane,
+                    doorThickness);
+                TryAssociateMaterial(familyDocument, panel, "_Elevator Door Finish", state);
+                AssociateVisibility(familyDocument, panel, geometry.VisibilityParameter, state, stopIndex > 1);
+                TryTag(panel, $"LIBER:ELEVATOR:{state}:LANDING_PANEL");
+                addedIds.Add(panel.Id.Value);
+
+                if (addedIds.Count != expectedAdded)
+                {
+                    tx.RollBack();
+                    throw new InvalidOperationException($"{state} expected {expectedAdded} new forms, observed {addedIds.Count}.");
+                }
+
+                familyDocument.Regenerate();
+                FamilyInvariantSnapshot tentative = Snapshot(familyDocument);
+                VerifyAddedForms(before, tentative, expectedAdded, state);
+                VerifyCreatedSolids(familyDocument, addedIds, state);
+
+                TransactionStatus committed = tx.Commit();
+                if (committed != TransactionStatus.Committed)
+                    throw new InvalidOperationException($"Revit did not commit {state}.");
+            }
+
+            FamilyInvariantSnapshot after = Snapshot(familyDocument);
+            VerifyAddedForms(before, after, expectedAdded, state);
+            SaveCopy(familyDocument, candidatePath);
+            string candidateHash = Sha256(candidatePath);
+
+            return Result(
+                request, state, sourcePath, candidatePath, baselineHash, candidateHash,
+                Array.Empty<long>(), addedIds, before, after,
+                new[]
+                {
+                    $"{state} continued strictly from {Path.GetFileName(sourcePath)}.",
+                    $"Native stop base elevation: {stopBase:R} ft.",
+                    $"Landing panel U-range: {panelLeft:R} to {panelRight:R} ft.",
+                    $"Landing panel face separation from car-panel plane: {separation:R} ft.",
+                    $"Visibility family parameter: {geometry.VisibilityParameter ?? "always-visible"}.",
+                    stopIndex == 1
+                        ? "Stop 1 reused the S5 frame and added only its landing panel."
+                        : "This upper stop added one landing panel plus a three-piece matching frame.",
+                    "Protected wall/reference/dimension/nested-family identities remained unchanged.",
+                    "No project family was loaded or replaced."
+                });
         }
+        finally { CloseWorkshop(familyDocument); }
     }
 
     private static InfillGeometry RequireGeometry(WorkshopRequest request, string state) =>
@@ -532,26 +627,20 @@ internal sealed class ElevatorWorkshopService
         return (values.Min(), values.Max());
     }
 
-    private static void ValidateOpeningGeometry(
+    private static void ValidateOpeningWidthAndNative(
         Document document,
         InfillGeometry geometry,
         double apertureMinU,
         double apertureMaxU,
-        double clearBottom,
-        double apertureMaxZ,
         string state)
     {
         double clearLeft = geometry.ClearLeftUFt;
         double clearRight = geometry.ClearRightUFt;
-        double clearTop = clearBottom + geometry.DoorHeightFt;
         if (!(clearRight - clearLeft > Tol))
             throw new InvalidOperationException($"{state} clear opening width is invalid.");
         if (clearLeft < apertureMinU - Tol || clearRight > apertureMaxU + Tol)
             throw new InvalidOperationException(
                 $"{state} clear opening [{clearLeft:R},{clearRight:R}] falls outside existing aperture [{apertureMinU:R},{apertureMaxU:R}].");
-        if (!(clearTop > clearBottom + Tol) || clearTop > apertureMaxZ + Tol)
-            throw new InvalidOperationException(
-                $"{state} door height exceeds existing aperture: clearTop={clearTop:R}; apertureTop={apertureMaxZ:R}.");
 
         double nativeClear = RequireFamilyDouble(document, "Clear Opening", state);
         double nativeHeight = RequireFamilyDouble(document, "_Elevator Door Height", state);
@@ -563,17 +652,59 @@ internal sealed class ElevatorWorkshopService
                 $"{state} planned door height does not match native family parameter: planned={geometry.DoorHeightFt:R}; native={nativeHeight:R}.");
     }
 
+    private static void ValidateOpeningGeometry(
+        Document document,
+        InfillGeometry geometry,
+        double apertureMinU,
+        double apertureMaxU,
+        double clearBottom,
+        double apertureMaxZ,
+        string state)
+    {
+        ValidateOpeningWidthAndNative(document, geometry, apertureMinU, apertureMaxU, state);
+        double clearTop = clearBottom + geometry.DoorHeightFt;
+        if (!(clearTop > clearBottom + Tol) || clearTop > apertureMaxZ + Tol)
+            throw new InvalidOperationException(
+                $"{state} door height exceeds existing aperture: clearTop={clearTop:R}; apertureTop={apertureMaxZ:R}.");
+    }
+
     private static double RequireFamilyDouble(Document document, string name, string state)
     {
-        FamilyManager manager = document.FamilyManager;
-        FamilyParameter? parameter = manager.GetParameters()
-            .FirstOrDefault(p => string.Equals(p.Definition.Name, name, StringComparison.OrdinalIgnoreCase));
-        if (parameter == null || manager.CurrentType == null)
-            throw new InvalidOperationException($"{state} family parameter '{name}' is unavailable.");
-        double? value = manager.CurrentType.AsDouble(parameter);
+        double? value = TryFamilyDouble(document, name);
         if (value is not > 0)
-            throw new InvalidOperationException($"{state} family parameter '{name}' is not a positive length.");
+            throw new InvalidOperationException($"{state} family parameter '{name}' is unavailable or not a positive length.");
         return value.Value;
+    }
+
+    private static double? TryFamilyDouble(Document document, string name)
+    {
+        try
+        {
+            FamilyManager manager = document.FamilyManager;
+            FamilyParameter? parameter = manager.GetParameters()
+                .FirstOrDefault(p => string.Equals(p.Definition.Name, name, StringComparison.OrdinalIgnoreCase));
+            return parameter == null || manager.CurrentType == null ? null : manager.CurrentType.AsDouble(parameter);
+        }
+        catch { return null; }
+    }
+
+    private static double ResolveLandingSeparation(Document document, string state)
+    {
+        foreach ((string elevatorName, string lobbyName) in new[]
+        {
+            ("Right Elevator Door Offset", "Right Lobby Door Offset"),
+            ("Left Elevator Door Offset", "Left Lobby Door Offset")
+        })
+        {
+            double? elevator = TryFamilyDouble(document, elevatorName);
+            double? lobby = TryFamilyDouble(document, lobbyName);
+            if (elevator is > 0 && lobby is >= 0)
+            {
+                double separation = Math.Abs(elevator.Value - lobby.Value);
+                if (separation > Tol && separation < 2.0) return separation;
+            }
+        }
+        throw new InvalidOperationException($"{state} could not derive the native landing/car door-plane separation.");
     }
 
     private static WorkshopResult Result(
@@ -589,7 +720,7 @@ internal sealed class ElevatorWorkshopService
         FamilyInvariantSnapshot after,
         IReadOnlyList<string> evidence) =>
         new(
-            "liber.revex.elevator.workshop.v2",
+            "liber.revex.elevator.workshop.v3",
             request.FocusId,
             request.RequestId,
             request.Action,
@@ -618,15 +749,8 @@ internal sealed class ElevatorWorkshopService
             .OfClass(typeof(GenericForm))
             .GetElementCount();
         return new FamilyInvariantSnapshot(
-            genericForms,
-            walls.Length,
-            refs.Length,
-            dimensions.Length,
-            nested.Length,
-            walls,
-            refs,
-            dimensions,
-            nested);
+            genericForms, walls.Length, refs.Length, dimensions.Length, nested.Length,
+            walls, refs, dimensions, nested);
     }
 
     private static long[] Ids<T>(Document document) where T : Element =>
@@ -727,14 +851,8 @@ internal sealed class ElevatorWorkshopService
 
     private static double ResolveCabWallThickness(Document document, BoundingBoxXYZ aperture, string axis)
     {
-        try
-        {
-            return RequireFamilyDouble(document, "Car Wall Thickness", "S4");
-        }
-        catch
-        {
-            return axis == "x" ? aperture.Max.X - aperture.Min.X : aperture.Max.Y - aperture.Min.Y;
-        }
+        try { return RequireFamilyDouble(document, "Car Wall Thickness", "S4"); }
+        catch { return axis == "x" ? aperture.Max.X - aperture.Min.X : aperture.Max.Y - aperture.Min.Y; }
     }
 
     private static void TryAssociateDoorMaterial(Document document, Extrusion extrusion, string state)
@@ -760,6 +878,22 @@ internal sealed class ElevatorWorkshopService
             RevexDiagnostics.Warn("ELEVATOR_WORKSHOP", $"Could not associate {state} material {familyParameterName}: " + ex.Message);
             return false;
         }
+    }
+
+    private static void AssociateVisibility(Document document, Element element, string? familyParameterName, string state, bool required)
+    {
+        if (string.IsNullOrWhiteSpace(familyParameterName))
+        {
+            if (required) throw new InvalidOperationException($"{state} visibility association is required but unresolved.");
+            return;
+        }
+        FamilyManager manager = document.FamilyManager;
+        FamilyParameter? visibility = manager.GetParameters()
+            .FirstOrDefault(p => string.Equals(p.Definition.Name, familyParameterName, StringComparison.OrdinalIgnoreCase));
+        Parameter? elementVisibility = element.LookupParameter("Visible");
+        if (visibility == null || elementVisibility == null)
+            throw new InvalidOperationException($"{state} could not bind Visible to family parameter {familyParameterName}.");
+        manager.AssociateElementParameterToFamilyParameter(elementVisibility, visibility);
     }
 
     private static void TryTag(Element element, string value)
@@ -816,11 +950,7 @@ internal sealed class ElevatorWorkshopService
 
     private static void SaveCopy(Document familyDocument, string path)
     {
-        var options = new SaveAsOptions
-        {
-            OverwriteExistingFile = true,
-            MaximumBackups = 1
-        };
+        var options = new SaveAsOptions { OverwriteExistingFile = true, MaximumBackups = 1 };
         familyDocument.SaveAs(path, options);
     }
 
