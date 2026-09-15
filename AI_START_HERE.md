@@ -21,7 +21,10 @@ The current REVEX contract is:
 - Native web bridge: `src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs`
 - WALLT helper/fixer control plane: `docs/liber-apps/apps/revex/wallt-control-plane.js`
 - WALLT bounded fixer adapters: `docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js`
-- Observer / hidden-focus candidate: `docs/liber-apps/apps/revex/observer-focus-api-r143.js`
+- Observer / hidden-focus runtime: `docs/liber-apps/apps/revex/observer-focus-api-r143.js`
+- Deep native family observer: `src/Liber.Revex.Revit/Services/ObserverFamilyService.cs`
+- Observer WebView2 / ExternalEvent bridge: `src/Liber.Revex.Revit/UI/RevexObserverBridge.cs`
+- Elevator Observer lab: `docs/liber-apps/apps/revex/observer-elevator-r144.js`
 - Authenticated cloud broker / Firebase functions: `server/firebase-functions/index.js`
 - Energy worker: `server/revex-energy-worker/app.py`
 
@@ -37,7 +40,7 @@ Example:
 const focus = window.RevexObserver.createFocus({
   name: 'elevator.single-right',
   target: 'single right-side elevator entrance',
-  scope: { elementIds: ['3436315'], stableFaceRefs: [] },
+  scope: { elementIds: [], stableFaceRefs: [] },
   protected: ['host identity', 'rails', 'cab extents', 'stop elevations']
 });
 
@@ -45,6 +48,34 @@ focus.focusId;
 ```
 
 Use `focusId` for later `getFocus`, `recordStep`, `preview`, and bounded adapter calls.
+
+## Deep family observation
+
+RVX is the authoritative project-scene geometry owner, but a project RVX FamilyInstance does not expose every internal Family Editor dependency. For that boundary, the Observer uses Revit itself as the instrument:
+
+1. select a project FamilyInstance;
+2. browser posts `liber:revex-observer-family-inspect-r144`;
+3. `RevexObserverBridge` raises a read-only Revit `ExternalEvent`;
+4. `ObserverFamilyService` calls `Document.EditFamily(family)`;
+5. it reads family parameters, host/reference planes, dimensions/references, GenericForms, nested families, dependent elements, parameter associations, host identity and bounding boxes;
+6. it closes the temporary family document with `Close(false)`;
+7. no transaction is created and no document is saved.
+
+This is a bounded observation workshop, not a second family engine.
+
+### Elevator proving focus
+
+Inside the REVEX Revit add-in, select the elevator family instance and run:
+
+```js
+const run = await window.RevexObserverElevator.start();
+run.focus.focusId;
+run.analysis;
+```
+
+The first target is deliberately specific: one entrance, right-aligned at the cab edge, one sliding panel, panel pocket to the left, while preserving project identity, primary host identity, cab extents except the required opening, rails/guides, stop elevations and existing parameter semantics unless a later verified state intentionally replaces them.
+
+This focus is being used to develop the Observer itself: every missing observation needed by the elevator becomes a bounded addition to the Observer rather than another one-off script.
 
 ## Security boundary
 
@@ -73,4 +104,4 @@ Do not collapse a long repair into one opaque transaction when the system can pr
 
 `docs/CNAME` binds the public docs tree to `liberpict.com`. The live REVEX UI is therefore intended to be served from this repository's `docs/` surface. Do not assume byte-for-byte parity from that fact alone: use the public manifest plus the parity verifier before a production mutation.
 
-The Observer candidate is read-only until an explicit bounded mutation adapter is proven and authorized.
+The Observer candidate remains mutation-disabled until an explicit bounded native transition adapter is proven and authorized.
