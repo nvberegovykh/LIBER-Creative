@@ -1,21 +1,17 @@
 {
-  "schema": "liber.revex.observer.expected-output.v1",
+  "schema": "liber.revex.observer.expected-output.v2",
   "focusIdPrefix": "rave289.coffee-area.",
   "expected": {
     "mutation": false,
     "delta": "appearance-only-render-and-coordination-visualization",
+    "deliverables": ["spec", "render"],
     "protected": {
       "overallWidthIn": 48.0,
       "overallHeightIn": 96.0,
       "counterTopAffIn": 36.5,
       "leftClearIn": 18.0,
-      "lowerLeftShelfBottomAffIn": 54.5,
       "rightClearIn": 12.0,
-      "mieleBottomAffIn": 48.5,
       "mieleFaceHeightIn": 17.9375,
-      "mieleTopAffIn": 66.4375,
-      "middleFullShelfBottomAffIn": 66.75,
-      "upperFullShelfBottomAffIn": 81.25,
       "mieleCount": 1,
       "subZeroCount": 1,
       "leftVisibleFrontCount": 2,
@@ -23,13 +19,27 @@
       "lowerShelfSpan": "left-only",
       "middleShelfSpan": "full-width",
       "upperShelfSpan": "full-width"
+    },
+    "dimensionChains": {
+      "mainVertical": [34.5, 2.0, 18.0, 12.25, 14.5, 14.75],
+      "mainVerticalTotalIn": 96.0,
+      "rightBranch": [12.0, 17.9375]
+    },
+    "confidence": {
+      "hardInvariants": "exact",
+      "softFloor": 0.75,
+      "softTarget": 0.95
     }
   },
   "acceptance": [
     "Observer preview canProceed is true for the current project revision",
     "before and after snapshots reference the same current project and intended revision",
     "observed geometry mutation is false",
-    "visible sheet and render preserve every protected coordinate/count/span",
+    "visible dimensions are computed as differences between exposed anchors, never copied AFF values presented as segment distances",
+    "main vertical chain sums to the 96in envelope and the Miele 12in clearance remains an independent right-side branch",
+    "visible spec and render preserve every protected count/span/relation",
+    "soft composition confidence never falls below the configured floor and is encouraged toward target before the outer Observer gate",
+    "rendered or generated output remains evidence, not geometry authority",
     "no room depth or walking clearance is inferred",
     "uncertain fabrication details remain unresolved rather than guessed"
   ]
