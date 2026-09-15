@@ -1,5 +1,5 @@
 {
-  "schema": "liber.revex.observer.focus-spec.v1",
+  "schema": "liber.revex.observer.focus-spec.v2",
   "focusId": "rave289.coffee-area",
   "name": "Rave 289 Coffee Area",
   "target": "48in x 96in coffee appliance cabinet behind double pocket doors",
@@ -26,7 +26,7 @@
       "materials",
       "lighting",
       "decorative objects that do not change protected geometry",
-      "annotation layout"
+      "annotation layout derived from measured relationships"
     ],
     "forbidden": [
       "envelope changes",
@@ -34,11 +34,55 @@
       "appliance count or placement changes",
       "shelf span changes",
       "drawer-front count changes",
-      "invented depth or clearance geometry"
+      "invented depth or clearance geometry",
+      "using absolute elevations as if they were segment dimensions"
     ]
   },
+  "measurementPolicy": {
+    "mode": "derive-deltas-from-exposed-parameters",
+    "unit": "in",
+    "rules": [
+      "dimensions are differences between exposed anchors, not copied elevations",
+      "main vertical chain and Miele branch remain independent",
+      "rendered or generated output is an observation, never a new geometry authority"
+    ],
+    "mainVerticalChain": [
+      {"from": "floor", "to": "baseTop", "distanceIn": 34.5},
+      {"from": "baseTop", "to": "counterTop", "distanceIn": 2.0},
+      {"from": "counterTop", "to": "lowerLeftShelfBottom", "distanceIn": 18.0},
+      {"from": "lowerLeftShelfBottom", "to": "middleFullShelfBottom", "distanceIn": 12.25},
+      {"from": "middleFullShelfBottom", "to": "upperFullShelfBottom", "distanceIn": 14.5},
+      {"from": "upperFullShelfBottom", "to": "cabinetTop", "distanceIn": 14.75}
+    ],
+    "rightBranch": [
+      {"from": "counterTop", "to": "mieleBottom", "distanceIn": 12.0},
+      {"from": "mieleBottom", "to": "mieleTop", "distanceIn": 17.9375}
+    ]
+  },
+  "confidencePolicy": {
+    "hardInvariants": "exact",
+    "softFloor": 0.75,
+    "softTarget": 0.95,
+    "belowFloor": "correct-before-next-engine",
+    "betweenFloorAndTarget": "continue-lightweight-exploration",
+    "atOrAboveTarget": "eligible-for-outer-observer-gate",
+    "posteriorRule": "after every engine handoff, treat the parsed result as evidence and update soft-relation confidence"
+  },
+  "composition": {
+    "mode": "soft-relational",
+    "relations": [
+      {"id": "miele-upper-right-anchor", "weight": 1.0},
+      {"id": "lower-shelf-left-only", "weight": 1.0},
+      {"id": "upper-shelves-reunify-width", "weight": 0.95},
+      {"id": "base-two-by-two-rhythm", "weight": 0.9},
+      {"id": "open-left-solid-right-balance", "weight": 0.85},
+      {"id": "restrained-decor-density", "weight": 0.6}
+    ]
+  },
+  "deliverables": ["spec", "render"],
   "authority": {
     "overall": {"widthIn": 48.0, "heightIn": 96.0},
+    "base": {"topAffIn": 34.5},
     "counter": {"thicknessIn": 2.0, "topAffIn": 36.5},
     "leftBranch": {"clearAboveCounterIn": 18.0, "lowerShelfBottomAffIn": 54.5},
     "rightBranch": {"clearAboveCounterIn": 12.0, "mieleBottomAffIn": 48.5},
