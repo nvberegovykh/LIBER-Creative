@@ -1,0 +1,38 @@
+name: REVEX Observer coffee r147
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/.well-known/liber-ai.json'
+      - 'docs/liber-apps/apps/revex/observer-focus-api-r143.js'
+      - 'docs/liber-apps/apps/revex/observer-coffee-area-r147.js'
+      - 'docs/liber-apps/apps/revex/focuses/rave-289-coffee-area.json'
+      - 'docs/liber-apps/apps/revex/focuses/rave-289-coffee-area.expected.json'
+      - 'docs/liber-apps/apps/revex/focuses/rave-289-coffee-area.run.js'
+      - 'docs/liber-apps/apps/revex/focuses/rave-289-coffee-area.verify.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - '.github/scripts/verify-revex-observer-coffee-r147.js'
+      - '.github/workflows/revex-observer-coffee-r147.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  coffee-observer-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check coffee Observer runtimes
+        run: |
+          node --check docs/liber-apps/apps/revex/observer-focus-api-r143.js
+          node --check docs/liber-apps/apps/revex/observer-coffee-area-r147.js
+          node --check docs/liber-apps/apps/revex/focuses/rave-289-coffee-area.run.js
+          node --check docs/liber-apps/apps/revex/focuses/rave-289-coffee-area.verify.js
+          node --check .github/scripts/verify-revex-observer-coffee-r147.js
+      - name: Verify protected coffee-area authority and live-session boundary
+        run: node .github/scripts/verify-revex-observer-coffee-r147.js
