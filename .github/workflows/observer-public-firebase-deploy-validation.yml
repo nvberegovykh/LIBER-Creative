@@ -44,10 +44,14 @@ jobs:
             "'x-goog-user-project' = `$ProjectId",
             '-Headers (Firebase-Headers)',
             '$DomainMatches = [System.Collections.Generic.List[object]]::new()',
-            '.EndsWith($expectedSuffix,[System.StringComparison]::OrdinalIgnoreCase)'
+            '.EndsWith($expectedSuffix,[System.StringComparison]::OrdinalIgnoreCase)',
+            'function Get-FinalizedVersionState',
+            '$final = Get-FinalizedVersionState $CloneVersion',
+            '$PreviewChannelCreated = $false'
           )) { if(-not $text.Contains($marker)){ throw "Missing surgical-deploy marker: $marker" } }
           if($text -match 'firebase\s+deploy\s+--only\s+hosting'){ throw 'Whole-site firebase deploy is forbidden in the surgical controller.' }
           if($text -match '(?im)^\s*\$matches\s*='){ throw 'Do not use PowerShell automatic $Matches as a mutable collection.' }
+          if($text.Contains('$final.fileCount')){ throw 'Do not trust fileCount on the PATCH response; re-read finalized version metadata first.' }
           $launcher=Get-Content -Raw RUN_OBSERVER_PUBLIC_FIREBASE_CURRENT.cmd
           foreach($marker in @('git clone --filter=blob:none --depth 1','DEPLOY_OBSERVER_PUBLIC_FIREBASE_CURRENT.cmd','Current main:')) {
             if(-not $launcher.Contains($marker)){ throw "Missing from-anywhere launcher marker: $marker" }
