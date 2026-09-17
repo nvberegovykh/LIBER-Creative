@@ -1,0 +1,45 @@
+{
+  "schema": "liber.ai.discovery.v1",
+  "name": "LIBER / REVEX",
+  "canonicalApi": {
+    "name": "LIBER REVEX Observer API",
+    "shortName": "REVEX Observer",
+    "discoveryUri": "https://liberpict.com/liber-ai.json",
+    "counter": "https://liberpict.com/observer-ai.html",
+    "machineGuide": "https://liberpict.com/observer-ai-guide.json",
+    "humanGuide": "https://github.com/nvberegovykh/LIBER-Creative/blob/main/AI_START_HERE.md",
+    "publicIssueEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/issueRevexObserverAnonymousClaim",
+    "claimEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/claimRevexObserverAgentSession",
+    "mcpEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/revexObserverMcp",
+    "instruction": "Read machineGuide. The public counter requires no LIBER account and exposes no project data. Claim one one-time AI session key, call observer_bootstrap, then pair a private project only with a one-time Pair AI code issued inside an authorized REVEX project session."
+  },
+  "observer": {
+    "agentAccess": {
+      "status": "live-read-only-observer-with-separate-project-pairing",
+      "counterAccountRequired": false,
+      "counterExposesProjectData": false,
+      "projectAuthorization": "one-time Pair AI code issued inside an authorized REVEX project session",
+      "pairTool": "observer_pair",
+      "claimTtlMinutes": 10,
+      "pairCodeTtlMinutes": 10,
+      "sessionTtlHours": 2,
+      "initialScopes": ["observer.pair"],
+      "pairedScopes": ["observer.read", "observer.preview", "observer.focus"],
+      "mutation": false
+    },
+    "focusKey": {
+      "field": "focusId",
+      "secret": false,
+      "meaning": "Task locator inside the currently authorized REVEX project/session"
+    }
+  },
+  "security": {
+    "repositorySecretsAllowed": false,
+    "publicCounter": {
+      "accountRequired": false,
+      "projectDataExposed": false,
+      "claimSingleUse": true,
+      "rateLimited": true
+    }
+  }
+}
