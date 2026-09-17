@@ -10,16 +10,15 @@ For an external AI session, do **not** search the repository for credentials or 
 
 1. Fetch `https://liberpict.com/.well-known/liber-ai.json`.
 2. Read `https://liberpict.com/ai/guide.json`.
-3. The human/user opens `https://liberpict.com/ai/`, chooses an accessible REVEX project, and presses **Issue one-time AI session key**.
-4. The AI receives that one-time claim key from the human and exchanges it exactly once at the claim endpoint declared by discovery.
-5. The claim returns an opaque short-lived bearer plus the Observer MCP endpoint.
-6. Connect to the MCP endpoint with `Authorization: Bearer <accessToken>` and call `observer_bootstrap` before other tools.
-7. Keep the selected project open in an authorized REVEX browser session. The browser relay executes only the existing `window.RevexObserver` surface; the external AI never receives the user's Firebase credential.
-8. Call `observer_release` when finished. The lease also expires automatically.
+3. Open `https://liberpict.com/ai/` and take **one AI session package**. The counter is public; no LIBER account or project selection is required there.
+4. Give that package to exactly one AI session. The AI exchanges the claim key exactly once and calls `observer_bootstrap`.
+5. At this point the AI session is deliberately **not attached to a private project**. It can only request pairing.
+6. To attach a private project, an authorized REVEX collaborator opens that project and presses **Pair AI**. REVEX returns a short one-time pairing code.
+7. Give that pairing code to the AI. The AI calls `observer_pair`, then `observer_bootstrap` again.
+8. Only after successful pairing are `observer.read`, `observer.preview`, and `observer.focus` exposed for that project.
+9. Keep the paired REVEX project open while live Observer calls are running. Call `observer_release` when finished.
 
-The one-time claim is intentionally different from `focusId`: the claim/key authorizes the AI session; `focusId` locates one bounded task inside the authorized project.
-
-Current external scopes are read-only Observer scopes only: `observer.read`, `observer.preview`, and `observer.focus`. They do not authorize Revit mutation.
+The public counter and private project authorization are intentionally separate. The counter exposes no project data and receives no Firebase/REVEX credential.
 
 ## Operating rule
 
@@ -39,14 +38,14 @@ The current REVEX contract is:
 - WALLT helper/fixer control plane: `docs/liber-apps/apps/revex/wallt-control-plane.js`
 - WALLT bounded fixer adapters: `docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js`
 - Observer / hidden-focus runtime: `docs/liber-apps/apps/revex/observer-focus-api-r143.js`
-- Observer external-AI browser relay: `docs/liber-apps/apps/revex/observer-agent-bridge-r151.js`
-- Observer external-AI broker / one-time claim / MCP surface: `server/firebase-functions/observer-agent-broker.js`
+- Observer external-AI browser relay / Pair AI control: `docs/liber-apps/apps/revex/observer-agent-bridge-r151.js`
+- Observer external-AI broker / public claim / pairing / MCP surface: `server/firebase-functions/observer-agent-broker.js`
 - Native family Observer: `src/Liber.Revex.Revit/Services/ObserverFamilyService.cs`
 - Observer WebView2 / ExternalEvent bridge: `src/Liber.Revex.Revit/UI/RevexObserverBridge.cs`
 - Elevator proving planner: `docs/liber-apps/apps/revex/observer-elevator-r144.js`
 - Elevator isolated workshop runtime: `docs/liber-apps/apps/revex/observer-elevator-workshop-r146.js`
 - Elevator isolated workshop native service: `src/Liber.Revex.Revit/Services/ElevatorWorkshopService.cs`
-- Authenticated cloud broker / Firebase functions: `server/firebase-functions/main.js`
+- Cloud broker composition: `server/firebase-functions/main.js`
 - Energy worker: `server/revex-energy-worker/app.py`
 
 Historical/versioned files are preserved as evidence and rollback. They are not automatically current runtime owners.
@@ -92,39 +91,19 @@ Inside the REVEX Revit add-in, select the elevator family instance. Observation/
 const observed = await window.RevexObserverElevator.start();
 ```
 
-The current isolated proving sequence through S4 is:
-
-```js
-const s4 = await window.RevexElevatorWorkshop.proveS4();
-```
-
-That sequence:
-
-1. observes the selected project elevator instance and its internal family dependency graph;
-2. proves the existing opposite/rear panoramic aperture and single-panel pocket capacity;
-3. saves an `S2_BASE.rfa` under `%TEMP%/LIBER_REVEX/observer-workshops/<focus>/...`;
-4. S3: retires exactly one proven rear-glass GenericForm in one named Revit transaction, rejects cascading deletion, regenerates, verifies protected family topology, and saves `S3_REAR_GLASS_RETIRED.rfa`;
-5. S4: opens that verified S3 file directly, adds only the solid cab-wall infill needed to leave one measured right-aligned clear opening, regenerates, verifies the same protected topology, and saves `S4_RIGHT_OPENING_INFILLED.rfa`;
-6. never calls `LoadFamily` and never replaces the family in the active project.
-
-The target remains: one entrance, aligned all the way to the viewer-right edge of the cab, one sliding panel with its pocket to the left, preserving project identity, primary host identity, rails/guides, stop elevations and the family scaffold unless a later verified state intentionally changes it.
-
-The elevator and Observer are intentionally developed as a coupled pair:
-
-`elevator need -> missing observation -> bounded Observer capability -> isolated native transition -> observed candidate -> next smallest transition`
-
-A later state may be promoted only through a separate explicit project-validation / production adapter after review and evidence gates.
+The isolated workshop remains detached from the active project and never promotes a candidate back into project authority without a separate explicit validation/production adapter.
 
 ## Security boundary
 
 - Never place bearer tokens, service-account JSON, private keys, OAuth refresh tokens, API secrets, or signing keys in this repository or in focus records.
-- Browser/runtime observation uses the existing authenticated REVEX session.
-- External AI access starts with a server-issued one-time claim. The raw claim value is returned once; only its SHA-256 is stored server-side. A successful one-time claim returns a short-lived opaque bearer; again only its SHA-256 is stored server-side.
-- AI leases are project-scoped, optionally focus-scoped, action-scoped, revocable, and must never be written to Git, Firestore History, browser diagnostics, model evidence, screenshots, or URLs.
-- The browser relay never receives the AI bearer; it uses the existing authorized Firebase/REVEX session to service bounded Observer requests.
-- A focus key identifies a task. A capability token authorizes an action. They are intentionally different things.
+- The public AI counter requires no LIBER account and exposes no project data.
+- A public one-time claim creates an unpaired AI lease with only `observer.pair`.
+- Private project authorization happens later through a one-time **Pair AI** code created inside an authorized REVEX project session.
+- The raw claim, AI bearer, and pairing code are each returned once; only SHA-256 digests are stored server-side.
+- The AI bearer never enters the authorized REVEX browser relay.
+- The browser relay never gives its Firebase credential to the AI.
+- A focus key identifies a task. A pairing code authorizes one project binding. They are intentionally different things.
 - Revit remains the final model authority. Browser JavaScript does not directly manufacture authoritative BIM state.
-- Workshop artifact paths are local execution evidence, not secrets or project authority.
 
 ## Observer's Method for agents
 
