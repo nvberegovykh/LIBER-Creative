@@ -6,6 +6,7 @@ on:
     paths:
       - 'DEPLOY_OBSERVER_PUBLIC_FIREBASE_CURRENT.ps1'
       - 'DEPLOY_OBSERVER_PUBLIC_FIREBASE_CURRENT.cmd'
+      - 'RUN_OBSERVER_PUBLIC_FIREBASE_CURRENT.cmd'
       - '.github/workflows/observer-public-firebase-deploy-validation.yml'
   workflow_dispatch:
 
@@ -39,7 +40,13 @@ jobs:
             "[ValidateSet('AUDIT','APPLY')]",
             '/observer-ai.html',
             '/liber-ai.json',
-            '/observer-ai-guide.json'
+            '/observer-ai-guide.json',
+            "'x-goog-user-project' = `$ProjectId",
+            '-Headers (Firebase-Headers)'
           )) { if(-not $text.Contains($marker)){ throw "Missing surgical-deploy marker: $marker" } }
           if($text -match 'firebase\s+deploy\s+--only\s+hosting'){ throw 'Whole-site firebase deploy is forbidden in the surgical controller.' }
+          $launcher=Get-Content -Raw RUN_OBSERVER_PUBLIC_FIREBASE_CURRENT.cmd
+          foreach($marker in @('git clone --filter=blob:none --depth 1','DEPLOY_OBSERVER_PUBLIC_FIREBASE_CURRENT.cmd','Current main:')) {
+            if(-not $launcher.Contains($marker)){ throw "Missing from-anywhere launcher marker: $marker" }
+          }
           Write-Host 'OBSERVER_FIREBASE_SURGICAL_CONTRACT=PASSED'
