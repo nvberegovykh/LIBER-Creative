@@ -39,13 +39,17 @@ function Invoke-Json([string]$Method,[string]$Uri,$Body=$null) {
 function Wait-Operation($Operation) {
   $op = $Operation
   for ($i=0; $i -lt 120; $i++) {
-    if ($op.done) {
-      if ($op.error) { throw "Firebase Hosting operation failed: $($op.error | ConvertTo-Json -Depth 20 -Compress)" }
+    $hasDone = @($op.PSObject.Properties.Name) -contains 'done'
+    if ($hasDone -and $op.done -eq $true) {
+      $hasError = @($op.PSObject.Properties.Name) -contains 'error'
+      if ($hasError -and $null -ne $op.error) { throw "Firebase Hosting operation failed: $($op.error | ConvertTo-Json -Depth 20 -Compress)" }
       return $op
     }
-    Start-Sleep -Seconds 1
+    $hasName = @($op.PSObject.Properties.Name) -contains 'name'
+    if (-not $hasName) { throw 'Long-running operation returned no name.' }
     $name = [string]$op.name
-    if (-not $name) { throw 'Long-running operation returned no name.' }
+    if (-not $name) { throw 'Long-running operation returned an empty name.' }
+    Start-Sleep -Seconds 1
     $op = Invoke-Json GET "$Api/$name"
   }
   throw 'Timed out waiting for Firebase Hosting operation.'
@@ -165,6 +169,7 @@ try {
   Say "Cloning current live version $SourceVersion so all existing files/config remain intact."
   $cloneOp = Invoke-Json POST "$Api/sites/$SiteId/versions:clone" @{ sourceVersion=$SourceVersion; finalize=$false }
   $cloneDone = Wait-Operation $cloneOp
+  if (-not (@($cloneDone.PSObject.Properties.Name) -contains 'response')) { throw 'Clone operation completed without a response.' }
   $CloneVersion = [string]$cloneDone.response.name
   if (-not $CloneVersion) { throw 'Clone operation completed without a version name.' }
   Say "Clone created: $CloneVersion"
