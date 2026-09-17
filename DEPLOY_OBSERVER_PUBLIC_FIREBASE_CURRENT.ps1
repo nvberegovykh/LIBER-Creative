@@ -197,13 +197,23 @@ try {
   Say "Clone created: $CloneVersion"
 
   $populate = Invoke-Json POST "$Api/$CloneVersion`:populateFiles" @{ files=$manifest }
-  $required = @($populate.uploadRequiredHashes)
+  $populateProps = @($populate.PSObject.Properties.Name)
+  $required = @()
+  if (($populateProps -contains 'uploadRequiredHashes') -and $null -ne $populate.uploadRequiredHashes) {
+    $required = @($populate.uploadRequiredHashes)
+  }
   Say "Firebase requires $($required.Count) payload upload(s)."
+  $uploadBase = $null
+  if ($required.Count -gt 0) {
+    if (-not ($populateProps -contains 'uploadUrl')) { throw 'Firebase populateFiles requested uploads but returned no uploadUrl.' }
+    $uploadBase = ([string]$populate.uploadUrl).TrimEnd('/')
+    if (-not $uploadBase) { throw 'Firebase populateFiles returned an empty uploadUrl.' }
+  }
   foreach ($hash in $required) {
     if (-not $payloadByHash.ContainsKey([string]$hash)) { throw "Firebase requested unknown payload hash $hash" }
     $tmp = Join-Path $EvidenceDir ("$hash.gz")
     [IO.File]::WriteAllBytes($tmp,$payloadByHash[[string]$hash].Bytes)
-    $uploadUri = ([string]$populate.uploadUrl).TrimEnd('/') + '/' + $hash
+    $uploadUri = $uploadBase + '/' + $hash
     $resp = Invoke-WebRequest -UseBasicParsing -Method Post -Uri $uploadUri -Headers (Firebase-Headers) -ContentType 'application/octet-stream' -InFile $tmp
     if ($resp.StatusCode -lt 200 -or $resp.StatusCode -ge 300) { throw "Upload failed for ${hash}: HTTP $($resp.StatusCode)" }
     Remove-Item -LiteralPath $tmp -Force
