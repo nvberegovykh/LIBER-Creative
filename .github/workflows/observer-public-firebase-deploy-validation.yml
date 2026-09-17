@@ -56,7 +56,7 @@ jobs:
           if($text -match 'firebase\s+deploy\s+--only\s+hosting'){ throw 'Whole-site firebase deploy is forbidden in the surgical controller.' }
           if($text -match '(?im)^\s*\$matches\s*='){ throw 'Do not use PowerShell automatic $Matches as a mutable collection.' }
           if($text.Contains('$finalPatch.fileCount')){ throw 'Do not trust fileCount on the PATCH response; re-read finalized version metadata first.' }
-          if($text.Contains('$required = @($populate.uploadRequiredHashes)')){ throw 'uploadRequiredHashes is optional; guard property existence under StrictMode.' }
+          if($text -match '(?im)^\s*\$populate\s*=.*populateFiles.*\r?\n\s*\$required\s*=\s*@\(\$populate\.uploadRequiredHashes\)\s*$'){ throw 'uploadRequiredHashes is optional; guard property existence under StrictMode.' }
           $launcher=Get-Content -Raw RUN_OBSERVER_PUBLIC_FIREBASE_CURRENT.cmd
           foreach($marker in @('git clone --filter=blob:none --depth 1','DEPLOY_OBSERVER_PUBLIC_FIREBASE_CURRENT.cmd','Current main:')) {
             if(-not $launcher.Contains($marker)){ throw "Missing from-anywhere launcher marker: $marker" }
