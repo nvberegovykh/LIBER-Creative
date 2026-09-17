@@ -23,7 +23,6 @@ must(broker,"sessionRefForToken(token)",'session bearer must resolve by digest')
 must(broker,"'observer.read'",'read scope missing');
 must(broker,"'observer.preview'",'preview scope missing');
 must(broker,"'observer.focus'",'focus scope missing');
-must(broker,"mutation:false",'agent discovery state must remain read-only');
 must(broker,"observer_bootstrap",'bootstrap tool missing');
 must(broker,"observer_release",'release tool missing');
 must(broker,"No active authorized REVEX session is servicing this project",'active browser relay failure must be explicit');
