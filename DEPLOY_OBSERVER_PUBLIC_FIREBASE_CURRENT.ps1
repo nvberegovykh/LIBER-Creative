@@ -104,24 +104,25 @@ if ($LASTEXITCODE -ne 0 -or -not $script:AccessToken) { throw 'gcloud auth print
 $sitesResponse = Invoke-Json GET "$Api/projects/$ProjectId/sites?pageSize=40"
 $sites = @($sitesResponse.sites)
 if ($sites.Count -lt 1) { throw "No Firebase Hosting sites found in $ProjectId." }
-$matches = @()
+$DomainMatches = [System.Collections.Generic.List[object]]::new()
 foreach ($site in $sites) {
   $siteId = ([string]$site.name -split '/')[-1]
   try {
     $domains = Invoke-Json GET "$Api/projects/$ProjectId/sites/$siteId/customDomains?pageSize=40"
     foreach ($cd in @($domains.customDomains)) {
       $cdName = [string]$cd.name
-      if ($cdName -match "/customDomains/$([regex]::Escape($Domain))$") {
-        $matches += [pscustomobject]@{ SiteId=$siteId; Domain=$cd }
+      $expectedSuffix = "/customDomains/$Domain"
+      if ($cdName.EndsWith($expectedSuffix,[System.StringComparison]::OrdinalIgnoreCase)) {
+        $DomainMatches.Add([pscustomobject]@{ SiteId=$siteId; Domain=$cd })
       }
     }
   } catch {
     Say "Custom-domain inventory warning for ${siteId}: $($_.Exception.Message)"
   }
 }
-if ($matches.Count -ne 1) { throw "Expected exactly one Firebase Hosting site owning $Domain; found $($matches.Count). Refusing to mutate hosting." }
-$SiteId = [string]$matches[0].SiteId
-$CustomDomain = $matches[0].Domain
+if ($DomainMatches.Count -ne 1) { throw "Expected exactly one Firebase Hosting site owning $Domain; found $($DomainMatches.Count). Refusing to mutate hosting." }
+$SiteId = [string]$DomainMatches[0].SiteId
+$CustomDomain = $DomainMatches[0].Domain
 Say "Resolved $Domain -> Firebase Hosting site $SiteId; hostState=$($CustomDomain.hostState); ownershipState=$($CustomDomain.ownershipState)"
 if ([string]$CustomDomain.hostState -and [string]$CustomDomain.hostState -ne 'HOST_ACTIVE') { throw "Custom domain is not HOST_ACTIVE: $($CustomDomain.hostState)" }
 
