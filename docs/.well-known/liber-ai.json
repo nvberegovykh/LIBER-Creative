@@ -1,0 +1,235 @@
+{
+  "schema": "liber.ai.discovery.v1",
+  "name": "LIBER / REVEX",
+  "canonicalApi": {
+    "name": "LIBER REVEX Observer API",
+    "shortName": "REVEX Observer",
+    "aliases": [
+      "LIBER Observer API",
+      "REVEX Observer API",
+      "REVEX Focus API",
+      "LIBER REVEX BIM Observer"
+    ],
+    "discoveryUri": "https://liberpict.com/.well-known/liber-ai.json",
+    "counter": "https://liberpict.com/ai/",
+    "machineGuide": "https://liberpict.com/ai/guide.json",
+    "humanGuide": "https://github.com/nvberegovykh/LIBER-Creative/blob/main/AI_START_HERE.md",
+    "publicIssueEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/issueRevexObserverAnonymousClaim",
+    "claimEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/claimRevexObserverAgentSession",
+    "mcpEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/revexObserverMcp",
+    "sourceRepository": "https://github.com/nvberegovykh/LIBER-Creative",
+    "candidateBranch": "agent/revex-observer-public-counter-20260917",
+    "instruction": "Fetch discoveryUri first. Read machineGuide. The public counter requires no LIBER account and exposes no project data. Take one one-time AI key, claim it once, call observer_bootstrap, then pair a private REVEX project only with a one-time Pair AI code issued inside an authorized REVEX project session. Never infer credentials or bypass declared capability boundaries."
+  },
+  "sourceRepository": "https://github.com/nvberegovykh/LIBER-Creative",
+  "defaultBranch": "main",
+  "productionRoot": "https://liberpict.com/liber-apps/",
+  "humanGuide": "https://github.com/nvberegovykh/LIBER-Creative/blob/main/AI_START_HERE.md",
+  "machineGuide": "https://liberpict.com/ai/guide.json",
+  "principles": [
+    "integrate-do-not-reconstruct",
+    "one-concern-one-runtime-owner",
+    "revit-remains-model-authority",
+    "observe-before-and-after-every-consequential-transition",
+    "focus-keys-are-not-authentication-secrets",
+    "public-ai-counter-does-not-equal-project-authorization",
+    "pair-private-projects-from-authorized-revex-session",
+    "isolated-workshop-before-production-mutation"
+  ],
+  "observer": {
+    "status": "candidate-read-only-core-with-public-ai-counter-pairing-relay-and-isolated-workshop",
+    "source": "docs/liber-apps/apps/revex/observer-focus-api-r143.js",
+    "global": "window.RevexObserver",
+    "methods": [
+      "snapshot",
+      "getElement",
+      "query",
+      "graph",
+      "getSelection",
+      "select",
+      "createFocus",
+      "getFocus",
+      "listFocus",
+      "updateFocus",
+      "recordStep",
+      "closeFocus",
+      "preview"
+    ],
+    "agentAccess": {
+      "status": "candidate",
+      "counter": "https://liberpict.com/ai/",
+      "counterAccountRequired": false,
+      "counterExposesProjectData": false,
+      "guide": "https://liberpict.com/ai/guide.json",
+      "publicIssueEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/issueRevexObserverAnonymousClaim",
+      "claimEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/claimRevexObserverAgentSession",
+      "mcpEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/revexObserverMcp",
+      "projectAuthorization": "one-time Pair AI code issued inside an authorized REVEX project session",
+      "pairTool": "observer_pair",
+      "serverBroker": "server/firebase-functions/observer-agent-broker.js",
+      "browserRelay": "docs/liber-apps/apps/revex/observer-agent-bridge-r151.js",
+      "claimTtlMinutes": 10,
+      "pairCodeTtlMinutes": 10,
+      "sessionTtlHours": 2,
+      "initialScopes": ["observer.pair"],
+      "pairedScopes": ["observer.read", "observer.preview", "observer.focus"],
+      "requiresActiveAuthorizedRevexBrowserForProjectCalls": true,
+      "mutation": false
+    },
+    "nativeFamilyInspection": {
+      "requestType": "liber:revex-observer-family-inspect-r144",
+      "responseType": "liber:revex-observer-family-inspection-r144",
+      "browserRecipe": "docs/liber-apps/apps/revex/observer-elevator-r144.js",
+      "nativeService": "src/Liber.Revex.Revit/Services/ObserverFamilyService.cs",
+      "nativeBridge": "src/Liber.Revex.Revit/UI/RevexObserverBridge.cs",
+      "mutation": false,
+      "opensFamilyWith": "Document.EditFamily",
+      "closesFamilyWithSave": false
+    },
+    "isolatedWorkshop": {
+      "status": "candidate",
+      "productionMutation": false,
+      "requestType": "liber:revex-observer-elevator-workshop-r146",
+      "responseType": "liber:revex-observer-elevator-workshop-result-r146",
+      "browserRuntime": "docs/liber-apps/apps/revex/observer-elevator-workshop-r146.js",
+      "nativeService": "src/Liber.Revex.Revit/Services/ElevatorWorkshopService.cs",
+      "nativeHandler": "src/Liber.Revex.Revit/Revit/RevexElevatorWorkshopExternalHandler.cs",
+      "artifactRoot": "%TEMP%/LIBER_REVEX/observer-workshops",
+      "rules": [
+        "save-baseline-before-mutation",
+        "one-named-revit-transaction-per-state",
+        "reject-cascading-delete",
+        "regenerate-before-acceptance",
+        "preserve-wall-reference-dimension-nested-family-identities",
+        "never-load-candidate-back-into-active-project"
+      ]
+    },
+    "focusKey": {
+      "field": "focusId",
+      "secret": false,
+      "meaning": "Task locator inside the currently authorized REVEX project/session"
+    },
+    "mutationAvailable": false,
+    "isolatedWorkshopAvailable": true
+  },
+  "provingFocuses": [
+    {
+      "id": "elevator.single-right",
+      "observerGlobal": "window.RevexObserverElevator",
+      "observerStartMethod": "start",
+      "workshopGlobal": "window.RevexElevatorWorkshop",
+      "workshopStartMethod": "proveS7",
+      "target": "one right-aligned elevator entrance with one sliding panel and left-side panel pocket",
+      "currentState": "candidate proving lane implemented through S7; compile/runtime gate required before production promotion",
+      "purpose": "Develop the Observer and the elevator repair together; missing evidence becomes a bounded Observer capability instead of a one-off script."
+    },
+    {
+      "id": "rave289.coffee-area",
+      "observerGlobal": "window.RevexCoffeeAreaObserver",
+      "observerStartMethod": "start",
+      "observerVerifyMethod": "verify",
+      "target": "48in x 96in coffee appliance cabinet behind double pocket doors",
+      "currentState": "candidate read-only focus recipe; live authorized-session start/render/verify gate required",
+      "purpose": "Bind the coordination visualization and actual render to one protected Observer state and reject protected geometry drift."
+    }
+  ],
+  "runtimeOwners": [
+    {
+      "name": "revex-companion",
+      "role": "Companion shell and BIM orchestration",
+      "source": "docs/liber-apps/apps/revex/app.js"
+    },
+    {
+      "name": "revex-store",
+      "role": "Project identity, revision pointers and cloud/local store boundary",
+      "source": "docs/liber-apps/apps/revex/store.js"
+    },
+    {
+      "name": "rvx-export",
+      "role": "Exact Revit geometry export",
+      "source": "src/Liber.Revex.Revit/Services/RevexMeshExportService.cs"
+    },
+    {
+      "name": "revit-request-owner",
+      "role": "Native Revit request and ExternalEvent execution boundary",
+      "source": "src/Liber.Revex.Revit/Revit/RevitRequestHandler.cs"
+    },
+    {
+      "name": "revit-web-bridge",
+      "role": "REVEX WebView2 to native Revit bridge",
+      "source": "src/Liber.Revex.Revit/UI/RevexWebIntegrationBridge.cs"
+    },
+    {
+      "name": "observer-native-family",
+      "role": "Read-only deep Family Editor inspection through Revit itself",
+      "source": "src/Liber.Revex.Revit/Services/ObserverFamilyService.cs"
+    },
+    {
+      "name": "observer-agent-broker",
+      "role": "Public one-time AI claim, project pairing, short-lived scoped session, MCP tool broker and authorized browser relay queue",
+      "source": "server/firebase-functions/observer-agent-broker.js"
+    },
+    {
+      "name": "observer-agent-browser-relay",
+      "role": "Issues Pair AI codes and executes only the current read-only window.RevexObserver inside the authorized REVEX browser session",
+      "source": "docs/liber-apps/apps/revex/observer-agent-bridge-r151.js"
+    },
+    {
+      "name": "elevator-workshop",
+      "role": "Detached family candidate transitions only; never active-project authority",
+      "source": "src/Liber.Revex.Revit/Services/ElevatorWorkshopService.cs"
+    },
+    {
+      "name": "wallt-control-plane",
+      "role": "Helper/fixer orchestration over existing owners",
+      "source": "docs/liber-apps/apps/revex/wallt-control-plane.js"
+    },
+    {
+      "name": "wallt-fixer-adapters",
+      "role": "Bounded local fixer adapters",
+      "source": "docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js"
+    },
+    {
+      "name": "firebase-broker",
+      "role": "Authenticated and public-bounded Cloud Function broker boundary",
+      "source": "server/firebase-functions/main.js"
+    },
+    {
+      "name": "energy-worker",
+      "role": "Current managed Energy worker",
+      "source": "server/revex-energy-worker/app.py"
+    }
+  ],
+  "security": {
+    "repositorySecretsAllowed": false,
+    "focusRecordsMayContainSecrets": false,
+    "browserAuth": "existing-authorized-revex-session",
+    "publicCounter": {
+      "accountRequired": false,
+      "projectDataExposed": false,
+      "claimSingleUse": true,
+      "rateLimited": true
+    },
+    "headlessCapabilityToken": {
+      "status": "candidate-implemented-read-only-observer-with-separate-project-pairing",
+      "claim": "public one-time random claim key; raw value returned once and only SHA-256 stored",
+      "session": "opaque random bearer; raw value returned once and only SHA-256 stored",
+      "projectPairing": "one-time code created only by an authorized REVEX project session; raw code returned once and only SHA-256 stored",
+      "requirements": [
+        "server-issued",
+        "short-lived",
+        "project-unbound-at-public-counter",
+        "project-scoped-only-after-authorized-pairing",
+        "focus-scoped-when-requested",
+        "action-scoped",
+        "revocable",
+        "never-logged-or-committed"
+      ]
+    }
+  },
+  "sourceParity": {
+    "customDomainSource": "docs/CNAME",
+    "expectedDomain": "liberpict.com",
+    "rule": "Do not assume live byte parity from repository presence alone; verify the live asset fingerprint before production mutation."
+  }
+}

@@ -1,0 +1,111 @@
+{
+  "schema": "liber.revex.observer.focus-spec.v2",
+  "focusId": "rave289.coffee-area",
+  "name": "Rave 289 Coffee Area",
+  "target": "48in x 96in coffee appliance cabinet behind double pocket doors",
+  "temporary": true,
+  "scope": {
+    "elementIds": [],
+    "stableFaceRefs": []
+  },
+  "protected": [
+    "overall envelope = 48in W x 96in H",
+    "counter top = 36.5in AFF",
+    "left branch clear = 18in from counter to lower-left shelf",
+    "right branch clear = 12in from counter to Miele bottom",
+    "one Miele CVA 7445 upper-right",
+    "one Sub-Zero ID-24R lower-right",
+    "three shelf levels: lower-left only + two upper full-width",
+    "two visible left drawer fronts aligned visually to the two panel-ready ID-24R fronts",
+    "no invented room or walking depth"
+  ],
+  "expectedDelta": {
+    "kind": "appearance-only-render-and-coordination-visualization",
+    "geometryMutation": false,
+    "allowed": [
+      "materials",
+      "lighting",
+      "decorative objects that do not change protected geometry",
+      "annotation layout derived from measured relationships"
+    ],
+    "forbidden": [
+      "envelope changes",
+      "branch topology changes",
+      "appliance count or placement changes",
+      "shelf span changes",
+      "drawer-front count changes",
+      "invented depth or clearance geometry",
+      "using absolute elevations as if they were segment dimensions"
+    ]
+  },
+  "measurementPolicy": {
+    "mode": "derive-deltas-from-exposed-parameters",
+    "unit": "in",
+    "rules": [
+      "dimensions are differences between exposed anchors, not copied elevations",
+      "main vertical chain and Miele branch remain independent",
+      "rendered or generated output is an observation, never a new geometry authority"
+    ],
+    "mainVerticalChain": [
+      {"from": "floor", "to": "baseTop", "distanceIn": 34.5},
+      {"from": "baseTop", "to": "counterTop", "distanceIn": 2.0},
+      {"from": "counterTop", "to": "lowerLeftShelfBottom", "distanceIn": 18.0},
+      {"from": "lowerLeftShelfBottom", "to": "middleFullShelfBottom", "distanceIn": 12.25},
+      {"from": "middleFullShelfBottom", "to": "upperFullShelfBottom", "distanceIn": 14.5},
+      {"from": "upperFullShelfBottom", "to": "cabinetTop", "distanceIn": 14.75}
+    ],
+    "rightBranch": [
+      {"from": "counterTop", "to": "mieleBottom", "distanceIn": 12.0},
+      {"from": "mieleBottom", "to": "mieleTop", "distanceIn": 17.9375}
+    ]
+  },
+  "confidencePolicy": {
+    "hardInvariants": "exact",
+    "softFloor": 0.75,
+    "softTarget": 0.95,
+    "belowFloor": "correct-before-next-engine",
+    "betweenFloorAndTarget": "continue-lightweight-exploration",
+    "atOrAboveTarget": "eligible-for-outer-observer-gate",
+    "posteriorRule": "after every engine handoff, treat the parsed result as evidence and update soft-relation confidence"
+  },
+  "composition": {
+    "mode": "soft-relational",
+    "relations": [
+      {"id": "miele-upper-right-anchor", "weight": 1.0},
+      {"id": "lower-shelf-left-only", "weight": 1.0},
+      {"id": "upper-shelves-reunify-width", "weight": 0.95},
+      {"id": "base-two-by-two-rhythm", "weight": 0.9},
+      {"id": "open-left-solid-right-balance", "weight": 0.85},
+      {"id": "restrained-decor-density", "weight": 0.6}
+    ]
+  },
+  "deliverables": ["spec", "render"],
+  "authority": {
+    "overall": {"widthIn": 48.0, "heightIn": 96.0},
+    "base": {"topAffIn": 34.5},
+    "counter": {"thicknessIn": 2.0, "topAffIn": 36.5},
+    "leftBranch": {"clearAboveCounterIn": 18.0, "lowerShelfBottomAffIn": 54.5},
+    "rightBranch": {"clearAboveCounterIn": 12.0, "mieleBottomAffIn": 48.5},
+    "miele": {
+      "model": "CVA 7445",
+      "faceWidthIn": 23.4375,
+      "faceHeightIn": 17.9375,
+      "nicheWidthIn": 22.125,
+      "nicheHeightIn": 17.6875,
+      "nicheDepthIn": 24.0
+    },
+    "subZero": {
+      "model": "ID-24R",
+      "widthIn": 24.0,
+      "heightIn": 34.5,
+      "depthIn": 24.0,
+      "openingDepthIn": 25.0
+    },
+    "shelves": {
+      "lowerLeftBottomAffIn": 54.5,
+      "middleFullBottomAffIn": 66.75,
+      "upperFullBottomAffIn": 81.25,
+      "thicknessIn": 0.75
+    }
+  }
+}

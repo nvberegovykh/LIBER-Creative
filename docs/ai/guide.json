@@ -1,0 +1,67 @@
+{
+  "schema": "liber.revex.observer-agent-guide.v2",
+  "name": "LIBER / REVEX Observer AI session guide",
+  "discovery": "https://liberpict.com/.well-known/liber-ai.json",
+  "counter": "https://liberpict.com/ai/",
+  "publicIssue": "https://us-central1-liber-apps-cca20.cloudfunctions.net/issueRevexObserverAnonymousClaim",
+  "claim": "https://us-central1-liber-apps-cca20.cloudfunctions.net/claimRevexObserverAgentSession",
+  "mcp": "https://us-central1-liber-apps-cca20.cloudfunctions.net/revexObserverMcp",
+  "flow": [
+    "Open the public AI Counter. No LIBER account is required to take one guide + one-time AI session key.",
+    "Give the full package to exactly one AI session.",
+    "The AI fetches discovery and this guide, exchanges the claim key exactly once, keeps the returned bearer private, and calls observer_bootstrap.",
+    "The anonymous lease initially has no project data. If a private REVEX project is needed, an authorized REVEX collaborator opens that project and presses Pair AI.",
+    "The collaborator sends the resulting one-time pairing code to the AI. The AI calls observer_pair with that code.",
+    "After pairing, call observer_bootstrap again and use only the returned observer.read / observer.preview / observer.focus scopes.",
+    "The active authorized REVEX browser services live Observer calls through the existing window.RevexObserver owner.",
+    "Call observer_release when finished."
+  ],
+  "publicCounter": {
+    "accountRequired": false,
+    "projectDataExposed": false,
+    "claimSingleUse": true,
+    "claimTtlMinutes": 10,
+    "rateLimited": true
+  },
+  "projectPairing": {
+    "accountRequiredAtCounter": false,
+    "authorizationLocation": "authorized REVEX project session",
+    "pairCodeSingleUse": true,
+    "pairCodeTtlMinutes": 10,
+    "browserAction": "Pair AI",
+    "aiTool": "observer_pair"
+  },
+  "session": {
+    "ttlHours": 2,
+    "revocable": true,
+    "initialScopes": ["observer.pair"],
+    "pairedScopes": ["observer.read", "observer.preview", "observer.focus"]
+  },
+  "tools": [
+    "observer_bootstrap",
+    "observer_pair",
+    "observer_snapshot",
+    "observer_get_element",
+    "observer_query",
+    "observer_graph",
+    "observer_get_selection",
+    "observer_create_focus",
+    "observer_get_focus",
+    "observer_list_focus",
+    "observer_update_focus",
+    "observer_record_step",
+    "observer_close_focus",
+    "observer_preview",
+    "observer_release"
+  ],
+  "hardBoundaries": [
+    "The public counter does not authenticate a LIBER user and does not expose project data.",
+    "Private project authorization happens only through a one-time Pair AI code created inside an authorized REVEX project session.",
+    "The AI bearer never enters the authorized REVEX browser relay.",
+    "The REVEX browser never gives its Firebase credential to the AI.",
+    "Revit remains model authority.",
+    "The external AI lease does not authorize model mutation.",
+    "focusId is a task locator, not an authentication secret.",
+    "Unknown or missing evidence must be reported, not invented."
+  ]
+}

@@ -26,6 +26,7 @@ public static class RendairWindowManager
         _handler = new RevitRequestHandler();
         _externalEvent = ExternalEvent.Create(_handler);
         RevexWebIntegrationBridge.ConfigureFamilyPlacement();
+        RevexObserverBridge.Configure();
         _activeDocumentRuntimeId = uiapp.ActiveUIDocument?.Document.GetHashCode() ?? 0;
 
         _window = new RendairWindow(_handler, _externalEvent);
@@ -34,6 +35,7 @@ public static class RendairWindowManager
         {
             _externalEvent?.Dispose();
             _externalEvent = null;
+            RevexObserverBridge.Release();
             RevexWebIntegrationBridge.ReleaseFamilyPlacement();
             _handler = null;
             _window = null;
@@ -69,6 +71,7 @@ public static class RendairWindowManager
 
         _externalEvent?.Dispose();
         _externalEvent = null;
+        RevexObserverBridge.Release();
         RevexWebIntegrationBridge.ReleaseFamilyPlacement();
         _handler = null;
         _activeDocumentRuntimeId = 0;

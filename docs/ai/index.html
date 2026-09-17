@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>LIBER / REVEX AI Counter</title>
+<meta name="robots" content="index,follow" />
+<style>
+:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color-scheme:dark;background:#101315;color:#f5f7f8}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at top,#20272c 0,#101315 48%,#0c0f11 100%)}main{width:min(760px,100%);background:#171c20;border:1px solid #2c353b;border-radius:22px;padding:28px;box-shadow:0 24px 80px #0008}h1{font-size:clamp(28px,5vw,44px);margin:0 0 8px}p{line-height:1.55;color:#cbd3d7}a{color:#b7dcff}button{width:100%;border-radius:12px;border:1px solid #38434a;background:#f4f7f9;color:#101315;padding:13px 15px;font:inherit;font-weight:700;cursor:pointer}button.secondary{background:#252d32;color:#eef2f4}button:disabled{opacity:.5;cursor:not-allowed}.status{padding:12px 14px;border-radius:12px;background:#10161a;border:1px solid #2e3940;color:#cbd3d7;margin:18px 0}.status.good{border-color:#3b6b50;color:#bfe5cc}.status.bad{border-color:#74414a;color:#ffc6cf}.secret{display:none;margin-top:18px;padding:18px;border-radius:16px;background:#0c1012;border:1px solid #3d484f}.secret.show{display:block}.secret code{display:block;word-break:break-all;font:600 13px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;background:#050708;padding:13px;border-radius:10px;margin:10px 0}.actions{display:flex;gap:10px;flex-wrap:wrap}.actions button,.actions a{flex:1;min-width:170px;text-align:center;text-decoration:none;padding:11px 13px;border-radius:11px}.note{font-size:13px;color:#95a2a9}.mini{font-size:12px;color:#839098;margin-top:18px;border-top:1px solid #293238;padding-top:16px}
+</style>
+</head>
+<body>
+<main>
+  <h1>AI Counter</h1>
+  <p>Take one guide + one one-time key for one AI session. <strong>No LIBER account is required here.</strong> The counter does not expose any project data.</p>
+  <div id="status" class="status">Ready.</div>
+  <button id="issue">Take one AI session package</button>
+  <section id="secret" class="secret">
+    <strong>One-time claim key</strong>
+    <code id="claim-key"></code>
+    <div class="actions"><button id="copy-key" class="secondary">Copy key</button><button id="copy-bootstrap" class="secondary">Copy full package</button></div>
+    <p id="expiry" class="note"></p>
+    <p class="note">Paste the full package into Claude, ChatGPT, or another tool-capable AI. The AI claims the key once and gets a short-lived Observer lease. To attach a private REVEX project later, an authorized REVEX collaborator opens that project, presses <strong>Pair AI</strong>, and sends the one-time pairing code to the AI. Counter access and project authorization are intentionally separate.</p>
+  </section>
+  <div class="actions" style="margin-top:18px"><a class="secondary" href="/ai/guide.json">AI guide</a><a class="secondary" href="/.well-known/liber-ai.json">Discovery</a></div>
+  <div class="mini">The counter itself is public. Project access is never granted here. No Firebase credential, bearer token, service-account secret, OAuth refresh token, or signing key is stored in this page.</div>
+</main>
+<script>
+(function(){
+'use strict';
+const ISSUE_URL='https://us-central1-liber-apps-cca20.cloudfunctions.net/issueRevexObserverAnonymousClaim';
+const status=document.getElementById('status'),issue=document.getElementById('issue'),secret=document.getElementById('secret'),claimKey=document.getElementById('claim-key'),expiry=document.getElementById('expiry');
+let issued=null;
+function setStatus(text,tone=''){status.textContent=text;status.className='status'+(tone?' '+tone:'');}
+issue.addEventListener('click',async()=>{
+  issue.disabled=true;secret.classList.remove('show');setStatus('Issuing one-time package…');
+  try{
+    const res=await fetch(ISSUE_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'});
+    const response=await res.json().catch(()=>({}));
+    if(!res.ok||!response?.claimKey)throw new Error(response?.error||`Counter returned HTTP ${res.status}.`);
+    issued=response;claimKey.textContent=response.claimKey;expiry.textContent=`Claim expires ${response.claimExpiresAt}. It can be exchanged exactly once.`;secret.classList.add('show');setStatus('Package ready. No sign-in was used.','good');
+  }catch(error){setStatus(`Counter unavailable: ${error?.message||error}`,'bad');}
+  finally{issue.disabled=false;}
+});
+document.getElementById('copy-key').addEventListener('click',async()=>{if(issued?.claimKey)await navigator.clipboard.writeText(issued.claimKey);});
+document.getElementById('copy-bootstrap').addEventListener('click',async()=>{
+  if(!issued)return;
+  const text=[
+    'LIBER / REVEX Observer AI session package',
+    `Discovery: ${issued.discoveryUrl}`,
+    `Guide: ${issued.guideUrl}`,
+    `One-time claim endpoint: ${issued.claimUrl}`,
+    `Observer MCP endpoint: ${issued.mcpUrl}`,
+    `Claim key: ${issued.claimKey}`,
+    '',
+    'Instructions for the AI:',
+    '1. Fetch Discovery and Guide first.',
+    '2. Exchange Claim key exactly once at the claim endpoint.',
+    '3. Keep the returned access token private and call observer_bootstrap.',
+    '4. If bootstrap says the session is unpaired, ask the human for a REVEX Pair AI code and call observer_pair with that code.',
+    '5. Use only the scopes returned by bootstrap. Do not infer missing project data or credentials.',
+    '6. Call observer_release when finished.'
+  ].join('\n');
+  await navigator.clipboard.writeText(text);
+});
+})();
+</script>
+</body>
+</html>
