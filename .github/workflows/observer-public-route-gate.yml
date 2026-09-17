@@ -1,0 +1,55 @@
+name: Observer public route gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/observer-ai.html'
+      - 'docs/observer-ai-20260917.html'
+      - 'docs/ai.html'
+      - 'docs/ai/**'
+      - 'docs/404.html'
+      - 'docs/liber-ai.json'
+      - 'docs/observer-ai-guide.json'
+      - '.github/workflows/observer-public-route-gate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-route:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for exact public counter route
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL='https://liberpict.com/observer-ai-20260917.html'
+          TMP="$(mktemp)"
+          trap 'rm -f "$TMP"' EXIT
+          ok=0
+          for i in $(seq 1 30); do
+            code="$(curl -L --silent --show-error --output "$TMP" --write-out '%{http_code}' --max-time 20 "$URL" || true)"
+            echo "attempt=$i http=$code sha256=$(sha256sum "$TMP" | awk '{print $1}')"
+            if [[ "$code" == '200' ]] && grep -Fq '<title>LIBER / REVEX AI Counter</title>' "$TMP" && grep -Fq 'Take one AI session package' "$TMP"; then
+              ok=1
+              break
+            fi
+            echo 'body-head:'
+            head -c 240 "$TMP" | tr '\n' ' '; echo
+            sleep 5
+          done
+          if [[ "$ok" != '1' ]]; then
+            echo 'OBSERVER_PUBLIC_ROUTE=FAILED'
+            exit 1
+          fi
+          echo 'OBSERVER_PUBLIC_ROUTE=PASSED'
+
+      - name: Verify public discovery documents
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --silent --show-error --max-time 20 'https://liberpict.com/liber-ai.json' | grep -Fq 'observer'
+          curl -L --fail --silent --show-error --max-time 20 'https://liberpict.com/observer-ai-guide.json' | grep -Fq 'Observer'
+          echo 'OBSERVER_DISCOVERY=PASSED'
