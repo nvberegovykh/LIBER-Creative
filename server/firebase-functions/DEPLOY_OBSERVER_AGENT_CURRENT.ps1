@@ -81,27 +81,66 @@ function Verify-Function([string]$GCloud,[string]$Name){
   if([string]$fn.buildConfig.runtime -ne 'nodejs22'){ throw "$Name runtime is not nodejs22." }
   if([string]$fn.serviceConfig.serviceAccountEmail -ne $ObserverSa){ throw "$Name runtime identity mismatch: $($fn.serviceConfig.serviceAccountEmail)" }
   if([string]$fn.serviceConfig.environmentVariables.REVEX_SOURCE_CANDIDATE -ne $SourceCandidate){ throw "$Name source SHA binding mismatch." }
-  if(-not [string]$fn.serviceConfig.uri){ throw "$Name has no service URI." }
+  if(-not [string]$fn.serviceConfig.uri -and -not [string]$fn.url){ throw "$Name has no service URI." }
   return $fn
 }
-function Invoke-Json([string]$Uri,[string]$Method,[object]$Body,[hashtable]$Headers=@{}){
+function Public-Url([object]$Fn){
+  $url=[string]$Fn.url
+  if(-not $url){$url=[string]$Fn.serviceConfig.uri}
+  if(-not $url){throw 'Function has no HTTP URL.'}
+  return $url
+}
+function Service-Name([object]$Fn){
+  $service=[string]$Fn.serviceConfig.service
+  if(-not $service){throw 'Function has no backing Cloud Run service.'}
+  return ($service -split '/')[-1]
+}
+function Probe-PublicTransport([string]$Uri){
+  try{
+    $r=Invoke-WebRequest -Uri $Uri -Method Options -UseBasicParsing -TimeoutSec 30
+    return ([int]$r.StatusCode -ge 200 -and [int]$r.StatusCode -lt 500)
+  }catch{
+    $status='';try{$status=[int]$_.Exception.Response.StatusCode}catch{}
+    return ($status -ne 401 -and $status -ne 403)
+  }
+}
+function Ensure-PublicTransport([string]$GCloud,[string]$Name,[object]$Fn){
+  $service=Service-Name $Fn
+  $url=Public-Url $Fn
+  Write-Host ">> Verify unauthenticated HTTP transport for $Name" -ForegroundColor DarkCyan
+  $bind=Invoke-Native $GCloud @('run','services','add-iam-policy-binding',$service,'--project',$ProjectId,'--region',$Region,'--member','allUsers','--role','roles/run.invoker','--quiet') '' -Quiet
+  if($bind -ne 0){
+    Write-Host "allUsers binding was rejected for $service; trying Cloud Run no-invoker-IAM-check mode." -ForegroundColor Yellow
+    Require-Ok "Disable invoker IAM check for $service" $GCloud @('run','services','update',$service,'--project',$ProjectId,'--region',$Region,'--no-invoker-iam-check','--quiet') '' -Quiet
+  }
+  if(-not(Probe-PublicTransport $url)){ throw "$Name still rejects unauthenticated HTTP transport after access configuration." }
+  Write-Host "PASS: $Name HTTP transport reachable; application-level Observer/Firebase authorization remains enforced in the handler." -ForegroundColor Green
+  return $url
+}
+function Http-Failure([object]$ErrorRecord){
+  $status='';try{$status=[string][int]$ErrorRecord.Exception.Response.StatusCode}catch{}
+  if($status){return "HTTP $status"}
+  return [string]$ErrorRecord.Exception.Message
+}
+function Invoke-Json([string]$Label,[string]$Uri,[string]$Method,[object]$Body,[hashtable]$Headers=@{}){
   $json = if($null -eq $Body){ '{}' } else { $Body | ConvertTo-Json -Depth 12 -Compress }
-  return Invoke-RestMethod -Uri $Uri -Method $Method -Headers $Headers -ContentType 'application/json' -Body $json -TimeoutSec 45
+  try{return Invoke-RestMethod -Uri $Uri -Method $Method -Headers $Headers -ContentType 'application/json' -Body $json -TimeoutSec 45}
+  catch{throw "$Label failed at $Uri ($(Http-Failure $_))."}
 }
 function Smoke-PublicObserver([hashtable]$Uris){
   Write-Host '>> Smoke-test public claim -> short-lived session -> MCP bootstrap -> release' -ForegroundColor DarkCyan
   $claim = $null; $session = $null
   try{
-    $claim = Invoke-Json $Uris['issueRevexObserverAnonymousClaim'] 'POST' @{}
+    $claim = Invoke-Json 'Public anonymous claim' $Uris['issueRevexObserverAnonymousClaim'] 'POST' @{}
     if($claim.ok -ne $true -or -not [string]$claim.claimKey){ throw 'Public Observer counter did not issue a one-time claim.' }
-    $session = Invoke-Json $Uris['claimRevexObserverAgentSession'] 'POST' @{ claimKey=[string]$claim.claimKey }
+    $session = Invoke-Json 'One-time claim exchange' $Uris['claimRevexObserverAgentSession'] 'POST' @{ claimKey=[string]$claim.claimKey }
     if($session.ok -ne $true -or -not [string]$session.accessToken){ throw 'Observer claim exchange did not return a session bearer.' }
     $headers = @{ Authorization = 'Bearer ' + [string]$session.accessToken }
-    $init = Invoke-Json $Uris['revexObserverMcp'] 'POST' @{ jsonrpc='2.0'; id=1; method='initialize'; params=@{ protocolVersion='2025-06-18'; capabilities=@{}; clientInfo=@{ name='REVEX deployment smoke'; version='1' } } } $headers
+    $init = Invoke-Json 'MCP initialize' $Uris['revexObserverMcp'] 'POST' @{ jsonrpc='2.0'; id=1; method='initialize'; params=@{ protocolVersion='2025-06-18'; capabilities=@{}; clientInfo=@{ name='REVEX deployment smoke'; version='1' } } } $headers
     if(-not $init.result -or [string]$init.result.serverInfo.name -ne 'LIBER REVEX Observer'){ throw 'Observer MCP initialize smoke test failed.' }
-    $boot = Invoke-Json $Uris['revexObserverMcp'] 'POST' @{ jsonrpc='2.0'; id=2; method='tools/call'; params=@{ name='observer_bootstrap'; arguments=@{} } } $headers
+    $boot = Invoke-Json 'Observer bootstrap' $Uris['revexObserverMcp'] 'POST' @{ jsonrpc='2.0'; id=2; method='tools/call'; params=@{ name='observer_bootstrap'; arguments=@{} } } $headers
     if(-not $boot.result -or $boot.result.isError -eq $true){ throw 'Observer bootstrap smoke test failed.' }
-    $release = Invoke-Json $Uris['revexObserverMcp'] 'POST' @{ jsonrpc='2.0'; id=3; method='tools/call'; params=@{ name='observer_release'; arguments=@{} } } $headers
+    $release = Invoke-Json 'Observer release' $Uris['revexObserverMcp'] 'POST' @{ jsonrpc='2.0'; id=3; method='tools/call'; params=@{ name='observer_release'; arguments=@{} } } $headers
     if(-not $release.result -or $release.result.isError -eq $true){ throw 'Observer release smoke test failed.' }
     Write-Host 'PASS: anonymous counter + claim exchange + MCP bootstrap + release are live.' -ForegroundColor Green
   } finally {
@@ -168,11 +207,10 @@ try{
   $Uris = @{}
   foreach($name in $Functions){
     $fn = Verify-Function $GCloud $name
-    $Uris[$name] = [string]$fn.serviceConfig.uri
+    $Uris[$name] = Ensure-PublicTransport $GCloud $name $fn
     Write-Host "PASS: $name ACTIVE / nodejs22 / source-bound." -ForegroundColor Green
   }
 
-  Invoke-Json $Uris['issueRevexObserverAnonymousClaim'] 'OPTIONS' @{} | Out-Null
   Smoke-PublicObserver $Uris
 
   Write-Host ''
