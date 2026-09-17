@@ -11,8 +11,11 @@ const ui=read('docs/liber-apps/apps/revex/ui-integrity.js');
 const counter=read('docs/ai/index.html');
 const guide=JSON.parse(read('docs/ai/guide.json'));
 const discovery=JSON.parse(read('docs/.well-known/liber-ai.json'));
+const deploy=read('server/firebase-functions/DEPLOY_OBSERVER_AGENT_CURRENT.ps1');
+const launcher=read('DEPLOY_REVEX_OBSERVER_AI_CURRENT.cmd');
+const functions=['issueRevexObserverAnonymousClaim','issueRevexObserverPairCode','claimRevexObserverAgentSession','pullRevexObserverAgentRequests','completeRevexObserverAgentRequest','revexObserverMcp'];
 
-for(const name of ['issueRevexObserverAnonymousClaim','issueRevexObserverPairCode','claimRevexObserverAgentSession','pullRevexObserverAgentRequests','completeRevexObserverAgentRequest','revexObserverMcp']) must(main,name,'Firebase composition export missing');
+for(const name of functions) must(main,name,'Firebase composition export missing');
 
 must(broker,"PUBLIC_SCOPES = Object.freeze(['observer.pair'])",'anonymous lease must start unpaired');
 must(broker,"PROJECT_SCOPES = Object.freeze(['observer.read','observer.preview','observer.focus'])",'paired project scopes missing');
@@ -56,4 +59,22 @@ if(discovery.observer?.agentAccess?.pairTool!=='observer_pair')throw new Error('
 if(discovery.security?.publicCounter?.accountRequired!==false)throw new Error('security discovery account policy mismatch');
 if(discovery.security?.headlessCapabilityToken?.status!=='candidate-implemented-read-only-observer-with-separate-project-pairing')throw new Error('headless status mismatch');
 
-console.log('REVEX_OBSERVER_AGENT_GATE_R152=PASSED');
+for(const name of functions){
+  must(deploy,`'${name}'`,`Observer-only deployment must include ${name}`);
+}
+must(deploy,"$ObserverSaName = 'revex-observer-broker'",'Observer deployment must use its own runtime identity');
+must(deploy,"'roles/datastore.user'",'Observer runtime must have bounded Firestore role');
+must(deploy,"'roles/logging.logWriter'",'Observer runtime must have logging role');
+must(deploy,"'--runtime','nodejs22'",'Observer runtime must stay Node 22');
+must(deploy,"'--allow-unauthenticated'",'HTTP transport must remain reachable so app/MCP auth can be enforced inside handlers');
+must(deploy,"REVEX_SOURCE_CANDIDATE=$SourceCandidate",'Observer functions must bind exact source SHA');
+must(deploy,"Smoke-PublicObserver",'Observer deployment must smoke-test public claim/MCP path');
+must(deploy,"observer_release",'deployment smoke test must revoke its test lease');
+must(deploy,'Energy worker, renderer, Revit model, Storage rules, Firestore rules and project content are not redeployed','deployment scope must remain bounded');
+mustNot(deploy,"runRevexEnergy","Observer-only deployment may not deploy Energy broker");
+mustNot(deploy,"runRevexRender","Observer-only deployment may not deploy Render broker");
+must(launcher,'git clone --depth 1 --branch main --single-branch','launcher must self-refresh from exact current main');
+must(launcher,'DEPLOY_OBSERVER_AGENT_CURRENT.ps1','launcher must call bounded Observer deployment controller');
+must(launcher,'rmdir /s /q "%WORK%"','launcher must remove disposable checkout');
+
+console.log('REVEX_OBSERVER_AGENT_GATE_R153=PASSED');
