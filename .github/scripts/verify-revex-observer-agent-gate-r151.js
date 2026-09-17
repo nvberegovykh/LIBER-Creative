@@ -13,6 +13,8 @@ const guide=JSON.parse(read('docs/ai/guide.json'));
 const discovery=JSON.parse(read('docs/.well-known/liber-ai.json'));
 const deploy=read('server/firebase-functions/DEPLOY_OBSERVER_AGENT_CURRENT.ps1');
 const launcher=read('DEPLOY_REVEX_OBSERVER_AI_CURRENT.cmd');
+const repair=read('server/firebase-functions/REPAIR_OBSERVER_AGENT_PUBLIC_ACCESS.ps1');
+const repairLauncher=read('REPAIR_REVEX_OBSERVER_AI_ACCESS_CURRENT.cmd');
 const functions=['issueRevexObserverAnonymousClaim','issueRevexObserverPairCode','claimRevexObserverAgentSession','pullRevexObserverAgentRequests','completeRevexObserverAgentRequest','revexObserverMcp'];
 
 for(const name of functions) must(main,name,'Firebase composition export missing');
@@ -32,8 +34,6 @@ must(broker,"CLAIM_TTL_MS = 10 * 60 * 1000",'claim TTL mismatch');
 must(broker,"PAIR_TTL_MS = 10 * 60 * 1000",'pair TTL mismatch');
 must(broker,"SESSION_TTL_MS = 2 * 60 * 60 * 1000",'session TTL mismatch');
 mustNot(broker,'accessToken:accessToken','raw bearer must not be persisted under explicit field');
-// CommonJS export identity is part of the runtime contract: assigning a fresh
-// module.exports object here silently discards every earlier exports.<handler> binding.
 mustNot(broker,"module.exports = { PROJECT_SCOPES, PUBLIC_SCOPES };",'Observer broker may not replace module.exports after declaring handlers');
 must(broker,'module.exports.PROJECT_SCOPES = PROJECT_SCOPES;','Observer broker must append PROJECT_SCOPES without clobbering handlers');
 must(broker,'module.exports.PUBLIC_SCOPES = PUBLIC_SCOPES;','Observer broker must append PUBLIC_SCOPES without clobbering handlers');
@@ -64,22 +64,41 @@ if(discovery.observer?.agentAccess?.pairTool!=='observer_pair')throw new Error('
 if(discovery.security?.publicCounter?.accountRequired!==false)throw new Error('security discovery account policy mismatch');
 if(discovery.security?.headlessCapabilityToken?.status!=='candidate-implemented-read-only-observer-with-separate-project-pairing')throw new Error('headless status mismatch');
 
-for(const name of functions){
-  must(deploy,`'${name}'`,`Observer-only deployment must include ${name}`);
-}
+for(const name of functions){must(deploy,`'${name}'`,`Observer-only deployment must include ${name}`);must(repair,`'${name}'`,`Observer public-access repair must include ${name}`);}
 must(deploy,"$ObserverSaName = 'revex-observer-broker'",'Observer deployment must use its own runtime identity');
 must(deploy,"'roles/datastore.user'",'Observer runtime must have bounded Firestore role');
 must(deploy,"'roles/logging.logWriter'",'Observer runtime must have logging role');
 must(deploy,"'--runtime','nodejs22'",'Observer runtime must stay Node 22');
-must(deploy,"'--allow-unauthenticated'",'HTTP transport must remain reachable so app/MCP auth can be enforced inside handlers');
+must(deploy,"'--allow-unauthenticated'",'function deployment must request unauthenticated HTTP transport');
+must(deploy,"'run','services','add-iam-policy-binding'",'deployment must explicitly repair Gen2 Cloud Run invoker IAM');
+must(deploy,"'allUsers'",'deployment must grant public transport to allUsers');
+must(deploy,"'roles/run.invoker'",'deployment must use Cloud Run Invoker role');
+must(deploy,"'--no-invoker-iam-check'",'deployment must have domain-restricted-sharing fallback');
+must(deploy,'Probe-PublicTransport','deployment must verify unauthenticated transport before smoke testing');
 must(deploy,"REVEX_SOURCE_CANDIDATE=$SourceCandidate",'Observer functions must bind exact source SHA');
 must(deploy,"Smoke-PublicObserver",'Observer deployment must smoke-test public claim/MCP path');
+must(deploy,"'Public anonymous claim'",'smoke test must identify the failing public-claim stage');
+must(deploy,"'One-time claim exchange'",'smoke test must identify the claim-exchange stage');
+must(deploy,"'MCP initialize'",'smoke test must identify MCP transport failure');
 must(deploy,"observer_release",'deployment smoke test must revoke its test lease');
 must(deploy,'Energy worker, renderer, Revit model, Storage rules, Firestore rules and project content are not redeployed','deployment scope must remain bounded');
 mustNot(deploy,"runRevexEnergy","Observer-only deployment may not deploy Energy broker");
 mustNot(deploy,"runRevexRender","Observer-only deployment may not deploy Render broker");
+
+must(repair,"'run','services','add-iam-policy-binding'",'repair must set Cloud Run invoker IAM explicitly');
+must(repair,"'roles/run.invoker'",'repair must use Cloud Run Invoker role');
+must(repair,"'--no-invoker-iam-check'",'repair must have DRS fallback');
+must(repair,'Scope: invocation IAM + smoke test only. No function rebuild','repair may not rebuild deployed functions');
+must(repair,'Smoke-PublicObserver','repair must run end-to-end anonymous-session smoke test');
+mustNot(repair,"'functions','deploy'",'access-only repair may not redeploy functions');
+mustNot(repair,"runRevexEnergy",'access-only repair may not deploy Energy');
+mustNot(repair,"runRevexRender",'access-only repair may not deploy Render');
+
 must(launcher,'git clone --depth 1 --branch main --single-branch','launcher must self-refresh from exact current main');
 must(launcher,'DEPLOY_OBSERVER_AGENT_CURRENT.ps1','launcher must call bounded Observer deployment controller');
 must(launcher,'rmdir /s /q "%WORK%"','launcher must remove disposable checkout');
+must(repairLauncher,'git clone --depth 1 --branch main --single-branch','repair launcher must self-refresh from main');
+must(repairLauncher,'REPAIR_OBSERVER_AGENT_PUBLIC_ACCESS.ps1','repair launcher must call access-only controller');
+must(repairLauncher,'rmdir /s /q "%WORK%"','repair launcher must remove disposable checkout');
 
-console.log('REVEX_OBSERVER_AGENT_GATE_R154=PASSED');
+console.log('REVEX_OBSERVER_AGENT_GATE_R155=PASSED');
