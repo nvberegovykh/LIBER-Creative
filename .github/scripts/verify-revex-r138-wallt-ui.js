@@ -7,9 +7,9 @@ const source=fs.readFileSync('docs/liber-apps/apps/revex/wallt-ui-r138.js','utf8
 const ui=fs.readFileSync('docs/liber-apps/apps/revex/ui-integrity.js','utf8');
 new Function(source);
 
-assert.ok(ui.includes("wallt-ui-r138.js?v=20260818r138-wallt-ui1"),'canonical UI owner does not load visible WALLT r138');
+assert.ok(ui.includes("wallt-ui-r138.js?v=20260820r147-release1"),'canonical UI owner does not load current context-aware WALLT r138');
 for(const marker of [
-  "const BUILD='20260818r138-wallt-ui1'",
+  "const BUILD='20260820r144-wallt-context1'",
   "controlOwner:'wallt-control-plane'",
   'storageOwner:null',
   "open.id='revex-wallt-open'",
@@ -26,6 +26,8 @@ for(const marker of [
   "event.ctrlKey||event.metaKey",
   "newStorageOwner:false"
 ]) assert.ok(source.includes(marker),`visible WALLT UI missing ${marker}`);
+for(const marker of ['function chatActive()','open.hidden=chat','mobileMenu.hidden=chat'])assert.ok(source.includes(marker),`WALLT Chat exclusion missing ${marker}`);
+for(const effect of ['backdrop-filter','gradient'])assert.ok(!source.includes(effect),`WALLT presentation uses forbidden effect: ${effect}`);
 for(const forbidden of [
   'firebase.firestore',
   'localStorage.setItem',
@@ -58,7 +60,7 @@ const document={
 const context={window:root,document,console,setTimeout(){return 1;},clearTimeout(){}};
 vm.runInNewContext(source,context,{filename:'wallt-ui-r138.js'});
 const api=root.__revexWalltUiR138;
-assert.equal(api.build,'20260818r138-wallt-ui1');
+assert.equal(api.build,'20260820r144-wallt-context1');
 assert.equal(api.controlOwner,'wallt-control-plane');
 assert.equal(api.storageOwner,null);
 assert.equal(api.helper,true);assert.equal(api.fixer,true);

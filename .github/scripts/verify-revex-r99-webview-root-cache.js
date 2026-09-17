@@ -12,7 +12,7 @@ if(!rootMatch)throw new Error('index root ui-integrity cache key is missing');
 if(rootMatch[1]!==uiBuild)throw new Error(`index/ui-integrity cache mismatch: index=${rootMatch[1]} ui=${uiBuild}`);
 if(/r99-root-cache1|r122-mobile-final1/.test(rootMatch[1]))throw new Error(`stale historical root cache key survived: ${rootMatch[1]}`);
 requireText(ui,"energy-replay-r95.js?v=20260817r116-final-energy1",'current Energy replay cache break');
-requireText(ui,"viewer-interaction-r85-loader.js?v=20260817r116-final-energy1",'current live-edge loader cache break');
+requireText(ui,"viewer-interaction-r85-loader.js?v=20260820r147-release1",'current viewer/live-edge loader cache break');
 requireText(loader,"import('./live-worker-edge-r97.js?v=20260817r116-final-energy1')",'independent current durable-job recovery import');
 requireText(loader,'REVEX_R114_LIVE_EDGE_COMPAT','r114 live-edge compatibility marker');
 requireText(edge,'function pipelineTerminal(status)','terminal pipeline state classifier');

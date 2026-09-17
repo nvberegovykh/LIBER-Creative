@@ -16,6 +16,44 @@
     return Store.isCloud() && Store.api && Store.db && Store.user?.uid;
   }
 
+  const assetFields = ['images', 'inspiration', 'renders', 'versionImages'];
+  function sanitizeAssetRows(rows, label) {
+    return (rows || []).map((asset) => Store.sanitizeStoredAsset(asset, label));
+  }
+  async function hydrateAssetFields(row, label) {
+    const next = { ...row };
+    for (const field of assetFields) if (Array.isArray(next[field]))
+      next[field] = await Promise.all(next[field].map((asset) => Store.hydrateStoredAsset(asset, `${label} ${field}`)));
+    return next;
+  }
+
+  function exactProjectAssetPath(projectId, value, label = 'project asset') {
+    const path = String(value || '').trim().replace(/\\/g, '/');
+    if (!path || !path.startsWith(`projects/${projectId}/`) || path.includes('/../') || path.endsWith('/..'))
+      throw new Error(`${label} is not scoped to the active REVEX project.`);
+    return path;
+  }
+
+  async function sanitizeRenderJob(projectId, value) {
+    const data = { ...(value || {}) };
+    let resultPath = data.resultPath ? exactProjectAssetPath(projectId, data.resultPath, 'Render result') : null;
+    if (!resultPath && data.resultUrl && typeof Store.storagePathForObjectUrl === 'function') {
+      const cachedPath = Store.storagePathForObjectUrl(data.resultUrl);
+      if (cachedPath) resultPath = exactProjectAssetPath(projectId, cachedPath, 'Render result');
+    }
+    delete data.resultUrl;
+    if (resultPath) data.resultPath = resultPath;
+    else delete data.resultPath;
+    return data;
+  }
+
+  async function hydrateRenderJob(row) {
+    const next = { ...row };
+    if (next.resultPath) next.resultUrl = await Store.fileUrl(next.resultPath);
+    else if (next.resultUrl) next.resultUrl = Store.assertEphemeralUrl(next.resultUrl, 'legacy render result');
+    return next;
+  }
+
   function library(projectId) {
     return Store.api.collection(Store.db, 'projects', projectId, 'library');
   }
@@ -67,31 +105,20 @@
     const path = `projects/${projectId}/library/revex/${area}/${immutableName ? name : `${Date.now()}_${name}`}`;
     const ref = f.ref(Store.fs.storage, path);
     await f.uploadBytes(ref, file, firestorePlain({ contentType: file.type || (/\.json$/i.test(name) ? 'application/json' : 'application/octet-stream') }));
-    return { path, url: await f.getDownloadURL(ref), name, size: file.size };
+    return { path, name, size: file.size };
   }
 
   async function verifyUploadedAsset(uploaded, file, label) {
-    if (!uploaded?.url || !file?.size) throw new Error(`${label} did not produce a readable revision asset.`);
-    const controller = new AbortController();
-    try {
-      const response = await fetch(uploaded.url, {
-        cache: 'no-store',
-        signal: controller.signal
-      });
-      if (!response.ok) throw new Error(`${label} upload verification returned ${response.status}.`);
-      const reader = response.body?.getReader?.();
-      if (!reader) throw new Error(`${label} upload verification returned no data stream.`);
-      const first = await reader.read();
-      await reader.cancel().catch(() => {});
-      if (first.done || !first.value?.byteLength) throw new Error(`${label} upload verification returned an empty asset.`);
-      if (/\.rvxmesh\.gz$/i.test(file.name) && (first.value.byteLength < 2 || first.value[0] !== 0x1f || first.value[1] !== 0x8b))
+    if (!uploaded?.path || !file?.size || typeof Store.fileBlob !== 'function') throw new Error(`${label} did not produce a readable revision asset.`);
+    const blob = await Store.fileBlob(uploaded.path);
+    if (!blob || blob.size !== file.size) throw new Error(`${label} authenticated verification returned the wrong byte count.`);
+    const first = new Uint8Array(await blob.slice(0, 32).arrayBuffer());
+      if (!first.byteLength) throw new Error(`${label} upload verification returned an empty asset.`);
+      if (/\.rvxmesh\.gz$/i.test(file.name) && (first.byteLength < 2 || first[0] !== 0x1f || first[1] !== 0x8b))
         throw new Error('Exact Revit geometry upload is not a valid gzip stream.');
-    } finally {
-      controller.abort();
-    }
   }
 
-  async function publishSpecScheduleSources(store, specProjectId, projectId, specPush, project, storagePath, storageUrl, revision) {
+  async function publishSpecScheduleSources(store, specProjectId, projectId, specPush, project, storagePath, revision) {
     const collection = store.api.collection(store.db, 'specProjects', specProjectId, 'sources');
     const manifestRef = store.api.doc(collection, 'revex-revit');
     let previousIds = [];
@@ -115,7 +142,6 @@
         pushedAt: specPush?.pushedAt || iso(),
         payload: [],
         payloadEncoding: 'revex-storage-index-v1',
-        payloadUrl: storageUrl,
         payloadIndex: sourceIds.length - 1,
         linkedProjectId: projectId,
         sourceScheduleId: identity,
@@ -140,7 +166,7 @@
       rev: specPush?.rev || revision, pushedAt: specPush?.pushedAt || iso(),
       payload: [], linkedProjectId: projectId, scheduleSourceIds: sourceIds,
       scheduleCount: sourceIds.length, centralDocumentUniqueId: project?.central?.documentUniqueId || null,
-      storagePath, payloadUrl: storageUrl, payloadEncoding: 'revex-storage-index-v1'
+      storagePath, payloadEncoding: 'revex-storage-index-v1'
     });
     await store.api.setDoc(manifestRef, manifest, firestorePlain({ merge: false }));
     return manifest;
@@ -313,8 +339,9 @@
     if (!cloudReady()) {
       try { return JSON.parse(localStorage.getItem(`liber.revex.derived-plans.${projectId}`) || '[]'); } catch (_) { return []; }
     }
-    return (await listKind(projectId, 'derived-plan', 1000)).map((row) => ({ ...row, id: row.revexId || row.id }))
+    const rows = (await listKind(projectId, 'derived-plan', 1000)).map((row) => ({ ...row, id: row.revexId || row.id }))
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    return Promise.all(rows.map((row) => Store.hydrateStorageRecord(row)));
   };
 
   Store.saveDerivedPlan = async function saveDerivedPlanControlled(projectId, plan = {}, imageDataUrl = '') {
@@ -328,16 +355,16 @@
       localStorage.setItem(key, JSON.stringify(all.slice(0, 250)));
       return all[0];
     }
-    let imageUrl = null, imagePath = null;
+    let imagePath = null;
     if (imageDataUrl && this.fs?.storage) {
       const blob = await (await fetch(imageDataUrl)).blob();
       const file = new File([blob], `${id}.png`, { type: 'image/png' });
       const uploaded = await upload(projectId, `derived-plans/${docId(id)}`, file);
-      imageUrl = uploaded.url; imagePath = uploaded.path;
+      imagePath = uploaded.path;
     }
-    const finalData = clone({ ...data, imageUrl, imagePath });
+    const finalData = clone({ ...data, imagePath });
     await setRecord(projectId, `revex_plan_${docId(id)}`, 'derived-plan', finalData, false);
-    return finalData;
+    return Store.hydrateStorageRecord(finalData);
   };
 
   Store.getState = async function getControlledState(projectId) {
@@ -346,7 +373,7 @@
       try { return JSON.parse(localStorage.getItem(`liber.revex.state.${projectId}`) || 'null'); } catch (_) { return null; }
     }
     const snap = await this.api.getDoc(libraryDoc(projectId, 'revex_state'));
-    const state = snap.exists() ? { id: snap.id, ...snap.data() } : null;
+    const state = snap.exists() ? await this.hydrateStorageRecord({ id: snap.id, ...snap.data() }) : null;
     root.__revexCloudState = state;
     return state;
   };
@@ -356,9 +383,11 @@
     return this.api.onSnapshot(
       libraryDoc(projectId, 'revex_state'),
       (snap) => {
-        const state = snap.exists() ? { id: snap.id, ...snap.data() } : null;
-        root.__revexCloudState = state;
-        callback(state);
+        if (!snap.exists()) { root.__revexCloudState = null; callback(null); return; }
+        this.hydrateStorageRecord({ id: snap.id, ...snap.data() }).then((state) => {
+          root.__revexCloudState = state;
+          callback(state);
+        }).catch((error) => console.warn('[REVEX] controlled state asset hydration', error));
       },
       (error) => console.warn('[REVEX] controlled state subscription', error)
     );
@@ -432,8 +461,7 @@
     if (specProjectId) {
       const source = await publishSpecScheduleSources(
         this, specProjectId, projectId, specPush, project,
-        uploads['spec-revit-push.json']?.path || null,
-        uploads['spec-revit-push.json']?.url || null, revision);
+        uploads['spec-revit-push.json']?.path || null, revision);
       specSync = { status: 'published', projectId: specProjectId, rev: source.rev, pushedAt: source.pushedAt, scheduleCount: source.scheduleCount };
     }
 
@@ -471,19 +499,16 @@
       geometryAuthority: 'ifc',
       central: project?.central || null,
       integrity: integrity || null,
-      ifcUrl: uploads[ifcFile.name]?.url || null,
       ifcPath: uploads[ifcFile.name]?.path || null,
-      modelUrl: meshManifestFile ? uploads[meshManifestFile.name]?.url || null : uploads[rvxMeshFile?.name]?.url || null,
       modelPath: meshManifestFile ? uploads[meshManifestFile.name]?.path || null : uploads[rvxMeshFile?.name]?.path || null,
-      modelPages: meshPageFiles.map((file,index)=>({ index:index+1, name:file.name, url:uploads[file.name]?.url||null, path:uploads[file.name]?.path||null, bytes:file.size })),
+      modelPages: meshPageFiles.map((file,index)=>({ index:index+1, name:file.name, path:uploads[file.name]?.path||null, bytes:file.size })),
       modelFormat: meshManifestFile ? 'rvxmesh-gzip-pages' : 'rvxmesh-gzip',
-      fallbackModelUrl: fbxFile ? uploads[fbxFile.name]?.url || null : null,
       fallbackModelPath: fbxFile ? uploads[fbxFile.name]?.path || null : null,
-      viewerUrl: uploads['viewer-model.json']?.url || null,
-      designUrl: uploads['design-book.json']?.url || null,
-      projectUrl: uploads['project.json']?.url || null,
-      specPushUrl: uploads['spec-revit-push.json']?.url || null,
-      printingSetsUrl: uploads['printing-sets.json']?.url || null,
+      viewerPath: uploads['viewer-model.json']?.path || null,
+      designPath: uploads['design-book.json']?.path || null,
+      projectPath: uploads['project.json']?.path || null,
+      specPushPath: uploads['spec-revit-push.json']?.path || null,
+      printingSetsPath: uploads['printing-sets.json']?.path || null,
       printingSetCount: printingSets?.sets?.length || 0,
       printingSheetCount: (printingSets?.sets || []).reduce((n, set) => n + (set.pages?.length || 0), 0),
       scheduleCount: integrity?.counts?.schedules || design?.schedules?.length || 0,
@@ -498,8 +523,9 @@
     // revision. Older revision records and files remain append-only/offloaded.
     await setRecord(projectId, `revex_revision_${revision}`, 'revision', {
       ...state, revision, syncedAt: state.syncedAt, ifcPath: state.ifcPath, modelPath: state.modelPath,
-      viewerUrl: state.viewerUrl, designUrl: state.designUrl, projectUrl: state.projectUrl,
-      specPushUrl: state.specPushUrl, printingSetsUrl: state.printingSetsUrl, integrity: state.integrity, createdAt: state.syncedAt
+      viewerPath: state.viewerPath, designPath: state.designPath, projectPath: state.projectPath,
+      specPushPath: state.specPushPath, printingSetsPath: state.printingSetsPath, integrity: state.integrity,
+      immutable: true, createdAt: state.syncedAt
     }, false);
     // Publish the single current pointer last. Readers keep the prior complete
     // revision visible until every new immutable asset and projection is ready.
@@ -510,12 +536,13 @@
 
   Store.listDesignEdits = async function listDesignEditsControlled(projectId) {
     if (!cloudReady() || !projectId) return [];
-    return (await listKind(projectId, 'design-item')).map((row) => ({ ...row, id: row.revexId || row.id }));
+    return Promise.all((await listKind(projectId, 'design-item')).map((row) => hydrateAssetFields({ ...row, id: row.revexId || row.id }, 'Design Book item')));
   };
 
   Store.saveDesignEdit = async function saveDesignEditControlled(projectId, itemId, patch) {
     const sourceRevision = patch?.sourceRevision || root.__revexCloudState?.revision || null;
     const data = { ...patch, sourceRevision, revexId: itemId, overlayLane: 'design-book', updatedAt: iso(), updatedBy: this.user?.uid || 'local' };
+    for (const field of assetFields) if (Array.isArray(data[field])) data[field] = sanitizeAssetRows(data[field], `Design Book item ${field}`);
     if (!cloudReady()) {
       const key = `liber.revex.design.${projectId}`;
       const all = JSON.parse(localStorage.getItem(key) || '{}');
@@ -529,19 +556,20 @@
       ...data, revexId: versionId, overlayId: itemId, immutable: true, createdAt: iso()
     }, false);
     await setRecord(projectId, `revex_design_${docId(itemId)}`, 'design-item', data, true);
-    return { id: itemId, ...data };
+    return hydrateAssetFields({ id: itemId, ...data }, 'Design Book item');
   };
 
   Store.listChapterEdits = async function listChapterEditsControlled(projectId) {
     if (!cloudReady() || !projectId) {
       try { return Object.values(JSON.parse(localStorage.getItem(`liber.revex.chapters.${projectId}`) || '{}')); } catch (_) { return []; }
     }
-    return (await listKind(projectId, 'design-chapter')).map((row) => ({ ...row, id: row.revexId || row.id }));
+    return Promise.all((await listKind(projectId, 'design-chapter')).map((row) => hydrateAssetFields({ ...row, id: row.revexId || row.id }, 'Design Book chapter')));
   };
 
   Store.saveChapterEdit = async function saveChapterEditControlled(projectId, chapterId, patch) {
     const sourceRevision = patch?.sourceRevision || root.__revexCloudState?.revision || null;
     const data = { ...patch, sourceRevision, revexId: chapterId, overlayLane: 'design-book', updatedAt: iso(), updatedBy: this.user?.uid || 'local' };
+    for (const field of assetFields) if (Array.isArray(data[field])) data[field] = sanitizeAssetRows(data[field], `Design Book chapter ${field}`);
     if (!cloudReady()) {
       const key = `liber.revex.chapters.${projectId}`;
       const all = JSON.parse(localStorage.getItem(key) || '{}');
@@ -555,7 +583,7 @@
       ...data, revexId: versionId, overlayId: chapterId, immutable: true, createdAt: iso()
     }, false);
     await setRecord(projectId, `revex_chapter_${docId(chapterId)}`, 'design-chapter', data, true);
-    return { id: chapterId, ...data };
+    return hydrateAssetFields({ id: chapterId, ...data }, 'Design Book chapter');
   };
 
   Store.uploadChapterImage = async function uploadChapterImageControlled(projectId, chapterId, field, file, currentImages) {
@@ -567,9 +595,9 @@
       return images;
     }
     const uploaded = await upload(projectId, `design/chapters/${docId(chapterId)}/${field}`, file);
-    const images = [...(currentImages || []), { url: uploaded.url, path: uploaded.path, name: uploaded.name }].slice(-24);
-    await this.saveChapterEdit(projectId, chapterId, { [field]: images });
-    return images;
+    const images = [...sanitizeAssetRows(currentImages, `Design Book chapter ${field}`), { path: uploaded.path, name: uploaded.name }].slice(-24);
+    const saved = await this.saveChapterEdit(projectId, chapterId, { [field]: images });
+    return saved[field] || [];
   };
 
   Store.uploadDesignImage = async function uploadDesignImageControlled(projectId, itemId, file, currentImages) {
@@ -580,9 +608,9 @@
       return images;
     }
     const uploaded = await upload(projectId, `design/items/${docId(itemId)}`, file);
-    const images = [...(currentImages || []), { url: uploaded.url, path: uploaded.path, name: uploaded.name }].slice(-12);
-    await this.saveDesignEdit(projectId, itemId, { images });
-    return images;
+    const images = [...sanitizeAssetRows(currentImages, 'Design Book item image'), { path: uploaded.path, name: uploaded.name }].slice(-12);
+    const saved = await this.saveDesignEdit(projectId, itemId, { images });
+    return saved.images || [];
   };
 
   Store.listIssues = async function listIssuesControlled(projectId) {
@@ -614,16 +642,17 @@
   Store.listRenderJobs = async function listRenderJobsControlled(projectId) {
     if (!projectId) return [];
     if (!cloudReady()) {
-      try { return JSON.parse(localStorage.getItem(`liber.revex.renders.${projectId}`) || '[]'); } catch (_) { return []; }
+      try { return Promise.all(JSON.parse(localStorage.getItem(`liber.revex.renders.${projectId}`) || '[]').map(hydrateRenderJob)); } catch (_) { return []; }
     }
-    return (await listKind(projectId, 'render', 100))
+    const rows = (await listKind(projectId, 'render', 100))
       .map((row) => ({ ...row, id: row.revexId || row.id }))
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).slice(0, 40);
+    return Promise.all(rows.map(hydrateRenderJob));
   };
 
   Store.createRenderJob = async function createRenderJobControlled(projectId, job) {
     const id = `render_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-    const data = { ...job, revexId: id, status: job.status || 'prepared', createdAt: iso(), updatedAt: iso(), createdBy: this.user?.uid || 'local' };
+    const data = { ...await sanitizeRenderJob(projectId, job), revexId: id, status: job.status || 'prepared', createdAt: iso(), updatedAt: iso(), createdBy: this.user?.uid || 'local' };
     if (!cloudReady()) {
       const key = `liber.revex.renders.${projectId}`;
       const all = JSON.parse(localStorage.getItem(key) || '[]');
@@ -634,17 +663,19 @@
   };
 
   Store.updateRenderJob = async function updateRenderJobControlled(projectId, jobId, patch) {
-    const data = { ...patch, revexId: jobId, updatedAt: iso(), updatedBy: this.user?.uid || 'local' };
+    const transientResultUrl = patch?.resultUrl ? Store.assertEphemeralUrl(patch.resultUrl, 'render result') : null;
+    const data = { ...await sanitizeRenderJob(projectId, patch), revexId: jobId, updatedAt: iso(), updatedBy: this.user?.uid || 'local' };
     if (!cloudReady()) {
       const key = `liber.revex.renders.${projectId}`;
       const all = JSON.parse(localStorage.getItem(key) || '[]');
       const index = all.findIndex((row) => row.id === jobId);
       if (index >= 0) all[index] = { ...all[index], ...data };
       localStorage.setItem(key, JSON.stringify(all));
-      return index >= 0 ? all[index] : { id: jobId, ...data };
+      const row = index >= 0 ? all[index] : { id: jobId, ...data };
+      return transientResultUrl ? { ...row, resultUrl: transientResultUrl } : row;
     }
     await setRecord(projectId, `revex_render_${docId(jobId)}`, 'render', data, true);
-    return { id: jobId, ...data };
+    return transientResultUrl ? { id: jobId, ...data, resultUrl: transientResultUrl } : hydrateRenderJob({ id: jobId, ...data });
   };
 
   function disableParentRevexKeepAlive() {
@@ -661,7 +692,7 @@
   }
 
   function stabilizeActions() {
-    const expected = { 'new-project-button': 'New', 'invite-project-button': 'Invite', 'sync-button': 'Import sync', 'render-button': 'Render' };
+    const expected = { 'new-project-button': 'New', 'invite-project-button': 'Invite', 'sync-button': 'Sync project', 'render-button': 'Render' };
     Object.entries(expected).forEach(([id, text]) => { const button = document.getElementById(id); if (button) button.textContent = text; });
     const nav = document.querySelector('.main-nav');
     if (nav) {

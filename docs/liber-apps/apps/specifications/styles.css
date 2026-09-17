@@ -26,15 +26,15 @@ a{color:var(--acc-2)}
 .spec-app{display:flex;flex-direction:column;min-height:100%;min-height:100dvh}
 
 body.embedded .spec-app{height:100dvh;min-height:0}
-body.embedded .sp-header{position:absolute;top:7px;left:7px;z-index:35;display:none;padding:0;border:0;background:transparent;backdrop-filter:none}
+body.embedded .sp-header{position:absolute;top:7px;left:7px;z-index:35;display:none;padding:0;border:0;background:transparent}
 body.embedded .sp-header .sp-title,body.embedded .sp-header .sp-head-actions{display:none}
 body.embedded .sp-layout{height:100dvh}
 body.embedded #view-projects{display:none!important}
 
 /* header */
 .sp-header{position:sticky;top:0;z-index:30;display:flex;gap:8px;align-items:center;
-  padding:10px 12px;padding-top:max(10px,env(safe-area-inset-top));background:rgba(12,14,17,.92);
-  backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  padding:10px 12px;padding-top:max(10px,env(safe-area-inset-top));background:#0c0e11;
+  border-bottom:1px solid var(--line)}
 .sp-title{display:flex;flex-direction:column;min-width:0;flex:1}
 .sp-title strong{font-size:15px;letter-spacing:.3px}
 .sp-crumb{font-size:12px;color:var(--tx-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -211,6 +211,24 @@ table.sp-table{width:100%;border-collapse:collapse;font-size:13.5px}
   a{color:#000;text-decoration:underline}
 }
 
+/* REVEX r144 presentation alignment. The specification data and editing owners
+   remain unchanged; this layer only shares the Companion visual language. */
+:root{
+  --bg:#090d12;--panel:#10161e;--panel-2:#151c25;--line:rgba(187,206,230,.14);--line-2:rgba(187,206,230,.24);
+  --tx:#f2f5f8;--tx-2:#aeb9c8;--tx-3:#7f8da0;--acc:#4d9cff;--acc-2:#62acff;--r:12px;
+  --sans:Inter,"Avenir Next","Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace
+}
+body{letter-spacing:-.006em;background:var(--bg)}
+button,input,select,textarea{border-radius:10px!important}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,[role="button"]:focus-visible,[tabindex]:focus-visible{outline:2px solid #69afff;outline-offset:2px}
+.sp-rail{background:#10161e;border-color:var(--line)}
+.sp-rail-head input{min-height:42px;background:#0b1118}.sp-tree{padding:8px}.sp-div-h{min-height:38px;border-radius:9px}.sp-div-h b{color:#68afff}.sp-sec{min-height:42px;border-radius:9px}.sp-sec.active{background:rgba(70,147,243,.14);box-shadow:inset 2px 0 #5aa7ff}
+.sp-toolbar{min-height:58px;padding:9px 14px;background:rgba(14,20,27,.97);border-color:var(--line)}.sp-seg{border-radius:10px}.sp-seg button{min-height:38px}.sp-seg button.active{background:rgba(70,147,243,.15);color:#80bcff}.sp-field select{min-height:38px}
+.sp-content{padding:18px}.sp-art,.sp-native-schedule,.sp-card{border-color:var(--line);border-radius:12px;background:#151c25;box-shadow:0 10px 28px rgba(0,0,0,.1)}
+.sp-drawer{background:#10161e;border-color:var(--line);box-shadow:-22px 0 64px rgba(0,0,0,.38)}
+@media(max-width:760px){.sp-content{padding:12px}.sp-toolbar{padding:8px}.sp-seg button,.sp-icon-btn,.sp-btn,.sp-field select{min-height:44px}.sp-drawer{border-radius:18px 18px 0 0}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
+
 
 /* ---------- spreadsheet cells, user columns, images ---------- */
 .sp-ph{color:var(--tx-3)}
@@ -256,8 +274,8 @@ table.sp-table{width:100%;border-collapse:collapse;font-size:13.5px}
 
 /* ---------- needs-attention summary ---------- */
 .sp-attn{position:sticky;top:0;z-index:6;margin:0 0 18px;padding:13px 15px;border:1px solid #5a4520;border-radius:10px;
-  background:linear-gradient(180deg,#241c10,#1a1712);backdrop-filter:blur(6px)}
-.sp-attn.done{border-color:#20402f;background:linear-gradient(180deg,#12241a,#141a16)}
+  background:#211a11}
+.sp-attn.done{border-color:#20402f;background:#122019}
 .sp-attn-top{display:flex;gap:14px;align-items:flex-start;justify-content:space-between}
 .sp-attn-h{font-size:13px;font-weight:650;letter-spacing:.2px}
 .sp-attn-sub{font-size:12px;color:var(--tx-2);margin-top:2px}
@@ -265,7 +283,7 @@ table.sp-table{width:100%;border-collapse:collapse;font-size:13.5px}
 .sp-attn-pct b{font:600 20px var(--mono);color:var(--tx)}
 .sp-attn-pct span{display:block;font:9.5px var(--mono);letter-spacing:.5px;text-transform:uppercase;color:var(--tx-3)}
 .sp-bar{height:4px;border-radius:3px;background:#2a2a2f;margin:10px 0;overflow:hidden}
-.sp-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--acc),var(--acc-2))}
+.sp-bar i{display:block;height:100%;background:var(--acc-2)}
 .sp-chips{display:flex;gap:7px;flex-wrap:wrap}
 .sp-chip{border:1px solid var(--line);background:rgba(255,255,255,.04);color:var(--tx-2);border-radius:999px;
   padding:5px 11px;font-size:12px;cursor:pointer;white-space:nowrap;min-height:30px}
@@ -277,7 +295,7 @@ table.sp-table{width:100%;border-collapse:collapse;font-size:13.5px}
 .sp-attn-filter{display:flex;gap:10px;align-items:center;margin-top:10px;padding-top:9px;border-top:1px solid var(--line);font-size:12px;color:var(--tx-2)}
 .sp-warntx{color:var(--warn)}
 .sp-tag.miss{color:var(--warn);border-color:#5a4520;border-style:dashed}
-.sp-table td.blank{background:repeating-linear-gradient(135deg,rgba(255,178,54,.07) 0 6px,transparent 6px 12px);
+.sp-table td.blank{background:#211b12;
   box-shadow:inset 0 0 0 1px rgba(255,178,54,.28)}
 .sp-table td.blank:hover{box-shadow:inset 0 0 0 1px var(--warn)}
 .sp-rich:empty{border-style:dashed;border-color:#5a4520;min-height:34px}

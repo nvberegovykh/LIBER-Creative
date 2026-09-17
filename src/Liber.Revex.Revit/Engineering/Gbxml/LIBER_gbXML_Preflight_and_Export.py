@@ -52,6 +52,7 @@ from Autodesk.Revit.DB import (
     GBXMLExportOptions,
     IFailuresPreprocessor,
     Level,
+    ModelPathUtils,
     Options,
     RevitLinkInstance,
     SpatialElementBoundaryOptions,
@@ -128,6 +129,9 @@ OPENING_PARENT_PLANE_TOL_FT = 0.12
 OPENING_PARENT_EDGE_TOL_FT = 0.20
 TOP_COVER_SEARCH_MAX_FT = 30.0
 EXTERIOR_GAP_TOP_TOL_FT = 0.35
+# A Room-derived processed volume may never become the old runaway story-tower
+# shell. 20 m is a hard geometry rejection, not a target height.
+MAX_PROCESSED_ROOM_HEIGHT_FT = 20.0 / 0.3048
 
 
 doc = DocumentManager.Instance.CurrentDBDocument
@@ -691,6 +695,7 @@ def room_source_record(room, transform, inverse, kind, source_label):
         "kind": kind,
         "source": source_label,
         "id": eid_value(room.Id),
+        "unique_id": str(safe_attr(room, "UniqueId", "") or ""),
         "name": spatial_name(room),
         "number": str(room.Number or "").strip(),
         "point": host_point,
@@ -1226,7 +1231,41 @@ def create_room_seeded_spaces(
     }
 
 
-def map_room_sources_to_spaces(model_doc, phase, levels, room_sources, phase_spaces):
+def _space_has_positive_vertical_evidence(space):
+    """True only when a placed Space proves a usable positive 3D extent.
+
+    Area/location alone is not sufficient: that was the loophole which allowed a
+    zero-height source Space to mark its Room as covered and suppress creation of
+    a valid processed representation.
+    """
+    if space is None or not is_placed_spatial(space):
+        return False
+    try:
+        if float(safe_attr(space, "Volume", 0.0) or 0.0) <= 1.0e-9:
+            return False
+    except Exception:
+        return False
+    try:
+        actual = _source_space_actual_z_bounds(space)
+        if actual is not None and float(actual[1]) > float(actual[0]) + 0.25:
+            return True
+    except Exception:
+        pass
+    try:
+        height, _, _ = space_height(space)
+        return height is not None and float(height) > 0.25
+    except Exception:
+        return False
+
+
+def map_room_sources_to_spaces(
+    model_doc,
+    phase,
+    levels,
+    room_sources,
+    phase_spaces,
+    require_positive_vertical=True,
+):
     """Resolve Room->Space identity from committed topology using independent proofs.
 
     Order of proof:
@@ -1238,7 +1277,11 @@ def map_room_sources_to_spaces(model_doc, phase, levels, room_sources, phase_spa
 
     This avoids treating a single unreliable Room location point as topology truth.
     """
-    candidates=[space for space in list(phase_spaces or []) if is_placed_spatial(space)]
+    candidates=[
+        space for space in list(phase_spaces or [])
+        if is_placed_spatial(space)
+        and (not require_positive_vertical or _space_has_positive_vertical_evidence(space))
+    ]
     by_id={eid_value(space.Id):space for space in candidates}
     by_room={}
     for space in candidates:
@@ -1405,6 +1448,7 @@ def probe_remaining_plan_circuits(model_doc, phase, target_levels, messages, emi
         )
         try:
             transaction.Start()
+            guard = attach_space_failure_guard(transaction)
             view = create_temp_plan(model_doc, level, phase, sequence)
             ids = list(model_doc.Create.NewSpaces2(level, phase, view) or [])
             model_doc.Regenerate()
@@ -4010,7 +4054,15 @@ def deep_geometry_review(spaces, messages):
     }
 
 
-def audit_spaces(model_doc, phase, phases, levels, messages, generated_ids=None):
+def audit_spaces(
+    model_doc,
+    phase,
+    phases,
+    levels,
+    messages,
+    generated_ids=None,
+    original_ids=None,
+):
     indexes = phase_index_map(phases)
     selected_index = indexes[eid_value(phase.Id)]
     phase_spaces = [
@@ -4021,7 +4073,13 @@ def audit_spaces(model_doc, phase, phases, levels, messages, generated_ids=None)
     valid = []
     unplaced = []
     generated_ids = set(int(v) for v in list(generated_ids or []))
+    original_ids = set(int(v) for v in list(original_ids or []))
     for space in phase_spaces:
+        sid = eid_value(space.Id)
+        is_generated_this_run = sid in generated_ids
+        is_revex_owned = bool(is_generated_this_run or is_revex_generated_space(space))
+        is_original_untouched = bool(sid in original_ids and not is_revex_owned)
+        exportable = True
         location = spatial_point(space)
         area = float(space.Area or 0.0)
         label = spatial_label(space)
@@ -4055,22 +4113,11 @@ def audit_spaces(model_doc, phase, phases, levels, messages, generated_ids=None)
             volume = float(space.Volume)
         except Exception:
             volume = 0.0
-        if volume <= 0.0:
-            messages.append(
-                {
-                    "severity": "ERROR",
-                    "code": "SPACE_ZERO_VOLUME",
-                    "element_id": eid_value(space.Id),
-                    "space": label,
-                    "message": "Space volume is zero after Areas and Volumes computation.",
-                }
-            )
         height, base, top = space_height(space)
         actual_bounds = _source_space_actual_z_bounds(space)
         actual_height = None if actual_bounds is None else float(actual_bounds[1] - actual_bounds[0])
+        preexisting_invalid_vertical_extent = False
         if height is None or height <= 0.25:
-            sid = eid_value(space.Id)
-            is_generated = sid in generated_ids
             # Revit can expose an invalid/missing Upper Limit parameter while its actual
             # placed Space solid is still positive and is accepted by the EADM. Geometry
             # is authoritative; the bad parameter is maintenance metadata, not a reason
@@ -4083,28 +4130,44 @@ def audit_spaces(model_doc, phase, phases, levels, messages, generated_ids=None)
                     "space": label,
                     "parameter_height_ft": height,
                     "actual_geometry_height_ft": round(actual_height, 6),
-                    "generated": bool(is_generated),
+                    "generated": bool(is_revex_owned),
                     "message": "Upper Limit/offset parameters are invalid, but native Revit Space geometry has a positive volume; REVEX uses the actual geometry and keeps the parameter defect as a warning.",
                 })
                 height, base, top = actual_height, float(actual_bounds[0]), float(actual_bounds[1])
             else:
-                preexisting_orphan = bool(generated_ids) and not is_generated
+                preexisting_invalid_vertical_extent = bool(is_original_untouched)
+                exportable = False
                 messages.append(
                     {
-                        "severity": "WARNING" if preexisting_orphan else "ERROR",
+                        "severity": "WARNING" if preexisting_invalid_vertical_extent else "ERROR",
                         "code": (
                             "PREEXISTING_INVALID_SPACE_VERTICAL_EXTENT_PRESERVED_NOT_EXPORTED"
-                            if preexisting_orphan else "INVALID_SPACE_VERTICAL_EXTENT"
+                            if preexisting_invalid_vertical_extent else "INVALID_SPACE_VERTICAL_EXTENT"
                         ),
                         "element_id": sid,
                         "space": label,
                         "height_ft": height,
+                        "provenance": (
+                            "PREEXISTING_UNTOUCHED"
+                            if preexisting_invalid_vertical_extent else
+                            ("REVEX_CREATED" if is_revex_owned else "UNKNOWN_FAIL_CLOSED")
+                        ),
                         "message": (
                             "Pre-existing Space has a nonpositive vertical extent and no positive native geometry; REVEX leaves it untouched and excludes it when necessary."
-                            if preexisting_orphan else "Upper Limit/offsets and native Space geometry do not define a positive volume."
+                            if preexisting_invalid_vertical_extent else "Upper Limit/offsets and native Space geometry do not define a positive volume."
                         ),
                     }
                 )
+        if volume <= 0.0 and not preexisting_invalid_vertical_extent:
+            messages.append(
+                {
+                    "severity": "ERROR",
+                    "code": "SPACE_ZERO_VOLUME",
+                    "element_id": sid,
+                    "space": label,
+                    "message": "Space volume is zero after Areas and Volumes computation.",
+                }
+            )
         if height is not None and height > 0.25:
             crossed = local_intermediate_story_spaces(space, phase_spaces)
             if crossed:
@@ -4132,7 +4195,8 @@ def audit_spaces(model_doc, phase, phases, levels, messages, generated_ids=None)
                     "message": problem,
                 }
             )
-        valid.append(space)
+        if exportable:
+            valid.append(space)
 
     if not valid:
         messages.append(
@@ -4382,6 +4446,7 @@ def export_native_gbxml(model_doc, output_folder, partial_name, partial_candidat
             attempt["transaction_start"]=str(start_status)
             if start_status != TransactionStatus.Started:
                 raise Exception("Native gbXML export transaction did not start: {}".format(start_status))
+            guard=attach_space_failure_guard(tx)
             options=GBXMLExportOptions()  # Revit 2026 defaults; stored EADM is authoritative
             exported=bool(model_doc.Export(output_folder,export_name,options))
             attempt["returned"]=exported
@@ -6622,7 +6687,443 @@ def _space_floor_polygon_ft(space, model_doc):
     return max(loops,key=lambda pts:abs(newell(pts)[2])) if loops else []
 
 
-def write_direct_revit_geometry_gbxml(model_doc, xml_path, spaces, physical_manifest, messages):
+def _room_source_key(source):
+    return "{}:{}:{}:{}".format(
+        str(source.get("kind") or "room"),
+        int(source.get("link_id") or -1),
+        int(source.get("id") or -1),
+        str(source.get("unique_id") or ""),
+    )
+
+
+def _room_source_boundary_loops_ft(source, base_z):
+    """Tessellate one architectural Room boundary into host-coordinate loops."""
+    room = source.get("room")
+    transform = source.get("transform") or Transform.Identity
+    loops = []
+    boundary_element_ids = set()
+    try:
+        raw = room.GetBoundarySegments(SpatialElementBoundaryOptions())
+    except Exception:
+        raw = []
+    for raw_loop in list(raw or []):
+        points = []
+        for segment in list(raw_loop or []):
+            try:
+                boundary_id = eid_value(safe_attr(segment, "ElementId", None))
+                if boundary_id > 0:
+                    boundary_element_ids.add(boundary_id)
+                curve = segment.GetCurve()
+                try:
+                    tess = list(curve.Tessellate() or [])
+                except Exception:
+                    tess = [curve.GetEndPoint(0), curve.GetEndPoint(1)]
+                if not tess:
+                    tess = [curve.GetEndPoint(0), curve.GetEndPoint(1)]
+                for point in tess:
+                    host = transform.OfPoint(point)
+                    value = (float(host.X), float(host.Y), float(base_z))
+                    if not points or distance3(value, points[-1]) > POINT_TOL_FT:
+                        points.append(value)
+            except Exception:
+                continue
+        if len(points) > 1 and distance3(points[0], points[-1]) <= POINT_TOL_FT:
+            points.pop()
+        points = clean_consecutive(points, MIN_EDGE_M / 0.3048)
+        if len(points) >= 3 and abs(newell(points)[2]) > 1.0e-8:
+            loops.append(points)
+    loops.sort(key=lambda item: abs(newell(item)[2]), reverse=True)
+    return loops, sorted(boundary_element_ids)
+
+
+def build_room_derived_processed_spaces(
+    model_doc,
+    phase,
+    levels,
+    room_sources,
+    phase_spaces,
+    exportable_spaces,
+    original_space_ids,
+    messages,
+):
+    """Build isolated 2.5D records for Rooms hidden by invalid source Spaces.
+
+    The original MEP Space is neither changed nor deleted. A processed record is
+    admitted only when the Room boundary, story level and a positive bounded top
+    are deterministic. This gives GeometryCo/direct gbXML a valid representation
+    without attempting to place an overlapping Revit Space.
+    """
+    all_mapping, all_resolution = map_room_sources_to_spaces(
+        model_doc, phase, levels, room_sources, phase_spaces,
+        require_positive_vertical=False,
+    )
+    valid_mapping, valid_resolution = map_room_sources_to_spaces(
+        model_doc, phase, levels, room_sources, exportable_spaces,
+        require_positive_vertical=True,
+    )
+    original_ids = set(int(value) for value in list(original_space_ids or []))
+    exportable_ids = set(eid_value(space.Id) for space in list(exportable_spaces or []))
+    invalid_original_ids = set()
+    for space in list(phase_spaces or []):
+        sid = eid_value(space.Id)
+        if (
+            sid in original_ids
+            and sid not in exportable_ids
+            and is_placed_spatial(space)
+            and not is_revex_generated_space(space)
+            and not _space_has_positive_vertical_evidence(space)
+        ):
+            invalid_original_ids.add(sid)
+
+    records = []
+    rejected = []
+    for source in sorted(
+        list(room_sources or []),
+        key=lambda item: (_room_source_key(item), float(item.get("base_z") or 0.0)),
+    ):
+        if id(source) in valid_mapping:
+            continue
+        pair = all_mapping.get(id(source))
+        invalid_space = pair[0] if pair else None
+        invalid_space_id = eid_value(safe_attr(invalid_space, "Id", None))
+        if invalid_space_id not in invalid_original_ids:
+            continue
+
+        base_z = source.get("base_z")
+        if base_z is None:
+            point = source.get("point")
+            base_z = float(point.Z) if point is not None else None
+        level = source_level(levels, source)
+        if base_z is None or level is None:
+            rejected.append({
+                "roomSourceKey": _room_source_key(source),
+                "invalidOriginalSpaceId": invalid_space_id,
+                "reason": "ROOM_LEVEL_OR_BASE_UNPROVEN",
+            })
+            continue
+        base_z = float(base_z)
+        top_z = source.get("effective_top_z", source.get("top_z"))
+        if top_z is None or float(top_z) <= base_z + 0.25:
+            story_top, _, _ = preferred_story_top_z(level, levels, levels)
+            top_z = story_top
+        top_z = float(top_z) if top_z is not None else base_z
+        height = top_z - base_z
+        if height <= 0.25 or height > MAX_PROCESSED_ROOM_HEIGHT_FT:
+            rejected.append({
+                "roomSourceKey": _room_source_key(source),
+                "invalidOriginalSpaceId": invalid_space_id,
+                "baseZFt": base_z,
+                "topZFt": top_z,
+                "heightFt": height,
+                "reason": "ROOM_DERIVED_HEIGHT_OUT_OF_BOUNDS",
+            })
+            continue
+        loops, boundary_ids = _room_source_boundary_loops_ft(source, base_z)
+        if not loops:
+            rejected.append({
+                "roomSourceKey": _room_source_key(source),
+                "invalidOriginalSpaceId": invalid_space_id,
+                "reason": "ROOM_BOUNDARY_UNAVAILABLE",
+            })
+            continue
+        outer = loops[0]
+        if polygon_self_intersects(dominant_projection(outer, newell(outer))):
+            rejected.append({
+                "roomSourceKey": _room_source_key(source),
+                "invalidOriginalSpaceId": invalid_space_id,
+                "reason": "ROOM_BOUNDARY_SELF_INTERSECTS",
+            })
+            continue
+        source_key = _room_source_key(source)
+        processed_id = "liber-room-derived-" + hashlib.sha256(
+            (source_key + "|" + str(invalid_space_id)).encode("utf-8")
+        ).hexdigest()[:20]
+        area_ft2 = max(float(source.get("area") or 0.0), abs(newell(outer)[2]) * 0.5)
+        records.append({
+            "id": processed_id,
+            "sourceRoomKey": source_key,
+            "sourceRoomId": int(source.get("id") or -1),
+            "sourceRoomUniqueId": str(source.get("unique_id") or ""),
+            "sourceKind": str(source.get("kind") or "room"),
+            "sourceDocument": str(source.get("source") or ""),
+            "linkId": source.get("link_id"),
+            "name": str(source.get("name") or processed_id),
+            "number": str(source.get("number") or ""),
+            "invalidOriginalSpaceId": invalid_space_id,
+            "invalidOriginalSpaceUniqueId": str(safe_attr(invalid_space, "UniqueId", "") or ""),
+            "provenance": "ROOM_DERIVED_ISOLATED_FROM_PREEXISTING_INVALID_SPACE",
+            "coordinateSystem": "REVIT_HOST_INTERNAL",
+            "baseLevelId": eid_value(level.Id),
+            "baseLevelName": str(safe_element_name(level)),
+            "baseZFt": base_z,
+            "topZFt": top_z,
+            "heightFt": height,
+            "areaFt2": area_ft2,
+            "volumeFt3": area_ft2 * height,
+            "outerLoopFt": [list(point) for point in outer],
+            "innerLoopsFt": [[list(point) for point in loop] for loop in loops[1:]],
+            "boundaryElementIds": boundary_ids,
+            "geometryMode": "ROOM_BOUNDARY_STORY_BOUNDED_2_5D",
+            "requiresSurfaceConsolidation": True,
+            "openingProjectionSource": "REVIT_PHYSICAL_ENVELOPE_ONLY",
+        })
+
+    if records:
+        messages.append({
+            "severity": "WARNING",
+            "code": "ROOM_DERIVED_ISOLATED_SPACES_CREATED",
+            "count": len(records),
+            "invalid_original_space_ids": sorted(set(row["invalidOriginalSpaceId"] for row in records)),
+            "message": "Invalid pre-existing Spaces remain untouched. Their mapped Rooms were serialized as bounded isolated 2.5D processed Spaces for direct gbXML/GeometryCo.",
+        })
+    for row in rejected:
+        messages.append({
+            "severity": "ERROR",
+            "code": row.get("reason"),
+            "room_source_key": row.get("roomSourceKey"),
+            "element_id": row.get("invalidOriginalSpaceId"),
+            "height_ft": row.get("heightFt"),
+            "message": "An invalid original Space was preserved, but its Room could not produce a safe bounded processed representation.",
+        })
+    return records, {
+        "invalidOriginalSpaceCount": len(invalid_original_ids),
+        "processedCount": len(records),
+        "everyInvalidOriginalRepresented": len(records) == len(invalid_original_ids),
+        "rejectedCount": len(rejected),
+        "rejected": rejected[:100],
+        "nativeMapping": valid_resolution,
+        "allPlacedMapping": all_resolution,
+        "maxHeightFt": MAX_PROCESSED_ROOM_HEIGHT_FT,
+    }
+
+
+def combine_native_and_processed_room_topology(
+    model_doc,
+    phase,
+    levels,
+    room_sources,
+    exportable_spaces,
+    processed_spaces,
+    messages,
+):
+    native = audit_room_space_topology(
+        model_doc, phase, levels, room_sources, exportable_spaces, [], strict=False
+    )
+    native_mapping, _ = map_room_sources_to_spaces(
+        model_doc, phase, levels, room_sources, exportable_spaces,
+        require_positive_vertical=True,
+    )
+    processed_keys = set(str(row.get("sourceRoomKey") or "") for row in list(processed_spaces or []))
+    native_keys = set(
+        _room_source_key(source) for source in list(room_sources or [])
+        if id(source) in native_mapping
+    )
+    covered_keys = native_keys.union(processed_keys)
+    uncovered = [source for source in list(room_sources or []) if _room_source_key(source) not in covered_keys]
+    for source in uncovered:
+        messages.append({
+            "severity": "ERROR",
+            "code": "ROOM_SOURCE_HAS_NO_POSITIVE_NATIVE_OR_PROCESSED_SPACE",
+            "room_id": source.get("id"),
+            "room_name": source.get("name"),
+            "room_number": source.get("number"),
+            "source": source.get("source"),
+            "message": "Room coverage requires either a positive native Space or a bounded Room-derived processed Space.",
+        })
+    result = dict(native)
+    result.update({
+        "native_positive_room_sources": len(native_keys),
+        "processed_room_sources": len(processed_keys),
+        "covered_room_sources": len(covered_keys),
+        "uncovered_room_sources": len(uncovered),
+        "coverageAuthority": "POSITIVE_NATIVE_SPACE_OR_BOUNDED_ROOM_DERIVED_2_5D",
+        "uncoveredRoomSourceKeys": [_room_source_key(source) for source in uncovered[:100]],
+    })
+    return result
+
+
+def _canonical_xy_ring(points):
+    values = [(round(float(point[0]), 6), round(float(point[1]), 6)) for point in list(points or [])]
+    if not values:
+        return ()
+    variants = []
+    for ring in (values, list(reversed(values))):
+        for index in range(len(ring)):
+            variants.append(tuple(ring[index:] + ring[:index]))
+    return min(variants)
+
+
+def inject_room_derived_processed_geometry(xml_path, processed_spaces, messages):
+    """Merge isolated Room-derived volumes into an existing gbXML document.
+
+    Exact coincident derived faces are consolidated to one two-sided carrier. This
+    is a deterministic geometry merge only; no material/thermal value is invented.
+    """
+    records = sorted(list(processed_spaces or []), key=lambda row: str(row.get("id") or ""))
+    if not records:
+        return {"processedSpaces": 0, "spacesAdded": 0, "surfacesAdded": 0, "consolidatedFaces": 0}
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+    namespace = namespace_uri(root) or "http://www.gbxml.org/schema"
+    try:
+        ET.register_namespace("", namespace)
+    except Exception:
+        pass
+    q = lambda name: qualified(namespace, name)
+    campus = next((item for item in root.iter() if local_name(item.tag) == "Campus"), None)
+    building = next((item for item in root.iter() if local_name(item.tag) == "Building"), None)
+    if campus is None or building is None:
+        raise Exception("Room-derived geometry merge requires gbXML Campus and Building nodes.")
+    existing_space_ids = set(
+        str(item.attrib.get("id") or "") for item in root.iter()
+        if local_name(item.tag) == "Space"
+    )
+    existing_surface_ids = set(
+        str(item.attrib.get("id") or "") for item in root.iter()
+        if local_name(item.tag) == "Surface"
+    )
+    nodes = {}
+    added_spaces = []
+    added_area_m2 = 0.0
+    for record in records:
+        xid = str(record.get("id") or "")
+        if not xid:
+            raise Exception("Room-derived processed Space has no stable id.")
+        if xid in existing_space_ids:
+            nodes[xid] = next(
+                item for item in root.iter()
+                if local_name(item.tag) == "Space" and item.attrib.get("id") == xid
+            )
+            continue
+        outer = list(record.get("outerLoopFt") or [])
+        z0 = float(record.get("baseZFt") or 0.0)
+        z1 = float(record.get("topZFt") or 0.0)
+        if len(outer) < 3 or z1 <= z0 + 0.25 or z1 - z0 > MAX_PROCESSED_ROOM_HEIGHT_FT:
+            raise Exception("Room-derived processed Space {} has invalid bounded geometry.".format(xid))
+        node = ET.SubElement(building, q("Space"), {"id": xid})
+        name = ET.SubElement(node, q("Name")); name.text = str(record.get("name") or xid)
+        area = max(0.0, float(record.get("areaFt2") or 0.0)) * 0.09290304
+        volume = max(0.0, float(record.get("volumeFt3") or 0.0)) * 0.028316846592
+        area_node = ET.SubElement(node, q("Area")); area_node.text = "{:.6f}".format(area)
+        volume_node = ET.SubElement(node, q("Volume")); volume_node.text = "{:.6f}".format(volume)
+        add_planar_geometry(node, namespace, [
+            (float(point[0]) * 0.3048, float(point[1]) * 0.3048, z0 * 0.3048)
+            for point in outer
+        ])
+        cad = ET.SubElement(node, q("CADObjectId")); cad.text = "ROOM:{}".format(record.get("sourceRoomId"))
+        nodes[xid] = node
+        existing_space_ids.add(xid)
+        added_spaces.append(xid)
+        added_area_m2 += area
+
+    if not added_spaces:
+        return {
+            "processedSpaces": len(records),
+            "spacesAdded": 0,
+            "surfacesAdded": 0,
+            "consolidatedFaces": 0,
+            "alreadyMerged": True,
+            "thermalValuesInvented": False,
+            "sourceSpacesModified": False,
+        }
+
+    building_area = next((child for child in list(building) if local_name(child.tag) == "Area"), None)
+    if building_area is None:
+        building_area = ET.Element(q("Area")); building.insert(0, building_area)
+        current_area = 0.0
+    else:
+        try:
+            current_area = float(building_area.text or 0.0)
+        except Exception:
+            current_area = 0.0
+    building_area.text = "{:.6f}".format(current_area + added_area_m2)
+
+    face_groups = {}
+    for record in records:
+        xid = str(record.get("id") or "")
+        outer = [tuple(float(value) for value in point[:3]) for point in list(record.get("outerLoopFt") or [])]
+        if xid not in nodes or len(outer) < 3:
+            continue
+        z0 = float(record.get("baseZFt") or 0.0)
+        z1 = float(record.get("topZFt") or 0.0)
+        floor = [(point[0], point[1], z0) for point in outer]
+        roof = [(point[0], point[1], z1) for point in reversed(outer)]
+        face_groups.setdefault(("H", round(z0, 6), _canonical_xy_ring(floor)), []).append({"space": xid, "role": "floor", "points": floor, "record": record})
+        face_groups.setdefault(("H", round(z1, 6), _canonical_xy_ring(roof)), []).append({"space": xid, "role": "roof", "points": roof, "record": record})
+        for index in range(len(outer)):
+            a = outer[index]; b = outer[(index + 1) % len(outer)]
+            endpoints = tuple(sorted(((round(a[0], 6), round(a[1], 6)), (round(b[0], 6), round(b[1], 6)))))
+            points = [(a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1)]
+            face_groups.setdefault(("V", endpoints, round(z0, 6), round(z1, 6)), []).append({"space": xid, "role": "wall", "points": points, "record": record})
+
+    added_surfaces = []
+    consolidated = 0
+    for key in sorted(face_groups.keys(), key=str):
+        items = face_groups[key]
+        distinct = []
+        for item in items:
+            if item["space"] not in [row["space"] for row in distinct]:
+                distinct.append(item)
+        groups = [distinct] if 1 <= len(distinct) <= 2 else [[item] for item in distinct]
+        for group in groups:
+            if not group:
+                continue
+            refs = [item["space"] for item in group]
+            if len(refs) == 2:
+                consolidated += 1
+            role = group[0]["role"]
+            surface_type = (
+                "InteriorWall" if role == "wall" and len(refs) == 2 else
+                "ExteriorWall" if role == "wall" else
+                "InteriorFloor" if len(refs) == 2 else
+                "Roof" if role == "roof" else "RaisedFloor"
+            )
+            seed = str(key) + "|" + "|".join(sorted(refs))
+            sid = "liber-room-derived-surface-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:20]
+            sequence = 2
+            base_sid = sid
+            while sid in existing_surface_ids:
+                sid = "{}-{}".format(base_sid, sequence); sequence += 1
+            existing_surface_ids.add(sid)
+            surface = ET.SubElement(campus, q("Surface"), {"id": sid, "surfaceType": surface_type})
+            if surface_type in ("ExteriorWall", "Roof"):
+                surface.attrib["exposedToSun"] = "true"
+            name = ET.SubElement(surface, q("Name")); name.text = "LIBER Room-derived processed carrier"
+            for ref in refs:
+                ET.SubElement(surface, q("AdjacentSpaceId"), {"spaceIdRef": ref})
+            points_m = [tuple(float(value) * 0.3048 for value in point[:3]) for point in group[0]["points"]]
+            add_planar_geometry(surface, namespace, points_m)
+            cad = ET.SubElement(surface, q("CADObjectId")); cad.text = "ROOM:{}".format(group[0]["record"].get("sourceRoomId"))
+            for ref in refs:
+                boundary = ET.SubElement(nodes[ref], q("SpaceBoundary"), {"surfaceIdRef": sid})
+                add_planar_geometry(boundary, namespace, points_m)
+            added_surfaces.append(sid)
+
+    tree.write(xml_path, encoding="utf-8", xml_declaration=True)
+    result = {
+        "processedSpaces": len(records),
+        "spacesAdded": len(added_spaces),
+        "spaceIds": added_spaces,
+        "surfacesAdded": len(added_surfaces),
+        "surfaceIds": added_surfaces[:250],
+        "consolidatedFaces": consolidated,
+        "innerLoopsRecordedNotFilled": sum(len(list(row.get("innerLoopsFt") or [])) for row in records),
+        "thermalValuesInvented": False,
+        "sourceSpacesModified": False,
+    }
+    messages.append({
+        "severity": "WARNING",
+        "code": "ROOM_DERIVED_GEOMETRY_MERGED_FOR_GEOMETRYCO",
+        "count": len(records),
+        "surfaces": len(added_surfaces),
+        "message": "Bounded Room-derived processed Spaces were merged into gbXML with exact shared-face consolidation. Thermal values remain template/COMcheck evidence, never inferred here.",
+    })
+    return result
+
+
+def write_direct_revit_geometry_gbxml(
+    model_doc, xml_path, spaces, physical_manifest, messages, processed_spaces=None
+):
     """Last-resort source-native gbXML from actual Revit Space solids + physical walls.
 
     This path never invents coordinates. Vertical walls/openings come from the native
@@ -6638,8 +7139,9 @@ def write_direct_revit_geometry_gbxml(model_doc, xml_path, spaces, physical_mani
     campus=ET.SubElement(root,q("Campus"),{"id":"liber-campus"})
     location=ET.SubElement(campus,q("Location")); nm=ET.SubElement(location,q("Name")); nm.text=str(model_doc.Title); zc=ET.SubElement(location,q("ZipcodeOrPostalCode")); zc.text="00000"
     building=ET.SubElement(campus,q("Building"),{"id":"liber-building","buildingType":"Unknown"})
-    valid=[s for s in list(spaces or []) if s is not None and is_placed_spatial(s)]
-    if not valid: raise Exception("Direct Revit geometry fallback has no placed Spaces.")
+    valid=[s for s in list(spaces or []) if s is not None and is_placed_spatial(s) and _space_has_positive_vertical_evidence(s)]
+    if not valid and not list(processed_spaces or []):
+        raise Exception("Direct Revit geometry fallback has no positive native or bounded Room-derived Spaces.")
     space_nodes={}; space_map={}
     total_area=sum(max(0.0,float(space.Area or 0.0))*0.09290304 for space in valid)
     building_area=ET.SubElement(building,q("Area")); building_area.text="{:.6f}".format(total_area)
@@ -6693,10 +7195,11 @@ def write_direct_revit_geometry_gbxml(model_doc, xml_path, spaces, physical_mani
         if parent is None or len(pts)<3: continue
         oid="liber-revit-opening-"+hashlib.sha1(str(rec.get("key") or opening_count).encode("utf-8")).hexdigest()[:14]
         op=ET.SubElement(parent,q("Opening"),{"id":oid,"openingType":_fallback_opening_type(rec.get("opening_type")),"coordinatesAbsolute":"true"}); n=ET.SubElement(op,q("Name")); n.text=str(rec.get("name") or oid); add_planar_geometry(op,namespace,[tuple(float(c)*0.3048 for c in p[:3]) for p in pts]); cad=ET.SubElement(op,q("CADObjectId")); cad.text=str(rec.get("originating_element_id") or ""); opening_count+=1
-    if len(existing)<4: raise Exception("Direct Revit geometry fallback has insufficient source surfaces: {}".format(len(existing)))
     ET.ElementTree(root).write(xml_path,encoding="utf-8",xml_declaration=True)
+    processed_merge = inject_room_derived_processed_geometry(xml_path, processed_spaces, messages)
     parsed=ET.parse(xml_path).getroot(); counts={"spaces":sum(1 for e in parsed.iter() if local_name(e.tag)=="Space"),"surfaces":sum(1 for e in parsed.iter() if local_name(e.tag)=="Surface"),"openings":sum(1 for e in parsed.iter() if local_name(e.tag)=="Opening")}
     if counts["spaces"]<1 or counts["surfaces"]<4: raise Exception("Direct Revit geometry fallback wrote an empty/insufficient model: {}".format(counts))
+    counts["roomDerived"] = processed_merge
     messages.append({"severity":"WARNING","code":"DIRECT_REVIT_GEOMETRY_GBXML_FALLBACK_USED","counts":counts,"message":"Native EADM/serializer path could not complete; REVEX exported source-native Revit Space solids, wall faces and proven openings without fitting geometry. Downstream template compiler must apply constructions/schedules/systems."})
     return xml_path,counts
 
@@ -8177,6 +8680,199 @@ def write_reports(report, report_base):
     return json_path, text_path
 
 
+def _geometry_json_value(value, depth=0):
+    """Convert a captured Revit evidence graph to deterministic JSON primitives."""
+    if depth > 32:
+        return "<depth-limit>"
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        return {
+            str(key): _geometry_json_value(item, depth + 1)
+            for key, item in sorted(value.items(), key=lambda row: str(row[0]))
+            if str(key) not in ("room", "transform", "inverse")
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_geometry_json_value(item, depth + 1) for item in list(value)]
+    try:
+        return {
+            "x": float(value.X),
+            "y": float(value.Y),
+            "z": float(value.Z),
+        }
+    except Exception:
+        pass
+    try:
+        element_id = eid_value(value)
+        if element_id >= 0:
+            return element_id
+    except Exception:
+        pass
+    return str(value)
+
+
+def write_revit_energy_geometry_evidence(
+    model_doc,
+    phase,
+    levels,
+    room_sources,
+    phase_spaces,
+    exportable_spaces,
+    processed_room_spaces,
+    original_space_ids,
+    created_space_ids,
+    physical_manifest,
+    analytical_manifest,
+    report,
+    gbxml_path,
+    output_folder,
+):
+    """Persist the exact processed geometry graph used by this gbXML revision.
+
+    This is evidence only: it does not create a parallel model or mutate Revit. The
+    immutable Engineering Sync manifest binds this file hash to the active-document
+    fingerprint and the same gbXML hash.
+    """
+    if not os.path.isfile(gbxml_path):
+        raise Exception("Geometry evidence cannot bind to a missing gbXML file.")
+
+    def sha256(path):
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    unique_id = str(safe_attr(safe_attr(model_doc, "ProjectInformation", None), "UniqueId", "") or "")
+    central_path = str(safe_attr(model_doc, "PathName", "") or "")
+    if bool(safe_attr(model_doc, "IsWorkshared", False)):
+        try:
+            central_path = str(ModelPathUtils.ConvertModelPathToUserVisiblePath(
+                model_doc.GetWorksharingCentralModelPath()
+            ) or central_path)
+        except Exception:
+            pass
+    fingerprint_seed = unique_id + "\n" + central_path.strip().replace("\\", "/").upper()
+    document_fingerprint = "revitdoc_" + hashlib.sha256(
+        fingerprint_seed.encode("utf-8")
+    ).hexdigest()[:24]
+
+    level_rows = [
+        {
+            "id": eid_value(level.Id),
+            "uniqueId": str(safe_attr(level, "UniqueId", "") or ""),
+            "name": str(safe_element_name(level)),
+            "elevationFt": float(level_elevation(level)),
+            "buildingStory": bool(safe_attr(level, "IsBuildingStory", False)),
+        }
+        for level in list(levels or [])
+    ]
+    room_rows = []
+    for source in list(room_sources or []):
+        point = source.get("point")
+        room_rows.append({
+            "kind": source.get("kind"),
+            "source": source.get("source"),
+            "id": source.get("id"),
+            "uniqueId": source.get("unique_id"),
+            "linkId": source.get("link_id"),
+            "name": source.get("name"),
+            "number": source.get("number"),
+            "hostLevelId": source.get("host_level_id"),
+            "pointFt": _geometry_json_value(point),
+            "baseZFt": source.get("base_z"),
+            "topZFt": source.get("top_z"),
+            "areaFt2": source.get("area"),
+        })
+    space_rows = []
+    exportable_ids = set(eid_value(item.Id) for item in list(exportable_spaces or []))
+    for space in list(phase_spaces or []):
+        sid = eid_value(space.Id)
+        height, bottom, top = space_height(space)
+        actual = _source_space_actual_z_bounds(space)
+        point = spatial_point(space)
+        base_level = _space_base_level(space)
+        upper_level = _space_upper_level(space)
+        revex_owned = bool(sid in set(created_space_ids or []) or is_revex_generated_space(space))
+        provenance = "REVEX_CREATED" if revex_owned else (
+            "PREEXISTING_UNTOUCHED" if sid in set(original_space_ids or []) else "UNKNOWN"
+        )
+        space_rows.append({
+            "id": sid,
+            "uniqueId": str(safe_attr(space, "UniqueId", "") or ""),
+            "name": spatial_name(space),
+            "number": str(safe_attr(space, "Number", "") or ""),
+            "provenance": provenance,
+            "exportable": sid in exportable_ids,
+            "pointFt": _geometry_json_value(point),
+            "areaFt2": float(safe_attr(space, "Area", 0.0) or 0.0),
+            "volumeFt3": float(safe_attr(space, "Volume", 0.0) or 0.0),
+            "baseLevelId": eid_value(safe_attr(base_level, "Id", None)),
+            "upperLevelId": eid_value(safe_attr(upper_level, "Id", None)),
+            "parameterHeightFt": height,
+            "parameterBottomFt": bottom,
+            "parameterTopFt": top,
+            "nativeSolidZBoundsFt": list(actual) if actual is not None else None,
+        })
+
+    payload = {
+        "schema": "liber.revex.revit-energy-geometry.v1",
+        "version": "20260820r128-immutable-geometry1",
+        "authority": "active-revit-document-processed-energy-geometry",
+        "architecture": ARCHITECTURE_ID,
+        "generatedAt": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "sourceDocument": {
+            "title": str(safe_attr(model_doc, "Title", "") or ""),
+            "path": str(safe_attr(model_doc, "PathName", "") or ""),
+            "projectInformationUniqueId": unique_id,
+            "documentFingerprint": document_fingerprint,
+            "phaseId": eid_value(safe_attr(phase, "Id", None)),
+            "phaseName": str(safe_element_name(phase)),
+            "coordinateSystem": "REVIT_HOST_INTERNAL",
+            "linearUnit": "foot",
+            "areaUnit": "square-foot",
+        },
+        "levels": level_rows,
+        "rooms": room_rows,
+        "spaces": space_rows,
+        "processedSpaces": _geometry_json_value(processed_room_spaces),
+        "physical": _geometry_json_value(physical_manifest),
+        "analytical": _geometry_json_value(analytical_manifest),
+        "reconstruction": _geometry_json_value({
+            "spaceTopology": report.get("space_topology", {}),
+            "generatedStorySpanSanity": report.get("generated_story_span_sanity", {}),
+            "analyticalVerticalSanity": report.get("analytical_vertical_sanity", {}),
+            "openingNormalization": report.get("opening_normalization", {}),
+            "envelopePersistence": report.get("envelope_persistence", {}),
+            "geometryIntegrity": report.get("geometry_integrity", {}),
+            "changes": report.get("changes", []),
+        }),
+        "integrity": _geometry_json_value(report.get("preservation_gate", {})),
+        "gbxml": {
+            "name": os.path.basename(gbxml_path),
+            "sha256": sha256(gbxml_path),
+        },
+    }
+    path = os.path.join(output_folder, "REVIT-ENERGY-GEOMETRY.json")
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=False, sort_keys=True)
+    return {
+        "schema": payload["schema"],
+        "path": path,
+        "sha256": sha256(path),
+        "gbxmlSha256": payload["gbxml"]["sha256"],
+        "levelCount": len(level_rows),
+        "roomCount": len(room_rows),
+        "spaceCount": len(space_rows) + len(list(processed_room_spaces or [])),
+        "nativeSpaceCount": len(space_rows),
+        "processedSpaceCount": len(list(processed_room_spaces or [])),
+        "physicalSurfaceCount": len(list((physical_manifest or {}).get("surfaces", []) or [])),
+        "physicalOpeningCount": len(list((physical_manifest or {}).get("openings", []) or [])),
+        "analyticalSurfaceCount": len(list((analytical_manifest or {}).get("surfaces", []) or [])),
+        "analyticalOpeningCount": len(list((analytical_manifest or {}).get("openings", []) or [])),
+    }
+
+
 def finish_space_creation_rollback_report(
     report, report_base, existing_spaces, creation_stats, reason
 ):
@@ -9563,6 +10259,7 @@ def _r15_probe_residual_circuit_seeds(model_doc, phase, target_levels, messages)
         tx=Transaction(model_doc,"LIBER gbXML: probe residual circuit seeds {}".format(sequence))
         try:
             tx.Start()
+            guard=attach_space_failure_guard(tx)
             view=create_temp_plan(model_doc,level,phase,sequence)
             ids=list(model_doc.Create.NewSpaces2(level,phase,view) or [])
             model_doc.Regenerate()
@@ -10143,6 +10840,7 @@ def _probe_spatial_circuits(model_doc, phase, level, sequence):
     tx=Transaction(model_doc,'LIBER gbXML: probe spatial domain {}'.format(sequence))
     try:
         tx.Start()
+        guard=attach_space_failure_guard(tx)
         view=create_temp_plan(model_doc,level,phase,sequence)
         ids=list(model_doc.Create.NewSpaces2(level,phase,view) or [])
         model_doc.Regenerate()
@@ -10895,6 +11593,21 @@ def run_tool():
         for space in collect_spaces(doc)
         if element_exists_in_phase(space, phase_index, phases_map)
     ]
+    # Immutable provenance checkpoint taken before REVEX starts any transaction.
+    # It is the only authority for distinguishing untouched source Spaces from
+    # Spaces created during this run; an empty created-id set must never erase that
+    # distinction.
+    original_space_ids = set(eid_value(space.Id) for space in existing_spaces)
+    invalid_original_space_ids = set(
+        eid_value(space.Id) for space in existing_spaces
+        if is_placed_spatial(space) and not _space_has_positive_vertical_evidence(space)
+    )
+    report["invalid_original_space_checkpoint"] = {
+        "count": len(invalid_original_space_ids),
+        "element_ids": sorted(invalid_original_space_ids)[:250],
+        "source_spaces_modified": False,
+        "spatial_mutation_skipped": bool(invalid_original_space_ids),
+    }
     report["spaces_before"] = len(existing_spaces)
 
     TransactionManager.Instance.ForceCloseTransaction()
@@ -10903,6 +11616,7 @@ def run_tool():
     created_ids = set()
     temporary_energy_model = None
     exportable_spaces = []
+    processed_room_spaces = []
     physical_manifest = {"surfaces": [], "openings": [], "counts": {}}
     analytical_manifest = {"spaces": [], "surfaces": [], "openings": [], "counts": {}}
     force_source_geometry_fallback = False
@@ -10942,7 +11656,7 @@ def run_tool():
             for level in targets
         ]
 
-        if not AUDIT_ONLY and APPLY_SAFE_FIXES:
+        if not AUDIT_ONLY and APPLY_SAFE_FIXES and not invalid_original_space_ids:
             vertical_caps = prepare_room_source_vertical_targets(
                 room_sources, targets, levels, changes, messages
             )
@@ -11213,6 +11927,7 @@ def run_tool():
             # normalize generated vertical spans. This is still inside the outer group.
             identity_transaction = Transaction(doc, "LIBER gbXML: finalize Space identity")
             identity_transaction.Start()
+            identity_guard = attach_space_failure_guard(identity_transaction)
             try:
                 spaces, matched = match_and_update_spaces(
                     doc,
@@ -11241,9 +11956,12 @@ def run_tool():
                 report["generated_story_span_sanity"]=story_sanity
                 if not story_sanity.get("passed",False):
                     raise Exception("Generated energy Space story-bound sanity failed for {} Space(s): {}".format(story_sanity.get("violation_count",0),story_sanity.get("violations",[])[:10]))
-                identity_transaction.Commit()
+                identity_status = identity_transaction.Commit()
+                if identity_status != TransactionStatus.Committed:
+                    raise Exception("Space identity transaction did not commit: {}".format(identity_status))
             except Exception:
-                identity_transaction.RollBack()
+                if identity_transaction.GetStatus() == TransactionStatus.Started:
+                    identity_transaction.RollBack()
                 raise
 
             # STAGE D — annotation is deliberately deferred to the single post-EADM
@@ -11252,6 +11970,21 @@ def run_tool():
             report["space_plan_tags"] = {"deferred_to_post_eadm": True}
         else:
             spaces = existing_spaces
+            if not AUDIT_ONLY and APPLY_SAFE_FIXES and invalid_original_space_ids:
+                report["space_creation"] = {
+                    "attempted": 0,
+                    "kept": 0,
+                    "skipped_for_invalid_original_checkpoint": True,
+                    "invalid_original_space_ids": sorted(invalid_original_space_ids)[:250],
+                }
+                messages.append({
+                    "severity":"WARNING",
+                    "code":"SPATIAL_MUTATION_SKIPPED_INVALID_ORIGINALS_ROOM_DERIVED",
+                    "count":len(invalid_original_space_ids),
+                    "element_ids":sorted(invalid_original_space_ids)[:250],
+                    "authoritative_spaces_deleted":0,
+                    "message":"Placed pre-existing Spaces without positive vertical evidence are preserved. REVEX does not enter Room/Space mutation transactions against their occupied circuits; mapped Rooms become isolated bounded processed geometry instead.",
+                })
 
         # Re-query Spaces through SpaceFilter after the creation transaction commits.
         # Revit explicitly does not support OfClass(Space); this cross-check prevents
@@ -11292,11 +12025,18 @@ def run_tool():
             and is_placed_spatial(space)
         ]
         report["space_topology"] = audit_room_space_topology(
-            doc, phase, levels, room_sources, phase_spaces_for_topology, messages, strict=True
+            doc, phase, levels, room_sources, phase_spaces_for_topology, messages, strict=False
         )
-        report["plan_circuit_coverage"] = probe_remaining_plan_circuits(
-            doc, phase, targets, messages
-        )
+        if invalid_original_space_ids:
+            report["plan_circuit_coverage"] = {
+                "skipped": True,
+                "reason": "invalid_preexisting_space_checkpoint_uses_room_derived_geometry",
+                "invalid_original_space_count": len(invalid_original_space_ids),
+            }
+        else:
+            report["plan_circuit_coverage"] = probe_remaining_plan_circuits(
+                doc, phase, targets, messages
+            )
 
         # The C# entry point disables topology mutation when an existing placed
         # checkpoint is complete. Repair stale vertical parameters only after that
@@ -11334,16 +12074,59 @@ def run_tool():
             "space_creation", {}
         ).get("attempted", len(created_ids))
         phase_spaces, exportable_spaces, unplaced = audit_spaces(
-            doc, phase, phases, levels, messages, created_ids
+            doc,
+            phase,
+            phases,
+            levels,
+            messages,
+            generated_ids=created_ids,
+            original_ids=original_space_ids,
         )
         report["spaces_in_phase"] = len(phase_spaces)
         report["spaces_exportable"] = len(exportable_spaces)
         report["unplaced_spaces_ignored"] = len(unplaced)
 
+        processed_room_spaces, processed_room_report = build_room_derived_processed_spaces(
+            doc,
+            phase,
+            targets,
+            room_sources,
+            phase_spaces,
+            exportable_spaces,
+            original_space_ids,
+            messages,
+        )
+        report["processed_room_spaces"] = processed_room_report
+        report["processed_room_space_count"] = len(processed_room_spaces)
+        if processed_room_spaces:
+            force_source_geometry_fallback = True
+            messages.append({
+                "severity":"WARNING",
+                "code":"NATIVE_EADM_SKIPPED_ROOM_DERIVED_SPATIAL_DOMAIN",
+                "count":len(processed_room_spaces),
+                "message":"A Room-derived processed spatial domain is active, so REVEX bypasses document-wide native EADM creation and serializes positive native Spaces plus bounded Room records directly. This prevents untouched invalid originals from reopening Revit's zero-height modal.",
+            })
+        if processed_room_spaces and not exportable_spaces:
+            for item in messages:
+                if item.get("code") == "NO_EXPORTABLE_SPACES":
+                    item["severity"] = "WARNING"
+                    item["code"] = "NO_NATIVE_EXPORTABLE_SPACES_ROOM_DERIVED"
+                    item["message"] = "No native Space has positive vertical evidence; bounded Room-derived processed Spaces are the isolated geometry authority for this run."
+        report["native_space_topology"] = report.get("space_topology", {})
+        report["space_topology"] = combine_native_and_processed_room_topology(
+            doc,
+            phase,
+            targets,
+            room_sources,
+            exportable_spaces,
+            processed_room_spaces,
+            messages,
+        )
+
         report["semantic_review"] = {
             "engine": "deferred_until_geometry_verified",
             "provider": None,
-            "count": len(exportable_spaces),
+            "count": len(exportable_spaces) + len(processed_room_spaces),
             "bounded": True,
         }
         physical_manifest = capture_physical_envelope(
@@ -11363,19 +12146,20 @@ def run_tool():
         topology = report.get("space_topology", {}) or {}
         room_total = int(topology.get("room_sources", 0) or 0)
         room_covered = int(topology.get("covered_room_sources", 0) or 0)
-        room_preservation = (float(room_covered) / float(room_total)) if room_total else (1.0 if exportable_spaces else 0.0)
+        room_preservation = (float(room_covered) / float(room_total)) if room_total else (1.0 if (exportable_spaces or processed_room_spaces) else 0.0)
         report["preservation_gate_preexport"] = {
             "room_preservation": round(room_preservation, 6),
             "target": PRESERVATION_TARGET,
             "minimum": PRESERVATION_MINIMUM,
             "exportable_spaces": len(exportable_spaces),
+            "processed_room_spaces": len(processed_room_spaces),
             "decision": (
                 ("ACCEPT_80_PLUS" if room_preservation >= PRESERVATION_MINIMUM else "BLOCK_BELOW_80")
             ),
         }
         verified_room_preservation = float(room_preservation)
         spatial_state_verified = bool(
-            len(exportable_spaces) > 0
+            (len(exportable_spaces) + len(processed_room_spaces)) > 0
             and bool(report.get("generated_story_span_sanity", {}).get("passed", True))
         )
         report["verified_spatial_checkpoint"] = {
@@ -11383,6 +12167,7 @@ def run_tool():
             "room_preservation": round(verified_room_preservation, 6),
             "created_space_ids": len(created_ids),
             "exportable_spaces": len(exportable_spaces),
+            "processed_room_spaces": len(processed_room_spaces),
         }
 
         if AUDIT_ONLY:
@@ -11393,7 +12178,7 @@ def run_tool():
             report["report_text"] = text_path
             return report
 
-        if not exportable_spaces:
+        if not exportable_spaces and not processed_room_spaces:
             group.RollBack()
             group_finished = True
             report["status"] = "FAILED_EMPTY_ANALYTICAL_MODEL"
@@ -11403,6 +12188,14 @@ def run_tool():
             report["report_json"] = json_path
             report["report_text"] = text_path
             return report
+        if not exportable_spaces and processed_room_spaces:
+            force_source_geometry_fallback = True
+            messages.append({
+                "severity":"WARNING",
+                "code":"NATIVE_EADM_SKIPPED_ALL_SPACES_ROOM_DERIVED",
+                "count":len(processed_room_spaces),
+                "message":"Every usable spatial record is Room-derived because the original Spaces have no positive vertical evidence. REVEX skips native EADM creation and writes the bounded isolated geometry directly.",
+            })
         if room_preservation < PRESERVATION_MINIMUM:
             messages.append({
                 "severity":"WARNING",
@@ -11496,7 +12289,10 @@ def run_tool():
         report["energy_model_attempts"] = energy_model_attempts
         if temporary_energy_model is None:
             messages.append({"severity":"WARNING","code":"NATIVE_ENERGY_MODEL_CREATION_FAILED_ALL_TIERS","message":"Revit could not create a native SpatialElement EADM. REVEX is switching to the source-native Revit geometry serializer instead of stopping."})
-            partial_xml, direct_counts = write_direct_revit_geometry_gbxml(doc, partial_xml, exportable_spaces, physical_manifest, messages)
+            partial_xml, direct_counts = write_direct_revit_geometry_gbxml(
+                doc, partial_xml, exportable_spaces, physical_manifest, messages,
+                processed_spaces=processed_room_spaces,
+            )
             report["export_method"] = "DIRECT_REVIT_GEOMETRY_FALLBACK"
             report["direct_revit_fallback"] = direct_counts
             analytical_manifest = {"spaces": [], "surfaces": [], "openings": [], "counts": {}}
@@ -11605,7 +12401,8 @@ def run_tool():
                             "trace":traceback.format_exc()[-3000:],
                         })
                         partial_xml, direct_counts = write_direct_revit_geometry_gbxml(
-                            doc, partial_xml, exportable_spaces, physical_manifest, messages
+                            doc, partial_xml, exportable_spaces, physical_manifest, messages,
+                            processed_spaces=processed_room_spaces,
                         )
                         report["export_method"]="DIRECT_REVIT_GEOMETRY_FALLBACK"
                         report["direct_revit_fallback"]=direct_counts
@@ -11618,6 +12415,17 @@ def run_tool():
                 report["gbxml_project_identity_changes"] = normalize_gbxml_project_identity(doc, partial_xml, messages)
             except Exception as ex:
                 messages.append({"severity":"WARNING","code":"GBXML_PROJECT_IDENTITY_NORMALIZATION_FAILED_NONBLOCKING","message":str(ex)})
+            try:
+                report["room_derived_geometry_merge"] = inject_room_derived_processed_geometry(
+                    partial_xml, processed_room_spaces, messages
+                )
+            except Exception as ex:
+                report["room_derived_geometry_merge"] = {"error": str(ex)}
+                messages.append({
+                    "severity":"ERROR",
+                    "code":"ROOM_DERIVED_GEOMETRY_MERGE_FAILED",
+                    "message":str(ex),
+                })
 
         # Native Revit 2026 gbXML can serialize a Surface with the same Space
         # twice. OpenStudio refuses to translate those carriers, leaving visible
@@ -11674,7 +12482,10 @@ def run_tool():
         envelope_persistence = geometry_integrity.get("final_persistence", {}) or {}
         report["envelope_persistence"] = envelope_persistence
         try:
-            xml_validation = validate_gbxml(partial_xml, len(exportable_spaces))
+            xml_validation = validate_gbxml(
+                partial_xml,
+                len(exportable_spaces) + int((processed_room_report or {}).get("invalidOriginalSpaceCount", 0) or 0),
+            )
         except Exception as ex:
             xml_validation = {"passed":False,"errors":["gbXML validator software failure: {}".format(ex)],"warnings":[],"counts":{}}
             try:
@@ -11718,14 +12529,19 @@ def run_tool():
         post_eadm_tag_tx = Transaction(doc, "LIBER gbXML: post-EADM Space Tags on EN/Energy plans")
         try:
             post_eadm_tag_tx.Start()
+            post_eadm_tag_guard = attach_space_failure_guard(post_eadm_tag_tx)
             post_eadm_spaces = [
                 item for item in collect_spaces(doc)
-                if element_exists_in_phase(item, phase_index, phases_map) and is_placed_spatial(item)
+                if element_exists_in_phase(item, phase_index, phases_map)
+                and is_placed_spatial(item)
+                and _space_has_positive_vertical_evidence(item)
             ]
             report["space_plan_tags"] = auto_tag_spaces_on_energy_plans(
                 doc, post_eadm_spaces, messages, changes
             )
-            post_eadm_tag_tx.Commit()
+            post_eadm_tag_status = post_eadm_tag_tx.Commit()
+            if post_eadm_tag_status != TransactionStatus.Committed:
+                raise Exception("Post-EADM Space Tag transaction did not commit: {}".format(post_eadm_tag_status))
         except Exception as ex:
             try:
                 if post_eadm_tag_tx.GetStatus() == TransactionStatus.Started:
@@ -11743,7 +12559,10 @@ def run_tool():
 
         xml_counts = xml_validation.get("counts", {}) or {}
         persistence_counts = envelope_persistence.get("counts", {}) or {}
-        expected_spaces = max(0, len(exportable_spaces))
+        expected_spaces = max(
+            0,
+            len(exportable_spaces) + int((processed_room_report or {}).get("invalidOriginalSpaceCount", 0) or 0),
+        )
         preserved_spaces = min(expected_spaces, int(xml_counts.get("spaces", 0) or 0))
         # Raw physical subfaces are partitioned differently by Rooms/Spaces/EADM and
         # remain diagnostics. The publication score uses unique authoritative Revit
@@ -11785,7 +12604,12 @@ def run_tool():
             "strict_qa_passed": bool(xml_validation.get("passed")),
         }
         nonempty_xml = int(xml_counts.get("spaces",0) or 0) > 0 and int(xml_counts.get("surfaces",0) or 0) > 0
+        invalid_replacement_complete = bool(
+            (processed_room_report or {}).get("everyInvalidOriginalRepresented", True)
+        )
         publication_threshold_met = bool(
+            invalid_replacement_complete
+            and
             room_preservation >= PRESERVATION_MINIMUM
             and preservation >= PRESERVATION_MINIMUM
             and spatial_preservation >= PRESERVATION_MINIMUM
@@ -11798,10 +12622,12 @@ def run_tool():
         quality_target_met = bool(all(value >= PRESERVATION_TARGET for value in integrity_ratios.values()))
         below_quality_target = {key: round(value, 6) for key, value in integrity_ratios.items() if value < PRESERVATION_TARGET}
         report["preservation_gate"]["publication_threshold_met"] = publication_threshold_met
+        report["preservation_gate"]["every_invalid_original_represented"] = invalid_replacement_complete
         report["preservation_gate"]["quality_target_met"] = quality_target_met
         report["preservation_gate"]["below_quality_target"] = below_quality_target
         report["preservation_gate"]["decision"] = (
-            "ACCEPT_80_PLUS" if publication_threshold_met else "BLOCK_BELOW_80"
+            "ACCEPT_80_PLUS" if publication_threshold_met else
+            ("BLOCK_INVALID_ORIGINAL_UNREPRESENTED" if not invalid_replacement_complete else "BLOCK_BELOW_80")
         )
         acceptable = bool(nonempty_xml and publication_threshold_met)
         if acceptable:
@@ -11826,6 +12652,22 @@ def run_tool():
             # is reachable only after every required publication-integrity ratio meets the 80% hard stop.
             # Quality/warning state remains explicit in export_quality + report warnings.
             report["status"] = "EXPORTED"
+            report["geometry_evidence"] = write_revit_energy_geometry_evidence(
+                doc,
+                phase,
+                levels,
+                room_sources,
+                phase_spaces,
+                exportable_spaces,
+                processed_room_spaces,
+                original_space_ids,
+                created_ids,
+                physical_manifest,
+                analytical_manifest,
+                report,
+                final_xml,
+                output_folder,
+            )
             for error in xml_validation["errors"]:
                 messages.append({
                     "severity": "WARNING",
@@ -11842,17 +12684,29 @@ def run_tool():
             os.replace(partial_xml, failed_xml)
             report["gbxml_path"] = failed_xml
             report["export_quality"] = "DIAGNOSTIC_BELOW_80_NOT_PUBLISHED"
-            report["status"] = "BLOCKED_BELOW_80_INTEGRITY_PRESERVED"
+            report["status"] = (
+                "BLOCKED_UNREPRESENTED_INVALID_ORIGINAL_SPACE"
+                if not invalid_replacement_complete else
+                "BLOCKED_BELOW_80_INTEGRITY_PRESERVED"
+            )
             messages.append({
                 "severity": "ERROR",
-                "code": "PUBLICATION_BLOCKED_BELOW_80",
+                "code": (
+                    "PUBLICATION_BLOCKED_UNREPRESENTED_INVALID_ORIGINAL_SPACE"
+                    if not invalid_replacement_complete else
+                    "PUBLICATION_BLOCKED_BELOW_80"
+                ),
                 "room_preservation": round(room_preservation, 6),
                 "overall_preservation": round(preservation, 6),
                 "spatial_preservation": round(spatial_preservation, 6),
                 "physical_preservation": round(physical_preservation, 6),
                 "analytical_surface_preservation": round(analytical_preservation, 6),
                 "physical_opening_source_preservation": round(physical_opening_preservation, 6),
-                "message": "Energy Sync publication is blocked below the 80% hard-stop integrity floor. Verified Spaces, EADM, EN/Energy tags, diagnostic gbXML, and evidence were preserved for repair.",
+                "message": (
+                    "Energy Sync publication is blocked because at least one excluded invalid original Space has no bounded Room-derived processed representation. Originals remain untouched and the diagnostic geometry is preserved."
+                    if not invalid_replacement_complete else
+                    "Energy Sync publication is blocked below the 80% hard-stop integrity floor. Verified Spaces, EADM, EN/Energy tags, diagnostic gbXML, and evidence were preserved for repair."
+                ),
             })
             for error in xml_validation["errors"]:
                 messages.append({
@@ -11894,7 +12748,7 @@ def run_tool():
         # If a late stage fails, first create/rescue a non-empty source-backed XML while
         # the valid EADM and source manifests still exist. Only then decide whether any
         # analytical model needs cleanup.
-        if spatial_state_verified and exportable_spaces and not os.path.isfile(partial_xml):
+        if spatial_state_verified and (exportable_spaces or processed_room_spaces) and not os.path.isfile(partial_xml):
             try:
                 main = Analysis.EnergyAnalysisDetailModel.GetMainEnergyAnalysisDetailModel(doc)
                 rescue_manifest = analytical_manifest
@@ -11903,12 +12757,19 @@ def run_tool():
                         rescue_manifest = capture_energy_manifest(doc, main, messages)
                     except Exception:
                         pass
-                if (rescue_manifest or {}).get("surfaces"):
+                if exportable_spaces and (rescue_manifest or {}).get("surfaces"):
                     partial_xml, _ = write_direct_eadm_gbxml(doc, partial_xml, exportable_spaces, rescue_manifest, messages)
                     report["export_method"] = "DIRECT_EADM_LATE_RECOVERY"
                 if not os.path.isfile(partial_xml):
-                    partial_xml, _ = write_direct_revit_geometry_gbxml(doc, partial_xml, exportable_spaces, physical_manifest, messages)
+                    partial_xml, _ = write_direct_revit_geometry_gbxml(
+                        doc, partial_xml, exportable_spaces, physical_manifest, messages,
+                        processed_spaces=processed_room_spaces,
+                    )
                     report["export_method"] = "DIRECT_REVIT_GEOMETRY_LATE_RECOVERY"
+                elif processed_room_spaces:
+                    report["late_room_derived_geometry_merge"] = inject_room_derived_processed_geometry(
+                        partial_xml, processed_room_spaces, messages
+                    )
             except Exception as rescue_ex:
                 messages.append({"severity":"WARNING","code":"LATE_SERIALIZER_RECOVERY_FAILED","message":str(rescue_ex)})
         if os.path.isfile(partial_xml):
@@ -11942,7 +12803,7 @@ def run_tool():
                 if not keep_main:
                     cleanup_tx = Transaction(doc, "LIBER gbXML: discard invalid failed analytical model")
                     try:
-                        cleanup_tx.Start(); delete_main_energy_model(doc, changes); doc.Regenerate(); cleanup_tx.Commit()
+                        cleanup_tx.Start(); cleanup_guard = attach_space_failure_guard(cleanup_tx); delete_main_energy_model(doc, changes); doc.Regenerate(); cleanup_tx.Commit()
                     except Exception:
                         try:
                             if cleanup_tx.GetStatus() == TransactionStatus.Started:

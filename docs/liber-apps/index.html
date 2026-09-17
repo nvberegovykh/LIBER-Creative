@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="LIBER">
@@ -873,7 +874,7 @@
     <div id="modal-overlay" class="modal-overlay hidden" style="display:none"></div>
 
     <!-- Firebase SDK Loader (latest-first with fallback) -->
-    <script type="module" src="js/firebase-loader.js"></script>
+    <script type="module" src="js/firebase-loader.js?v=20260820r147-release1"></script>
     <script>
         if ('serviceWorker' in navigator){
             const path = location.pathname || '';
@@ -899,12 +900,12 @@
                         console.error(`Module ${index + 1}:`, script.innerHTML.substring(0, 100) + '...');
                     });
                     
-                    // Check network connectivity (probe latest first)
-                    fetch('https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js', { method: 'HEAD' })
+                    // Check network connectivity against the exact release pair used by the loader.
+                    fetch('https://www.gstatic.com/firebasejs/12.17.1/firebase-app.js', { method: 'HEAD' })
                         .then(() => console.log('✅ Firebase CDN is accessible'))
                         .catch(() => {
                             console.error('❌ Firebase CDN latest path not accessible, probing fallback...');
-                            fetch('https://www.gstatic.com/firebasejs/12.1.0/firebase-app.js', { method: 'HEAD' })
+                            fetch('https://www.gstatic.com/firebasejs/12.17.0/firebase-app.js', { method: 'HEAD' })
                                 .then(() => console.log('✅ Firebase CDN fallback is accessible'))
                                 .catch(() => console.error('❌ Firebase CDN is not accessible'));
                         });
@@ -929,7 +930,7 @@
       (function(){var h=(typeof window!=='undefined'&&window.location&&window.location.hostname)||'';var p=/liberpict\.com|\.web\.app|\.firebaseapp\.com$/i.test(h);window.__devLog=p?function(){}:function(){console.log.apply(console,arguments);};window.__devWarn=p?function(){}:function(){console.warn.apply(console,arguments);};})();
     </script>
     <script>
-      window.LIBER_APP_VERSION = '20260805r53';
+      window.LIBER_APP_VERSION = '20260820r147-release1';
       (function loadVersionedScripts() {
         const v = encodeURIComponent(window.LIBER_APP_VERSION || 'dev');
         const critical = ['js/crypto.js', 'js/secure-keys.js', 'js/email-service.js', 'js/firebase-service.js', 'js/auth.js', '../components/auto-ui-translate.js', '../components/media-fullscreen-viewer.js', '../components/media-video-player.js', 'js/dashboard.js', 'js/apps.js', 'js/users.js', 'js/main.js'];

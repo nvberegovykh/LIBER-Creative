@@ -5,6 +5,9 @@ const read = p => fs.readFileSync(p, 'utf8');
 const workerOnly = read('server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1');
 const full = read('server/revex-energy-worker/DEPLOY_ENERGY_CURRENT.ps1');
 const docker = read('server/revex-energy-worker/Dockerfile');
+// Docker line continuations are formatting only. Evaluate the build-time environment
+// proof as one logical instruction so wrapping it cannot weaken or spuriously fail QA.
+const dockerLogical = docker.replace(/\\\r?\n\s*/g, ' ').replace(/\s+/g, ' ');
 const entry = read('server/revex-energy-worker/app_entry.py');
 const helper = read('server/revex-energy-worker/revex_cloud_project.py');
 const agent = read('server/revex-energy-worker/revex_identity_content_agent.py');
@@ -23,10 +26,11 @@ for (const marker of [
   'COPY server/revex-energy-worker/app_entry.py',
   'COPY server/revex-energy-worker/revex_cloud_project.py',
   'COPY server/revex-energy-worker/verify_vertex_project_binding_r98.py',
-  'REVEX_VERTEX_PROJECT=liber-apps-cca20 REVEX_VERTEX_LOCATION=global python3 -c',
   'python3 /opt/revex/server/verify_vertex_project_binding_r98.py',
   'app_entry:APP'
 ]) if (!docker.includes(marker)) throw new Error(`Docker missing ${marker}`);
+if (!dockerLogical.includes('REVEX_VERTEX_PROJECT=liber-apps-cca20 REVEX_VERTEX_LOCATION=global python3 -c'))
+  throw new Error('Docker missing build-time Vertex project/location import proof');
 for (const marker of ['os.environ["REVEX_VERTEX_PROJECT"] = resolve_vertex_project()','from app import APP'])
   if (!entry.includes(marker)) throw new Error(`production entrypoint missing ${marker}`);
 for (const marker of ['REVEX_VERTEX_PROJECT','GOOGLE_CLOUD_PROJECT','GCLOUD_PROJECT','google.auth.default','not a valid substitute'])

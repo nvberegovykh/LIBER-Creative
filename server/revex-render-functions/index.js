@@ -55,14 +55,11 @@ function decodeImageDataUrl(value) {
   return { bytes, contentType: match[1].toLowerCase() };
 }
 
-async function assertProjectAccess(projectId, uid) {
+async function assertProjectAccess(projectId, uid, authClaims = {}) {
   const { db } = runtimeServices();
-  const [projectSnap, userSnap] = await Promise.all([
-    db.doc(`projects/${projectId}`).get(),
-    db.doc(`users/${uid}`).get()
-  ]);
+  const projectSnap = await db.doc(`projects/${projectId}`).get();
   if (!projectSnap.exists) throw new HttpsError('not-found', 'REVEX project not found.');
-  const role = projectAccessRole(projectSnap.data() || {}, userSnap.exists ? userSnap.data() || {} : {}, uid);
+  const role = projectAccessRole(projectSnap.data() || {}, authClaims, uid);
   if (!role) throw new HttpsError('permission-denied', 'You do not have access to this REVEX project.');
   return role;
 }
@@ -102,7 +99,7 @@ exports.runRevexRender = onCall({
   const projectId = safeId(body.projectId, PROJECT_RE, 'projectId');
   const jobId = safeId(body.jobId, JOB_RE, 'jobId');
   const uid = String(request.auth.uid);
-  const accessRole = await assertProjectAccess(projectId, uid);
+  const accessRole = await assertProjectAccess(projectId, uid, request.auth.token || {});
   const jobRef = runtime.db.doc(`projects/${projectId}/revexRenders/${jobId}`);
   const jobSnap = await jobRef.get();
   let existing = jobSnap.exists ? (jobSnap.data() || {}) : null;

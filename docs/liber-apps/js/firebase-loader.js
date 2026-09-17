@@ -1,9 +1,10 @@
-// Dynamic Firebase SDK loader with version fallback
-// Attempts latest first, falls back if CDN path is unavailable
+// Dynamic Firebase SDK loader with an exact, current browser-module fallback.
+// Every Firebase product in a window must come from the same SDK release.
+(function liberFirebaseLoader(){
 
 const FIREBASE_VERSIONS = [
-	'12.1.0',
-	'13.1.0'
+	'12.17.1',
+	'12.17.0'
 ];
 
 async function loadFirebaseVersion(version) {
@@ -17,7 +18,9 @@ async function loadFirebaseVersion(version) {
 	let msgMod = null; try { msgMod = await import(`${base}/firebase-messaging.js`); } catch(_) { msgMod = null; }
 
 	const {
-		initializeApp
+		initializeApp,
+		getApps,
+		getApp
 	} = appMod;
 
 	const {
@@ -95,6 +98,8 @@ async function loadFirebaseVersion(version) {
 	// Expose compat-style object expected by existing code
 	window.firebase = {
 		initializeApp,
+		getApps,
+		getApp,
 		auth: getAuth,
 		firestore: getFirestore,
 		SDK_VERSION: version,
@@ -159,6 +164,8 @@ async function loadFirebaseVersion(version) {
 	// Also expose modular functions directly
 	window.firebaseModular = {
 		initializeApp,
+		getApps,
+		getApp,
 		getAuth,
 		getFirestore,
 		createUserWithEmailAndPassword,
@@ -222,7 +229,8 @@ async function loadFirebaseVersion(version) {
 	console.log('Available services: Auth, Firestore');
 }
 
-(async () => {
+	if (window.__liberFirebaseSdkPromise) return;
+	window.__liberFirebaseSdkPromise = (async () => {
 	let lastError = null;
 	for (const v of FIREBASE_VERSIONS) {
 		try {
@@ -235,4 +243,5 @@ async function loadFirebaseVersion(version) {
 	}
 	console.error('❌ All Firebase SDK versions failed to load');
 	window.firebaseLoadError = lastError;
+})();
 })();

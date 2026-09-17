@@ -4,14 +4,15 @@ function normalizedUid(value) {
   return String(value || '').trim();
 }
 
-function normalizedRole(userData) {
-  return String(userData?.role || '').trim().toLowerCase();
+function trustedAdminClaims(authClaims) {
+  return authClaims?.revexAdmin === true ||
+    String(authClaims?.role || '').trim().toLowerCase() === 'admin';
 }
 
-function projectAccessRole(projectData, userData, uid) {
+function projectAccessRole(projectData, authClaims, uid) {
   const identity = normalizedUid(uid);
   if (!identity) return null;
-  if (normalizedRole(userData) === 'admin') return 'liber-admin';
+  if (trustedAdminClaims(authClaims)) return 'liber-admin';
   if (normalizedUid(projectData?.ownerId) === identity) return 'owner';
   const members = Array.isArray(projectData?.memberIds)
     ? projectData.memberIds.map(normalizedUid).filter(Boolean)
@@ -19,4 +20,4 @@ function projectAccessRole(projectData, userData, uid) {
   return members.includes(identity) ? 'member' : null;
 }
 
-module.exports = { projectAccessRole };
+module.exports = { trustedAdminClaims, projectAccessRole };

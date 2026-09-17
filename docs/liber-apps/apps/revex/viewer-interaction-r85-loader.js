@@ -12,7 +12,7 @@
     // Energy recovery and malformed-key guard stay independent of viewer interaction.
     const liveEdge=import('./live-worker-edge-r97.js?v=20260817r116-final-energy1')
       .catch(error=>{diagnostic('R116_LIVE_EDGE_LOAD',error);console.error('[REVEX] r116 live worker edge failed to load',error);});
-    const viewer=import('./viewer-interaction-r85.js?v=20260816r85-viewer-interaction1')
+    const viewer=import('./viewer-interaction-r85.js?v=20260820r147-release1')
       .catch(error=>{diagnostic('R85_INTERACTION_LOAD',error);console.error('[REVEX] r85 interaction module failed to load',error);});
     await Promise.all([liveEdge,viewer]);
   };

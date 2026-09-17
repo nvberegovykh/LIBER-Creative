@@ -8,9 +8,12 @@ function revexR43SignedIn() {
 }
 
 function revexR43IsAdmin() {
-  return revexR43SignedIn()
-    && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-    && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+  // Auth custom claims are server-issued. Never trust users/{uid}.role, because
+  // this fragment cannot revoke an allow granted by an unrelated preserved rule.
+  return revexR43SignedIn() && (
+    (request.auth.token.keys().hasAny(['revexAdmin']) && request.auth.token.revexAdmin == true)
+    || (request.auth.token.keys().hasAny(['role']) && request.auth.token.role == 'admin')
+  );
 }
 
 function revexR43MemberOf(data) {
@@ -60,10 +63,41 @@ function revexR43ImmutableLibraryId(libraryId) {
     || libraryId.matches('^revex_daily_report_.*');
 }
 
+function revexR43ValidRenderRequest(jobId) {
+  return revexR43SignedIn()
+    && jobId.matches('^render_[A-Za-z0-9_-]{16,80}$')
+    && request.resource.data.keys().hasAll([
+      'schema', 'type', 'hidden', 'revexKind', 'revexId',
+      'provider', 'model', 'status', 'sourceRevision',
+      'createdAt', 'updatedAt', 'createdBy'
+    ])
+    && request.resource.data.keys().hasOnly([
+      'schema', 'type', 'hidden', 'revexKind', 'revexId',
+      'contextKind', 'contextLabel', 'elementId', 'designItemId', 'chapterId',
+      'revision', 'renderLocation', 'sourceCamera', 'sourceRevision', 'settings',
+      'provider', 'model', 'status', 'createdAt', 'updatedAt', 'createdBy'
+    ])
+    && request.resource.data.schema == 'liber.revex.google-render-job.v1'
+    && request.resource.data.type == 'revex'
+    && request.resource.data.hidden == true
+    && request.resource.data.revexKind == 'render'
+    && request.resource.data.revexId == jobId
+    && request.resource.data.createdBy == request.auth.uid
+    && request.resource.data.provider == 'google-gemini-server'
+    && request.resource.data.model == 'gemini-3.1-flash-image'
+    && request.resource.data.status == 'PREPARED'
+    && request.resource.data.sourceRevision is string
+    && request.resource.data.sourceRevision.size() <= 160
+    && request.resource.data.createdAt is string
+    && request.resource.data.updatedAt is string;
+}
+
 function revexR43ImmutableProjectLane(projectCollection) {
   return projectCollection == 'revexRevisions'
     || projectCollection == 'revexHistory'
     || projectCollection == 'revexEnergyJobs'
+    || projectCollection == 'revexRenders'
+    || projectCollection == 'revexRenderJobs'
     || projectCollection == 'revexReportJobs'
     || projectCollection == 'revexEnergyConsents';
 }
@@ -72,12 +106,14 @@ function revexR43ImmutableProjectLane(projectCollection) {
  * participant can use the connection they actually belong to. No public chat
  * reads and no cross-connection message access are introduced here. */
 function revexR43ChatMemberOf(data) {
-  return revexR43SignedIn() && (
-    (data.keys().hasAny(['participants']) && data.participants is list && request.auth.uid in data.participants)
-    || (data.keys().hasAny(['users']) && data.users is list && request.auth.uid in data.users)
-    || (data.keys().hasAny(['memberIds']) && data.memberIds is list && request.auth.uid in data.memberIds)
-    || (data.keys().hasAny(['admins']) && data.admins is list && request.auth.uid in data.admins)
-  );
+  return revexR43SignedIn()
+    && revexR43ChatProjectBoundary(data)
+    && (
+      (data.keys().hasAny(['participants']) && data.participants is list && request.auth.uid in data.participants)
+      || (data.keys().hasAny(['users']) && data.users is list && request.auth.uid in data.users)
+      || (data.keys().hasAny(['memberIds']) && data.memberIds is list && request.auth.uid in data.memberIds)
+      || (data.keys().hasAny(['admins']) && data.admins is list && request.auth.uid in data.admins)
+    );
 }
 
 function revexR43ChatMember(connId) {
@@ -88,6 +124,7 @@ function revexR43ChatMember(connId) {
 function revexR43ChatAdmin(connId) {
   return revexR43SignedIn()
     && exists(/databases/$(database)/documents/chatConnections/$(connId))
+    && revexR43ChatProjectBoundary(get(/databases/$(database)/documents/chatConnections/$(connId)).data)
     && get(/databases/$(database)/documents/chatConnections/$(connId)).data.keys().hasAny(['admins'])
     && get(/databases/$(database)/documents/chatConnections/$(connId)).data.admins is list
     && request.auth.uid in get(/databases/$(database)/documents/chatConnections/$(connId)).data.admins;
@@ -99,6 +136,13 @@ function revexR43ProjectChat(data) {
     && data.type == 'project';
 }
 
+function revexR43ChatProjectBoundary(data) {
+  // Explicit chat membership is insufficient for a Project Chat. A removed
+  // project member loses connection, message and attachment access immediately,
+  // even before the controller has reconciled the denormalized participant list.
+  return !revexR43ProjectChat(data) || revexR43ProjectRecordMember(data.projectId);
+}
+
 function revexR43ProjectChatBindingUntouched() {
   return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
     'participants', 'users', 'memberIds', 'admins',
@@ -106,14 +150,32 @@ function revexR43ProjectChatBindingUntouched() {
   ]);
 }
 
+function revexR43ProjectChatBindingAbsent(data) {
+  return !data.keys().hasAny([
+    'chatConnId', 'chatProjectSchema', 'chatSourceCandidate', 'chatUpdatedAt'
+  ]);
+}
+
+function revexR43BrowserChatIsNotProject(data) {
+  return !revexR43ProjectChat(data)
+    && (!data.keys().hasAny(['schema']) || data.schema != 'liber.revex.project-chat.v1')
+    && (!data.keys().hasAny(['source']) || data.source != 'revex-project-chat');
+}
+
+function revexR43BrowserChatCreateAllowed(data) {
+  return revexR43ChatMemberOf(data) && revexR43BrowserChatIsNotProject(data);
+}
+
 match /projects/{projectId} {
   allow get: if revexR43IsAdmin() || revexR43MemberOf(resource.data);
   allow list: if revexR43IsAdmin()
     || (revexR43SignedIn() && resource.data.ownerId == request.auth.uid)
     || (revexR43SignedIn() && request.auth.uid in resource.data.memberIds);
-  allow create: if revexR43IsAdmin() || (
-    revexR43MemberOf(request.resource.data)
-    && request.resource.data.ownerId == request.auth.uid
+  allow create: if revexR43ProjectChatBindingAbsent(request.resource.data) && (
+    revexR43IsAdmin() || (
+      revexR43MemberOf(request.resource.data)
+      && request.resource.data.ownerId == request.auth.uid
+    )
   );
   // The Admin-SDK Project Chat controller owns these bindings. Browser clients,
   // including platform admins, cannot relink a project to an arbitrary room.
@@ -149,6 +211,21 @@ match /projects/{projectId} {
   }
 
   match /revexEnergyJobs/{jobId} {
+    allow read: if revexR43ProjectMember(projectId);
+  }
+
+  /* A browser may create exactly one caller-owned PREPARED request. From that
+   * point forward only the Admin-SDK broker may accept, complete or fail it. */
+  match /revexRenders/{jobId} {
+    allow read: if revexR43ProjectMember(projectId);
+    allow create: if revexR43ProjectMember(projectId)
+      && revexR43ValidRenderRequest(jobId);
+  }
+
+  /* Render leases/results are created transactionally by the authenticated
+   * server broker. Members may observe status, but no browser identity may
+   * forge a job, reset its one-shot lease, or replace its result binding. */
+  match /revexRenderJobs/{jobId} {
     allow read: if revexR43ProjectMember(projectId);
   }
 
@@ -224,20 +301,26 @@ match /chatConnections/{connId} {
   // Keep list rules field-specific. Firestore must be able to prove the exact
   // array-contains query constraint before executing it; one broad OR helper is
   // safe for a direct get but cannot be proven for a participants-only query.
-  allow list: if revexR43SignedIn() && request.auth.uid in resource.data.participants;
-  allow list: if revexR43SignedIn() && request.auth.uid in resource.data.users;
-  allow list: if revexR43SignedIn() && request.auth.uid in resource.data.memberIds;
-  allow list: if revexR43SignedIn() && request.auth.uid in resource.data.admins;
+  allow list: if revexR43SignedIn() && revexR43ChatProjectBoundary(resource.data) && request.auth.uid in resource.data.participants;
+  allow list: if revexR43SignedIn() && revexR43ChatProjectBoundary(resource.data) && request.auth.uid in resource.data.users;
+  allow list: if revexR43SignedIn() && revexR43ChatProjectBoundary(resource.data) && request.auth.uid in resource.data.memberIds;
+  allow list: if revexR43SignedIn() && revexR43ChatProjectBoundary(resource.data) && request.auth.uid in resource.data.admins;
 
-  allow create: if revexR43ChatMemberOf(request.resource.data);
+  // Only the Admin-SDK resolver may create a canonical Project Chat room. This
+  // prevents a browser from pre-seeding the deterministic/query candidate and
+  // having its messages or crypto lineage adopted into another project.
+  allow create: if revexR43BrowserChatCreateAllowed(request.resource.data);
   allow update: if (
     revexR43ChatAdmin(connId)
-    && (!revexR43ProjectChat(resource.data) || revexR43ProjectChatBindingUntouched())
+    && (
+      (revexR43ProjectChat(resource.data) && revexR43ProjectChatBindingUntouched())
+      || (!revexR43ProjectChat(resource.data) && revexR43BrowserChatIsNotProject(request.resource.data))
+    )
   ) || (
     revexR43ChatMemberOf(resource.data)
     && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
       'participants', 'users', 'memberIds', 'admins',
-      'projectId', 'type', 'key', 'projectKey', 'cryptoLegacySalts',
+      'schema', 'source', 'sourceCandidate', 'projectId', 'type', 'key', 'projectKey', 'cryptoLegacySalts',
       'groupKeyVersion', 'groupKeyEpoch', 'groupKeyParticipantDigest',
       'groupKeyIssuerUid', 'groupKeyEnvelopes', 'groupKeyHistory',
       'groupKeyRotatedAt', 'keyRotationRequired'
@@ -254,8 +337,23 @@ match /userPublicKeys/{uid} {
     && request.auth.uid == uid
     && request.resource.data.uid == request.auth.uid
     && request.resource.data.cryptoVersion == 'liber.secure-chat.identity-p256.v2'
-    && request.resource.data.keys().hasAll(['uid', 'publicJwk', 'fingerprint', 'cryptoVersion', 'createdAt']);
+    && request.resource.data.keys().hasAll(['uid', 'publicJwk', 'fingerprint', 'cryptoVersion', 'createdAt'])
+    && request.resource.data.keys().hasOnly(['uid', 'publicJwk', 'fingerprint', 'cryptoVersion', 'createdAt']);
   allow update, delete, list: if false;
+}
+
+/* Raw push tokens and identity-recovery audit records are server-only. They are
+ * intentionally outside user profile documents and are never client-readable. */
+match /serverSecureState/{uid}/pushTokens/{tokenHash} {
+  allow read, write: if false;
+}
+
+match /serverSecureState/chatPushReceipts/deliveries/{receiptId} {
+  allow read, write: if false;
+}
+
+match /secureChatIdentityRecoveryAudit/{eventId} {
+  allow read, write: if false;
 }
 
 match /chatMessages/{connId}/messages/{messageId} {
@@ -274,7 +372,7 @@ match /chatMessages/{connId}/messages/{messageId} {
     || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'updatedAt'])
   );
   allow delete: if revexR43ChatAdmin(connId) || (
-    revexR43SignedIn()
+    revexR43ChatMember(connId)
     && resource.data.keys().hasAny(['sender'])
     && resource.data.sender == request.auth.uid
   );

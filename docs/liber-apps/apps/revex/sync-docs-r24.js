@@ -16,6 +16,7 @@
     const date=value?.toDate?value.toDate():new Date(value);
     return Number.isNaN(date.getTime())?'—':date.toLocaleString([],{dateStyle:'medium',timeStyle:'short'});
   };
+  const legacyUrl=(value,label)=>value?(typeof Store.assertEphemeralUrl==='function'?Store.assertEphemeralUrl(value,label):value):null;
 
   function post(stage,detail={}){
     try{root.chrome?.webview?.postMessage({type:'liber:revex-sync-progress',stage,build:BUILD,...detail});}catch(_){}
@@ -27,7 +28,7 @@
     post('docs-upload-start',{path,bytes:file.size});
     await Store.api.uploadBytes(ref,file,clone({contentType:file.type||'application/pdf'}));
     post('docs-upload-complete',{path,bytes:file.size});
-    return{path,url:await Store.api.getDownloadURL(ref)};
+    return{path};
   }
 
   function pageWithLocalPdf(page,files){
@@ -75,6 +76,9 @@
   const original=Store.syncPackage.bind(Store);
   Store.syncPackage=async function(fileList,preferredProjectId,preferredSpecProjectId){
     const files=Array.from(fileList||[]);
+    const projectManifest=await readJson(byName(files,'project.json')).catch(()=>null);
+    const sourceMutations=projectManifest?.sourceMutations?.schema==='liber.revex.source-mutations.v1'&&Array.isArray(projectManifest?.sourceMutations?.items)
+      ?projectManifest.sourceMutations.items:[];
     const printing=await readJson(byName(files,'printing-sets.json')).catch(()=>null);
     const affected=await readJson(byName(files,'affected-plan-views.json')).catch(()=>null);
     const result=await original(fileList,preferredProjectId,preferredSpecProjectId);
@@ -117,7 +121,7 @@
         printingSetName:set.name||'Printing Set',revision:result.revision,sheetIndex,createdAt:at,updatedAt:at,createdBy:Store.user.uid
       });
       await Store.api.setDoc(Store.api.doc(Store.db,'projects',result.projectId,'library',id),data,clone({merge:true}));
-      printingRecords.push({id,...data,url:uploaded.url});
+      printingRecords.push({id,...data});
     }
     result.printingDocs=printingRecords;
 
@@ -138,7 +142,7 @@
         createdAt:at,updatedAt:at,createdBy:Store.user.uid
       });
       await Store.api.setDoc(Store.api.doc(Store.db,'projects',result.projectId,'library',id),data,clone({merge:true}));
-      affectedRecords.push({id,...data,url:uploaded.url});
+      affectedRecords.push({id,...data});
       try{
         await Store.appendHistory(result.projectId,{
           id:`plan_${docId(view.uniqueId||view.id||view.name)}_${docId(result.revision)}`,sourceRevision:result.revision,
@@ -150,11 +154,39 @@
       }catch(e){console.warn('[REVEX r113 Docs] plan history',e);}
     }
     result.affectedPlanDocs=affectedRecords;
+    const attachedFamilyCommands=[];
+    for(const receipt of sourceMutations){
+      const context=receipt?.context||{},mutation=receipt?.result||{},commandId=String(context.commandId||'').trim();
+      if(!commandId||receipt?.status!=='COMPLETED_PENDING_SOURCE_SYNC')continue;
+      if(String(context.projectId||'')!==String(result.projectId||'')||
+         String(context.documentFingerprint||'')!==String(projectManifest?.central?.documentFingerprint||''))
+        throw new Error(`Family mutation ${commandId} is not bound to this immutable source package.`);
+      await Store.appendHistory(result.projectId,{
+        id:`family_${docId(commandId)}`,sourceRevision:result.revision,baseSourceRevision:context.baseSourceRevision||null,
+        commandId,correlationId:context.correlationId||null,documentFingerprint:context.documentFingerprint||null,
+        kind:'bim-family',operation:receipt.operation||'family-mutation',
+        label:receipt.operation==='transform'?`Adjusted BIM family · ${mutation.family||mutation.type||'Family'}`:`Inserted BIM family · ${mutation.family||mutation.type||'Family'}`,
+        affectedElementIds:Number.isFinite(Number(mutation.elementId))?[Number(mutation.elementId)]:[],
+        affectedUniqueIds:mutation.uniqueId?[mutation.uniqueId]:[],affectedLevels:mutation.level?[mutation.level]:[],affectedViews:[],
+        before:null,after:{uniqueId:mutation.uniqueId||null,elementId:mutation.elementId??null,family:mutation.family||null,type:mutation.type||null,level:mutation.level||null,hostUniqueId:mutation.hostUniqueId||null,bboxMin:mutation.bboxMin||null,bboxMax:mutation.bboxMax||null},
+        note:'User-confirmed Revit ExternalEvent mutation; command and result receipt are integrity-bound inside this immutable source revision.'
+      });
+      attachedFamilyCommands.push(commandId);
+    }
+    if(attachedFamilyCommands.length){
+      try{root.chrome?.webview?.postMessage({
+        type:'liber:revex-family-mutations-ack',projectId:result.projectId,
+        documentFingerprint:projectManifest?.central?.documentFingerprint||'',sourceRevision:result.revision,
+        commandIds:attachedFamilyCommands
+      });}catch(error){console.warn('[REVEX r113 Docs] family receipt acknowledgement',error);}
+    }
+    result.familyMutations=sourceMutations;
     post('docs-index-complete',{
       printingSets:printingRecords.length,
       printingPages:printingRecords.reduce((n,r)=>n+(r.sheetIndex?.length||0),0),
       isolatedSheetPdfs:printingRecords.reduce((n,r)=>n+(r.sheetIndex||[]).filter(p=>p.singlePageStoragePath).length,0),
-      affectedPlans:affectedRecords.length
+      affectedPlans:affectedRecords.length,
+      familyMutations:attachedFamilyCommands.length
     });
     announce();
     return result;
@@ -196,7 +228,7 @@
           sheetUniqueId:row.sheetUniqueId||null,sheetNumber:row.sheetNumber||'',sheetName:row.sheetName||row.name||'',
           currentRevision:row.currentRevision||row.sheetRevision||null,
           singlePageStoragePath:row.singlePageStoragePath||row.storagePath||null,
-          singlePageUrl:row.singlePageUrl||row.localUrl||row.url||null,
+          singlePageUrl:(row.singlePageStoragePath||row.storagePath)?null:legacyUrl(row.singlePageUrl||row.localUrl||row.url,'legacy Docs sheet'),
           legacyLibraryId:row.id||null
         };
         const key=sheetKey(sheet);if(seen.has(key))continue;seen.add(key);file.sheetIndex.push(sheet);
@@ -207,9 +239,9 @@
   }
 
   async function isolatedSheetUrl(sheet){
-    if(sheet?.singlePageLocalUrl)return sheet.singlePageLocalUrl;
-    if(sheet?.singlePageUrl)return sheet.singlePageUrl;
     if(sheet?.singlePageStoragePath&&typeof Store.fileUrl==='function')return Store.fileUrl(sheet.singlePageStoragePath);
+    if(sheet?.singlePageLocalUrl)return legacyUrl(sheet.singlePageLocalUrl,'local Docs sheet');
+    if(sheet?.singlePageUrl)return legacyUrl(sheet.singlePageUrl,'legacy Docs sheet');
     return null;
   }
   function ensureShareButton(){
@@ -229,7 +261,7 @@
     const frame=document.getElementById('docs-frame'),empty=document.getElementById('docs-empty');
     const pageNumber=page?Number(page):null;
     const isolated=sheet?await isolatedSheetUrl(sheet):null;
-    const full=file.localUrl||file.url||(file.storagePath&&typeof Store.fileUrl==='function'?await Store.fileUrl(file.storagePath):null);
+    const full=file.storagePath&&typeof Store.fileUrl==='function'?await Store.fileUrl(file.storagePath):legacyUrl(file.localUrl||file.url,'legacy project document');
     if(!isolated&&!full)throw new Error('Document URL is unavailable.');
     const url=isolated||full;
     s.docSelection={file,page:isolated?null:pageNumber,sourcePage:pageNumber,sheet:sheet||null,url,isolatedSheetUrl:isolated||null,mode:isolated?'isolated-sheet-pdf':'document'};

@@ -9,6 +9,34 @@ html,body{height:100%;margin:0;overflow:hidden;-webkit-text-size-adjust:100%;tex
   .main{width:calc(100% - 320px)}
   .connections-panel{position:static;display:flex;flex-direction:column;min-height:0;height:100%}
 }
+
+/* Account-controlled recovery for a device whose non-exportable E2EE identity
+   differs from the create-once public identity. Kept compact so it does not
+   change the surrounding Chat layout. */
+.identity-recovery{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin:8px 12px;
+  padding:10px 12px;
+  border:1px solid rgba(245,158,11,.55);
+  border-radius:10px;
+  background:rgba(120,53,15,.26);
+  color:#fef3c7;
+  position:relative;
+  z-index:30;
+}
+.identity-recovery.hidden{display:none!important}
+.identity-recovery-copy{display:grid;gap:2px;min-width:0;font-size:12px;line-height:1.35}
+.identity-recovery-copy strong{font-size:13px;color:#fff7ed}
+.identity-recovery .btn{min-height:40px;white-space:nowrap}
+.identity-recovery.busy{opacity:.72;pointer-events:none}
+
+@media (max-width: 640px){
+  .identity-recovery{align-items:stretch;flex-direction:column;margin:6px 8px}
+  .identity-recovery .btn{width:100%;min-height:44px}
+}
 /* Mobile: top bar dropdown */
 @media(max-width:768px){
   .chat-app{--mobile-bar-height:56px;--mobile-search-height:56px}
@@ -408,11 +436,13 @@ button.call-status-badge:hover{
 .msg-reply-quote:hover{background:rgba(0,0,0,.5)}
 .msg-reply-quote .reply-author{font-weight:600;color:#b8c5d8;margin-right:6px}
 .composer textarea{flex:1;min-width:140px;resize:none;padding:8px 10px;border:1px solid var(--border-color,#1f222a);border-radius:12px;background:#14161b;color:#eaeaea;outline:none;max-height:160px;min-height:40px;font-size:16px}
+.search-box input:focus-visible,.composer textarea:focus-visible,.chat-app :where(button,[role="button"],a,input,textarea,select):focus-visible{outline:2px solid #69afff;outline-offset:2px;border-color:#69afff}
 .chat-app input,.chat-app textarea{font-size:16px}
 .btn{background:#2563eb;border:none;color:#fff;padding:10px 14px;border-radius:10px;cursor:pointer;transition:transform .05s ease,opacity .2s ease}
 .btn:active{transform:translateY(1px)}
 .btn.secondary{background:#222737}
 .btn.back{display:none}
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
 /* Sticker panel */
 .sticker-panel{position:absolute;bottom:80px;left:70px;width:320px;max-height:260px;overflow:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;background:#111418;border:1px solid #2a2f36;border-radius:10px;padding:8px;box-shadow:0 10px 24px rgba(0,0,0,.4);z-index:92}
 .sticker-backdrop{position:fixed;inset:0;background:transparent;z-index:91}
@@ -1300,5 +1330,3 @@ button.call-status-badge:hover{
     box-shadow: none !important;
   }
 }
-
-

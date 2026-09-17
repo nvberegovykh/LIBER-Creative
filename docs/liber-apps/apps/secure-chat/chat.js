@@ -160,6 +160,8 @@
       this._pinnedByConn = new Map();
       this._selectionMode = false;
       this._selectedMessages = new Map();
+      this._identityRecoveryState = null;
+      this._identityRecoveryInFlight = false;
       this.chatCategories = [];
       this.connCategories = {};
       this.selectedCategory = 'all';
@@ -2136,7 +2138,7 @@
           cryptoEpoch: cryptoMeta.cryptoEpoch,
           updatedAt: new Date().toISOString()
         });
-      }catch(err){ alert(err?.message || 'Failed to edit'); }
+      }catch(err){ throw err; }
     }
     async deleteMessage(connId, msgId, el){
       if (!confirm('Delete this message?')) return;
@@ -3105,6 +3107,104 @@
         this._showCallError(msg);
       else
         this._showError(msg);
+    }
+
+    _isIdentityMismatch(error){
+      return String(error?.code || '') === 'secure-chat/identity-mismatch';
+    }
+
+    _showIdentityRecovery(state, message = ''){
+      this._identityRecoveryState = state || this._identityRecoveryState;
+      const host = document.getElementById('identity-recovery');
+      const copy = document.getElementById('identity-recovery-message');
+      const button = document.getElementById('identity-recovery-btn');
+      if (!host || !copy || !button) return;
+      copy.textContent = message || 'Re-enrollment publishes this device\'s existing non-exportable key after account re-authentication. Messages encrypted only to a lost previous device cannot be reconstructed.';
+      host.classList.remove('hidden');
+      if (!button._identityRecoveryBound){
+        button._identityRecoveryBound = true;
+        button.addEventListener('click', ()=> this.recoverChatIdentity().catch((error)=> this._handleChatOperationError(error)));
+      }
+    }
+
+    _hideIdentityRecovery(){
+      this._identityRecoveryState = null;
+      const host = document.getElementById('identity-recovery');
+      if (host) host.classList.add('hidden');
+    }
+
+    async _reauthenticateForIdentityRecovery(){
+      const user = window.firebaseService?.auth?.currentUser || this.currentUser;
+      if (!user) throw Object.assign(new Error('Sign in again before re-enrolling Secure Chat.'), { code:'unauthenticated' });
+      const providers = new Set((Array.isArray(user.providerData) ? user.providerData : []).map((row)=> String(row?.providerId || '')));
+      if (providers.has('google.com') && firebase?.GoogleAuthProvider && firebase?.reauthenticateWithPopup){
+        const provider = new firebase.GoogleAuthProvider();
+        if (typeof provider.setCustomParameters === 'function') provider.setCustomParameters({ prompt:'select_account' });
+        await firebase.reauthenticateWithPopup(user, provider);
+        await user.getIdToken(true);
+        return;
+      }
+      if (providers.has('password') && user.email && firebase?.EmailAuthProvider?.credential && firebase?.reauthenticateWithCredential){
+        const password = window.prompt('Enter your LIBER password to verify this device. It is sent only to Firebase Authentication.');
+        if (password == null) throw Object.assign(new Error('Device re-enrollment was cancelled.'), { code:'secure-chat/recovery-cancelled' });
+        const credential = firebase.EmailAuthProvider.credential(user.email, password);
+        await firebase.reauthenticateWithCredential(user, credential);
+        await user.getIdToken(true);
+        return;
+      }
+      throw Object.assign(new Error('Sign out and sign in again with your account, then return here and retry device re-enrollment.'), { code:'secure-chat/sign-in-again' });
+    }
+
+    async recoverChatIdentity(){
+      if (this._identityRecoveryInFlight) return;
+      const state = this._identityRecoveryState;
+      if (!state?.publicJwk || !state?.expectedPublishedFingerprint)
+        throw new Error('Reload Secure Chat before re-enrolling this device.');
+      const host = document.getElementById('identity-recovery');
+      const button = document.getElementById('identity-recovery-btn');
+      this._identityRecoveryInFlight = true;
+      if (host) host.classList.add('busy');
+      if (button) button.textContent = 'Verifying…';
+      const payload = {
+        publicJwk: state.publicJwk,
+        expectedPublishedFingerprint: state.expectedPublishedFingerprint
+      };
+      try{
+        let result;
+        try{
+          result = await window.firebaseService.callFunction('recoverSecureChatIdentity', payload);
+        }catch(error){
+          if (String(error?.code || '') !== 'requires-recent-login') throw error;
+          await this._reauthenticateForIdentityRecovery();
+          result = await window.firebaseService.callFunction('recoverSecureChatIdentity', payload);
+        }
+        if (!result?.ok) throw new Error('Secure Chat device re-enrollment returned no confirmation.');
+        this.sharedKeyCache = {};
+        this._cryptoMetaByConn.clear();
+        await this.ensurePublishedChatIdentity();
+        this._hideIdentityRecovery();
+        const groups = Number(result.affectedGroupCount || 0);
+        this._showErrorToast(groups > 0
+          ? `Device verified. ${groups} group conversation${groups === 1 ? '' : 's'} will rotate encryption before the next message.`
+          : 'This device is verified for encrypted chat.');
+      }finally{
+        this._identityRecoveryInFlight = false;
+        if (host) host.classList.remove('busy');
+        if (button) button.textContent = 'Re-enroll this device';
+      }
+    }
+
+    _handleChatOperationError(error){
+      if (this._isIdentityMismatch(error)){
+        this._showIdentityRecovery(error.identityRecovery || this._identityRecoveryState);
+        return;
+      }
+      const message = String(error?.message || error || 'Secure Chat operation failed.');
+      this._showError(message);
+    }
+
+    safeSendCurrent(){
+      return this.sendCurrent().catch((error)=> this._handleChatOperationError(error));
     }
 
     _avatarFromUser(user, fallback = '../../images/default-bird.png'){
@@ -4186,6 +4286,7 @@
       // then build per-participant envelopes without ever receiving a private key.
       try { await this.ensurePublishedChatIdentity(); } catch (error) {
         console.warn('Secure Chat identity enrollment is incomplete:', error?.message || 'unknown error');
+        if (this._isIdentityMismatch(error)) this._showIdentityRecovery(error.identityRecovery);
       }
 
       this.loadChatCategories();
@@ -4599,7 +4700,7 @@
               return;
             }
             e.preventDefault();
-            this.sendCurrent();
+            this.safeSendCurrent();
           }
         });
       }
@@ -5217,7 +5318,7 @@
         if (sendBtn){ sendBtn.click(); return; }
       }
       if ((input && input.value.trim().length) || hasQueuedAttachments){
-        this.sendCurrent();
+        this.safeSendCurrent();
       } else {
         // Toggle stable recording mode (audio <-> video)
         this._recordMode = this._recordMode === 'video' ? 'audio' : 'video';
@@ -7887,6 +7988,7 @@
         cipher,
         cryptoVersion: cryptoMeta.cryptoVersion,
         cryptoEpoch: cryptoMeta.cryptoEpoch,
+        identityFingerprints: cryptoMeta.identityFingerprints || null,
         fileUrl: legacyFileUrl,
         fileName: legacyFileName,
         sharedAsset: (sharedAsset && typeof sharedAsset === 'object') ? this.toPlainObject(sharedAsset) : null,
@@ -8320,6 +8422,10 @@
         } catch (err) {
           console.error('Send file error details:', err.code, err.message, err);
           result.failedFiles.push(f);
+          if (this._isIdentityMismatch(err)) {
+            this._showIdentityRecovery(err.identityRecovery);
+            if (silent) throw err;
+          }
           if (!silent) alert('Failed to send file: ' + err.message);
         }
       }
@@ -8946,23 +9052,65 @@
           createdAt: new Date().toISOString()
         });
       } else {
-        const publishedFingerprint = await chatCrypto.fingerprintPublicJwk(published.data()?.publicJwk);
+        const publishedRecord = published.data() || {};
+        const publishedFingerprint = await chatCrypto.fingerprintPublicJwk(publishedRecord.publicJwk);
         if (publishedFingerprint !== fingerprint) {
-          throw new Error('This device does not match your published chat identity. Re-enroll it before sending.');
+          const error = new Error('This device does not match your published chat identity. Verify the account before re-enrolling it.');
+          error.code = 'secure-chat/identity-mismatch';
+          error.identityRecovery = {
+            uid: myUid,
+            publicJwk: identity.publicJwk,
+            deviceFingerprint: fingerprint,
+            expectedPublishedFingerprint: publishedFingerprint
+          };
+          this._identityRecoveryState = error.identityRecovery;
+          this._showIdentityRecovery(error.identityRecovery);
+          throw error;
         }
       }
+      this._hideIdentityRecovery();
       return { identity, fingerprint };
     }
 
-    pinChatIdentity(uid, fingerprint){
+    pinChatIdentity(uid, fingerprint, publishedRecord = null){
       const myUid = String(this.currentUser?.uid || '').trim();
       const peerUid = String(uid || '').trim();
       const value = String(fingerprint || '').trim();
       if (!myUid || !peerUid || !value) throw new Error('Invalid chat identity fingerprint.');
       const pinKey = `liber_secure_chat_peer_pin_v2:${myUid}:${peerUid}`;
       const pinned = String(localStorage.getItem(pinKey) || '').trim();
-      if (pinned && pinned !== value) throw new Error(`The encryption key for ${peerUid} changed. Verify their identity before continuing.`);
+      if (pinned && pinned !== value) {
+        const lineage = Array.isArray(publishedRecord?.fingerprintLineage)
+          ? publishedRecord.fingerprintLineage.map(String)
+          : [];
+        const rotation = publishedRecord?.rotation || {};
+        const serverRecovered = rotation.schema === 'liber.secure-chat.identity-rotation.v1'
+          && String(rotation.toFingerprint || '') === value
+          && lineage.includes(pinned);
+        if (!serverRecovered)
+          throw new Error(`The encryption key for ${peerUid} changed without a verified recovery lineage. Verify their identity before continuing.`);
+        localStorage.setItem(pinKey, value);
+        return { rotated: true, previousFingerprint: pinned, fingerprint: value };
+      }
       if (!pinned) localStorage.setItem(pinKey, value);
+      return { rotated: false, fingerprint: value };
+    }
+
+    async resolvePublishedJwkForFingerprint(publishedRecord, fingerprint){
+      const wanted = String(fingerprint || '').trim();
+      const candidates = [
+        publishedRecord?.publicJwk,
+        ...(Array.isArray(publishedRecord?.publicKeyHistory)
+          ? publishedRecord.publicKeyHistory.map((entry)=> entry?.publicJwk)
+          : [])
+      ].filter(Boolean);
+      for (const candidate of candidates){
+        try{
+          const candidateFingerprint = await chatCrypto.fingerprintPublicJwk(candidate);
+          if (!wanted || candidateFingerprint === wanted) return { publicJwk:candidate, fingerprint:candidateFingerprint };
+        }catch(_){ }
+      }
+      throw new Error('The required historical Secure Chat public identity is unavailable.');
     }
 
     async groupParticipantDigest(participants){
@@ -8996,9 +9144,10 @@
       for (const participantUid of participants){
         const keySnap = await firebase.getDoc(firebase.doc(this.db, 'userPublicKeys', participantUid));
         if (!keySnap.exists()) throw new Error(`Group key rotation is blocked until ${participantUid} opens Secure Chat and publishes an encryption identity.`);
-        const participantJwk = keySnap.data()?.publicJwk;
+        const participantRecord = keySnap.data() || {};
+        const participantJwk = participantRecord.publicJwk;
         const recipientFingerprint = await chatCrypto.fingerprintPublicJwk(participantJwk);
-        this.pinChatIdentity(participantUid, recipientFingerprint);
+        this.pinChatIdentity(participantUid, recipientFingerprint, participantRecord);
         const wrappingKey = await chatCrypto.deriveSharedAesKey(
           issuerPrivateKey,
           participantJwk,
@@ -9072,13 +9221,23 @@
       const myUid = String(this.currentUser?.uid || '').trim();
       const envelope = state?.envelopes?.[myUid];
       if (!state || !envelope?.wrappedKey || !state.issuerUid) throw new Error(`No group-key envelope is available for epoch ${wantedEpoch}.`);
-      await this.ensurePublishedChatIdentity();
+      // Read-only history recovery uses the non-exportable key already on this
+      // device even when another device is now the account's published identity.
+      // New writes still require ensurePublishedChatIdentity() in the send path.
+      const localIdentity = await chatCrypto.loadOrCreateIdentity(myUid);
+      const localFingerprint = await chatCrypto.fingerprintPublicJwk(localIdentity.publicJwk);
+      if (envelope.recipientFingerprint && envelope.recipientFingerprint !== localFingerprint)
+        throw new Error(`This device does not hold the private key for group epoch ${wantedEpoch}.`);
       const issuerSnap = await firebase.getDoc(firebase.doc(this.db, 'userPublicKeys', String(state.issuerUid)));
       if (!issuerSnap.exists()) throw new Error('The group-key issuer identity is unavailable.');
-      const issuerJwk = issuerSnap.data()?.publicJwk;
-      const issuerFingerprint = await chatCrypto.fingerprintPublicJwk(issuerJwk);
-      if (state.issuerFingerprint && state.issuerFingerprint !== issuerFingerprint) throw new Error('The group-key issuer fingerprint does not match the published epoch metadata.');
-      this.pinChatIdentity(state.issuerUid, issuerFingerprint);
+      const issuerRecord = issuerSnap.data() || {};
+      const currentIssuerFingerprint = await chatCrypto.fingerprintPublicJwk(issuerRecord.publicJwk);
+      this.pinChatIdentity(state.issuerUid, currentIssuerFingerprint, issuerRecord);
+      const issuerIdentity = await this.resolvePublishedJwkForFingerprint(issuerRecord, state.issuerFingerprint || currentIssuerFingerprint);
+      const issuerJwk = issuerIdentity.publicJwk;
+      const issuerFingerprint = issuerIdentity.fingerprint;
+      if (state.issuerFingerprint && state.issuerFingerprint !== issuerFingerprint)
+        throw new Error('The group-key issuer fingerprint does not match the published epoch metadata.');
       const privateKey = await chatCrypto.getPrivateKey(myUid);
       const wrappingKey = await chatCrypto.deriveSharedAesKey(
         privateKey,
@@ -9118,10 +9277,11 @@
       return key;
     }
 
-    async getEncryptionKeyForConn(connId){
+    async getEncryptionKeyForConn(connId, options = {}){
       const cid = String(connId || '').trim();
       const myUid = String(this.currentUser?.uid || '').trim();
       if (!cid || !myUid) throw new Error('Sign in and select a chat before sending.');
+      const requirePublishedSelf = options?.requirePublishedSelf !== false;
 
       let conn = (this.connections || []).find((row)=> row && row.id === cid) || null;
       // Encryption always uses the live membership/key epoch. A cached sidebar
@@ -9136,24 +9296,42 @@
         || conn?.type === 'project'
         || !!String(conn?.groupName || '').trim()
         || conn?.groupKeyVersion === 'liber.secure-chat.group-key-envelopes.v1';
+      // Every write path uses the default and therefore proves this device is the
+      // account's current, recently recoverable published identity. Decryption
+      // can opt out so an old device retains access to epochs it actually owns.
+      if (requirePublishedSelf) await this.ensurePublishedChatIdentity();
       if (isGroupOrProject) return this.getGroupEncryptionKeyForConn(cid, conn || {});
       const peerUid = participants.find((uid)=> uid !== myUid);
       if (!peerUid) throw new Error('The recipient identity could not be verified.');
 
-      await this.ensurePublishedChatIdentity();
-
       const peerSnap = await firebase.getDoc(firebase.doc(this.db, 'userPublicKeys', peerUid));
       if (!peerSnap.exists()) throw new Error('The recipient must open Secure Chat once before encrypted messages can be sent.');
-      const peerJwk = peerSnap.data()?.publicJwk;
-      const peerFingerprint = await chatCrypto.fingerprintPublicJwk(peerJwk);
-      this.pinChatIdentity(peerUid, peerFingerprint);
-
-      const cached = this.sharedKeyCache[cid];
-      if (cached && cached.peerFingerprint === peerFingerprint && cached.aesKey) return cached.aesKey;
-      const myPriv = await chatCrypto.getPrivateKey(myUid);
+      const peerRecord = peerSnap.data() || {};
+      const currentPeerFingerprint = await chatCrypto.fingerprintPublicJwk(peerRecord.publicJwk);
+      this.pinChatIdentity(peerUid, currentPeerFingerprint, peerRecord);
+      const peerIdentity = await this.resolvePublishedJwkForFingerprint(
+        peerRecord,
+        String(options?.peerFingerprintHint || '').trim() || currentPeerFingerprint
+      );
+      const peerJwk = peerIdentity.publicJwk;
+      const peerFingerprint = peerIdentity.fingerprint;
+      const localIdentity = await chatCrypto.loadOrCreateIdentity(myUid);
+      const localFingerprint = await chatCrypto.fingerprintPublicJwk(localIdentity.publicJwk);
+      const cacheKey = `${cid}:direct:${localFingerprint}:${peerFingerprint}`;
+      const cached = this.sharedKeyCache[cacheKey];
+      const cryptoMeta = {
+        cryptoVersion:'liber.secure-chat.ecdh-p256.v2',
+        cryptoEpoch:null,
+        identityFingerprints: { [myUid]:localFingerprint, [peerUid]:peerFingerprint }
+      };
+      if (cached?.aesKey) {
+        if (requirePublishedSelf) this._cryptoMetaByConn.set(cid, cryptoMeta);
+        return cached.aesKey;
+      }
+      const myPriv = localIdentity.privateKey;
       const aesKey = await chatCrypto.deriveSharedAesKey(myPriv, peerJwk, `liber-secure-chat:${cid}`);
-      this.sharedKeyCache[cid] = { aesKey, peerFingerprint, cryptoVersion:'liber.secure-chat.ecdh-p256.v2' };
-      this._cryptoMetaByConn.set(cid, { cryptoVersion:'liber.secure-chat.ecdh-p256.v2', cryptoEpoch:null });
+      this.sharedKeyCache[cacheKey] = { aesKey, localFingerprint, peerFingerprint, cryptoVersion:'liber.secure-chat.ecdh-p256.v2' };
+      if (requirePublishedSelf) this._cryptoMetaByConn.set(cid, cryptoMeta);
       return aesKey;
     }
 
@@ -9170,7 +9348,9 @@
         return this.unwrapGroupKeyForConn(cid, conn || {}, epoch);
       }
       if (message?.cryptoVersion === 'liber.secure-chat.ecdh-p256.v2') {
-        return this.getEncryptionKeyForConn(connId);
+        const peerUid = await this.getPeerUidForConn(connId);
+        const peerFingerprintHint = String(message?.identityFingerprints?.[peerUid] || '').trim();
+        return this.getEncryptionKeyForConn(connId, { requirePublishedSelf:false, peerFingerprintHint });
       }
       return this.getFallbackKeyForConn(connId);
     }

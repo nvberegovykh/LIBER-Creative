@@ -55,7 +55,7 @@ jobs:
           grep -q "spatialObjectsVisible: false" "$W"
           grep -q "REVEX_LIGHTWEIGHT_OBJECT_OUTLINES" "$W"
           grep -q "workspace-r51.js?v=20260818-current-workspace1" "$I"
-          grep -q "render-agent.js?v=20260818-google-render1" "$I"
+          grep -q "render-agent.js?v=20260820r146-render-broker1" "$I"
           grep -q "providerOwner:'render-agent.js'" "$C"
           grep -q "localModelCache:false" "$C"
           grep -q "legacyIframe:false" "$C"

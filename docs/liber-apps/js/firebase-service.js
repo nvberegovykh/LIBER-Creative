@@ -1,9 +1,11 @@
 /**
  * Firebase Service for Liber Apps Control Panel
  * Handles user authentication and data storage with Firebase
- * Updated for Firebase Modular SDK v12.1.0
+ * Updated for Firebase Modular SDK v12.17.x
  * Full Firebase Database integration
  */
+const LIBER_FUNCTIONS_CANONICAL_REGION = 'us-central1';
+const LIBER_FUNCTIONS_FAILOVER_REGION = 'europe-west1';
 
 class FirebaseService {
     constructor() {
@@ -40,6 +42,10 @@ class FirebaseService {
      */
     async registerMessaging(user){
         try{
+            // Only the top-level LIBER shell owns the browser push registration.
+            // Embedded REVEX/Secure Chat frames have their own Firebase realms for
+            // Firestore correctness, but must not race duplicate token writes.
+            if (window.self !== window.top) return;
             const keys = await window.secureKeyManager.getKeys();
             const vapid = keys && keys.messaging && keys.messaging.vapidPublicKey;
             if (!vapid) return;
@@ -71,7 +77,7 @@ class FirebaseService {
                 localStorage.setItem(`${k}_updatedAt`, new Date().toISOString());
             }catch(_){/* ignore */}
             try{
-                await this.callFunction('saveFcmToken', { token });
+                await this.callFunction('saveFcmToken', { token, deviceId: this.getOrCreateDeviceId() });
             }catch(_){/* best-effort; push may not work without token in Firestore */}
         }catch(_){/* ignore */}
     }
@@ -114,7 +120,9 @@ class FirebaseService {
             
             // Initialize Firebase with modular SDK
             if (window.__devLog) window.__devLog('Initializing Firebase app...');
-            this.app = firebase.initializeApp(firebaseConfig);
+            const existingApps = typeof firebase.getApps === 'function' ? firebase.getApps() : [];
+            this.app = existingApps.find((candidate) => candidate?.name === '[DEFAULT]')
+                || firebase.initializeApp(firebaseConfig);
             if (window.__devLog) window.__devLog('Firebase app created with name:', this.app.name);
 
             // Initialize services with modular SDK
@@ -131,7 +139,7 @@ class FirebaseService {
                     const keys = await window.secureKeyManager.getKeys();
                     preferredRegion = keys.functionsRegion || keys.firebase?.functionsRegion || 'us-central1';
                 } catch(_) { /* default */ }
-                const regionOrder = [preferredRegion, 'europe-west1']
+                const regionOrder = [LIBER_FUNCTIONS_CANONICAL_REGION, preferredRegion, LIBER_FUNCTIONS_FAILOVER_REGION]
                     .filter(Boolean)
                     .filter((v,i,a)=> a.indexOf(v)===i);
                 this.functionsByRegion = {};
@@ -1349,7 +1357,7 @@ class FirebaseService {
                     throw new Error('REVEX managed Energy broker returned no response.');
                 return response.data;
             }
-            if (name === 'saveFcmToken' || name === 'saveSwitchToken'){
+            if (name === 'saveSwitchToken'){
                 const user = this.auth?.currentUser || null;
                 if (!user) return null;
                 try{
@@ -1357,6 +1365,18 @@ class FirebaseService {
                 }catch(_){
                     return null;
                 }
+            }
+            if (name === 'saveFcmToken') {
+                if (!this.auth?.currentUser) return null;
+                return await this._callAuthenticatedHttp('saveFcmTokenHttp', payload);
+            }
+            if (name === 'recoverSecureChatIdentity') {
+                if (!this.auth?.currentUser) {
+                    const error = new Error('Sign in before re-enrolling Secure Chat.');
+                    error.code = 'unauthenticated';
+                    throw error;
+                }
+                return await this._callAuthenticatedHttp('recoverSecureChatIdentityHttp', payload);
             }
             // HTTP endpoints for callables that often 401 in iframe - use first
             if (name === 'sendProjectRespondEmail' && this.auth?.currentUser) {
@@ -1451,9 +1471,51 @@ class FirebaseService {
                 return null;
             }
             console.warn('Callable function failed:', name, e?.message || e);
-            if (name === 'runRevexEnergy' || name === 'sendProjectRespondEmail' || name === 'approveProject' || name === 'ensureProjectChat' || name === 'inviteProjectMemberByEmail' || name === 'removeProjectMember' || name === 'submitProjectRequest' || name === 'submitProjectReview' || name === 'deleteProjectReview' || name === 'adminDeleteUser') throw e;
+            if (name === 'runRevexEnergy' || name === 'sendProjectRespondEmail' || name === 'approveProject' || name === 'ensureProjectChat' || name === 'recoverSecureChatIdentity' || name === 'inviteProjectMemberByEmail' || name === 'removeProjectMember' || name === 'submitProjectRequest' || name === 'submitProjectReview' || name === 'deleteProjectReview' || name === 'adminDeleteUser') throw e;
             return null;
         }
+    }
+
+    async _callAuthenticatedHttp(functionName, payload) {
+        const user = this.auth?.currentUser;
+        if (!user) {
+            const error = new Error('Sign in before calling this service.');
+            error.code = 'unauthenticated';
+            throw error;
+        }
+        const token = await user.getIdToken();
+        const projectId = this.app?.options?.projectId || 'liber-apps-cca20';
+        const regions = Array.from(new Set([
+            LIBER_FUNCTIONS_CANONICAL_REGION,
+            ...Object.keys(this.functionsByRegion || {}),
+            LIBER_FUNCTIONS_FAILOVER_REGION
+        ].filter(Boolean)));
+        const requestId = `liber-http-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,10)}`;
+        let lastError = null;
+        for (const region of regions) {
+            const url = `https://${region}-${projectId}.cloudfunctions.net/${functionName}`;
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'X-Liber-Request-Id': requestId },
+                    body: JSON.stringify(payload || {})
+                });
+                const json = await response.json().catch(() => ({}));
+                if (response.ok) return json;
+                const error = new Error(json?.error || json?.message || `HTTP ${response.status}`);
+                error.code = String(json?.code || `http-${response.status}`);
+                error.status = response.status;
+                error.details = json;
+                // Auth, validation and membership failures are authoritative. Only
+                // an absent/unhealthy regional deployment may fall through.
+                if (response.status !== 404 && response.status < 500) throw error;
+                lastError = error;
+            } catch (error) {
+                if (Number(error?.status || 0) >= 400 && Number(error?.status || 0) < 500 && Number(error?.status || 0) !== 404) throw error;
+                lastError = error;
+            }
+        }
+        throw lastError || new Error(`${functionName} is unavailable in the configured Firebase regions.`);
     }
 
     async _callSendProjectRespondHttp(payload) {

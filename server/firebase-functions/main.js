@@ -7,5 +7,8 @@ const projectChat = require('./project-chat');
 
 module.exports = {
   ...energy,
-  ensureProjectChatHttp: projectChat.ensureProjectChatHttp
+  ensureProjectChatHttp: projectChat.ensureProjectChatHttp,
+  recoverSecureChatIdentityHttp: projectChat.recoverSecureChatIdentityHttp,
+  saveFcmTokenHttp: projectChat.saveFcmTokenHttp,
+  onChatMessageWrite: projectChat.onChatMessageWrite
 };

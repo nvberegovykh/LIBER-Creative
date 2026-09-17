@@ -220,7 +220,8 @@ def _missing_core(facts: dict) -> list[str]:
     if not (semantic.get("floorAreaFt2") or best(en or pages, "lighting", "floorAreaFt2") or best(tz or pages, "bulk", "conditionedFloorAreaFt2") or best(tz or pages, "bulk", "grossFloorAreaFt2")):
         missing.append("floorAreaFt2")
     envelope = [row for page in en for row in list(page.get("envelope") or []) if float(row.get("confidence") or 0) >= MIN_CONFIDENCE]
-    if not envelope:
+    joinable, _ = _retain_joinable_envelope_evidence(envelope)
+    if not any(_row_has_geometry(row) for row in joinable):
         missing.append("envelope")
     return missing
 
@@ -290,6 +291,81 @@ def _visible_number(text: str, value: float) -> bool:
     return any(token in normalized for token in candidates)
 
 
+def _row_code(row: dict) -> tuple[str, str]:
+    """Return an exact EN assembly tag and its base tag without fuzzy matching."""
+    source = " ".join(_text(row.get(key)) for key in ("assemblyType", "description", "evidence"))
+    match = re.search(r"(?<![A-Z0-9])([A-Z]{1,3}\d+(?:\.\d+)?)(?![A-Z0-9.])", source.upper())
+    if not match:
+        return "", ""
+    code = match.group(1)
+    return code, code.split(".", 1)[0]
+
+
+def _row_has_geometry(row: dict) -> bool:
+    kind = _text(row.get("kind")).lower()
+    if _number(row.get("grossAreaFt2")) is None:
+        return False
+    return kind not in {"wall", "window", "door"} or bool(_text(row.get("orientation")))
+
+
+def _row_has_thermal(row: dict) -> bool:
+    kind = _text(row.get("kind")).lower()
+    if kind == "window":
+        return row.get("uFactor") not in (None, "") and row.get("shgc") not in (None, "")
+    if kind == "door":
+        return row.get("uFactor") not in (None, "")
+    if kind in {"wall", "roof", "floor"}:
+        return row.get("cavityR") not in (None, "") or row.get("continuousR") not in (None, "")
+    return False
+
+
+def _row_thermal_signature(row: dict) -> tuple:
+    kind = _text(row.get("kind")).lower()
+    if kind in {"window", "door"}:
+        return (row.get("uFactor"), row.get("shgc"))
+    return (row.get("cavityR"), row.get("continuousR"))
+
+
+def _retain_joinable_envelope_evidence(rows: list[dict]) -> tuple[list[dict], list[str]]:
+    """Keep only current EN row halves that can form an unambiguous filing row.
+
+    Diagram rows own area/orientation and schedule rows own thermal properties. They
+    may be separate records and separate sheets, but must join by exact/base assembly
+    tag. Roof/floor use the existing bounded exception: one unique same-kind thermal
+    signature may serve tagged regions. Conflicting signatures fail closed.
+    """
+    geometry = [row for row in rows if _row_has_geometry(row)]
+    thermal = [row for row in rows if _row_has_thermal(row)]
+    kept_ids: set[int] = set()
+    rejected: list[str] = []
+
+    for diagram in geometry:
+        kind = _text(diagram.get("kind")).lower()
+        code, base = _row_code(diagram)
+        same_kind = [row for row in thermal if _text(row.get("kind")).lower() == kind]
+        exact = [row for row in same_kind if code and _row_code(row)[0] == code]
+        base_matches = [row for row in same_kind if base and _row_code(row)[1] == base]
+        candidates = exact or base_matches
+        if not candidates and kind in {"roof", "floor"}:
+            signatures = {_row_thermal_signature(row) for row in same_kind}
+            if len(signatures) == 1:
+                candidates = same_kind
+        if not code and kind in {"wall", "window", "door"}:
+            rejected.append(f"EN {kind} geometry row has no exact assembly tag")
+            continue
+        if not candidates:
+            rejected.append(f"EN {kind or 'envelope'} geometry row {code or '<unlabeled>'} has no thermal-property match")
+            continue
+        signatures = {_row_thermal_signature(row) for row in candidates}
+        if len(signatures) != 1:
+            rejected.append(f"EN {kind or 'envelope'} geometry row {code or '<unlabeled>'} has conflicting thermal-property matches")
+            continue
+        kept_ids.add(id(diagram))
+        kept_ids.update(id(row) for row in candidates)
+
+    return [row for row in rows if id(row) in kept_ids], rejected
+
+
 def _validate_envelope_rows(candidate: dict, selected: list[dict], pdf_text_by_source: dict[str, str]) -> tuple[list[dict], list[str]]:
     allowed = {row["source"]: row for row in selected}
     accepted: list[dict] = []
@@ -314,23 +390,13 @@ def _validate_envelope_rows(candidate: dict, selected: list[dict], pdf_text_by_s
             continue
         numeric_keys = ("grossAreaFt2", "uFactor", "shgc", "cavityR", "continuousR")
         values = [(_number(row.get(key)) if key == "grossAreaFt2" else (float(row[key]) if row.get(key) not in (None, "") else None)) for key in numeric_keys]
-        if kind in {"wall", "window", "door"} and not _text(row.get("orientation")):
-            rejected.append(f"row {index}: oriented envelope row has no orientation")
-            continue
-        if _number(row.get("grossAreaFt2")) is None:
-            rejected.append(f"row {index}: no positive gross area")
-            continue
-        if kind in {"window", "door"} and row.get("uFactor") in (None, ""):
-            rejected.append(f"row {index}: fenestration/door has no U-factor")
-            continue
-        if kind == "window" and row.get("shgc") in (None, ""):
-            rejected.append(f"row {index}: window has no SHGC")
-            continue
-        if kind in {"wall", "roof", "floor"} and row.get("cavityR") in (None, "") and row.get("continuousR") in (None, ""):
-            rejected.append(f"row {index}: opaque assembly has no R-value")
-            continue
         if not _text(row.get("assemblyType")) and not _text(row.get("description")):
             rejected.append(f"row {index}: no assembly label")
+            continue
+        has_geometry = _row_has_geometry(row)
+        has_thermal = _row_has_thermal(row)
+        if not has_geometry and not has_thermal:
+            rejected.append(f"row {index}: neither complete geometry nor required thermal evidence")
             continue
         visible = _flat(pdf_text_by_source.get(source, ""))
         proof = visible if len(visible) >= 20 else evidence
@@ -342,7 +408,9 @@ def _validate_envelope_rows(candidate: dict, selected: list[dict], pdf_text_by_s
         row["kind"] = kind
         row["confidence"] = confidence
         accepted.append(row)
-    return accepted, rejected
+    joinable, join_rejected = _retain_joinable_envelope_evidence(accepted)
+    rejected.extend(join_rejected)
+    return joinable, rejected
 
 
 def resolve_request(

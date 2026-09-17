@@ -11,7 +11,7 @@ const r119Path='server/revex-render-worker/render_r119.py',r126Path='server/reve
 const r119=fs.existsSync(r119Path)?read(r119Path):'',r126=fs.existsSync(r126Path)?read(r126Path):'';
 const must=(t,n,m)=>assert(t.includes(n),m||`missing ${n}`),forbid=(t,n,m)=>assert(!t.includes(n),m||`forbidden ${n}`);
 must(ui,'viewer-texture-r115.js?v=','r115 texture owner must remain loaded through a cache-broken URL');
-for(const marker of ['docs-pages-r115.js?v=20260817r115-docs1','render-touchups-r115.js?v=20260817r115-render-ui1'])must(ui,marker,'r115 runtime must remain loaded');
+for(const marker of ['docs-pages-r115.js?v=20260820r147-release1','render-touchups-r115.js?v=20260818r132-render-owner-guard1'])must(ui,marker,'r115 runtime must remain loaded through its current cache key');
 must(texture,"geometry.setAttribute('uv'",'exact meshes without UVs must receive generated UVs');
 must(texture,'revexGeneratedUvR115','generated UVs must be one-time/stable');
 // Newer appearance convergence makes design/model color a true fallback rather

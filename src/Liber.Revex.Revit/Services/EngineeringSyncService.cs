@@ -15,10 +15,16 @@ public sealed class EngineeringSyncService
     private const double PublicationMinimum = 0.80;
     private const double QualityTarget = 0.95;
     private const string StructuredScheduleEvidenceName = "REVIT-SCHEDULE-EVIDENCE.json";
+    private const string GeometryEvidenceName = "REVIT-ENERGY-GEOMETRY.json";
 
-    public EngineeringSyncOutput Create(GbxmlEngineeringOutput source, RevexProjectBinding binding, string weatherPath)
+    public EngineeringSyncOutput Create(
+        GbxmlEngineeringOutput source,
+        RevexProjectBinding binding,
+        string weatherPath,
+        string? sourceRevision = null)
     {
         string projectId = binding?.ProjectId?.Trim() ?? "";
+        sourceRevision = string.IsNullOrWhiteSpace(sourceRevision) ? null : sourceRevision.Trim();
         if (!string.Equals(binding?.BindingVersion, "active-revit-evidence-v1", StringComparison.Ordinal) ||
             string.IsNullOrWhiteSpace(binding?.IdentityEvidenceDigest))
             throw new InvalidOperationException("Engineering Sync requires the active Revit document's evidence-verified project binding.");
@@ -36,6 +42,8 @@ public sealed class EngineeringSyncService
         IReadOnlyDictionary<string, double> integrity = ValidatePublicationIntegrity(source);
         ValidateEnergyPageEvidence(source.RunFolder, binding);
         ValidateStructuredScheduleEvidence(source.RunFolder);
+        GeometryEvidenceMetadata geometryMetadata = ValidateGeometryEvidence(
+            source.RunFolder, source.GbxmlPath, source.ModelTitle, binding.DocumentFingerprint);
         string resolvedWeather = ResolveWeatherFile(weatherPath, Path.GetDirectoryName(source.GbxmlPath) ?? source.OutputFolder);
         WeatherMetadata weatherMeta = ValidateWeatherFile(resolvedWeather);
         RevexDiagnostics.Dependency("ENERGY-SYNC", "Weather input (.EPW)", true,
@@ -58,7 +66,12 @@ public sealed class EngineeringSyncService
             string weather = CopyRequired(resolvedWeather, staging, "weather.epw");
             string? report = CopyOptional(source.ReportPath, staging, "gbxml-report.json");
             string? summary = CopyOptional(source.SummaryPath, staging, "gbxml-summary.txt");
+            string geometryEvidence = CopyRequired(
+                Path.Combine(source.RunFolder, GeometryEvidenceName),
+                staging,
+                "revit-energy-geometry.json");
             var evidence = new List<string>();
+            evidence.Add(geometryEvidence);
             if (Directory.Exists(source.RunFolder))
             {
                 string pageIndexSource = Path.Combine(source.RunFolder, "REVIT-PAGE-EVIDENCE.json");
@@ -88,7 +101,8 @@ public sealed class EngineeringSyncService
                 foreach (string path in Directory.GetFiles(source.RunFolder, "*.json", SearchOption.TopDirectoryOnly))
                 {
                     if (string.Equals(Path.GetFileName(path), "REVIT-PAGE-EVIDENCE.json", StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(Path.GetFileName(path), "REVIT-PROJECT-IDENTITY.json", StringComparison.OrdinalIgnoreCase)) continue;
+                        string.Equals(Path.GetFileName(path), "REVIT-PROJECT-IDENTITY.json", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(Path.GetFileName(path), GeometryEvidenceName, StringComparison.OrdinalIgnoreCase)) continue;
                     string target = Path.Combine(staging, "engine-" + Path.GetFileName(path));
                     File.Copy(path, target, overwrite: true);
                     evidence.Add(target);
@@ -113,6 +127,8 @@ public sealed class EngineeringSyncService
                     ? "revit-page-index"
                     : name.Equals("revit-project-identity.json", StringComparison.OrdinalIgnoreCase)
                         ? "revit-project-identity"
+                    : name.Equals("revit-energy-geometry.json", StringComparison.OrdinalIgnoreCase)
+                        ? "revit-energy-geometry-evidence"
                     : name.Equals("engine-" + StructuredScheduleEvidenceName, StringComparison.OrdinalIgnoreCase)
                         ? "revit-schedule-evidence"
                     : name.StartsWith("REVIT_PAGE_", StringComparison.OrdinalIgnoreCase) && name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)
@@ -131,6 +147,7 @@ public sealed class EngineeringSyncService
                 initiator = RevexDiagnostics.CurrentInitiator,
                 operation = RevexDiagnostics.CurrentOperation,
                 projectId,
+                sourceRevision,
                 projectBinding = new
                 {
                     version = binding.BindingVersion,
@@ -144,6 +161,22 @@ public sealed class EngineeringSyncService
                 revision,
                 createdAt = DateTime.UtcNow,
                 sourceModel = new { title = source.ModelTitle, path = source.ModelPath },
+                geometryEvidence = new
+                {
+                    schema = geometryMetadata.Schema,
+                    authority = geometryMetadata.Authority,
+                    file = Path.GetFileName(geometryEvidence),
+                    sha256 = Sha256(geometryEvidence),
+                    gbxmlSha256 = geometryMetadata.GbxmlSha256,
+                    documentFingerprint = binding.DocumentFingerprint,
+                    geometryMetadata.LevelCount,
+                    geometryMetadata.RoomCount,
+                    geometryMetadata.SpaceCount,
+                    geometryMetadata.PhysicalSurfaceCount,
+                    geometryMetadata.PhysicalOpeningCount,
+                    geometryMetadata.AnalyticalSurfaceCount,
+                    geometryMetadata.AnalyticalOpeningCount
+                },
                 gbxmlStatus = source.Status,
                 publicationIntegrity = new { threshold = PublicationMinimum, qualityTarget = QualityTarget, qualityTargetMet, lowestRatio = integrity.Values.Min(), belowQualityTarget, ratios = integrity },
                 weather = new { city = weatherMeta.City, stateProvince = weatherMeta.StateProvince, country = weatherMeta.Country, dataSource = weatherMeta.DataSource, wmo = weatherMeta.Wmo, latitude = weatherMeta.Latitude, longitude = weatherMeta.Longitude, timeZone = weatherMeta.TimeZone, elevation = weatherMeta.Elevation, sourceFile = Path.GetFileName(resolvedWeather), file = Path.GetFileName(weather), sha256 = Sha256(weather) },
@@ -218,6 +251,18 @@ public sealed class EngineeringSyncService
 
     private sealed record WeatherMetadata(string City, string StateProvince, string Country, string DataSource, string Wmo, double Latitude, double Longitude, double TimeZone, double Elevation);
 
+    private sealed record GeometryEvidenceMetadata(
+        string Schema,
+        string Authority,
+        string GbxmlSha256,
+        int LevelCount,
+        int RoomCount,
+        int SpaceCount,
+        int PhysicalSurfaceCount,
+        int PhysicalOpeningCount,
+        int AnalyticalSurfaceCount,
+        int AnalyticalOpeningCount);
+
     private static WeatherMetadata ValidateWeatherFile(string path)
     {
         if (!File.Exists(path) || !path.EndsWith(".epw", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("The selected weather input is not an EPW file.");
@@ -249,6 +294,132 @@ public sealed class EngineeringSyncService
     {
         using var stream = File.OpenRead(path);
         return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+    }
+
+    private static GeometryEvidenceMetadata ValidateGeometryEvidence(
+        string runFolder,
+        string gbxmlPath,
+        string expectedModelTitle,
+        string expectedDocumentFingerprint)
+    {
+        string path = Path.Combine(runFolder, GeometryEvidenceName);
+        if (!File.Exists(path))
+            throw new InvalidOperationException("Processed Revit energy geometry evidence is missing. Engineering Sync was not published.");
+
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(path));
+        JsonElement root = document.RootElement;
+        string Text(JsonElement owner, string name) =>
+            owner.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString() ?? ""
+                : "";
+        int Count(JsonElement owner, string name) =>
+            owner.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.Array
+                ? value.GetArrayLength()
+                : 0;
+        int NestedCount(JsonElement owner, string section, string name) =>
+            owner.TryGetProperty(section, out JsonElement value) && value.ValueKind == JsonValueKind.Object
+                ? Count(value, name)
+                : 0;
+
+        string schema = Text(root, "schema");
+        string authority = Text(root, "authority");
+        if (!string.Equals(schema, "liber.revex.revit-energy-geometry.v1", StringComparison.Ordinal) ||
+            !string.Equals(authority, "active-revit-document-processed-energy-geometry", StringComparison.Ordinal))
+            throw new InvalidOperationException("Processed Revit energy geometry evidence has an incompatible schema or authority.");
+
+        if (!root.TryGetProperty("sourceDocument", out JsonElement sourceDocument) ||
+            sourceDocument.ValueKind != JsonValueKind.Object)
+            throw new InvalidOperationException("Processed Revit energy geometry evidence has no source-document binding.");
+        string modelTitle = Text(sourceDocument, "title");
+        if (!string.Equals(modelTitle, expectedModelTitle, StringComparison.Ordinal))
+            throw new InvalidOperationException("Processed Revit energy geometry evidence belongs to a different active model.");
+        string documentFingerprint = Text(sourceDocument, "documentFingerprint");
+        if (!string.Equals(documentFingerprint, expectedDocumentFingerprint, StringComparison.Ordinal))
+            throw new InvalidOperationException("Processed Revit energy geometry evidence belongs to a different active-document fingerprint.");
+        string coordinateSystem = Text(sourceDocument, "coordinateSystem");
+        string linearUnit = Text(sourceDocument, "linearUnit");
+        string areaUnit = Text(sourceDocument, "areaUnit");
+        string phaseName = Text(sourceDocument, "phaseName");
+        bool phaseValid = sourceDocument.TryGetProperty("phaseId", out JsonElement phaseId) &&
+                          phaseId.TryGetInt64(out long phaseValue) && phaseValue >= 0 &&
+                          !string.IsNullOrWhiteSpace(phaseName);
+        if (!phaseValid ||
+            !string.Equals(coordinateSystem, "REVIT_HOST_INTERNAL", StringComparison.Ordinal) ||
+            !string.Equals(linearUnit, "foot", StringComparison.Ordinal) ||
+            !string.Equals(areaUnit, "square-foot", StringComparison.Ordinal))
+            throw new InvalidOperationException("Processed Revit energy geometry evidence has an invalid phase, coordinate system, or unit contract.");
+
+        if (!root.TryGetProperty("gbxml", out JsonElement gbxml) || gbxml.ValueKind != JsonValueKind.Object)
+            throw new InvalidOperationException("Processed Revit energy geometry evidence has no gbXML digest binding.");
+        string gbxmlSha = Text(gbxml, "sha256");
+        if (!string.Equals(gbxmlSha, Sha256(gbxmlPath), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Processed Revit energy geometry evidence does not match the published gbXML bytes.");
+
+        int levels = Count(root, "levels");
+        int rooms = Count(root, "rooms");
+        int spaces = Count(root, "spaces");
+        int processedSpaces = Count(root, "processedSpaces");
+        int physicalSurfaces = NestedCount(root, "physical", "surfaces");
+        int physicalOpenings = NestedCount(root, "physical", "openings");
+        int analyticalSurfaces = NestedCount(root, "analytical", "surfaces");
+        int analyticalOpenings = NestedCount(root, "analytical", "openings");
+        if (levels == 0 || (spaces == 0 && processedSpaces == 0) ||
+            (physicalSurfaces == 0 && analyticalSurfaces == 0 && processedSpaces == 0))
+            throw new InvalidOperationException("Processed Revit energy geometry evidence is empty or incomplete.");
+
+        var excludedOriginalIds = new HashSet<long>();
+        bool nativeExportable = false;
+        foreach (JsonElement space in root.GetProperty("spaces").EnumerateArray())
+        {
+            string provenance = Text(space, "provenance");
+            if (provenance is not ("PREEXISTING_UNTOUCHED" or "REVEX_CREATED"))
+                throw new InvalidOperationException("Processed Revit energy geometry evidence contains a Space with unknown provenance.");
+            bool exportable = space.TryGetProperty("exportable", out JsonElement exportableValue) &&
+                              exportableValue.ValueKind == JsonValueKind.True;
+            nativeExportable |= exportable;
+            if (!exportable && provenance == "PREEXISTING_UNTOUCHED" &&
+                space.TryGetProperty("id", out JsonElement idValue) && idValue.TryGetInt64(out long id))
+                excludedOriginalIds.Add(id);
+        }
+
+        var repairedOriginalIds = new HashSet<long>();
+        if (root.TryGetProperty("processedSpaces", out JsonElement processedRows) &&
+            processedRows.ValueKind == JsonValueKind.Array)
+        {
+            var processedIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (JsonElement row in processedRows.EnumerateArray())
+            {
+                string id = Text(row, "id");
+                string provenance = Text(row, "provenance");
+                string processedCoordinateSystem = Text(row, "coordinateSystem");
+                string geometryMode = Text(row, "geometryMode");
+                if (string.IsNullOrWhiteSpace(id) || !processedIds.Add(id) ||
+                    provenance != "ROOM_DERIVED_ISOLATED_FROM_PREEXISTING_INVALID_SPACE" ||
+                    processedCoordinateSystem != "REVIT_HOST_INTERNAL" ||
+                    geometryMode != "ROOM_BOUNDARY_STORY_BOUNDED_2_5D")
+                    throw new InvalidOperationException("Room-derived processed geometry has an invalid identity/provenance contract.");
+                long sourceId = -1;
+                double height = 0.0, area = 0.0, volume = 0.0;
+                bool numeric = row.TryGetProperty("invalidOriginalSpaceId", out JsonElement originalId) && originalId.TryGetInt64(out sourceId) && sourceId >= 0 &&
+                               row.TryGetProperty("heightFt", out JsonElement heightValue) && heightValue.TryGetDouble(out height) && height > 0.25 && height <= 20.0 / 0.3048 &&
+                               row.TryGetProperty("areaFt2", out JsonElement areaValue) && areaValue.TryGetDouble(out area) && area > 0.0 &&
+                               row.TryGetProperty("volumeFt3", out JsonElement volumeValue) && volumeValue.TryGetDouble(out volume) && volume > 0.0 &&
+                               row.TryGetProperty("outerLoopFt", out JsonElement loop) && loop.ValueKind == JsonValueKind.Array && loop.GetArrayLength() >= 3;
+                if (!numeric)
+                    throw new InvalidOperationException("Room-derived processed geometry has invalid bounded geometry evidence.");
+                repairedOriginalIds.Add(sourceId);
+            }
+        }
+        if (!excludedOriginalIds.IsSubsetOf(repairedOriginalIds))
+            throw new InvalidOperationException("An excluded invalid original Space has no bounded Room-derived processed representation.");
+        if (!nativeExportable && processedSpaces == 0)
+            throw new InvalidOperationException("Processed Revit energy geometry has no exportable native or Room-derived Space.");
+
+        RevexDiagnostics.Dependency("ENERGY-SYNC", "Processed Revit energy geometry graph", true,
+            $"levels={levels}; rooms={rooms}; nativeSpaces={spaces}; processedRoomSpaces={processedSpaces}; physicalSurfaces={physicalSurfaces}; analyticalSurfaces={analyticalSurfaces}; {path}");
+        return new GeometryEvidenceMetadata(
+            schema, authority, gbxmlSha, levels, rooms, spaces + processedSpaces,
+            physicalSurfaces, physicalOpenings, analyticalSurfaces, analyticalOpenings);
     }
 
     private static void ValidateStructuredScheduleEvidence(string runFolder)

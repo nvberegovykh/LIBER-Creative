@@ -8,17 +8,18 @@ const loader=read('docs/liber-apps/apps/revex/ui-integrity.js');
 const ui=read('docs/liber-apps/apps/revex/ui-polish-r109.js');
 const docs=read('docs/liber-apps/apps/revex/sync-docs-r24.js');
 const app=read('docs/liber-apps/apps/revex/app.js');
-const render=read('docs/liber-apps/apps/revex/render-selfhost-r54.js');
+const render=read('docs/liber-apps/apps/revex/render-agent.js');
+const renderShadow=read('docs/liber-apps/apps/revex/render-selfhost-r54.js');
 const workspace=read('docs/liber-apps/apps/revex/workspace-r51.js');
-const broker=read('server/revex-render-functions/index.js');
+const broker=read('server/firebase-functions/index.js');
 const must=(text,needle,label)=>assert(text.includes(needle),label||`Missing ${needle}`);
 const forbid=(text,needle,label)=>assert(!text.includes(needle),label||`Forbidden ${needle}`);
 
 forbid(loader,"loadScript('mobile-ux-r100.js",'retired mobile runtime must not be loaded');
 forbid(loader,"loadScript('design-ux-r101.js",'retired design runtime must not be loaded');
-must(loader,"ui-polish-r109.js?v=20260817r110-responsive1",'r110 responsive cache break must be loaded');
+must(loader,"ui-polish-r109.js?v=20260820r147-release1",'r110 responsive cache break must be loaded');
 must(loader,"energy-diagnostics-r68.js?v=20260816r95-manual-identity1",'Energy diagnostics r95 must stay loaded');
-must(loader,"energy-identity-en1-r89.js?v=20260816r89-en1-identity1",'EN-1 identity must stay loaded');
+must(loader,"energy-identity-en1-r89.js?v=20260820r147-release1",'current EN-1 identity amendment owner must stay loaded');
 must(loader,"energy-replay-r95.js?v=20260816r95-single-owner1",'Energy replay must stay loaded');
 must(loader,"viewer-interaction-r85-loader.js?v=20260816r98-live-edge2",'current viewer/live worker edge must stay loaded');
 
@@ -61,25 +62,27 @@ forbid(docs,'MutationObserver','Docs must not observe/rewrite the DOM continuous
 must(app,'class="docs-node whole','base Docs markup must retain the full-set entry');
 must(app,'class="docs-node sheet','base Docs markup must retain linked sheet rows');
 
-// Render must be event-driven. The prior whole-document observer recursively retriggered
-// decorate() as it rewrote the Render DOM and could pin the browser main thread.
-forbid(render,'new MutationObserver','self-hosted Render must not observe the DOM');
-forbid(render,'observer.observe(document.documentElement','whole-document Render observer must never return');
-must(render,'function scheduleDecorate','Render UI decoration must use a bounded startup/event retry');
-must(render,"#render-button,#element-render,#design-render,#revex-r110-render",'Render decoration must follow explicit open actions');
-must(workspace,"render-selfhost-r54.js?v=20260817r110-selfhost-render2",'Revit WebView must cache-break the fixed renderer');
+// Current Render is the project-authenticated Google broker. The preserved Qwen
+// implementation remains a non-owning shadow and may not compete for default clicks.
+must(render,"httpsCallable(functions, 'runRevexGoogleRender'",'Render must call the authenticated us-central1 server broker');
+must(render,'Store.fileBlob(resultPath)','Render result must be read through authenticated project Storage');
+for(const marker of ['GoogleAuthProvider','reauthenticateWithPopup','linkWithPopup','x-goog-user-project','google-ai-project'])
+  forbid(render,marker,`current Render client must not retain user Google IAM/OAuth: ${marker}`);
+must(renderShadow,'document.addEventListener(\'click\', interceptClick, true)','preserved Qwen shadow source must remain reviewable');
+forbid(workspace,'render-selfhost-r54.js','retired self-host renderer must not compete with the current Google render owner');
+must(loader,"render-touchups-r115.js?v=20260818r132-render-owner-guard1",'current Render presentation guard must load');
+must(loader,"render-convergence-r126.js?v=20260818r129-freeze-guard1",'current Render interaction freeze guard must load');
 
-// Authenticated project members are already allowed to create render jobs. If the
-// browser write is not visible to Gen2 yet, the broker must idempotently establish it.
-forbid(broker,'Create the REVEX render job before dispatching it.','broker must not fail a valid render on a client-write visibility race');
-must(broker,'if (!existing)','broker must recover a missing project render job');
-must(broker,'brokerCreated: true','broker-created recovery jobs must be explicit/auditable');
-must(broker,"createdBy: uid",'broker recovery job must remain owned by the authenticated user');
+must(broker,'exports.runRevexGoogleRender = onCall','Google Render callable export missing');
+must(broker,'acceptGoogleRenderJob','broker must validate and atomically accept the controlled job');
+must(broker,'transaction.create(refs.lease','one-shot Render lease must be create-only and race-safe');
+must(broker,"String(job.createdBy || '') === uid",'controlled Render job must belong to the authenticated caller');
+must(broker,'assertProjectAccess(projectId, uid, request.auth.token || {})','every project member/owner/custom-claim admin must pass the shared project access boundary');
 
 console.log(JSON.stringify({
  schema:'liber.revex.r110.live-ui-render.v1',status:'PASSED',
  mobile:{sameDesktopOwners:true,hiddenIntegrity:true,semanticSvgTabs:true,directRender:true,touchWalkSharedViewer:true},
  docs:{linkedPrintingSetGroup:true,fullSet:true,isolatedSheetPdfs:true,legacyProjection:'render-only',globalClickInterceptor:false,stateRewrite:false},
- render:{globalMutationObserver:false,idempotentBrokerJob:true,webviewCacheBreak:true},
+ render:{serverBroker:true,oneShotLease:true,userGoogleIam:false,qwenShadowOnly:true,webviewCacheBreak:true},
  energy:{r95Diagnostics:true,r89Identity:true,r95Replay:true,liveWorkerEdge:true}
 },null,2));

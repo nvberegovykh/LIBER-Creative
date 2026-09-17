@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="LIBER Chat">
@@ -15,14 +16,14 @@
     <link rel="icon" type="image/png" href="../../images/LIBER LOGO.png" />
     <link rel="stylesheet" href="../../css/style.css?v=20260212r12c" />
     <link rel="stylesheet" href="../../css/chatgpt-widget.css?v=20250818c" />
-    <link rel="stylesheet" href="styles.css?v=20260228r20a" />
+    <link rel="stylesheet" href="styles.css?v=20260820v56-firebase-realm" />
     <link rel="stylesheet" href="../../../components/media-fullscreen-viewer.css" />
     <link rel="stylesheet" href="../../../components/media-video-player.css" />
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <script type="importmap">
       {
         "imports": {
-          "firebase/firestore": "https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js"
+          "firebase/firestore": "https://www.gstatic.com/firebasejs/12.17.1/firebase-firestore.js"
         }
       }
     </script>
@@ -102,6 +103,13 @@
             </div>
             <div id="typing-indicator" class="typing-indicator" aria-live="polite"></div>
             <div id="app-error" class="app-error" style="display:none;color:#ef4444;font-size:12px;margin:4px 8px;padding:8px;background:rgba(239,68,68,0.15);border-radius:8px;word-break:break-word"></div>
+            <div id="identity-recovery" class="identity-recovery hidden" role="status" aria-live="polite">
+                <div class="identity-recovery-copy">
+                    <strong>Secure Chat needs device verification</strong>
+                    <span id="identity-recovery-message">This device has a different encrypted-chat identity.</span>
+                </div>
+                <button id="identity-recovery-btn" class="btn" type="button">Re-enroll this device</button>
+            </div>
             <div id="error-toast" class="error-toast hidden" role="alert" aria-live="assertive">
                 <span id="error-toast-text"></span>
                 <button id="error-toast-dismiss" type="button" aria-label="Dismiss">×</button>
@@ -217,7 +225,7 @@
                     </div>
                 </div>
             </div>
-            <button id="show-call-btn" class="btn secondary call-fab" style="display:none"><i class="fas fa-phone-volume"></i></button>
+            <button id="show-call-btn" class="btn secondary call-fab" style="display:none" type="button" aria-label="Return to active call" title="Return to call"><i class="fas fa-phone-volume" aria-hidden="true"></i></button>
             <div id="incoming-call-prompt" class="incoming-call-prompt hidden" aria-live="polite">
                 <button id="incoming-call-open-btn" class="btn incoming-call-open" type="button" title="Open incoming call">
                     <i class="fas fa-phone-volume"></i>
@@ -229,7 +237,7 @@
 
     <!-- Always load our own Firebase - self-contained in iframe avoids cross-context "custom Object" setDoc error -->
     <script>
-      window.LIBER_CHAT_VERSION = '20260820v54-identity-vault';
+      window.LIBER_CHAT_VERSION = '20260820v56-firebase-realm';
     </script>
     <!-- Scripts (single-source cache version) -->
     <script>

@@ -1,6 +1,8 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const path = require('node:path');
+const { Worker } = require('node:worker_threads');
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const { onDocumentCreated } = require('firebase-functions/v2/firestore');
 const { setGlobalOptions } = require('firebase-functions/v2');
@@ -8,14 +10,22 @@ const { initializeApp } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 const { getStorage } = require('firebase-admin/storage');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
-const pdfParse = require('pdf-parse');
+const {
+  MAX_PROJECT_DOC_TOTAL_BYTES,
+  MAX_PDF_PAGES,
+  PDF_PARSE_TIMEOUT_MS,
+  MAX_PROJECT_DOC_CANDIDATES,
+  canonicalProjectLibraryPath,
+  projectDocumentPolicy,
+  verifyProjectDocumentPayload
+} = require('./report-security');
 
 initializeApp();
 setGlobalOptions({ region: 'us-central1', maxInstances: 4 });
 
 const db = getFirestore();
 const storage = getStorage();
-const BUILD = '20260817r126-daily-report-worker1';
+const BUILD = '20260820r147-report-isolation1';
 const NYC_TZ = 'America/New_York';
 const PROJECT_RE = /^[A-Za-z0-9._-]{1,160}$/;
 const INACTIVE = new Set(['resolved','closed','completed','complete','done','cancelled','canceled','deleted','archived']);
@@ -24,9 +34,36 @@ const MAX_DOCS = 16;
 const MAX_DOC_TEXT = 100000;
 const MAX_GROUNDING_CHARS = 90000;
 const MAX_DIFFS_PER_DAY = 2000;
+const REPORT_FAILURE_CODE = 'REVEX_REPORT_FAILED';
+const REPORT_FAILURE_MESSAGE = 'REVEX report generation failed. Try again or contact support.';
+const PDF_WORKER_PATH = path.join(__dirname, 'pdf-text-worker.js');
+const PDF_WORKER_RESOURCE_LIMITS = Object.freeze({
+  maxOldGenerationSizeMb: 256,
+  maxYoungGenerationSizeMb: 64,
+  codeRangeSizeMb: 64,
+  stackSizeMb: 8
+});
 
 function log(stage, detail = {}) {
   console.log('[REVEX REPORT]', JSON.stringify({ at: new Date().toISOString(), build: BUILD, stage, ...detail }));
+}
+function errorDetail(error) {
+  return {
+    name: String(error?.name || 'Error').slice(0, 120),
+    message: String(error?.message || error || 'Unknown failure.').slice(0, 3000),
+    stack: String(error?.stack || '').slice(0, 12000)
+  };
+}
+function incidentFrom(error) {
+  const value = String(error?.incidentId || '').trim();
+  return /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(value) ? value : crypto.randomUUID();
+}
+function reportFailure(incidentId) {
+  const failure = new Error(REPORT_FAILURE_MESSAGE);
+  failure.name = 'RevexReportFailure';
+  failure.code = REPORT_FAILURE_CODE;
+  failure.incidentId = incidentId;
+  return failure;
 }
 function safe(value) { return String(value || '').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 140) || 'x'; }
 function assertId(value, label) {
@@ -105,22 +142,32 @@ function diffViewer(previous, current, revision) {
 }
 function bucket() {
   const configured = String(process.env.REVEX_STORAGE_BUCKET || '').trim();
-  return configured ? storage.bucket(configured) : storage.bucket();
+  if (!configured) throw new Error('REVEX Report has no exact release-bound Firebase Storage bucket.');
+  return storage.bucket(configured);
 }
 async function readBytes(path) { const [data] = await bucket().file(path).download(); return data; }
 async function readJson(path) { return JSON.parse((await readBytes(path)).toString('utf8')); }
 async function exists(path) { const [ok] = await bucket().file(path).exists(); return ok; }
-async function uploadPublic(path, bytes, contentType, metadata = {}) {
-  const token = crypto.randomUUID();
+async function uploadPrivate(path, bytes, contentType, metadata = {}) {
   const file = bucket().file(path);
-  await file.save(bytes, { resumable:false, contentType, metadata:{ metadata:{ firebaseStorageDownloadTokens:token, revexBuild:BUILD, ...metadata } } });
-  return { path, url:`https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket().name)}/o/${encodeURIComponent(path)}?alt=media&token=${encodeURIComponent(token)}`, bytes:bytes.length };
+  await file.save(bytes, {
+    resumable:false,
+    contentType,
+    metadata:{
+      cacheControl:'private, max-age=0, no-store',
+      metadata:{ revexAccess:'firebase-authenticated-path-only', revexBuild:BUILD, ...metadata }
+    }
+  });
+  return { path, bytes:bytes.length, sha256:crypto.createHash('sha256').update(bytes).digest('hex') };
 }
-async function projectAccess(projectId, uid) {
-  const [projectSnap, userSnap] = await Promise.all([db.doc(`projects/${projectId}`).get(), db.doc(`users/${uid}`).get()]);
+function trustedAdminClaims(authClaims) {
+  return authClaims?.revexAdmin === true || String(authClaims?.role || '').trim().toLowerCase() === 'admin';
+}
+async function projectAccess(projectId, uid, authClaims = {}) {
+  const projectSnap = await db.doc(`projects/${projectId}`).get();
   if (!projectSnap.exists) throw new HttpsError('not-found','REVEX project not found.');
-  const project = projectSnap.data() || {}, user = userSnap.exists ? userSnap.data() || {} : {};
-  const allowed = String(project.ownerId||'')===uid || (project.memberIds||[]).map(String).includes(uid) || String(user.role||'').toLowerCase()==='admin';
+  const project = projectSnap.data() || {};
+  const allowed = String(project.ownerId||'')===uid || (project.memberIds||[]).map(String).includes(uid) || trustedAdminClaims(authClaims);
   if (!allowed) throw new HttpsError('permission-denied','You do not have access to this REVEX project.');
   return { id:projectSnap.id, ...project };
 }
@@ -149,20 +196,103 @@ async function waitAffectedPlanRows(projectId, revision, expectedCount) {
   }
   return affectedPlanRows(projectId, revision);
 }
+async function parseBoundedPdf(bytes) {
+  // Uint8Array.from creates an owned backing store. Transfer detaches that exact
+  // allocation from the Cloud Function isolate instead of cloning or sharing a
+  // pooled Storage Buffer with the untrusted PDF parser.
+  const ownedBytes = Uint8Array.from(bytes);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer = null;
+    const worker = new Worker(PDF_WORKER_PATH, { resourceLimits: PDF_WORKER_RESOURCE_LIMITS });
+    const clear = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      worker.removeAllListeners();
+    };
+    const finishFromWorker = (error, text = '') => {
+      if (settled) return;
+      settled = true;
+      clear();
+      // The worker destroys PDFParse before posting either result and closes its
+      // only MessagePort immediately afterward; no forced termination is needed.
+      if (error) reject(error);
+      else resolve(text);
+    };
+    const terminateAndReject = async error => {
+      if (settled) return;
+      settled = true;
+      clear();
+      try {
+        await worker.terminate();
+      } catch (terminationError) {
+        error.terminationDetail = errorDetail(terminationError);
+      }
+      reject(error);
+    };
+    worker.once('message', message => {
+      if (message?.ok === true) return finishFromWorker(null, String(message.text || ''));
+      const error = new Error('PDF text extraction failed inside the isolated parser.');
+      error.parserDetail = message?.error || null;
+      finishFromWorker(error);
+    });
+    worker.once('error', workerError => {
+      const error = new Error('The isolated PDF parser could not complete.');
+      error.workerDetail = errorDetail(workerError);
+      void terminateAndReject(error);
+    });
+    worker.once('exit', code => {
+      if (!settled) void terminateAndReject(new Error(`The isolated PDF parser exited before completion (code ${code}).`));
+    });
+    timer = setTimeout(() => {
+      const error = new Error(`PDF text extraction exceeded ${PDF_PARSE_TIMEOUT_MS} ms and was terminated.`);
+      void terminateAndReject(error);
+    }, PDF_PARSE_TIMEOUT_MS);
+    timer.unref?.();
+    try {
+      worker.postMessage(
+        { bytes: ownedBytes, maxPages: MAX_PDF_PAGES, maxTextChars: MAX_DOC_TEXT },
+        [ownedBytes.buffer]
+      );
+    } catch (postError) {
+      const error = new Error('The isolated PDF parser could not accept its transferred payload.');
+      error.workerDetail = errorDetail(postError);
+      void terminateAndReject(error);
+    }
+  });
+}
+async function downloadProjectDocument(projectId, row, currentTotalBytes) {
+  const path = canonicalProjectLibraryPath(projectId, row?.storagePath);
+  if (!path) throw new Error('Document Storage path is outside the exact project Library boundary.');
+  const liveFile = bucket().file(path);
+  const [metadata] = await liveFile.getMetadata();
+  const policy = projectDocumentPolicy(projectId, row, metadata, currentTotalBytes);
+  // Bind the download to the exact generation that was inspected for size/type.
+  const versionedFile = bucket().file(policy.path, { generation: policy.generation });
+  const [downloaded] = await versionedFile.download({ validation: 'crc32c' });
+  const document = verifyProjectDocumentPayload(policy, downloaded);
+  const [currentMetadata] = await liveFile.getMetadata();
+  if (String(currentMetadata?.generation || '') !== policy.generation)
+    throw new Error('Document Storage generation changed during extraction.');
+  return { policy, bytes: document.bytes, text: document.text };
+}
 async function extractProjectDocs(projectId) {
-  const rows = await libraryFiles(projectId), docs=[];
+  const rows = await libraryFiles(projectId), docs=[];let totalBytes=0, attemptedCandidates=0;
   for (const row of rows) {
     if (docs.length >= MAX_DOCS) break;
     if (row.type !== 'file' || !row.storagePath) continue;
-    const name = String(row.name || row.storagePath.split('/').pop() || 'document');
-    if (!/\.(pdf|txt|md|csv|json)$/i.test(name)) continue;
+    if (attemptedCandidates >= MAX_PROJECT_DOC_CANDIDATES) break;
+    attemptedCandidates += 1;
+    const candidateName = String(row.name || '').slice(0,260);
     try {
-      const bytes = await readBytes(row.storagePath);let text='';
-      if (/\.pdf$/i.test(name)) text = String((await pdfParse(bytes)).text || '');
-      else text = bytes.toString('utf8');
+      const { policy, bytes, text: verifiedText } = await downloadProjectDocument(projectId, row, totalBytes);let text='';
+      totalBytes += policy.size;
+      if (policy.kind === 'pdf') text = await parseBoundedPdf(bytes);
+      else text = verifiedText;
       text = text.replace(/\0/g,'').replace(/[ \t]+/g,' ').slice(0,MAX_DOC_TEXT).trim();
-      if (text) docs.push({ name, id:row.id, revision:row.revision||null, text });
-    } catch (error) { log('DOC_EXTRACT_SKIPPED',{projectId,name,error:String(error?.message||error).slice(0,300)}); }
+      if (text) docs.push({ name:policy.name, id:row.id, revision:row.revision||null, text });
+    } catch (error) { log('DOC_EXTRACT_SKIPPED',{projectId,name:candidateName,failure:errorDetail(error),parserDetail:error?.parserDetail||error?.workerDetail||null}); }
+    if (totalBytes >= MAX_PROJECT_DOC_TOTAL_BYTES) break;
   }
   return docs;
 }
@@ -194,7 +324,11 @@ async function walltGround(changes, docs) {
     const allowed=new Set(changes.map(c=>Number(c.number))),sourceNames=new Set(docs.map(d=>d.name));
     const items=parsed.items.filter(x=>allowed.has(Number(x.number))).map(x=>({number:Number(x.number),summary:String(x.summary||'').slice(0,800),support:(Array.isArray(x.support)?x.support:[]).filter(s=>sourceNames.has(String(s.sourceName||''))).map(s=>({sourceName:String(s.sourceName),requirement:String(s.requirement||'').slice(0,1200),relevance:String(s.relevance||'').slice(0,1200)}))}));
     return {status:'GROUNDED',items,sourceDocuments:docs.map(d=>d.name)};
-  } catch(error) { return {status:'DETERMINISTIC_ONLY',reason:`WALLT grounding unavailable: ${String(error?.message||error).slice(0,500)}`,items:[]}; }
+  } catch(error) {
+    const incidentId=crypto.randomUUID();
+    log('WALLT_GROUNDING_FAILED',{incidentId,failure:errorDetail(error)});
+    return {status:'DETERMINISTIC_ONLY',reason:'WALLT grounding unavailable for this report.',errorCode:'REVEX_WALLT_GROUNDING_UNAVAILABLE',incidentId,items:[]};
+  }
   finally{clearTimeout(timer)}
 }
 function wrap(text, width=90) {
@@ -229,7 +363,19 @@ async function annotatePlan(bytes, view, changeByElement, projectId, revision, d
 async function annotatePlans(projectId, revision, manifest, changes, day) {
   const rows=await waitAffectedPlanRows(projectId,revision,(manifest?.views||[]).length),byName=new Map(rows.map(r=>[String(r.revitViewUniqueId||r.revitViewId||r.revitViewName||''),r])),byFile=new Map(rows.map(r=>[String(r.name||'').split(' · ')[0],r]));
   const changeByElement=new Map(changes.filter(c=>c.elementId!=null).map(c=>[String(c.elementId),c])),out=[];
-  for(const view of manifest?.views||[]){let row=byName.get(String(view.uniqueId||view.id||view.name||''));if(!row)row=rows.find(r=>String(r.revitViewName||'')===String(view.name||''))||byFile.get(String(view.fileName||''));if(!row?.storagePath){out.push({viewName:view.name||'',status:'SOURCE_PLAN_UNAVAILABLE',changeNumbers:[]});continue}try{const annotated=await annotatePlan(await readBytes(row.storagePath),view,changeByElement,projectId,revision,day),path=`projects/${projectId}/revex/daily-reports/${day}/plans/${safe(revision)}_${safe(view.name||view.id)}_CLOUDS.pdf`,uploaded=await uploadPublic(path,annotated.bytes,'application/pdf',{revexDocKind:'daily-report-affected-plan',sourceRevision:revision});out.push({name:view.name||row.revitViewName||'Affected plan',viewName:view.name||'',sourceRevision:revision,sourceStoragePath:row.storagePath,...uploaded,status:'ANNOTATED',changeNumbers:annotated.changeNumbers,unlocatedChangedElementIds:view.unlocatedChangedElementIds||[]})}catch(error){out.push({viewName:view.name||'',sourceRevision:revision,status:'ANNOTATION_FAILED',error:String(error?.message||error).slice(0,500),changeNumbers:[]})}}
+  for(const view of manifest?.views||[]){
+    let row=byName.get(String(view.uniqueId||view.id||view.name||''));
+    if(!row)row=rows.find(r=>String(r.revitViewName||'')===String(view.name||''))||byFile.get(String(view.fileName||''));
+    if(!row?.storagePath){out.push({viewName:view.name||'',status:'SOURCE_PLAN_UNAVAILABLE',changeNumbers:[]});continue}
+    try{
+      const source=await downloadProjectDocument(projectId,row,0);
+      if(source.policy.kind!=='pdf')throw new Error('Affected-plan source is not a bounded PDF object.');
+      const annotated=await annotatePlan(source.bytes,view,changeByElement,projectId,revision,day);
+      const path=`projects/${projectId}/revex/daily-reports/${day}/plans/${safe(revision)}_${safe(view.name||view.id)}_CLOUDS.pdf`;
+      const uploaded=await uploadPrivate(path,annotated.bytes,'application/pdf',{revexDocKind:'daily-report-affected-plan',sourceRevision:revision});
+      out.push({name:view.name||row.revitViewName||'Affected plan',viewName:view.name||'',sourceRevision:revision,sourceStoragePath:source.policy.path,...uploaded,status:'ANNOTATED',changeNumbers:annotated.changeNumbers,unlocatedChangedElementIds:view.unlocatedChangedElementIds||[]});
+    }catch(error){const incidentId=crypto.randomUUID();log('PLAN_ANNOTATION_FAILED',{projectId,revision,viewName:String(view.name||'').slice(0,260),incidentId,failure:errorDetail(error)});out.push({viewName:view.name||'',sourceRevision:revision,status:'ANNOTATION_FAILED',errorCode:'REVEX_PLAN_ANNOTATION_FAILED',incidentId,changeNumbers:[]})}
+  }
   return out;
 }
 async function buildReport(projectId, triggerRevision='') {
@@ -237,12 +383,39 @@ async function buildReport(projectId, triggerRevision='') {
   for(const rev of dayRows){const index=all.findIndex(x=>x.id===rev.id),prev=index>0?all[index-1]:null,currentViewer=await readJson(`projects/${projectId}/revex/revisions/${rev.id}/viewer-model.json`),previousViewer=prev&&await exists(`projects/${projectId}/revex/revisions/${prev.id}/viewer-model.json`)?await readJson(`projects/${projectId}/revex/revisions/${prev.id}/viewer-model.json`):{elements:[]},delta=diffViewer(previousViewer,currentViewer,rev.id);changes.push(...delta.map(c=>({...c,syncedAt:rev.syncedAt||rev.createdAt})));let manifest={views:[]};try{manifest=await readJson(`projects/${projectId}/revex/revisions/${rev.id}/affected-plan-views.json`)}catch(_){}manifests.push({revision:rev.id,manifest})}
   changes.splice(MAX_DIFFS_PER_DAY);changes.forEach((c,i)=>{c.number=i+1});const open=await activeIssues(projectId),projectSnap=await db.doc(`projects/${projectId}`).get(),project=projectSnap.data()||{},userIds=[...new Set(open.flatMap(issue=>{const raw=issue.assigneeIds||issue.assigneeId||issue.assignedTo||[];return(Array.isArray(raw)?raw:[raw]).map(String).filter(Boolean)}))],names=new Map();for(const uid of userIds){try{const snap=await db.doc(`users/${uid}`).get(),u=snap.data()||{};names.set(uid,u.username||u.displayName||u.email||uid)}catch(_){names.set(uid,uid)}}const openIssues=open.map(issue=>({...issue,assigneeNames:(Array.isArray(issue.assigneeIds)?issue.assigneeIds:[issue.assigneeId||issue.assignedTo]).filter(Boolean).map(uid=>names.get(String(uid))||String(uid))}));const docs=await extractProjectDocs(projectId),grounding=await walltGround(changes,docs),annotatedPlans=[];for(const entry of manifests){const revChanges=changes.filter(c=>c.revision===entry.revision);annotatedPlans.push(...await annotatePlans(projectId,entry.revision,entry.manifest,revChanges,day))}
   const report={schema:'liber.revex.daily-report.v1',build:BUILD,projectId,projectName:project.name||project.title||projectId,day,timeZone:NYC_TZ,generatedAt:new Date().toISOString(),triggerRevision:target.id,revisions:dayRows.map(r=>({revision:r.id,syncedAt:r.syncedAt||r.createdAt,localTime:localTime(r.syncedAt||r.createdAt)})),changes,openIssues,annotatedPlans,grounding,technicalHistoryIncluded:false,sourceAuthority:{modelUpdates:'immutable viewer-model delta after successful synchronization',issues:'projects/{project}/revexIssues active statuses',plans:'native Revit affected plan exports',history:'audit provenance only'}};
-  const pdf=await makeDailyPdf(report),jsonBytes=Buffer.from(JSON.stringify(report,null,2),'utf8'),base=`projects/${projectId}/revex/daily-reports/${day}`,pdfUpload=await uploadPublic(`${base}/REVEX_DAILY_REPORT_${day}.pdf`,pdf,'application/pdf',{revexDocKind:'daily-report'}),jsonUpload=await uploadPublic(`${base}/REVEX_DAILY_REPORT_${day}.json`,jsonBytes,'application/json',{revexDocKind:'daily-report-evidence'});report.pdf=pdfUpload;report.evidence=jsonUpload;
-  const record={type:'revex',hidden:true,revexKind:'daily-report',revexId:`daily_${day}`,projectId,day,timeZone:NYC_TZ,updatedAt:new Date().toISOString(),latestRevision:target.id,revisionCount:dayRows.length,changeCount:changes.length,openIssueCount:openIssues.length,affectedPlanCount:annotatedPlans.filter(p=>p.status==='ANNOTATED').length,pdfUrl:pdfUpload.url,pdfPath:pdfUpload.path,evidenceUrl:jsonUpload.url,evidencePath:jsonUpload.path,groundingStatus:grounding.status,technicalHistoryIncluded:false};await db.doc(`projects/${projectId}/library/revex_daily_report_${safe(day)}`).set(record,{merge:false});log('REPORT_COMPLETE',{projectId,day,changes:changes.length,issues:openIssues.length,plans:record.affectedPlanCount,grounding:grounding.status});return report;
+  const pdf=await makeDailyPdf(report),jsonBytes=Buffer.from(JSON.stringify(report,null,2),'utf8'),base=`projects/${projectId}/revex/daily-reports/${day}`,pdfUpload=await uploadPrivate(`${base}/REVEX_DAILY_REPORT_${day}.pdf`,pdf,'application/pdf',{revexDocKind:'daily-report'}),jsonUpload=await uploadPrivate(`${base}/REVEX_DAILY_REPORT_${day}.json`,jsonBytes,'application/json',{revexDocKind:'daily-report-evidence'});report.pdf=pdfUpload;report.evidence=jsonUpload;
+  const record={type:'revex',hidden:true,revexKind:'daily-report',revexId:`daily_${day}`,projectId,day,timeZone:NYC_TZ,updatedAt:new Date().toISOString(),latestRevision:target.id,revisionCount:dayRows.length,changeCount:changes.length,openIssueCount:openIssues.length,affectedPlanCount:annotatedPlans.filter(p=>p.status==='ANNOTATED').length,pdfPath:pdfUpload.path,evidencePath:jsonUpload.path,groundingStatus:grounding.status,technicalHistoryIncluded:false};await db.doc(`projects/${projectId}/library/revex_daily_report_${safe(day)}`).set(record,{merge:false});log('REPORT_COMPLETE',{projectId,day,changes:changes.length,issues:openIssues.length,plans:record.affectedPlanCount,grounding:grounding.status});return report;
 }
 async function buildWithLock(projectId, revision) {
-  const lock=db.doc(`projects/${projectId}/revexReportJobs/${safe(revision||'current')}`),runId=crypto.randomUUID();await lock.set({schema:'liber.revex.report-job.v1',status:'RUNNING',runId,revision,startedAt:FieldValue.serverTimestamp(),build:BUILD},{merge:true});try{const report=await buildReport(projectId,revision);await lock.set({status:'COMPLETE',runId,day:report.day,completedAt:FieldValue.serverTimestamp(),changeCount:report.changes.length,openIssueCount:report.openIssues.length,affectedPlanCount:report.annotatedPlans.filter(p=>p.status==='ANNOTATED').length},{merge:true});return report}catch(error){await lock.set({status:'FAILED',runId,error:String(error?.message||error).slice(0,3000),failedAt:FieldValue.serverTimestamp()},{merge:true});throw error}
+  const lock=db.doc(`projects/${projectId}/revexReportJobs/${safe(revision||'current')}`),runId=crypto.randomUUID();
+  try {
+    await lock.set({
+      schema:'liber.revex.report-job.v1',status:'RUNNING',runId,revision,
+      startedAt:FieldValue.serverTimestamp(),build:BUILD,
+      error:FieldValue.delete(),errorCode:FieldValue.delete(),incidentId:FieldValue.delete()
+    },{merge:true});
+    const report=await buildReport(projectId,revision);
+    await lock.set({
+      status:'COMPLETE',runId,day:report.day,completedAt:FieldValue.serverTimestamp(),
+      changeCount:report.changes.length,openIssueCount:report.openIssues.length,
+      affectedPlanCount:report.annotatedPlans.filter(p=>p.status==='ANNOTATED').length,
+      error:FieldValue.delete(),errorCode:FieldValue.delete(),incidentId:FieldValue.delete()
+    },{merge:true});
+    return report;
+  } catch(error) {
+    const incidentId=crypto.randomUUID();
+    log('REPORT_FAILED',{projectId,revision,runId,incidentId,failure:errorDetail(error)});
+    try {
+      await lock.set({
+        status:'FAILED',runId,errorCode:REPORT_FAILURE_CODE,incidentId,
+        error:FieldValue.delete(),failedAt:FieldValue.serverTimestamp()
+      },{merge:true});
+    } catch(stateError) {
+      log('REPORT_FAILURE_STATE_WRITE_FAILED',{projectId,revision,runId,incidentId,failure:errorDetail(stateError)});
+    }
+    throw reportFailure(incidentId);
+  }
 }
-exports.documentRevexRevision = onDocumentCreated({document:'projects/{projectId}/revexRevisions/{revision}',timeoutSeconds:540,memory:'2GiB'},async event=>{const projectId=String(event.params.projectId||''),revision=String(event.params.revision||'');try{await buildWithLock(projectId,revision)}catch(error){log('TRIGGER_FAILED',{projectId,revision,error:String(error?.message||error).slice(0,1000)})}});
-exports.finalizeRevexDailyReport = onCall({timeoutSeconds:540,memory:'2GiB',concurrency:2},async request=>{if(!request.auth?.uid)throw new HttpsError('unauthenticated','Sign in to REVEX.');const projectId=assertId(request.data?.projectId,'projectId'),revision=assertId(request.data?.revision||'current','revision');await projectAccess(projectId,String(request.auth.uid));try{const report=await buildWithLock(projectId,revision==='current'?'':revision);return{ok:true,schema:'liber.revex.daily-report-response.v1',build:BUILD,day:report.day,changeCount:report.changes.length,openIssueCount:report.openIssues.length,affectedPlanCount:report.annotatedPlans.filter(p=>p.status==='ANNOTATED').length,pdfUrl:report.pdf?.url||null,groundingStatus:report.grounding?.status||'DETERMINISTIC_ONLY'}}catch(error){throw new HttpsError('internal',String(error?.message||error).slice(0,2000))}});
+exports.documentRevexRevision = onDocumentCreated({document:'projects/{projectId}/revexRevisions/{revision}',timeoutSeconds:540,memory:'2GiB'},async event=>{const projectId=String(event.params.projectId||''),revision=String(event.params.revision||'');try{await buildWithLock(projectId,revision)}catch(error){log('TRIGGER_FAILED',{projectId,revision,errorCode:REPORT_FAILURE_CODE,incidentId:incidentFrom(error)})}});
+exports.finalizeRevexDailyReport = onCall({timeoutSeconds:540,memory:'2GiB',concurrency:2},async request=>{if(!request.auth?.uid)throw new HttpsError('unauthenticated','Sign in to REVEX.');const projectId=assertId(request.data?.projectId,'projectId'),revision=assertId(request.data?.revision||'current','revision');await projectAccess(projectId,String(request.auth.uid),request.auth.token||{});try{const report=await buildWithLock(projectId,revision==='current'?'':revision);return{ok:true,schema:'liber.revex.daily-report-response.v1',build:BUILD,day:report.day,changeCount:report.changes.length,openIssueCount:report.openIssues.length,affectedPlanCount:report.annotatedPlans.filter(p=>p.status==='ANNOTATED').length,pdfPath:report.pdf?.path||null,groundingStatus:report.grounding?.status||'DETERMINISTIC_ONLY'}}catch(error){throw new HttpsError('internal',REPORT_FAILURE_MESSAGE,{errorCode:REPORT_FAILURE_CODE,incidentId:incidentFrom(error)})}});
 exports._test={nycDay,activeIssue,elementComparable,diffViewer,fieldChanges,parseJsonLoose};

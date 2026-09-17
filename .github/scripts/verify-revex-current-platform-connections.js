@@ -25,13 +25,18 @@ const projectChat = read('server/firebase-functions/project-chat.js');
 const functionsMain = read('server/firebase-functions/main.js');
 const functionsPackage = JSON.parse(read('server/firebase-functions/package.json'));
 const projectRuntimeDeploy = read('server/revex-report-functions/deploy-current.ps1');
+const ensureChatStart = projectChat.indexOf('async function ensureProjectChat(projectId, uid, authClaims = {})');
+const ensureChatEnd = projectChat.indexOf('async function markIdentityRotationForGroupChats', ensureChatStart);
+if (ensureChatStart < 0 || ensureChatEnd <= ensureChatStart) throw new Error('could not isolate source-bound Project Chat reconciliation');
+const ensureProjectChatSource = projectChat.slice(ensureChatStart, ensureChatEnd);
 
 // DOCS: one Full Set library object owns ordered linked sheet pages, including legacy projection.
 must(docsPages,
-  "BUILD='20260818r134-docs-linked-pages1'",
+  "BUILD='20260820r144-docs-disclosure1'",
   'fullSetAuthority:true',
   "fullSetOrderAuthority:'full-set-page-number'",
   'legacySheetProjection:true',
+  "disclosurePersistence:'project-local-v1'",
   'function orderedSheets(file)',
   'function projectRows(rows)',
   'function mergeLegacySheet(file,row)',
@@ -65,19 +70,28 @@ if (publishBody.includes("revexDocKind:'printing-sheet'")) throw new Error('shee
 // FAMILIES/BLOCKS: browser provider handoff stays opaque; Revit ExternalEvent owns mutation.
 must(blocks,
   "provider:'blocks'",
-  'walkOnly:true',
+  'walkPlacement:true',
+  'discoverable:true',
+  'explicitInsert:true',
   'placementDistanceFt:3',
   'viewer.camera.position.clone().addScaledVector(dir,3)',
   'return{x:target.x,y:-target.z,z:target.y',
   "type:'liber:revex-integration-open'",
-  "type:'liber:revex-integration-arm'",
   "type:'liber:revex-family-place-r126'",
   "type:'liber:revex-family-transform-r126'",
-  "data.type==='liber:revex-integration-family-r126'"
+  "data.type==='liber:revex-integration-family-r126'",
+  "button.textContent='Families'",
+  "button.disabled=!hosted()",
+  'Download the family again before retrying.'
 );
 must(bridge,
   'ConcurrentDictionary<string, PendingFamily> PendingFamilies',
-  'ExternalEvent.Create(_familyHandler)',
+  'ExternalEvent externalEvent = ExternalEvent.Create(handler)',
+  'handler.AttachExternalEvent(externalEvent)',
+  'providerWeb.CoreWebView2.Settings.IsWebMessageEnabled = false',
+  'IsTrustedCompanionMessageSource(e.Source)',
+  'MaxPendingFamilyDownloads = 16',
+  'familyPumpGeneration != _familyPumpGeneration',
   'liber:revex-family-place-r126',
   'liber:revex-family-transform-r126',
   'liber:revex-integration-arm',
@@ -85,7 +99,7 @@ must(bridge,
   'BlocksFamilies',
   'host == "blocksrvt.com" || host.EndsWith(".blocksrvt.com"',
   'extension is ".rfa" or ".zip"',
-  'PendingFamilies[token] = new PendingFamily(path, suggested, info.Length, DateTime.UtcNow, target)'
+  'PendingFamilies[token] = new PendingFamily(path, suggested, info.Length, sha256, DateTime.UtcNow, target)'
 );
 must(manager,
   'RevexWebIntegrationBridge.ConfigureFamilyPlacement();',
@@ -108,6 +122,7 @@ must(familyService,
   'REVEX could not place'
 );
 forbid(blocks, 'doc.Create.NewFamilyInstance', 'new Transaction(');
+forbid(blocks, "type:'liber:revex-integration-arm'");
 forbid(familyService, 'ZipFile.ExtractToDirectory(path, extractedFolder)');
 
 // CHAT: Secure Chat owns messages/storage; r136 owns exact active-project boundary.
@@ -153,9 +168,10 @@ must(projectAccess, "'chat'", 'function projectAccessRole');
 must(projectChat,
   "const CHAT_SCHEMA = 'liber.revex.project-chat.v1'",
   "getAuth().verifyIdToken",
-  'projectAccessRole(project, user, uid)',
+  'projectAccessRole(project, authClaims, uid)',
   'const participants = projectParticipants(access.project)',
-  'const chatAdmins = projectChatAdmins(access.project, participants)',
+  'const currentParticipants = projectParticipants(project)',
+  'const chatAdmins = projectChatAdmins(project, currentParticipants)',
   'const keyRotationRequired = membershipChanged || Boolean(existing.keyRotationRequired)',
   'project.chatConnId',
   "db.collection('chatConnections').where('projectId', '==', projectId)",
@@ -166,21 +182,24 @@ must(projectChat,
   "key: connectionKey",
   'projectKey,',
   "type: 'project'",
-  'participants,',
-  'memberIds: participants',
+  'participants: currentParticipants',
+  'memberIds: currentParticipants',
   'admins: chatAdmins',
   'keyRotationRequired,',
-  'batch.set(selected.ref, chatPatch, { merge: true })',
+  'return db.runTransaction(async (transaction) =>',
+  'transaction.set(selected.ref, chatPatch, { merge: true })',
   'chatConnId: connId',
   "region: ['us-central1', 'europe-west1']",
   'cors: true',
   'exports.ensureProjectChatHttp = onRequest'
 );
-forbid(projectChat,
+forbid(ensureProjectChatSource,
   'delete(',
   'recursiveDelete',
   "collection('messages')",
-  "collection('chatMessages')",
+  "collection('chatMessages')"
+);
+forbid(projectChat,
   "db.collection('users').where('role', '==', 'admin')"
 );
 
@@ -192,7 +211,7 @@ must(projectRuntimeDeploy,
   "'--source',$ChatSource",
   "REVEX_SOURCE_CANDIDATE=$SourceCandidate",
   "Verify-Function $GCloud 'ensureProjectChatHttp'",
-  "Daily Report + revision documentation + Project Chat resolver are ACTIVE and source-bound"
+  "Daily Report, revision documentation, Project Chat and secure device services are ACTIVE and source-bound"
 );
 
 // WALLT operates existing owners and exposes only bounded registered Fixer actions.
@@ -226,7 +245,8 @@ console.log(JSON.stringify({
   REVEX_CURRENT_PLATFORM_CONNECTIONS: 'PASSED',
   docs: {
     owner: 'docs-pages-r115',
-    build: 'r134',
+    build: 'r144',
+    mobileDisclosurePersistence: true,
     fullSetAuthority: true,
     linkedSheetIndex: true,
     legacyDetachedSheetsFolded: true,
@@ -236,6 +256,8 @@ console.log(JSON.stringify({
     owner: 'FamilyPlacementService via RevexWebIntegrationBridge',
     provider: 'blocks',
     opaqueDownloadToken: true,
+    explicitInsertConfirmation: true,
+    failedTokenIsOneShot: true,
     revitExternalEventMutation: true,
     exactWalkZ: true,
     faceAndElementHostFallback: true,

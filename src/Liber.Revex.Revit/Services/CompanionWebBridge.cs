@@ -9,7 +9,12 @@ public static class CompanionWebBridge
 {
     public static async Task<(bool ok, string message)> AttachSyncPackageAsync(
         WebView2 web,
-        RevexSyncOutput output)
+        RevexSyncOutput output,
+        string attemptId,
+        string projectId,
+        string documentUniqueId,
+        string documentFingerprint,
+        string identityEvidenceDigest)
     {
         if (web.CoreWebView2 == null)
             return (false, "REVEX Companion browser is not initialized.");
@@ -56,6 +61,10 @@ public static class CompanionWebBridge
         bool hasLegacyGeometry = !string.IsNullOrWhiteSpace(output.ViewerMesh) && File.Exists(output.ViewerMesh);
         if (!hasPagedGeometry && !hasLegacyGeometry)
             return (false, "The REVEX sync package has no complete exact Revit geometry stream; the prior BIM revision remains current.");
+        if (string.IsNullOrWhiteSpace(attemptId) || string.IsNullOrWhiteSpace(projectId) ||
+            string.IsNullOrWhiteSpace(documentUniqueId) || string.IsNullOrWhiteSpace(documentFingerprint) ||
+            string.IsNullOrWhiteSpace(identityEvidenceDigest))
+            return (false, "The native sync attempt has no complete project/document identity envelope; no files were attached.");
 
         RevexDiagnostics.Info("SYNC", hasPagedGeometry
             ? $"Companion attachment includes paged exact geometry: manifest={Path.GetFileName(output.ViewerMeshManifest)}; pages={output.ViewerMeshPages.Count}."
@@ -85,10 +94,22 @@ public static class CompanionWebBridge
         if (!ready)
             return (false, "REVEX Companion loaded but its native sync handler did not become ready within 8 seconds.");
 
-        const string markInput = """
+        string envelopeJson = JsonSerializer.Serialize(new
+        {
+            attemptId,
+            projectId,
+            revision = output.Revision,
+            documentUniqueId,
+            documentFingerprint,
+            identityEvidenceDigest
+        });
+        string markInput = $$"""
         (() => {
           const input = document.querySelector("input[data-liber-revex-sync-upload='1']");
           if (!input) return false;
+          const envelope = {{envelopeJson}};
+          window.__liberRevexNativeSyncEnvelope = Object.freeze(envelope);
+          input.dataset.liberRevexNativeAttemptId = envelope.attemptId;
           input.setAttribute('data-liber-revex-native-ready', '1');
           return true;
         })();

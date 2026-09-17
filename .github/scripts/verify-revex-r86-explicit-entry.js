@@ -41,8 +41,19 @@ must(bindingBlock,'RevitRequestKind.GbxmlEngineering','explicit Engineering sync
 
 must(windowHost,'Loaded += async (_, _) =>','window startup path must remain inspectable');
 must(windowHost,'ResolveActiveDocumentProjectBinding();','startup must recover the active document binding after WebView initialization');
-must(windowHost,'MakeButton("SYNC BIM + BOOKS"','explicit BIM sync button must remain');
-must(windowHost,'MakeButton("SYNC ENGINEERING"','explicit Engineering sync button must remain');
+assert.equal((windowHost.match(/MakeButton\("SYNC PROJECT"/g)||[]).length,2,'each mutually exclusive native mode must expose the same single Sync project action');
+must(windowHost,'_continueUnifiedSyncToEngineering = true','Sync project must arm the aligned Engineering continuation');
+must(windowHost,'await AttachPendingSourceSyncAsync()','source revision must attach before the Engineering continuation');
+must(windowHost,'_confirmedLiveSourceRevision','unified sync must track exact source cloud-publication confirmation');
+must(windowHost,'!string.Equals(_confirmedLiveSourceRevision, sourceRevision, StringComparison.Ordinal)','Engineering must stay blocked until the exact captured source revision is confirmed live');
+must(windowHost,'if (cloud)','a local-only source preview must not start the managed Engineering stage');
+must(windowHost,'_confirmedLiveSourceRevision = revision','the exact successful source result must release the Engineering gate');
+must(windowHost,'Engineering remains paused until that same revision is published','local-preview source evidence must remain safely retryable');
+must(windowHost,'await ContinueUnifiedSyncToEngineeringAsync()','exact source confirmation must advance the unified sync');
+must(windowHost,'_lastSourceRevision = result.SyncOutput.Revision','unified sync must retain the exact source revision identity');
+must(windowHost,'_activeEngineeringSourceRevision = unifiedContinuation ? sourceRevision : null','only the exact captured unified continuation may bind the preceding source revision');
+must(windowHost,'output, resolvedBinding, _resolvedEnergyWeatherPath, sourceRevision','Engineering revision must receive the captured source revision from the same unified sync');
+must(windowHost,'!string.Equals(sourceRevision, _activeEngineeringSourceRevision, StringComparison.Ordinal)','Engineering callback must revalidate that captured source revision before commit');
 
 // r106: native mode buttons must never drive Companion through browser script calls.
 // The user log proved rapid Engineering→Design routing could hang the WebView renderer.
@@ -69,5 +80,5 @@ console.log(JSON.stringify({
   schema:'liber.revex.r106-read-only-entry.v2',status:'PASSED',
   entry:{readOnlyActiveDocumentBinding:true,revitMutation:false,projectAutoCreation:false,autoEnergyResume:false},
   webView:{nativeModeBrowserRouting:false,firstStallSameUrlRecovery:true,moduleGuessing:false},
-  explicitActions:{bimSync:true,engineeringSync:true,newOrReboundProjectStillExplicit:true,bindingVerificationInsideExplicitActions:true}
+  explicitActions:{unifiedProjectSync:true,exactCloudSourceThenEngineering:true,localPreviewDoesNotMixVersions:true,newOrReboundProjectStillExplicit:true,bindingVerificationInsideExplicitActions:true}
 },null,2));

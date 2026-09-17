@@ -1,4 +1,4 @@
-name: REVEX r70 Energy + BIM appearance validation
+name: REVEX current Energy identity + BIM appearance validation
 
 on:
   push:
@@ -10,6 +10,7 @@ on:
       - 'server/revex-energy-worker/revex_energy_identity_normalizer.py'
       - 'server/revex-energy-worker/revex_energy_pipeline_r69.py'
       - 'server/revex-energy-worker/revex_energy_pipeline_guard.py'
+      - 'server/revex-energy-worker/revex_energy_pipeline_current.py'
       - 'server/revex-energy-worker/Dockerfile'
       - 'server/revex-energy-worker/DEPLOY_ENERGY_WORKER_ONLY_R69.ps1'
       - 'DEPLOY_REVEX_CURRENT_SERVICES.ps1'
@@ -50,11 +51,12 @@ jobs:
           python -m py_compile server/revex-energy-worker/revex_energy_identity_normalizer.py
           python -m py_compile server/revex-energy-worker/revex_energy_pipeline_r69.py
           python -m py_compile server/revex-energy-worker/revex_energy_pipeline_guard.py
+          python -m py_compile server/revex-energy-worker/revex_energy_pipeline_current.py
           python -m py_compile src/Liber.Revex.Revit/Engineering/Energy/comcheck_backstop.py
           node --check docs/liber-apps/apps/revex/appearance-r70.js
           node --check docs/liber-apps/apps/revex/ui-integrity.js
           node --check docs/liber-apps/apps/revex/docs-pages-r68.js
-      - name: Prove Energy, deployment, Docs and BIM appearance contracts
+      - name: Prove canonical Energy facade, preserved identity, deployment, Docs and BIM appearance contracts
         run: python .github/scripts/verify-revex-r69-energy-finish.py
       - name: Preserve historical worker-only primitive without making it current
         shell: pwsh

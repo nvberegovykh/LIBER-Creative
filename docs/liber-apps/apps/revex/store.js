@@ -19,6 +19,94 @@
   const COMCHECK_SERVICE = 'PNNL_COMCHECK_BACKSTOP';
   const COMCHECK_ENDPOINT = 'https://legacy-comcheck.energycode.pnl.gov/CheckWeb/';
   const COMCHECK_SCOPE = 'GENERATED_CURRENT_PROJECT_CXL_ONLY';
+  const GOOGLE_RENDER_JOB_SCHEMA = 'liber.revex.google-render-job.v1';
+  const GOOGLE_RENDER_PROVIDER = 'google-gemini-server';
+  const GOOGLE_RENDER_MODEL = 'gemini-3.1-flash-image';
+  const blobUrlCache = new Map();
+  const blobUrlPathCache = new Map();
+  let blobUrlCacheProjectId = null;
+  const BLOB_URL_CACHE_LIMIT = 160;
+
+  function clearBlobUrlCache() {
+    for (const pendingUrl of blobUrlCache.values()) Promise.resolve(pendingUrl)
+      .then((url) => { blobUrlPathCache.delete(url); try { URL.revokeObjectURL(url); } catch (_) {} }).catch(() => {});
+    blobUrlCache.clear();
+    blobUrlPathCache.clear();
+    blobUrlCacheProjectId = null;
+  }
+
+  function controlledRenderJobId() {
+    let nonce = '';
+    if (typeof root.crypto?.randomUUID === 'function') {
+      nonce = root.crypto.randomUUID().replace(/-/g, '').slice(0, 32);
+    } else if (typeof root.crypto?.getRandomValues === 'function') {
+      const bytes = root.crypto.getRandomValues(new Uint8Array(16));
+      nonce = Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+    }
+    if (!nonce) throw new Error('Secure browser randomness is required to create a Render job.');
+    return `render_${Date.now().toString(36)}_${nonce}`;
+  }
+
+  function isLegacyFirebaseDownloadUrl(value) {
+    const text = String(value || '').trim();
+    if (!text) return false;
+    try {
+      const url = new URL(text, root.location?.href || 'https://liberpict.com/');
+      return (url.hostname === 'firebasestorage.googleapis.com' || /\.googleapis\.com$/i.test(url.hostname) && url.pathname.includes('/v0/b/')) &&
+        (url.searchParams.has('token') || url.searchParams.get('alt') === 'media');
+    } catch (_) { return /firebasestorage\.googleapis\.com/i.test(text) && /[?&]token=/i.test(text); }
+  }
+
+  function compatibleEphemeralUrl(value, label = 'project asset') {
+    const text = String(value || '').trim();
+    if (!text) return null;
+    if (isLegacyFirebaseDownloadUrl(text))
+      throw new Error(`Blocked a legacy permanent Firebase download URL for ${label}. Re-publish this revision so it stores an authenticated Storage path.`);
+    return text;
+  }
+
+  function projectStoragePath(value) {
+    const storagePath = String(value || '').trim().replace(/\\/g, '/');
+    if (!storagePath || storagePath.startsWith('/') || storagePath.includes('//'))
+      throw new Error('The project file path is invalid.');
+    const segments = storagePath.split('/');
+    if (segments.some((segment) => !segment || segment === '.' || segment === '..'))
+      throw new Error('The project file path is invalid.');
+    if (segments.length < 3 || segments[0] !== 'projects' || !/^[A-Za-z0-9._-]{1,160}$/.test(segments[1]))
+      throw new Error('REVEX can open only project-scoped Storage files.');
+    const activeProjectId = String(root.__revexState?.projectId || '').trim();
+    if (activeProjectId && activeProjectId !== segments[1])
+      throw new Error('Blocked a cross-project file reference. Reload the selected REVEX project and try again.');
+    return storagePath;
+  }
+
+  function exactText(value, label) {
+    const text = String(value || '').trim();
+    if (!text) throw new Error(`Engineering Sync is missing ${label}.`);
+    return text;
+  }
+
+  function assertEngineeringSourceAlignment(source, manifest, projectId) {
+    const sourceRevision = exactText(manifest?.sourceRevision, 'sourceRevision');
+    const sourceProjectId = exactText(source?.projectId, 'the immutable source project id');
+    if (!source || source.immutable !== true || source.revexKind !== 'revision' || String(source.revision || '') !== sourceRevision)
+      throw new Error(`Engineering Sync source ${sourceRevision} is not the exact immutable REVEX source revision.`);
+    if (sourceProjectId !== projectId || String(manifest?.projectId || '') !== projectId)
+      throw new Error('Engineering Sync and its immutable source revision belong to different projects.');
+    const central = source.central || {};
+    const binding = manifest?.projectBinding || {};
+    for (const [field, label] of [
+      ['documentUniqueId', 'active Revit document id'],
+      ['documentFingerprint', 'active Revit document fingerprint'],
+      ['identityEvidenceDigest', 'identity evidence digest']
+    ]) {
+      const sourceValue = exactText(central[field], `source ${label}`);
+      const engineeringValue = exactText(binding[field], `Engineering ${label}`);
+      if (sourceValue !== engineeringValue)
+        throw new Error(`Engineering Sync ${label} does not match immutable source revision ${sourceRevision}.`);
+    }
+    return sourceRevision;
+  }
 
   function resolveAtomicPackageProject(project, preferredProjectId, preferredSpecProjectId) {
     const packageProjectId = String(project?.central?.projectId || project?.central?.liberProjectId || '').trim();
@@ -223,6 +311,7 @@
       this.mode = this.user ? 'cloud' : 'local';
       this.authSettled = true;
       if (previousMode === this.mode && previousUid === this._lastAuthUid) return this.mode;
+      clearBlobUrlCache();
       const pending = this.lastLocalPackage?.cloud === false ? {
         projectId: this.lastLocalPackage.projectId,
         revision: this.lastLocalPackage.revision,
@@ -248,6 +337,32 @@
     // Firebase's modular SDK rejects otherwise-plain objects created in a
     // different Window realm. Keep every REVEX writer on the SDK's own realm.
     toFirestorePlain(value) { return plain(value); },
+    assertEphemeralUrl(value, label) { return compatibleEphemeralUrl(value, label); },
+    sanitizeStoredAsset(asset, label = 'project asset') {
+      if (!asset || typeof asset !== 'object') return asset;
+      const row = { ...asset };
+      if (row.path) delete row.url;
+      else if (row.url) row.url = compatibleEphemeralUrl(row.url, label);
+      return row;
+    },
+    sanitizeRenderJob(projectId, value) {
+      const row = { ...(value || {}) };
+      let resultPath = row.resultPath ? projectStoragePath(row.resultPath) : null;
+      if (!resultPath && row.resultUrl) resultPath = this.storagePathForObjectUrl(row.resultUrl);
+      delete row.resultUrl;
+      if (resultPath) {
+        if (resultPath.split('/')[1] !== String(projectId || '')) throw new Error('Render result belongs to a different REVEX project.');
+        row.resultPath = resultPath;
+      } else delete row.resultPath;
+      return row;
+    },
+    async hydrateStoredAsset(asset, label = 'project asset') {
+      if (!asset || typeof asset !== 'object') return asset;
+      return {
+        ...asset,
+        url: asset.path ? await this.fileUrl(asset.path) : compatibleEphemeralUrl(asset.url, label)
+      };
+    },
 
     async init() {
       for (let i = 0; i < 50; i += 1) {
@@ -367,23 +482,77 @@
         try { return JSON.parse(localStorage.getItem(`liber.revex.state.${projectId}`) || 'null'); } catch (_) { return null; }
       }
       const snap = await this.api.getDoc(this.api.doc(this.db, 'projects', projectId, 'revex', 'state'));
-      return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+      return snap.exists() ? this.hydrateStorageRecord({ id: snap.id, ...snap.data() }) : null;
     },
 
     subscribeState(projectId, callback) {
       if (!this.isCloud() || !projectId || !this.api.onSnapshot) return () => {};
       return this.api.onSnapshot(
         this.api.doc(this.db, 'projects', projectId, 'revex', 'state'),
-        (snap) => callback(snap.exists() ? { id: snap.id, ...snap.data() } : null),
+        (snap) => {
+          if (!snap.exists()) { callback(null); return; }
+          this.hydrateStorageRecord({ id: snap.id, ...snap.data() })
+            .then(callback)
+            .catch((error) => console.warn('[REVEX] state asset hydration', error));
+        },
         (error) => console.warn('[REVEX] state subscription', error)
       );
     },
 
-    async fetchJson(url) {
-      if (!url) return null;
+    async fetchJson(urlOrPath) {
+      if (!urlOrPath) return null;
+      const value = String(urlOrPath || '').trim();
+      const storagePath = value.startsWith('storage://') ? value.slice('storage://'.length) : null;
+      if (storagePath) return JSON.parse(await (await this.fileBlob(storagePath)).text());
+      const url = compatibleEphemeralUrl(value, 'synced JSON');
       const response = await fetch(url, { cache: 'no-store' });
       if (!response.ok) throw new Error(`Could not load synced data (${response.status})`);
       return response.json();
+    },
+
+    async fileBlob(storagePath) {
+      if (!storagePath || !this.fs?.storage) return null;
+      if (!this.user?.uid) throw new Error('Sign in before opening a project file.');
+      const scopedPath = projectStoragePath(storagePath);
+      const getBlob = this.api?.getBlob || root.firebaseModular?.getBlob || REALM.firebaseModular?.getBlob;
+      if (typeof getBlob !== 'function') throw new Error('Authenticated Firebase Storage reads are unavailable in this browser.');
+      try {
+        return await getBlob(this.api.ref(this.fs.storage, scopedPath));
+      } catch (error) {
+        const code = String(error?.code || '').toLowerCase();
+        if (code.includes('unauthorized') || code.includes('permission-denied')) {
+          const denied = new Error('Project file access is unavailable. Verify project membership and deploy the current REVEX Storage access rules.');
+          denied.code = error?.code || 'storage/unauthorized';
+          denied.cause = error;
+          throw denied;
+        }
+        throw error;
+      }
+    },
+
+    async hydrateStorageRecord(value) {
+      if (!value || typeof value !== 'object') return value;
+      const row = plain(value);
+      const fields = [
+        ['ifcPath', 'ifcUrl'], ['modelPath', 'modelUrl'], ['fallbackModelPath', 'fallbackModelUrl'],
+        ['viewerPath', 'viewerUrl'], ['designPath', 'designUrl'], ['projectPath', 'projectUrl'],
+        ['specPushPath', 'specPushUrl'], ['printingSetsPath', 'printingSetsUrl'],
+        ['affectedPlansPath', 'affectedPlansUrl'], ['manifestPath', 'manifestUrl'],
+        ['imagePath', 'imageUrl'], ['resultPath', 'resultUrl']
+      ];
+      for (const [pathField, urlField] of fields) {
+        if (row[pathField]) row[urlField] = await this.fileUrl(row[pathField]);
+        else if (row[urlField]) row[urlField] = compatibleEphemeralUrl(row[urlField], urlField);
+      }
+      if (Array.isArray(row.modelPages)) row.modelPages = await Promise.all(row.modelPages.map(async (asset) => ({
+        ...asset,
+        url: asset?.path ? await this.fileUrl(asset.path) : compatibleEphemeralUrl(asset?.url, 'model page')
+      })));
+      if (Array.isArray(row.artifacts)) row.artifacts = await Promise.all(row.artifacts.map(async (asset) => ({
+        ...asset,
+        url: asset?.path ? await this.fileUrl(asset.path) : compatibleEphemeralUrl(asset?.url, 'Engineering/Energy artifact')
+      })));
+      return row;
     },
 
     async resolveSpecProject(projectId, preferredId) {
@@ -468,7 +637,7 @@
       const f = this.api;
       const ref = f.ref(this.fs.storage, path);
       await f.uploadBytes(ref, file, plain({ contentType: file.type || (file.name.endsWith('.json') ? 'application/json' : 'application/octet-stream') }));
-      return { path, url: await f.getDownloadURL(ref), name: file.name, size: file.size };
+      return { path, name: file.name, size: file.size };
     },
 
     async syncPackage(fileList, preferredProjectId, preferredSpecProjectId) {
@@ -546,16 +715,15 @@
         central: project?.central || null,
         ownership: project?.rules || null,
         integrity: integrity || null,
-        modelUrl: uploads[modelFile?.name]?.url || null,
         modelPath: uploads[modelFile?.name]?.path || null,
         modelFormat: rvxMeshFile ? 'rvxmesh-gzip' : (fbxFile ? 'fbx' : null),
-        fallbackModelUrl: rvxMeshFile && fbxFile ? (uploads[fbxFile.name]?.url || null) : null,
-        viewerUrl: uploads['viewer-model.json']?.url || null,
-        designUrl: uploads['design-book.json']?.url || null,
-        projectUrl: uploads['project.json']?.url || null,
-        specPushUrl: uploads['spec-revit-push.json']?.url || null,
-        printingSetsUrl: uploads['printing-sets.json']?.url || null,
-        affectedPlansUrl: uploads['affected-plan-views.json']?.url || null,
+        fallbackModelPath: rvxMeshFile && fbxFile ? (uploads[fbxFile.name]?.path || null) : null,
+        viewerPath: uploads['viewer-model.json']?.path || null,
+        designPath: uploads['design-book.json']?.path || null,
+        projectPath: uploads['project.json']?.path || null,
+        specPushPath: uploads['spec-revit-push.json']?.path || null,
+        printingSetsPath: uploads['printing-sets.json']?.path || null,
+        affectedPlansPath: uploads['affected-plan-views.json']?.path || null,
         scheduleCount: integrity?.counts?.schedules || design?.schedules?.length || 0,
         elementCount: integrity?.counts?.elements || viewer?.elements?.length || 0,
         spec: specSync,
@@ -566,9 +734,9 @@
       const revisionRef = this.api.doc(this.db, 'projects', projectId, 'revexRevisions', revision);
       const revisionState = plain({
         ...state,
-        viewerUrl: state.viewerUrl,
-        designUrl: state.designUrl,
-        projectUrl: state.projectUrl,
+        viewerPath: state.viewerPath,
+        designPath: state.designPath,
+        projectPath: state.projectPath,
         createdAt: state.syncedAt
       });
       if (publicationBatch) {
@@ -598,6 +766,7 @@
       if (manifest?.schema !== 'liber.revex.engineering-sync.v1' || manifest?.architecture !== 'REVIT_EVIDENCE_GRAPH_V1')
         throw new Error('This is not a compatible REVIT_EVIDENCE_GRAPH_V1 Engineering Sync revision.');
       const binding = manifest?.projectBinding || {};
+      const sourceRevision = exactText(manifest?.sourceRevision, 'sourceRevision');
       if (binding.version !== 'active-revit-evidence-v1' || !String(binding.identityEvidenceDigest || '').trim() || !String(binding.documentUniqueId || '').trim())
         throw new Error('Engineering Sync has no evidence-verified active Revit document binding. Re-sync from the active model.');
       const publication = manifest?.publicationIntegrity || {};
@@ -652,6 +821,15 @@
       if (!this.isCloud()) return state;
       if (!this.fs.storage) throw new Error('LIBER Storage is not available in this session.');
 
+      // A cloud Engineering revision can follow only the exact immutable source
+      // revision named by the native package. Never infer this from a mutable
+      // current pointer and never upload bytes before the full Revit envelope agrees.
+      const sourceRef = this.api.doc(this.db, 'projects', projectId, 'library', `revex_revision_${docId(sourceRevision)}`);
+      const sourceSnap = await this.api.getDoc(sourceRef);
+      if (!sourceSnap.exists())
+        throw new Error(`Publish immutable source revision ${sourceRevision} before its aligned Engineering revision.`);
+      assertEngineeringSourceAlignment({ id: sourceSnap.id, ...sourceSnap.data() }, manifest, projectId);
+
       const base = `projects/${projectId}/revex/engineering/revisions/${revision}`;
       const artifacts = [];
       for (let index = 0; index < files.length; index += 1) {
@@ -661,7 +839,7 @@
           name: file.name, bytes: file.size || 0,
           sha256: fileIntegrity.get(String(file.name || '').toLowerCase()),
           kind: index === 0 ? 'manifest' : 'engineering-evidence',
-          url: uploaded.url, path: uploaded.path, cloud: true
+          path: uploaded.path, cloud: true
         });
       }
       const cloudState = plain({ ...state, artifacts, cloud: true, syncedBy: this.user.uid });
@@ -680,7 +858,7 @@
         await this.api.setDoc(immutableRef, immutableRecord, plain({ merge: false }));
         await this.api.setDoc(currentRef, currentRecord, plain({ merge: false }));
       }
-      return cloudState;
+      return this.hydrateStorageRecord(cloudState);
     },
 
     async getEngineeringState(projectId) {
@@ -690,7 +868,7 @@
       }
       const canonicalRef = this.api.doc(this.db, 'projects', projectId, 'library', ENGINEERING_CURRENT_ID);
       const snap = await this.api.getDoc(canonicalRef);
-      if (snap.exists()) return { id: snap.id, ...snap.data() };
+      if (snap.exists()) return this.hydrateStorageRecord({ id: snap.id, ...snap.data() });
       // Legacy r41-r48 records never establish project identity. Only a fresh
       // active-document evidence revision may become the managed Energy source.
       return null;
@@ -700,7 +878,12 @@
       if (!this.isCloud() || !projectId || !this.api.onSnapshot) return () => {};
       return this.api.onSnapshot(
         this.api.doc(this.db, 'projects', projectId, 'library', ENGINEERING_CURRENT_ID),
-        (snap) => callback(snap.exists() ? { id: snap.id, ...snap.data() } : null),
+        (snap) => {
+          if (!snap.exists()) { callback(null); return; }
+          this.hydrateStorageRecord({ id: snap.id, ...snap.data() })
+            .then(callback)
+            .catch((error) => console.warn('[REVEX] Engineering asset hydration', error));
+        },
         (error) => console.warn('[REVEX] Engineering state subscription', error)
       );
     },
@@ -775,6 +958,26 @@
       return response;
     },
 
+    async applyEn1IdentityAmendment(projectId, sourceRevision, parentResultRevision, amendmentId) {
+      if (!projectId || !sourceRevision || !parentResultRevision || !amendmentId)
+        throw new Error('Project, Engineering revision, parent Energy result and amendment id are required.');
+      if (!this.isCloud()) throw new Error('Apply to EN-1 requires a signed-in REVEX cloud session.');
+      const consent = await this.getEnergyConsent(projectId, sourceRevision);
+      if (!consent) throw new Error('This Engineering revision has no authenticated Energy authorization record.');
+      const fs = this.fs || getService();
+      const response = await callEnergyBroker(fs, plain({
+        schema: 'liber.revex.energy-broker-request.v1',
+        mode: 'EN1_IDENTITY_AMENDMENT',
+        projectId,
+        sourceRevision,
+        parentResultRevision,
+        amendmentId,
+        clientBuild: '20260820r145-en1-amendment1'
+      }));
+      if (!response?.ok) throw new Error(response?.message || response?.error || 'REVEX could not publish the EN-1 amendment.');
+      return response;
+    },
+
     async publishEnergyResult(fileList, preferredProjectId) {
       const files = Array.from(fileList || []);
       const manifestFile = byName(files, 'energy-result.json');
@@ -807,10 +1010,10 @@
       for (let index = 0; index < resultFiles.length; index += 1) {
         const file = resultFiles[index];
         const uploaded = await this.uploadFile(`${base}/${String(index + 1).padStart(3, '0')}_${safe(file.name)}`, file);
-        artifacts.push({ ...(declared[index] || {}), name: declared[index]?.name || file.name, bytes: file.size || 0, url: uploaded.url, path: uploaded.path, cloud: true });
+        artifacts.push({ ...(declared[index] || {}), name: declared[index]?.name || file.name, bytes: file.size || 0, path: uploaded.path, cloud: true });
       }
       const manifestUpload = await this.uploadFile(`${base}/000_energy-result.json`, manifestFile);
-      const cloudState = plain({ ...state, artifacts, manifestUrl: manifestUpload.url, manifestPath: manifestUpload.path, cloud: true, publishedBy: this.user.uid });
+      const cloudState = plain({ ...state, artifacts, manifestPath: manifestUpload.path, cloud: true, publishedBy: this.user.uid });
       await this.api.setDoc(
         this.api.doc(this.db, 'projects', projectId, 'library', ENERGY_CURRENT_ID),
         revexRecord('energy', cloudState, at),
@@ -821,7 +1024,7 @@
         revexRecord('energy-result', { ...cloudState, immutable: true }, at),
         plain({ merge: false })
       );
-      return cloudState;
+      return this.hydrateStorageRecord(cloudState);
     },
 
     async getEnergyResult(projectId) {
@@ -830,7 +1033,7 @@
         try { return JSON.parse(localStorage.getItem(`liber.revex.energy-result.${projectId}`) || 'null'); } catch (_) { return null; }
       }
       const snap = await this.api.getDoc(this.api.doc(this.db, 'projects', projectId, 'library', ENERGY_CURRENT_ID));
-      return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+      return snap.exists() ? this.hydrateStorageRecord({ id: snap.id, ...snap.data() }) : null;
     },
 
     subscribeEnergyResult(projectId, callback) {
@@ -891,9 +1094,9 @@
         return images;
       }
       const uploaded = await this.uploadFile(`projects/${projectId}/revex/design/chapters/${docId(chapterId)}/${field}/${Date.now()}_${name}`, file);
-      const images = [...(currentImages || []), { url: uploaded.url, path: uploaded.path, name }].slice(-24);
+      const images = [...(currentImages || []).map((asset) => this.sanitizeStoredAsset(asset, `Design Book chapter ${field}`)), { path: uploaded.path, name }].slice(-24);
       await this.saveChapterEdit(projectId, chapterId, { [field]: images });
-      return images;
+      return Promise.all(images.map((asset) => this.hydrateStoredAsset(asset, `Design Book chapter ${field}`)));
     },
 
     async uploadDesignImage(projectId, itemId, file, currentImages) {
@@ -904,9 +1107,9 @@
         return images;
       }
       const uploaded = await this.uploadFile(`projects/${projectId}/revex/design/${docId(itemId)}/${Date.now()}_${name}`, file);
-      const images = [...(currentImages || []), { url: uploaded.url, path: uploaded.path, name }].slice(-12);
+      const images = [...(currentImages || []).map((asset) => this.sanitizeStoredAsset(asset, 'Design Book item image')), { path: uploaded.path, name }].slice(-12);
       await this.saveDesignEdit(projectId, itemId, { images });
-      return images;
+      return Promise.all(images.map((asset) => this.hydrateStoredAsset(asset, 'Design Book item image')));
     },
 
     async listIssues(projectId) {
@@ -937,36 +1140,56 @@
     async listRenderJobs(projectId) {
       if (!projectId) return [];
       if (!this.isCloud()) {
-        try { return JSON.parse(localStorage.getItem(`liber.revex.renders.${projectId}`) || '[]'); } catch (_) { return []; }
+        try { return Promise.all(JSON.parse(localStorage.getItem(`liber.revex.renders.${projectId}`) || '[]').map((row) => this.hydrateStorageRecord(row))); } catch (_) { return []; }
       }
       const snap = await this.api.getDocs(this.api.collection(this.db, 'projects', projectId, 'revexRenders'));
-      return snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).slice(0, 40);
+      const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).slice(0, 40);
+      return Promise.all(rows.map((row) => this.hydrateStorageRecord(row)));
     },
 
     async createRenderJob(projectId, job) {
-      const data = { ...job, status: job.status || 'prepared', createdAt: iso(), updatedAt: iso(), createdBy: this.user?.uid || 'local' };
-      if (!this.isCloud()) {
-        const key = `liber.revex.renders.${projectId}`;
-        const all = JSON.parse(localStorage.getItem(key) || '[]');
-        const row = { id: `render_${Date.now()}`, ...data };
-        all.unshift(row); localStorage.setItem(key, JSON.stringify(all.slice(0, 40))); return row;
-      }
-      const ref = await this.api.addDoc(this.api.collection(this.db, 'projects', projectId, 'revexRenders'), plain(data));
-      return { id: ref.id, ...data };
+      if (!this.isCloud()) throw new Error('Render jobs require a signed-in REVEX cloud session.');
+      const uid = String(this.fs?.auth?.currentUser?.uid || this.user?.uid || '').trim();
+      if (!uid) throw new Error('Sign in to LIBER Apps before creating a Render job.');
+      if (job?.schema !== GOOGLE_RENDER_JOB_SCHEMA || job?.provider !== GOOGLE_RENDER_PROVIDER || job?.model !== GOOGLE_RENDER_MODEL || String(job?.status || '').toUpperCase() !== 'PREPARED')
+        throw new Error('The Render request is not a controlled Google Render job.');
+      const id = controlledRenderJobId();
+      const now = iso();
+      const data = plain({
+        schema: GOOGLE_RENDER_JOB_SCHEMA,
+        type: 'revex', hidden: true, revexKind: 'render', revexId: id,
+        contextKind: String(job.contextKind || 'view').slice(0, 40),
+        contextLabel: String(job.contextLabel || '').slice(0, 1000),
+        elementId: job.elementId == null ? null : String(job.elementId).slice(0, 160),
+        designItemId: job.designItemId == null ? null : String(job.designItemId).slice(0, 160),
+        chapterId: job.chapterId == null ? null : String(job.chapterId).slice(0, 160),
+        revision: job.revision == null ? null : String(job.revision).slice(0, 160),
+        renderLocation: job.renderLocation && typeof job.renderLocation === 'object' ? job.renderLocation : null,
+        sourceCamera: job.sourceCamera && typeof job.sourceCamera === 'object' ? job.sourceCamera : null,
+        sourceRevision: String(job.sourceRevision || '').slice(0, 160),
+        settings: job.settings && typeof job.settings === 'object' ? job.settings : {},
+        provider: GOOGLE_RENDER_PROVIDER, model: GOOGLE_RENDER_MODEL,
+        status: 'PREPARED', createdAt: now, updatedAt: now, createdBy: uid
+      });
+      const ref = this.api.doc(this.db, 'projects', projectId, 'revexRenders', id);
+      await this.api.setDoc(ref, data, plain({ merge: false }));
+      return { id, ...data };
     },
 
     async updateRenderJob(projectId, jobId, patch) {
-      const data = { ...patch, updatedAt: iso(), updatedBy: this.user?.uid || 'local' };
+      const transientResultUrl = patch?.resultUrl ? compatibleEphemeralUrl(patch.resultUrl, 'render result') : null;
+      const data = { ...this.sanitizeRenderJob(projectId, patch), updatedAt: iso(), updatedBy: this.user?.uid || 'local' };
       if (!this.isCloud()) {
         const key = `liber.revex.renders.${projectId}`;
         const all = JSON.parse(localStorage.getItem(key) || '[]');
         const index = all.findIndex((row) => row.id === jobId);
         if (index >= 0) all[index] = { ...all[index], ...data };
         localStorage.setItem(key, JSON.stringify(all));
-        return index >= 0 ? all[index] : { id: jobId, ...data };
+        const row = index >= 0 ? all[index] : { id: jobId, ...data };
+        return transientResultUrl ? { ...row, resultUrl: transientResultUrl } : row;
       }
       await this.api.setDoc(this.api.doc(this.db, 'projects', projectId, 'revexRenders', jobId), plain(data), plain({ merge: true }));
-      return { id: jobId, ...data };
+      return transientResultUrl ? { id: jobId, ...data, resultUrl: transientResultUrl } : this.hydrateStorageRecord({ id: jobId, ...data });
     },
 
     async listLibrary(projectId) {
@@ -977,7 +1200,33 @@
 
     async fileUrl(storagePath) {
       if (!storagePath || !this.fs?.storage) return null;
-      return this.api.getDownloadURL(this.api.ref(this.fs.storage, storagePath));
+      const scopedPath = projectStoragePath(storagePath);
+      const assetProjectId = scopedPath.split('/')[1];
+      if (blobUrlCacheProjectId && blobUrlCacheProjectId !== assetProjectId) clearBlobUrlCache();
+      blobUrlCacheProjectId = assetProjectId;
+      if (!blobUrlCache.has(scopedPath)) {
+        const pending = this.fileBlob(scopedPath).then((blob) => {
+          if (!blob) throw new Error('The authenticated project file returned no data.');
+          const url = URL.createObjectURL(blob);
+          blobUrlPathCache.set(url, scopedPath);
+          while (blobUrlCache.size >= BLOB_URL_CACHE_LIMIT) {
+            const oldest = blobUrlCache.keys().next().value;
+            const evicted = blobUrlCache.get(oldest);
+            blobUrlCache.delete(oldest);
+            Promise.resolve(evicted).then((prior) => { blobUrlPathCache.delete(prior); try { URL.revokeObjectURL(prior); } catch (_) {} }).catch(() => {});
+          }
+          return url;
+        }).catch((error) => { blobUrlCache.delete(scopedPath); throw error; });
+        blobUrlCache.set(scopedPath, pending);
+      }
+      return blobUrlCache.get(scopedPath);
+    },
+
+    storagePathForObjectUrl(value) {
+      const url = compatibleEphemeralUrl(value, 'session object URL');
+      if (!url || !url.startsWith('blob:')) return null;
+      const storagePath = blobUrlPathCache.get(url) || null;
+      return storagePath ? projectStoragePath(storagePath) : null;
     },
 
     async uploadLibraryFile(projectId, file, folderPath = 'record_in/docs', metadata = {}) {
@@ -1015,6 +1264,10 @@
         id,
         projectId,
         sourceRevision: event?.sourceRevision || null,
+        baseSourceRevision: event?.baseSourceRevision || null,
+        commandId: event?.commandId || null,
+        correlationId: event?.correlationId || null,
+        documentFingerprint: event?.documentFingerprint || null,
         kind: event?.kind || 'project',
         operation: event?.operation || 'change',
         label: event?.label || event?.operation || 'Change',
@@ -1126,16 +1379,16 @@
         localStorage.setItem(key, JSON.stringify(all.slice(0, 250)));
         return all[0];
       }
-      let imageUrl = null, imagePath = null;
+      let imagePath = null;
       if (imageDataUrl && this.fs?.storage) {
         const blob = await (await fetch(imageDataUrl)).blob();
         const file = new File([blob], `${id}.png`, { type: 'image/png' });
         const uploaded = await this.uploadFile(`projects/${projectId}/revex/derived-plans/${id}.png`, file);
-        imageUrl = uploaded.url; imagePath = uploaded.path;
+        imagePath = uploaded.path;
       }
-      const finalData = plain({ ...data, imageUrl, imagePath });
+      const finalData = plain({ ...data, imagePath });
       await this.api.setDoc(this.api.doc(this.db, 'projects', projectId, 'revexDerivedPlans', id), finalData, plain({ merge: false }));
-      return finalData;
+      return this.hydrateStorageRecord(finalData);
     },
 
     async ensureProjectChat(projectId) {
@@ -1144,5 +1397,10 @@
     }
   };
 
+  root.__revexStorageDataBoundary = Object.freeze({
+    isLegacyFirebaseDownloadUrl,
+    projectStoragePath,
+    assertEngineeringSourceAlignment
+  });
   root.RevexStore = Store;
 })(window);

@@ -357,7 +357,7 @@ function verifyStaticContracts() {
   assert.match(store,/_applyAuthState\(user/); assert.match(store,/_reconcileAuthState/); assert.match(store,/liber\.revex\.pending-cloud-sync\.v1/);
   assert.match(secureKeys,/Provider credentials are deliberately unavailable to browser code/); assert.doesNotMatch(secureKeys,/api\.mailgun\.net|raw\.githubusercontent\.com\/.*gist/i);
   assert.doesNotMatch(emailService,/Authorization['"]?:\s*`Basic|mailgunApiKey|mailgunDomain/); assert.doesNotMatch(emailService,/console\.(?:log|error)\([^\n]*(?:token|users|user data)/i);
-  assert.match(secureChat,/getEncryptionKeyForConn\(connId\)/); assert.match(secureChat,/liber\.secure-chat\.ecdh-p256\.v2/);
+  assert.match(secureChat,/getEncryptionKeyForConn\(connId/); assert.match(secureChat,/liber\.secure-chat\.ecdh-p256\.v2/);
   assert.match(secureChat,/liber\.secure-chat\.group-key-envelopes\.v1/); assert.match(secureChat,/Group encryption key rotation is required/);
   assert.match(secureChat,/lastMessage:\s*'\[Encrypted message\]'/); assert.match(secureChatCrypto,/hash:\s*'SHA-256'/); assert.match(secureChatCrypto,/wrapGroupAesKey/);
   assert.match(worker,/"version": "0\.8\.19-r49"/); assert.match(worker,/REVIT_T_Z_EN_PAGE_SCAN_ONLY/); assert.match(worker,/Downloaded Engineering artifact failed transfer integrity/); assert.match(worker,/BASELINE_UPDATED_GEOMETRY\.osm/); assert.match(worker,/COMcheck_OFFICIAL_BACKSTOP_REPORT\.pdf/);
@@ -378,6 +378,8 @@ function verifyStaticContracts() {
   assert.match(projectRules,/secureChatNoGlobalAdminBypass/); assert.match(projectRules,/match \/userPublicKeys\/\{uid\}/); assert.match(projectRules,/allow update, delete, list: if false/);
   assert.match(projectRules,/'groupKeyEnvelopes'/); assert.match(projectRules,/'groupKeyHistory'/);
   assert.match(projectRules,/request\.resource\.data\.memberIds == resource\.data\.memberIds/); assert.match(projectRules,/revexR43IsAdmin/);
+  assert.match(projectRules,/request\.auth\.token\.revexAdmin == true/); assert.match(projectRules,/function revexR43ChatProjectBoundary\(data\)/);
+  assert.doesNotMatch(projectRules,/documents\/users\/\$\(request\.auth\.uid\)[\s\S]{0,160}\.data\.role == 'admin'/);
   assert.equal(brokerPackage.engines.node,'22'); assert.equal(brokerPackage.dependencies['firebase-admin'],'14.2.0'); assert.equal(brokerPackage.dependencies['firebase-functions'],'7.3.2'); assert.equal(brokerPackage.overrides.uuid,'11.1.1');
   checkpoint('STATIC_RELEASE_CONTRACTS', { build: '20260813r49', privateWorker: true, authenticatedBroker: true, revisionScopedConsent: true });
 }
@@ -387,22 +389,22 @@ function verifyProjectUserAccess() {
   const allowed=[
     ['owner',{},'owner-a','owner'],
     ['ordinary-project-member',{},'member-a','member'],
-    ['liber-admin',{role:'admin'},'admin-a','liber-admin']
+    ['liber-admin',{revexAdmin:true},'admin-a','liber-admin']
   ];
   for(const [label,profile,uid,role] of allowed){
     const matrix=functionalAccessMatrix(project,profile,uid);
     assert.equal(matrix.role,role,`${label} role mismatch`);
     for(const operation of PROJECT_FUNCTIONS) assert.equal(matrix.operations[operation],true,`${label} cannot ${operation}`);
   }
-  for(const [label,profile,uid] of [['outsider',{},'outsider-a'],['anonymous',{},''],['cross-project-member',{},'member-b']]){
+  for(const [label,profile,uid] of [['outsider',{},'outsider-a'],['anonymous',{},''],['cross-project-member',{},'member-b'],['self-promoted-profile',{},'admin-a']]){
     const matrix=functionalAccessMatrix(project,profile,uid);
     assert.equal(matrix.role,null,`${label} unexpectedly received access`);
     for(const operation of PROJECT_FUNCTIONS) assert.equal(matrix.operations[operation],false,`${label} can ${operation}`);
   }
   assert.equal(canMutateProjectAcl(project,{},'member-a'),false);
   assert.equal(canMutateProjectAcl(project,{},'owner-a'),true);
-  assert.equal(canMutateProjectAcl(project,{role:'admin'},'admin-a'),true);
-  checkpoint('PROJECT_USER_ACCESS_MATRIX',{ownerFunctionalParity:true,ordinaryProjectMemberFunctionalParity:true,liberAdminFunctionalParity:true,outsiderDenied:true,anonymousDenied:true,crossProjectDenied:true,aclRestrictedToOwnerOrAdmin:true});
+  assert.equal(canMutateProjectAcl(project,{revexAdmin:true},'admin-a'),true);
+  checkpoint('PROJECT_USER_ACCESS_MATRIX',{ownerFunctionalParity:true,ordinaryProjectMemberFunctionalParity:true,liberAdminFunctionalParity:true,outsiderDenied:true,anonymousDenied:true,crossProjectDenied:true,userDocumentRoleIsAuthority:false,aclRestrictedToOwnerOrAdmin:true});
 }
 
 (async()=>{

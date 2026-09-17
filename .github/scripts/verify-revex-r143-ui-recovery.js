@@ -35,7 +35,8 @@ assert.ok(!sheet.includes('appendChild(pane.node)'),'sheet must not reparent aut
 has(sheet,'nodesStayInOriginalModule:true','non-reparenting ownership contract');
 has(sheet,'#revex-r126-issues-button{bottom:calc(var(--revex-r142-sheet-bar)','Issues button clearance');
 has(sheet,'revex-r142-walk-active','Walk/sheet mutual exclusion');
-for(const file of ['mobile-final-r122.js','mobile-safe-r133.js','mobile-sheet-r142.js'])has(ui,`${file}?v=20260820r143-ui-recovery1`,`${file} cache key`);
+for(const file of ['mobile-final-r122.js','mobile-safe-r133.js'])has(ui,`${file}?v=20260820r143-ui-recovery1`,`${file} cache key`);
+has(ui,'mobile-sheet-r142.js?v=20260820r147-release1','mobile-sheet-r142 final cache key');
 has(native,'new WrapPanel','wrapping native navigation');
 has(native,'MinWidth = 720','minimum centered WebView column');
 has(native,'_diagnosticsPanel.Visibility = Visibility.Collapsed','diagnostics collapsed by default');

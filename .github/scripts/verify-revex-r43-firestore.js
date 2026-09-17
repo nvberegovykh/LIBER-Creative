@@ -15,7 +15,8 @@ vm.runInContext(`
   globalThis.firebase = {
     collection() {},
     firestore() { return globalThis.firebaseService.db; },
-    doc(_db, ...segments) { return { path: segments.join('/') }; },
+    doc(_db, ...segments) { return { path: segments.join('/'), id: segments[segments.length - 1] }; },
+    async getDoc() { throw new Error('Parent SDK must not receive REVEX reads'); },
     async setDoc(ref) { parentWrites.push(ref.path); throw new Error('Parent SDK must not receive REVEX writes'); }
   };
   globalThis.firebaseService = {
@@ -51,13 +52,27 @@ vm.runInContext(`
   globalThis.firebase = {
     collection() {},
     firestore() { return globalThis.firebaseService.db; },
-    doc(_db, ...segments) { return { path: segments.join('/') }; },
+    doc(_db, ...segments) { return { path: segments.join('/'), id: segments[segments.length - 1] }; },
+    async getDoc(ref) {
+      if (ref.path !== 'projects/project_r43/library/revex_revision_rev_source_r43')
+        return { id: ref.id, exists() { return false; }, data() { return undefined; } };
+      const source = {
+        projectId: 'project_r43', revision: 'rev_source_r43', revexKind: 'revision', immutable: true,
+        central: {
+          documentUniqueId: 'revit-document-r43',
+          documentFingerprint: 'revitdoc_r43',
+          identityEvidenceDigest: '${'a'.repeat(64)}'
+        }
+      };
+      return { id: ref.id, exists() { return true; }, data() { return source; } };
+    },
     ref(_storage, fullPath) { return { fullPath }; },
     async uploadBytes(ref, file, metadata) {
       requireOwnPlain(metadata, 'Storage metadata');
       uploads.push({ path: ref.fullPath, name: file.name });
       return { ref };
     },
+    async getBlob(ref) { return { name: ref.fullPath }; },
     async getDownloadURL(ref) { return 'https://storage.invalid/' + ref.fullPath; },
     async setDoc(ref, data, options) {
       requireOwnPlain(data, 'Firestore payload');
@@ -95,11 +110,12 @@ function load(name) {
       async text() { return JSON.stringify({
         schema: 'liber.revex.engineering-sync.v1',
         architecture: 'REVIT_EVIDENCE_GRAPH_V1',
-        projectId: 'project_r43', revision: 'eng_preserved_r43', gbxmlStatus: 'EXPORTED',
+        projectId: 'project_r43', revision: 'eng_preserved_r43', sourceRevision: 'rev_source_r43', gbxmlStatus: 'EXPORTED',
         projectBinding: {
           version: 'active-revit-evidence-v1',
           identityEvidenceDigest: '${'a'.repeat(64)}',
-          documentUniqueId: 'revit-document-r43'
+          documentUniqueId: 'revit-document-r43',
+          documentFingerprint: 'revitdoc_r43'
         },
         publicationIntegrity: {
           threshold: 0.80, qualityTarget: 0.95,
@@ -120,6 +136,7 @@ function load(name) {
 
   const engineering = await childRealm.RevexStore.syncEngineeringPackage(files, 'project_r43');
   assert.equal(engineering.cloud, true);
+  assert.equal(engineering.manifest.sourceRevision, 'rev_source_r43');
   assert.deepEqual(Array.from(childRealm.writes, (row) => row.path), [
     'projects/project_r43/library/revex_engineering_revision_eng_preserved_r43',
     'projects/project_r43/library/revex_engineering'

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-const BUILD = '20260813r49-review2';
+const BUILD = '20260820r145-section-delegate1';
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const Store = window.RevexStore;
@@ -196,6 +196,7 @@ if (!window.__revexReviewIntegrityR50) {
     if (!button) return;
     const id = button.id;
     if (!['fit-model', 'fit-model-rail', 'detail-toggle', 'walk-toggle', 'section-toggle', 'section-reset'].includes(id)) return;
+    if (id === 'section-toggle' && window.__revexViewerInteractionR85) return; // r85 is the deterministic Section/selection owner.
     const v = ensureViewerPatched();
     if (!v) return;
     event.preventDefault();

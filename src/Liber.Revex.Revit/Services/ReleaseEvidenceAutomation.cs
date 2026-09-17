@@ -93,8 +93,10 @@ public static class ReleaseEvidenceAutomation
                 if (_dynamoInitializationEvent == null)
                     throw new InvalidOperationException("The release-evidence Dynamo ExternalEvent was not created.");
                 _dynamoInitializationRaisedAtUtc = DateTime.UtcNow;
+                ExternalEventRequest request = _dynamoInitializationEvent.Raise();
+                if (request != ExternalEventRequest.Accepted)
+                    throw new InvalidOperationException($"Revit did not accept the release-evidence Dynamo ExternalEvent ({request}).");
                 _state = AutomationState.WaitingForDynamo;
-                _dynamoInitializationEvent.Raise();
                 RevexDiagnostics.Stage("RELEASE-QA", "DYNAMO_EXTERNAL_EVENT", "RAISED",
                     "UI-less synchronous Dynamo initialization was raised for a dedicated Revit ExternalEvent.");
                 args.SetRaiseWithoutDelay();

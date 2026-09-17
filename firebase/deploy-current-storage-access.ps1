@@ -12,6 +12,8 @@ $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Verifier = Join-Path $Root ".github\scripts\verify-revex-storage-access.js"
 $Patcher = Join-Path $Root ".github\scripts\patch-live-storage-rules.js"
 $Fragment = Join-Path $Root "firebase\revex-secure-chat-storage.rules"
+$RuleGateSource = Join-Path $Root "firebase\r49-live-rules"
+$LiveRulesVerifier = Join-Path $Root ".github\scripts\verify-revex-storage-live-rules.js"
 $Work = Join-Path $env:TEMP ("REVEX-STORAGE-RULES-" + [guid]::NewGuid().ToString("N"))
 $LivePath = Join-Path $Work "storage.live.rules"
 $PatchedPath = Join-Path $Work "storage.rules"
@@ -80,10 +82,21 @@ function Get-RulesSource([hashtable]$Headers,[string]$RulesetName) {
 function Assert-StorageContract([string]$Source,[string]$ExpectedSha="") {
   foreach($marker in @(
     'REVEX_SECURE_STORAGE_ACCESS_BEGIN','REVEX_SECURE_STORAGE_ACCESS_END',
-    'function revexStorageProjectMember(projectId)','function revexStorageChatParticipant(connId)',
+    'function revexStorageIsAdmin()','request.auth.token.revexAdmin == true',
+    'function revexStorageProjectRecordMember(projectId)','function revexStorageProjectMember(projectId)',
+    'function revexStorageChatProjectBoundary(data)','function revexStorageChatParticipant(connId)',
+    'function revexStorageImmutableProjectObject(objectName, projectId)',
     'match /projects/{projectId}/{projectObject=**}','match /chat/{connId}/{chatObject=**}',
     'match /stickers/{uid}/{stickerObject=**}'
   )){if(-not $Source.Contains($marker)){throw "Live Storage access contract is missing: $marker"}}
+  $outsideRevexBlock=[regex]::Replace(
+    $Source,
+    '(?s)/\*\s*REVEX_SECURE_STORAGE_ACCESS_BEGIN.*?REVEX_SECURE_STORAGE_ACCESS_END\s*\*/',
+    ''
+  )
+  if($outsideRevexBlock-match 'match\s+/projects/\{projectId\}/\{[^}]+\=\*\*\}'){
+    throw 'A second broad projects/{projectId}/{...=**} Storage match exists outside the controlled REVEX block; overlapping allows could defeat immutable-path denial.'
+  }
   if($ExpectedSha-and-not $Source.Contains("REVEX_SOURCE_CANDIDATE=$ExpectedSha")){throw "Live Storage rules are not source-bound to this release."}
 }
 function Set-ReleaseRuleset([hashtable]$Headers,[string]$Name,[string]$RulesetName) {
@@ -95,9 +108,9 @@ try {
   Write-Host 'REVEX current Storage-access deployment' -ForegroundColor Cyan
   Write-Host "Source: $SourceCandidate"
   Write-Host 'Scope: preserve the exact live Storage ruleset and replace only the marked REVEX/Secure Chat block.' -ForegroundColor Green
-  foreach($required in @($Verifier,$Patcher,$Fragment)){if(-not(Test-Path -LiteralPath $required -PathType Leaf)){throw "Storage deployment source is incomplete: $required"}}
+  foreach($required in @($Verifier,$Patcher,$Fragment,$LiveRulesVerifier,(Join-Path $RuleGateSource 'package.json'),(Join-Path $RuleGateSource 'package-lock.json'))){if(-not(Test-Path -LiteralPath $required -PathType Leaf)){throw "Storage deployment source is incomplete: $required"}}
   New-Item -ItemType Directory -Path $Work -Force|Out-Null
-  $GCloud=Require-Command 'gcloud';$Node=Require-Command 'node'
+  $GCloud=Require-Command 'gcloud';$Node=Require-Command 'node';$Npm=Require-Command 'npm';$Firebase=Require-Command 'firebase'
   if((Invoke-Native $Node @($Verifier) $Root)-ne 0){throw 'REVEX Storage access verification failed.'}
   if((Invoke-Native $GCloud @('services','enable','firebaserules.googleapis.com','--project',$ProjectId))-ne 0){throw 'Firebase Rules API could not be enabled.'}
   $token=Capture-Native $GCloud @('auth','print-access-token')
@@ -114,6 +127,24 @@ try {
   $patched=[regex]::Replace($patched,'(/\*\s*REVEX_SECURE_STORAGE_ACCESS_BEGIN[^\r\n]*)(\r?\n)',("`$1`$2"+$sourceLine+"`n"),1)
   Assert-StorageContract $patched $SourceCandidate
   [IO.File]::WriteAllText($PatchedPath,$patched,[Text.UTF8Encoding]::new($false))
+
+  # Compile and execute the exact fragment against the Firebase Storage emulator
+  # before any live release pointer changes. Static checks alone cannot prove that
+  # update/delete are denied after a successful create.
+  $gate=Join-Path $Work 'emulator-gate';New-Item -ItemType Directory -Path $gate -Force|Out-Null
+  Copy-Item -LiteralPath (Join-Path $RuleGateSource 'package.json'),(Join-Path $RuleGateSource 'package-lock.json') -Destination $gate -Force
+  [IO.File]::WriteAllText((Join-Path $gate 'firestore.rules'),"rules_version = '2';`nservice cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read, write: if false; } } }`n",[Text.UTF8Encoding]::new($false))
+  $preservedFixture="    match /avatars/{uid}/{file=**} {`n      allow read: if true;`n      allow write: if request.auth != null && request.auth.uid == uid;`n    }`n"
+  $storageGate="rules_version = '2';`nservice firebase.storage {`n  match /b/{bucket}/o {`n"+$preservedFixture+[IO.File]::ReadAllText($Fragment,[Text.Encoding]::UTF8)+"`n  }`n}`n"
+  [IO.File]::WriteAllText((Join-Path $gate 'storage.rules'),$storageGate,[Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText((Join-Path $gate 'firebase.json'),'{"firestore":{"rules":"firestore.rules"},"storage":{"rules":"storage.rules"},"emulators":{"firestore":{"port":8087},"storage":{"port":9199},"ui":{"enabled":false},"singleProjectMode":true}}',[Text.UTF8Encoding]::new($false))
+  if((Invoke-Native $Npm @('ci','--ignore-scripts','--no-audit','--no-fund') $gate)-ne 0){throw 'Firebase Storage emulator dependencies could not be installed.'}
+  $priorNodePath=$env:NODE_PATH
+  try{
+    $env:NODE_PATH=Join-Path $gate 'node_modules'
+    $gateCommand='node "'+$LiveRulesVerifier+'"'
+    if((Invoke-Native $Firebase @('emulators:exec','--only','firestore,storage','--project','demo-revex-r49','--config',(Join-Path $gate 'firebase.json'),$gateCommand) $gate)-ne 0){throw 'Firebase Storage immutable-path emulator denial gate failed.'}
+  }finally{$env:NODE_PATH=$priorNodePath}
   if($live.Contains("REVEX_SOURCE_CANDIDATE=$SourceCandidate")){
     Assert-StorageContract $live $SourceCandidate
     Write-Host "PASS: live Storage rules already match $SourceCandidate." -ForegroundColor Green
@@ -138,7 +169,12 @@ try {
   if($ReleaseChanged-and$ReleaseName-and$PreviousRulesetName){
     try{
       $token=Capture-Native $GCloud @('auth','print-access-token')
-      if($token.Code-eq 0-and$token.Text){$headers=Api-Headers ($token.Text.Trim());$null=Set-ReleaseRuleset $headers $ReleaseName $PreviousRulesetName;Write-Host 'Previous Storage ruleset restored.' -ForegroundColor Yellow}
+      if($token.Code-eq 0-and$token.Text){
+        $headers=Api-Headers ($token.Text.Trim());$null=Set-ReleaseRuleset $headers $ReleaseName $PreviousRulesetName
+        $restored=Invoke-RestMethod -Method Get -Uri ("https://firebaserules.googleapis.com/v1/"+$ReleaseName) -Headers $headers -TimeoutSec 30
+        if([string]$restored.rulesetName-ne $PreviousRulesetName){throw 'Storage rules rollback pointer verification failed.'}
+        Write-Host 'Previous Storage ruleset restored.' -ForegroundColor Yellow
+      }else{throw 'Google Cloud could not issue an access token for Storage rules rollback.'}
     }catch{Write-Host "WARNING: automatic Storage rules rollback failed: $($_.Exception.Message)" -ForegroundColor Red}
   }
   $ExitCode=1

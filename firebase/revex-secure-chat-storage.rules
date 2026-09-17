@@ -7,7 +7,14 @@ function revexStorageSignedIn() {
   return request.auth != null;
 }
 
-function revexStorageProjectMember(projectId) {
+function revexStorageIsAdmin() {
+  return revexStorageSignedIn() && (
+    (request.auth.token.keys().hasAny(['revexAdmin']) && request.auth.token.revexAdmin == true)
+    || (request.auth.token.keys().hasAny(['role']) && request.auth.token.role == 'admin')
+  );
+}
+
+function revexStorageProjectRecordMember(projectId) {
   return revexStorageSignedIn()
     && firestore.exists(/databases/(default)/documents/projects/$(projectId))
     && (
@@ -23,16 +30,56 @@ function revexStorageProjectMember(projectId) {
     );
 }
 
+function revexStorageProjectMember(projectId) {
+  return revexStorageIsAdmin() || revexStorageProjectRecordMember(projectId);
+}
+
+function revexStorageChatProjectBoundary(data) {
+  return !(data.keys().hasAll(['projectId', 'type']) && data.type == 'project')
+    || (data.projectId is string && revexStorageProjectRecordMember(data.projectId));
+}
+
 function revexStorageChatParticipant(connId) {
   return revexStorageSignedIn()
     && firestore.exists(/databases/(default)/documents/chatConnections/$(connId))
+    && revexStorageChatProjectBoundary(firestore.get(/databases/(default)/documents/chatConnections/$(connId)).data)
     && firestore.get(/databases/(default)/documents/chatConnections/$(connId)).data.keys().hasAny(['participants'])
     && firestore.get(/databases/(default)/documents/chatConnections/$(connId)).data.participants is list
     && request.auth.uid in firestore.get(/databases/(default)/documents/chatConnections/$(connId)).data.participants;
 }
 
+function revexStorageImmutableProjectObject(objectName, projectId) {
+  // Source, Engineering, Energy-result and revision-derived page objects are
+  // content-addressed by their immutable revision. They may be created once,
+  // but a retry must never overwrite or delete the evidence already published.
+  return objectName.matches(
+    'projects/' + projectId + '/(revex/revisions/[^/]+|library/revex/revisions/[^/]+|revex/engineering/revisions/[^/]+|revex/energy/results/[^/]+|revex/energy/server-results/[^/]+|library/revex/printing-pages-derived/[^/]+/[^/]+)/.+'
+  );
+}
+
+function revexStorageBrokerOwnedRenderObject(objectName, projectId) {
+  // Viewport source bytes and generated results are written only by the
+  // source-bound Admin-SDK Render broker. Project members may read them, but a
+  // browser identity may never race, replace or delete broker evidence.
+  return objectName.matches(
+    'projects/' + projectId + '/revex/renders/[^/]+/.+'
+  );
+}
+
+match /projects/{projectId}/revex/renders/{renderJobId}/{renderObject=**} {
+  allow read: if revexStorageProjectMember(projectId);
+}
+
 match /projects/{projectId}/{projectObject=**} {
-  allow read, write: if revexStorageProjectMember(projectId);
+  allow read: if revexStorageProjectMember(projectId);
+  allow create: if revexStorageProjectMember(projectId)
+    && !revexStorageBrokerOwnedRenderObject(request.resource.name, projectId);
+  allow update: if revexStorageProjectMember(projectId)
+    && !revexStorageImmutableProjectObject(request.resource.name, projectId)
+    && !revexStorageBrokerOwnedRenderObject(request.resource.name, projectId);
+  allow delete: if revexStorageProjectMember(projectId)
+    && !revexStorageImmutableProjectObject(resource.name, projectId)
+    && !revexStorageBrokerOwnedRenderObject(resource.name, projectId);
 }
 
 match /chat/{connId}/{chatObject=**} {

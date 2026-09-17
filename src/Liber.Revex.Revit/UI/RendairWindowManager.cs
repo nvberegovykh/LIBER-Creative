@@ -25,13 +25,15 @@ public static class RendairWindowManager
 
         _handler = new RevitRequestHandler();
         _externalEvent = ExternalEvent.Create(_handler);
+        _handler.AttachExternalEvent(_externalEvent);
         RevexWebIntegrationBridge.ConfigureFamilyPlacement();
         _activeDocumentRuntimeId = uiapp.ActiveUIDocument?.Document.GetHashCode() ?? 0;
 
-        _window = new RendairWindow(_handler, _externalEvent);
+        _window = new RendairWindow(_handler);
         RevexWindowResponsivenessHotfix.Attach(_window);
         _window.Closed += (_, _) =>
         {
+            _handler?.Close();
             _externalEvent?.Dispose();
             _externalEvent = null;
             RevexWebIntegrationBridge.ReleaseFamilyPlacement();
@@ -67,6 +69,7 @@ public static class RendairWindowManager
         _window?.Close();
         _window = null;
 
+        _handler?.Close();
         _externalEvent?.Dispose();
         _externalEvent = null;
         RevexWebIntegrationBridge.ReleaseFamilyPlacement();

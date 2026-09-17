@@ -1,8 +1,9 @@
 param(
   [string]$ProjectId = "liber-apps-cca20",
-  [string]$Region = "us-central1",
+  [ValidateSet("us-central1")][string]$Region = "us-central1",
   [string]$Repository = "revex",
   [string]$Service = "revex-energy-current",
+  [string]$StorageBucket = "",
   [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$SourceCandidate,
   [switch]$CandidateOnly,
   [switch]$BrokerOnly,
@@ -19,6 +20,7 @@ $CloudBuild = Join-Path $PSScriptRoot "cloudbuild.yaml"
 $Verifier = Join-Path $Root ".github\scripts\verify-revex-current-release.py"
 $WorkerSa = "revex-energy-worker@$ProjectId.iam.gserviceaccount.com"
 $BrokerSa = "revex-energy-broker@$ProjectId.iam.gserviceaccount.com"
+$Bucket = ""
 $Short = $SourceCandidate.Substring(0,12).ToLowerInvariant()
 $ImageTag = "current-$Short"
 $Image = "$Region-docker.pkg.dev/$ProjectId/$Repository/revex-energy-worker:$ImageTag"
@@ -71,17 +73,36 @@ function Add-ProjectRole([string]$GCloud,[string]$Member,[string]$Role,[string]$
 function Add-ServiceAccountUser([string]$GCloud,[string]$ServiceAccount,[string]$Member,[string]$Label) {
   Require-Ok $Label $GCloud @("iam","service-accounts","add-iam-policy-binding",$ServiceAccount,"--project",$ProjectId,"--member",$Member,"--role","roles/iam.serviceAccountUser","--quiet") -Quiet
 }
+function Resolve-StorageBucket([string]$GCloud,[string]$RequestedBucket) {
+  $rows = Capture-Native $GCloud @("storage","buckets","list","--project",$ProjectId,"--format","value(name)")
+  if ($rows.Code -ne 0) { throw "Could not enumerate project Storage buckets." }
+  $prefix = [Regex]::Escape($ProjectId)
+  $names = @($rows.Text -split "`n" | ForEach-Object { $_.Trim().TrimEnd('/') -replace '^gs://','' } | Where-Object { $_ } | Select-Object -Unique)
+  $matches = @($names | Where-Object { $_ -match "^$prefix\.(?:appspot\.com|firebasestorage\.app)$" })
+  if ($RequestedBucket) {
+    $requested = $RequestedBucket.Trim().TrimEnd('/') -replace '^gs://',''
+    if ($requested -notmatch "^$prefix\.(?:appspot\.com|firebasestorage\.app)$") { throw "StorageBucket is not owned by $ProjectId: $requested" }
+    if ($requested -notin $matches) { throw "The requested Storage bucket is not present in $ProjectId: $requested" }
+    return [string]$requested
+  }
+  $modern = "$ProjectId.firebasestorage.app"
+  if ($modern -in $matches) { return $modern }
+  if ($matches.Count -ne 1) { throw "Firebase Storage is ambiguous for $ProjectId; pass -StorageBucket. Found: $($matches -join ', ')." }
+  return [string]$matches[0]
+}
 function Resolve-VerifiedCandidate([string]$GCloud) {
   $state = Capture-Native $GCloud @("run","services","describe",$Service,"--project",$ProjectId,"--region",$Region,"--format","json")
   if ($state.Code -ne 0 -or -not $state.Text) { throw "Energy candidate service is unavailable: $Service" }
   $run = $state.Text | ConvertFrom-Json
   $ready = @($run.status.conditions | Where-Object { $_.type -eq "Ready" } | Select-Object -First 1)
   if ($ready.Count -eq 0 -or [string]$ready[0].status -ne "True") { throw "Energy candidate is not Ready; broker remains unchanged." }
+  if ([string]$run.spec.template.spec.serviceAccountName -ne $WorkerSa) { throw "Energy candidate is not attached to the controlled worker identity." }
   $url = [string]$run.status.url
   if (-not $url) { throw "Energy candidate has no ready service URL; broker remains unchanged." }
   $liveEnv = @{}
   foreach ($row in @($run.spec.template.spec.containers[0].env)) { $liveEnv[[string]$row.name] = [string]$row.value }
   if ([string]$liveEnv["REVEX_SOURCE_CANDIDATE"] -ne $SourceCandidate) { throw "Energy candidate source SHA does not match the exact release source." }
+  if ([string]$liveEnv["REVEX_STORAGE_BUCKET"] -ne $Bucket) { throw "Energy candidate Storage bucket does not match the selected release bucket." }
   if ([string]$liveEnv["REVEX_VERTEX_PROJECT"] -ne $ProjectId -or [string]$liveEnv["REVEX_VERTEX_LOCATION"] -ne "global") { throw "Energy candidate Vertex binding is not canonical." }
   return $url
 }
@@ -131,23 +152,33 @@ try {
   $auth = Capture-Native $GCloud @("auth","list","--filter","status:ACTIVE","--format","value(account)")
   if ($auth.Code -ne 0 -or -not $auth.Text) { throw "Google Cloud administrator sign-in is required before Energy deployment." }
   $Deployer = ($auth.Text -split "`n")[0].Trim()
+  $Bucket = Resolve-StorageBucket $GCloud $StorageBucket
+
+  # The Firebase codebase also owns the all-member Google Render callable. These
+  # broker prerequisites are required in BrokerOnly mode as well as a full worker
+  # deployment; ordinary REVEX users never receive Google Cloud IAM themselves.
+  Require-Ok "Enable authenticated Firebase broker APIs" $GCloud @(
+    "services","enable","cloudfunctions.googleapis.com","firebase.googleapis.com",
+    "generativelanguage.googleapis.com","firestore.googleapis.com","serviceusage.googleapis.com","--project",$ProjectId
+  ) -Quiet
+  $null = Ensure-ServiceAccount $GCloud "revex-energy-broker" "REVEX Energy + Google Render Broker"
+  Add-ServiceAccountUser $GCloud $BrokerSa "user:$Deployer" "Allow deployer to use the controlled Firebase broker identity"
+  Add-ProjectRole $GCloud "serviceAccount:$BrokerSa" "roles/datastore.user" "Grant broker durable Firestore access"
+  Add-ProjectRole $GCloud "serviceAccount:$BrokerSa" "roles/storage.objectAdmin" "Grant broker project Storage access"
+  Add-ProjectRole $GCloud "serviceAccount:$BrokerSa" "roles/serviceusage.serviceUsageConsumer" "Grant broker metered Google API consumption"
 
   if (-not $BrokerOnly) {
     Require-Ok "Select Google Cloud project" $GCloud @("config","set","project",$ProjectId) -Quiet
     Require-Ok "Enable Energy infrastructure APIs" $GCloud @(
       "services","enable","run.googleapis.com","cloudbuild.googleapis.com","artifactregistry.googleapis.com",
       "iamcredentials.googleapis.com","cloudfunctions.googleapis.com","firebase.googleapis.com",
-      "aiplatform.googleapis.com","firestore.googleapis.com","serviceusage.googleapis.com","--project",$ProjectId
+      "aiplatform.googleapis.com","generativelanguage.googleapis.com","firestore.googleapis.com","serviceusage.googleapis.com","--project",$ProjectId
     ) -Quiet
     $null = Ensure-ServiceAccount $GCloud "revex-energy-worker" "REVEX Energy Worker"
-    $null = Ensure-ServiceAccount $GCloud "revex-energy-broker" "REVEX Energy Broker"
     Add-ServiceAccountUser $GCloud $WorkerSa "user:$Deployer" "Allow deployer to use Energy worker identity"
-    Add-ServiceAccountUser $GCloud $BrokerSa "user:$Deployer" "Allow deployer to use Energy broker identity"
     Add-ProjectRole $GCloud "serviceAccount:$WorkerSa" "roles/storage.objectAdmin" "Grant Energy worker immutable Storage access"
     Add-ProjectRole $GCloud "serviceAccount:$WorkerSa" "roles/datastore.user" "Grant Energy worker durable Firestore access"
     Add-ProjectRole $GCloud "serviceAccount:$WorkerSa" "roles/aiplatform.user" "Grant Energy worker Vertex page-analysis access"
-    Add-ProjectRole $GCloud "serviceAccount:$BrokerSa" "roles/datastore.user" "Grant Energy broker Firestore access"
-    Add-ProjectRole $GCloud "serviceAccount:$BrokerSa" "roles/storage.objectAdmin" "Grant Energy broker Storage access"
     if (-not (Native-Ok $GCloud @("artifacts","repositories","describe",$Repository,"--location",$Region,"--project",$ProjectId))) {
       Require-Ok "Create REVEX Artifact Registry repository" $GCloud @("artifacts","repositories","create",$Repository,"--repository-format","docker","--location",$Region,"--project",$ProjectId,"--description","REVEX managed runtimes") -Quiet
     }
@@ -169,7 +200,7 @@ try {
         "run","deploy",$Service,"--project",$ProjectId,"--region",$Region,"--platform","managed",
         "--image",$Image,"--service-account",$WorkerSa,"--no-allow-unauthenticated",
         "--cpu=4","--memory=8Gi","--concurrency=1","--min-instances=0","--max-instances=3","--timeout=3600",
-        "--set-env-vars","REVEX_ENERGY_TIMEOUT_SECONDS=3500,REVEX_SOURCE_CANDIDATE=$SourceCandidate,REVEX_VERTEX_PROJECT=$ProjectId,REVEX_VERTEX_LOCATION=global,REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_current.py,REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py",
+        "--set-env-vars","REVEX_ENERGY_TIMEOUT_SECONDS=3500,REVEX_SOURCE_CANDIDATE=$SourceCandidate,REVEX_STORAGE_BUCKET=$Bucket,REVEX_VERTEX_PROJECT=$ProjectId,REVEX_VERTEX_LOCATION=global,REVEX_PIPELINE=/opt/revex/server/revex_energy_pipeline_current.py,REVEX_PIPELINE_IMPL=/opt/revex/energy/revex_energy_pipeline.py",
         "--quiet"
       )
       $WorkerUrl = Resolve-VerifiedCandidate $GCloud
@@ -195,15 +226,17 @@ try {
     @(
       "REVEX_ENERGY_WORKER_URL=$WorkerUrl",
       "REVEX_ENERGY_BROKER_SERVICE_ACCOUNT=$BrokerSa",
+      "REVEX_RENDER_BROKER_SERVICE_ACCOUNT=$BrokerSa",
+      "REVEX_STORAGE_BUCKET=$Bucket",
       "REVEX_SOURCE_CANDIDATE=$SourceCandidate"
     ) | Set-Content -LiteralPath $EnvPath -Encoding Ascii
 
-    $preflight = "const started=Date.now();const m=require('./main.js');const required=['runRevexEnergy','ensureProjectChatHttp'];const missing=required.filter(k=>typeof m[k]!=='function');if(missing.length){console.error('REVEX Firebase preflight missing exports: '+missing.join(','));process.exit(2);}console.log('REVEX_FIREBASE_NODE22_PREFLIGHT=PASSED ms='+(Date.now()-started)+' exports='+required.join(','));"
+    $preflight = "const started=Date.now();const m=require('./main.js');const required=['runRevexEnergy','runRevexGoogleRender','ensureProjectChatHttp','recoverSecureChatIdentityHttp','saveFcmTokenHttp','onChatMessageWrite'];const missing=required.filter(k=>typeof m[k]!=='function');if(missing.length){console.error('REVEX Firebase preflight missing exports: '+missing.join(','));process.exit(2);}console.log('REVEX_FIREBASE_NODE22_PREFLIGHT=PASSED ms='+(Date.now()-started)+' exports='+required.join(','));"
     Require-Ok "Preflight-load Energy broker under pinned Node 22" $Node22 @("-e",$preflight)
 
     $env:FUNCTIONS_DISCOVERY_TIMEOUT = "180"
-    Require-Ok "Cut authenticated Energy broker over to verified candidate" $Node22 @(
-      $FirebaseJs,"deploy","--only","functions:revex-energy","--project",$ProjectId,"--force","--non-interactive"
+    Require-Ok "Deploy only the authenticated Energy and Google Render brokers" $Node22 @(
+      $FirebaseJs,"deploy","--only","functions:revex-energy:runRevexEnergy,functions:revex-energy:runRevexGoogleRender","--project",$ProjectId,"--force","--non-interactive"
     )
   } finally {
     if (Test-Path -LiteralPath $EnvPath) { Remove-Item -LiteralPath $EnvPath -Force }
@@ -216,9 +249,28 @@ try {
   if ([string]$function.state -ne "ACTIVE") { throw "Energy broker is not ACTIVE after cutover." }
   $brokerWorker = [string]$function.serviceConfig.environmentVariables.REVEX_ENERGY_WORKER_URL
   $brokerSource = [string]$function.serviceConfig.environmentVariables.REVEX_SOURCE_CANDIDATE
+  if ([string]$function.serviceConfig.serviceAccountEmail -ne $BrokerSa) { throw "Energy broker is not attached to the controlled broker identity." }
   if ($brokerWorker -ne $WorkerUrl) { throw "Energy broker is not bound to the verified candidate worker." }
   if ($brokerSource -ne $SourceCandidate) { throw "Energy broker source SHA does not match the release source." }
+  if ([string]$function.serviceConfig.environmentVariables.REVEX_STORAGE_BUCKET -ne $Bucket) { throw "Energy broker Storage bucket does not match the selected release bucket." }
+  $renderState = Capture-Native $GCloud @("functions","describe","runRevexGoogleRender","--gen2","--project",$ProjectId,"--region","us-central1","--format","json")
+  if ($renderState.Code -ne 0 -or -not $renderState.Text) { throw "Google Render broker could not be verified after cutover." }
+  $renderFunction = $renderState.Text | ConvertFrom-Json
+  if ([string]$renderFunction.state -ne "ACTIVE") { throw "Google Render broker is not ACTIVE after cutover." }
+  if ([string]$renderFunction.serviceConfig.serviceAccountEmail -ne $BrokerSa) { throw "Google Render broker is not attached to the controlled broker identity." }
+  if ([string]$renderFunction.serviceConfig.environmentVariables.REVEX_SOURCE_CANDIDATE -ne $SourceCandidate) { throw "Google Render broker source SHA does not match the release source." }
+  if ([string]$renderFunction.serviceConfig.environmentVariables.REVEX_STORAGE_BUCKET -ne $Bucket) { throw "Google Render broker Storage bucket does not match the selected release bucket." }
+  $geminiApi = Capture-Native $GCloud @("services","list","--enabled","--project",$ProjectId,"--filter","config.name=generativelanguage.googleapis.com","--format","value(config.name)")
+  if ($geminiApi.Code -ne 0 -or $geminiApi.Text -ne "generativelanguage.googleapis.com") { throw "Generative Language API is not enabled after Google Render cutover." }
+  $consumerPolicy = Capture-Native $GCloud @("projects","get-iam-policy",$ProjectId,"--format","json")
+  if ($consumerPolicy.Code -ne 0 -or -not $consumerPolicy.Text) { throw "Google Render broker IAM policy could not be verified." }
+  $policy = $consumerPolicy.Text | ConvertFrom-Json
+  $consumerBinding = @($policy.bindings | Where-Object {
+    [string]$_.role -eq "roles/serviceusage.serviceUsageConsumer" -and @($_.members) -contains "serviceAccount:$BrokerSa"
+  })
+  if ($consumerBinding.Count -eq 0) { throw "Google Render broker lacks roles/serviceusage.serviceUsageConsumer." }
   Write-Host "PASS: current Energy broker is ACTIVE on the verified source-bound candidate." -ForegroundColor Green
+  Write-Host "PASS: authenticated Google Render broker is ACTIVE, source-bound and uses the controlled project broker identity." -ForegroundColor Green
   $ExitCode = 0
 }
 catch {

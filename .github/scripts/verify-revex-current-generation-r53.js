@@ -12,11 +12,12 @@ const exists = (...parts) => fs.existsSync(path.join(root, ...parts));
 const designPath = ['docs','liber-apps','apps','revex','design-versions-r52.js'];
 const workspacePath = ['docs','liber-apps','apps','revex','workspace-r51.js'];
 const rendererPath = ['docs','liber-apps','apps','revex','render-agent.js'];
+const renderBrokerPath = ['server','firebase-functions','index.js'];
 const gbxmlPath = ['src','Liber.Revex.Revit','Engineering','Gbxml','LIBER_gbXML_Preflight_and_Export.py'];
 const gbxmlDynPath = ['src','Liber.Revex.Revit','Engineering','Gbxml','LIBER_gbXML_Preflight_and_Export.dyn'];
 const energyQaPath = ['src','Liber.Revex.Revit','Engineering','Energy','verify_revex_r49_energy.py'];
 
-for (const p of [designPath, workspacePath, rendererPath, gbxmlPath, gbxmlDynPath, energyQaPath]) {
+for (const p of [designPath, workspacePath, rendererPath, renderBrokerPath, gbxmlPath, gbxmlDynPath, energyQaPath]) {
   assert.ok(exists(...p), `Current REVEX generation file was removed: ${p.join('/')}`);
 }
 
@@ -35,12 +36,19 @@ assert.match(workspace, /accLikeWalk:\s*true/);
 assert.match(workspace, /spatialObjectsVisible:\s*false/);
 
 const renderer = read(...rendererPath);
+const renderBroker = read(...renderBrokerPath);
 assert.match(renderer, /gemini-3\.1-flash-image/);
-assert.match(renderer, /x-goog-user-project/);
+assert.match(renderer, /runRevexGoogleRender/);
+assert.match(renderer, /Store\.fileBlob\(resultPath\)/);
 assert.match(renderer, /captureRenderReference/);
 assert.match(renderer, /GEOMETRY LOCK/);
-assert.match(renderer, /inline_data/);
+assert.ok(!renderer.includes('x-goog-user-project'), 'User Google Cloud IAM/quota project returned to the Render client.');
+assert.ok(!renderer.includes('GoogleAuthProvider'), 'User Google OAuth returned to the Render client.');
 assert.ok(!renderer.includes('rendair.com'), 'External Rendair routing returned.');
+assert.match(renderBroker, /exports\.runRevexGoogleRender = onCall/);
+assert.match(renderBroker, /new GoogleAuth\(\{ scopes: \['https:\/\/www\.googleapis\.com\/auth\/cloud-platform'\] \}\)/);
+assert.match(renderBroker, /transaction\.create\(refs\.lease/);
+assert.match(renderBroker, /projects\/\$\{projectId\}\/revex\/renders\/\$\{jobId\}/);
 
 const gbxml = read(...gbxmlPath);
 const energyQa = read(...energyQaPath);

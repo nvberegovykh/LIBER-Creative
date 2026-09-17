@@ -57,6 +57,7 @@ COPY server/revex-energy-worker/revex_en1_print_contract.py /opt/revex/server/re
 COPY server/revex-energy-worker/revex_energy_pipeline_r69.py /opt/revex/server/revex_energy_pipeline_r69.py
 COPY server/revex-energy-worker/revex_comcheck_evidence.py /opt/revex/server/revex_comcheck_evidence.py
 COPY server/revex-energy-worker/revex_comcheck_evidence_r116.py /opt/revex/server/revex_comcheck_evidence_r116.py
+COPY server/revex-energy-worker/revex_geometry_evidence.py /opt/revex/server/revex_geometry_evidence.py
 COPY server/revex-energy-worker/revex_structured_schedule_facts.py /opt/revex/server/revex_structured_schedule_facts.py
 COPY server/revex-energy-worker/revex_structured_schedule_projection.py /opt/revex/server/revex_structured_schedule_projection.py
 COPY server/revex-energy-worker/revex_geometryco_source_condition.py /opt/revex/server/revex_geometryco_source_condition.py
@@ -64,9 +65,11 @@ COPY server/revex-energy-worker/verify_failure_evidence_r55.py /opt/revex/server
 COPY server/revex-energy-worker/verify_identity_normalizer.py /opt/revex/server/verify_identity_normalizer.py
 COPY server/revex-energy-worker/verify_identity_content_agent.py /opt/revex/server/verify_identity_content_agent.py
 COPY server/revex-energy-worker/verify_user_identity_en1_r89.py /opt/revex/server/verify_user_identity_en1_r89.py
+COPY server/revex-energy-worker/verify_en1_amendment_r145.py /opt/revex/server/verify_en1_amendment_r145.py
 COPY server/revex-energy-worker/verify_r95_consumer_boundary.py /opt/revex/server/verify_r95_consumer_boundary.py
 COPY server/revex-energy-worker/verify_vertex_project_binding_r98.py /opt/revex/server/verify_vertex_project_binding_r98.py
 COPY server/revex-energy-worker/verify_comcheck_evidence_r100.py /opt/revex/server/verify_comcheck_evidence_r100.py
+COPY server/revex-energy-worker/verify_revit_energy_geometry_evidence_r128.py /opt/revex/server/verify_revit_energy_geometry_evidence_r128.py
 COPY server/revex-energy-worker/verify_structured_schedule_evidence_r101.py /opt/revex/server/verify_structured_schedule_evidence_r101.py
 COPY server/revex-energy-worker/verify_geometryco_source_condition_r91.py /opt/revex/server/verify_geometryco_source_condition_r91.py
 COPY server/revex-energy-worker/verify_final_comcheck_recovery_r116.py /opt/revex/server/verify_final_comcheck_recovery_r116.py
@@ -90,6 +93,8 @@ RUN mv /opt/revex/energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py
 RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
  && test -f /opt/revex/server/revex_energy_pipeline_current.py \
  && test -f /opt/revex/server/revex_en1_print_contract.py \
+ && test -f /opt/revex/server/revex_geometry_evidence.py \
+ && test -f /opt/revex/server/verify_revit_energy_geometry_evidence_r128.py \
  && test -f /opt/revex/server/verify_energy_agent.py \
  && test -f /opt/revex/energy/revex_final_touchups.py \
  && test -f /opt/revex/energy/revex_energy_contracts.py \
@@ -121,6 +126,7 @@ RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
       /opt/revex/server/revex_energy_pipeline_r69.py \
       /opt/revex/server/revex_comcheck_evidence.py \
       /opt/revex/server/revex_comcheck_evidence_r116.py \
+      /opt/revex/server/revex_geometry_evidence.py \
       /opt/revex/server/revex_structured_schedule_facts.py \
       /opt/revex/server/revex_structured_schedule_projection.py \
       /opt/revex/server/revex_geometryco_source_condition.py \
@@ -128,9 +134,11 @@ RUN test -f /opt/revex/server/run_revex_r49_release_acceptance.py \
       /opt/revex/server/verify_identity_normalizer.py \
       /opt/revex/server/verify_identity_content_agent.py \
       /opt/revex/server/verify_user_identity_en1_r89.py \
+      /opt/revex/server/verify_en1_amendment_r145.py \
       /opt/revex/server/verify_r95_consumer_boundary.py \
       /opt/revex/server/verify_vertex_project_binding_r98.py \
       /opt/revex/server/verify_comcheck_evidence_r100.py \
+      /opt/revex/server/verify_revit_energy_geometry_evidence_r128.py \
       /opt/revex/server/verify_structured_schedule_evidence_r101.py \
       /opt/revex/server/verify_geometryco_source_condition_r91.py \
       /opt/revex/server/verify_final_comcheck_recovery_r116.py \
@@ -162,7 +170,7 @@ RUN python3 -m pip install --no-cache-dir \
 # Import the production entry point with the same project/location binding used by deployment.
 RUN cd /opt/revex/server \
  && REVEX_VERTEX_PROJECT=liber-apps-cca20 REVEX_VERTEX_LOCATION=global \
-    python3 -c "from pathlib import Path; import os, app, app_entry; assert app_entry.APP is not None; assert app.PIPELINE==Path('/opt/revex/server/revex_energy_pipeline_current.py'); assert os.environ['REVEX_PIPELINE_IMPL']=='/opt/revex/energy/revex_energy_pipeline.py'; assert os.environ['REVEX_VERTEX_PROJECT']=='liber-apps-cca20'; assert os.environ['REVEX_VERTEX_LOCATION']=='global'"
+    python3 -c "from pathlib import Path; import os, app, app_entry, revex_geometry_evidence; assert app_entry.APP is not None; assert app.PIPELINE==Path('/opt/revex/server/revex_energy_pipeline_current.py'); assert callable(revex_geometry_evidence.validate_geometry_evidence); assert os.environ['REVEX_PIPELINE_IMPL']=='/opt/revex/energy/revex_energy_pipeline.py'; assert os.environ['REVEX_VERTEX_PROJECT']=='liber-apps-cca20'; assert os.environ['REVEX_VERTEX_LOCATION']=='global'"
 
 # Prove the browser dependency COMcheck uses is runnable in the exact image.
 RUN python3 -c "from selenium import webdriver; o=webdriver.ChromeOptions(); o.binary_location='/usr/bin/google-chrome'; o.add_argument('--headless=new'); o.add_argument('--no-sandbox'); o.add_argument('--disable-dev-shm-usage'); d=webdriver.Chrome(options=o); d.get('data:text/plain,REVEX-COMCHECK-DRIVER-READY'); d.quit()"
@@ -174,9 +182,11 @@ RUN python3 /opt/revex/energy/verify_revex_r49_energy.py \
  && python3 /opt/revex/server/verify_identity_normalizer.py \
  && python3 /opt/revex/server/verify_identity_content_agent.py \
  && python3 /opt/revex/server/verify_user_identity_en1_r89.py \
+ && python3 /opt/revex/server/verify_en1_amendment_r145.py \
  && python3 /opt/revex/server/verify_r95_consumer_boundary.py \
  && python3 /opt/revex/server/verify_vertex_project_binding_r98.py \
  && python3 /opt/revex/server/verify_comcheck_evidence_r100.py \
+ && python3 /opt/revex/server/verify_revit_energy_geometry_evidence_r128.py \
  && python3 /opt/revex/server/verify_structured_schedule_evidence_r101.py \
  && python3 /opt/revex/server/verify_geometryco_source_condition_r91.py \
  && python3 /opt/revex/server/verify_final_comcheck_recovery_r116.py \

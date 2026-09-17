@@ -64,7 +64,7 @@ must(fixer,
 );
 
 must(walltUi,
-  "const BUILD='20260818r138-wallt-ui1'",
+  "const BUILD='20260820r144-wallt-context1'",
   "controlOwner:'wallt-control-plane'",
   'storageOwner:null',
   "open.id='revex-wallt-open'",
@@ -99,9 +99,9 @@ must(ui,
   "loadScript('wallt-control-plane.js?v=20260818-wallt-control2','wallt-control-plane')",
   "loadScript('wallt-cycle-history.js?v=20260818-wallt-cycle-history1','wallt-cycle-history')",
   "loadScript('wallt-fixer-adapters-r137.js?v=20260818r137-fixer-adapters1','wallt-fixer-adapters-r137')",
-  "loadScript('wallt-ui-r138.js?v=20260818r138-wallt-ui1','wallt-ui-r138')",
-  "loadScript('mobile-sheet-r142.js?v=20260819r142-mobile-sheet1','mobile-sheet-r142')",
-  "wallt:'visible-helper+bounded-fixer-adapters+24h-history+mobile-actions-menu'"
+  "loadScript('wallt-ui-r138.js?v=20260820r147-release1','wallt-ui-r138')",
+  "loadScript('mobile-sheet-r142.js?v=20260820r147-release1','mobile-sheet-r142')",
+  "wallt:'context-aware+chat-excluded+mobile-actions-menu'"
 );
 
 must(mobileSheet,
@@ -158,7 +158,7 @@ if (!control.includes("old generation files are evidence/rollback shadows")) thr
 console.log(JSON.stringify({
   REVEX_WALLT_CONTROL_PLANE: 'PASSED',
   build: '20260818-wallt-control2',
-  visibleUiBuild: '20260818r138-wallt-ui1',
+  visibleUiBuild: '20260820r144-wallt-context1',
   visibleEntryPoint: true,
   mobileEntryPoint: 'existing-r109-actions-menu',
   helperPipeline: true,

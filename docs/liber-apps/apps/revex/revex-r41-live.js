@@ -100,6 +100,15 @@
       if(!response?.ok)throw new Error(response?.message||response?.error||'REVEX managed Energy worker did not complete.');
       return response;
     };
+    Store.applyEn1IdentityAmendment=async function(projectId,sourceRevision,parentResultRevision,amendmentId){
+      if(!projectId||!sourceRevision||!parentResultRevision||!amendmentId)throw new Error('Project, Engineering revision, parent Energy result and amendment id are required.');
+      if(!this.isCloud?.())throw new Error('Apply to EN-1 requires a signed-in REVEX cloud session.');
+      const consent=await this.getEnergyConsent?.(projectId,sourceRevision);if(!consent)throw new Error('This Engineering revision has no authenticated Energy authorization record.');
+      const fs=this.fs;if(!fs?.callFunction)throw new Error('REVEX managed Energy broker is unavailable in this session.');
+      const response=await fs.callFunction('runRevexEnergy',clone({schema:'liber.revex.energy-broker-request.v1',mode:'EN1_IDENTITY_AMENDMENT',projectId,sourceRevision,parentResultRevision,amendmentId,clientBuild:BUILD}));
+      if(!response?.ok)throw new Error(response?.message||response?.error||'REVEX could not publish the EN-1 amendment.');
+      return response;
+    };
   }
 
   function claim(buttonId,handler){

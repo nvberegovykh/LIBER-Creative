@@ -57,10 +57,27 @@ def main() -> int:
             "sheets": ["T001 · TITLE", "Z001 · ZONING"],
             "fields": {
                 "project.Project Name": "CURRENT TEST PROJECT",
-                "project.Project Address": "999 CURRENT AVENUE",
-                "sheet.T001.titleBlock.City": "BROOKLYN",
-                "sheet.T001.titleBlock.State": "NY",
-                "sheet.T001.titleBlock.Zip Code": "11201",
+                "project.Project Address": "999 CURRENT AVENUE\nBROOKLYN, NY 11201",
+                "sheet.T001.titleBlock.Project City": "BROOKLYN",
+                "sheet.T001.titleBlock.Project State": "NY",
+                "sheet.T001.titleBlock.Project Zip Code": "11201",
+                "sheet.T001.titleBlock.Architect City": "TROY",
+                "sheet.T001.titleBlock.Architect State": "NY",
+                "sheet.T001.titleBlock.Architect Zip Code": "12180",
+            },
+            "normalized": {
+                "title": "CURRENT TEST PROJECT",
+                "address": "999 CURRENT AVENUE\nBROOKLYN, NY 11201",
+                "city": "BROOKLYN",
+                "state": "NY",
+                "zip": "11201",
+            },
+            "normalizedProvenance": {
+                "title": "project.Project Name",
+                "address": "project.Project Address",
+                "city": "sheet.T001.titleBlock.Project City",
+                "state": "sheet.T001.titleBlock.Project State",
+                "zip": "sheet.T001.titleBlock.Project Zip Code",
             },
         }), encoding="utf-8")
         page_pdf.write_bytes(b"%PDF-1.4\n% immutable Revit EN evidence\n")
@@ -128,9 +145,32 @@ def main() -> int:
         assert health["sourceCandidate"] == "qa-source-candidate"
         normalized = worker.load_structured_identity(manifest, local)
         assert normalized["title"] == "CURRENT TEST PROJECT"
-        assert normalized["address"] == "999 CURRENT AVENUE"
+        assert normalized["address"] == "999 CURRENT AVENUE\nBROOKLYN, NY 11201"
         assert normalized["city"] == "BROOKLYN" and normalized["zip"] == "11201"
         assert normalized["evidenceDigest"] == evidence_digest
+        assert normalized["normalizedProvenance"]["city"] == "sheet.T001.titleBlock.Project City"
+
+        # Generic party locality fields are preserved as raw evidence but can never
+        # become structured project identity merely because they occur in a title block.
+        source_identity = json.loads(identity.read_text(encoding="utf-8"))
+        party_only = json.loads(json.dumps(source_identity))
+        for key in ("city", "state", "zip"):
+            party_only["normalized"].pop(key, None)
+            party_only["normalizedProvenance"].pop(key, None)
+        identity.write_text(json.dumps(party_only), encoding="utf-8")
+        party_result = worker.load_structured_identity(manifest, local)
+        assert party_result["city"] is None and party_result["state"] is None and party_result["zip"] is None
+
+        forged_party = json.loads(json.dumps(party_only))
+        forged_party["normalized"]["city"] = "TROY"
+        forged_party["normalizedProvenance"]["city"] = "sheet.T001.titleBlock.Architect City"
+        identity.write_text(json.dumps(forged_party), encoding="utf-8")
+        try:
+            worker.load_structured_identity(manifest, local)
+            raise AssertionError("party City bypassed normalized project-identity provenance")
+        except ValueError as exc:
+            assert "non-project provenance" in str(exc)
+        identity.write_text(json.dumps(source_identity), encoding="utf-8")
 
         assert worker._explicit_energy_code_from_visible_text(
             "1. CODE REFERENCE This project complies with the 2020 NYC Energy Conservation Code using the ASHRAE 90.1 Performance Path."
