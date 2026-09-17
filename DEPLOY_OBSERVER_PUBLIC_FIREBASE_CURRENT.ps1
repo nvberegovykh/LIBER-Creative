@@ -108,7 +108,7 @@ foreach ($site in $sites) {
       }
     }
   } catch {
-    Say "Custom-domain inventory warning for $siteId: $($_.Exception.Message)"
+    Say "Custom-domain inventory warning for ${siteId}: $($_.Exception.Message)"
   }
 }
 if ($matches.Count -ne 1) { throw "Expected exactly one Firebase Hosting site owning $Domain; found $($matches.Count). Refusing to mutate hosting." }
@@ -183,7 +183,7 @@ try {
     [IO.File]::WriteAllBytes($tmp,$payloadByHash[[string]$hash].Bytes)
     $uploadUri = ([string]$populate.uploadUrl).TrimEnd('/') + '/' + $hash
     $resp = Invoke-WebRequest -UseBasicParsing -Method Post -Uri $uploadUri -Headers @{ Authorization="Bearer $script:AccessToken" } -ContentType 'application/octet-stream' -InFile $tmp
-    if ($resp.StatusCode -lt 200 -or $resp.StatusCode -ge 300) { throw "Upload failed for $hash: HTTP $($resp.StatusCode)" }
+    if ($resp.StatusCode -lt 200 -or $resp.StatusCode -ge 300) { throw "Upload failed for ${hash}: HTTP $($resp.StatusCode)" }
     Remove-Item -LiteralPath $tmp -Force
   }
 
