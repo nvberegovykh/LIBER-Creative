@@ -1,0 +1,54 @@
+{
+  "schema": "liber.revex.observer-agent-guide.v1",
+  "name": "LIBER / REVEX Observer AI session guide",
+  "discovery": "https://liberpict.com/.well-known/liber-ai.json",
+  "counter": "https://liberpict.com/ai/",
+  "claim": "https://us-central1-liber-apps-cca20.cloudfunctions.net/claimRevexObserverAgentSession",
+  "mcp": "https://us-central1-liber-apps-cca20.cloudfunctions.net/revexObserverMcp",
+  "flow": [
+    "Fetch the discovery document and this guide before doing project work.",
+    "Receive one one-time claim key from the human/user through the AI Counter.",
+    "POST the claim key exactly once to the claim endpoint as JSON: {\"claimKey\":\"...\"}.",
+    "Keep the returned accessToken private. Do not place it in URLs, Git, project records, focus journals, screenshots, diagnostics, or evidence.",
+    "Connect to the MCP endpoint using Authorization: Bearer <accessToken>.",
+    "Call initialize, tools/list, then observer_bootstrap before other Observer tools.",
+    "Use the existing REVEX/Revit runtime owner through the active authorized browser relay. Do not reconstruct a second BIM/viewer/runtime owner.",
+    "For consequential work: snapshot -> identify invariants -> preview -> use only a registered bounded owner -> observe again -> compare expected vs observed delta -> record step.",
+    "Call observer_release when finished. The lease also expires automatically."
+  ],
+  "claimKey": {
+    "singleUse": true,
+    "ttlMinutes": 10,
+    "storedRawServerSide": false
+  },
+  "session": {
+    "ttlHours": 2,
+    "revocable": true,
+    "boundTo": ["ownerUid", "projectId", "optional focusId", "scopes"],
+    "defaultScopes": ["observer.read", "observer.preview", "observer.focus"]
+  },
+  "tools": [
+    "observer_bootstrap",
+    "observer_snapshot",
+    "observer_get_element",
+    "observer_query",
+    "observer_graph",
+    "observer_get_selection",
+    "observer_create_focus",
+    "observer_get_focus",
+    "observer_list_focus",
+    "observer_update_focus",
+    "observer_record_step",
+    "observer_close_focus",
+    "observer_preview",
+    "observer_release"
+  ],
+  "hardBoundaries": [
+    "Revit remains model authority.",
+    "The Observer AI lease does not authorize model mutation.",
+    "No direct Firestore project-state mutation is exposed to the external AI session.",
+    "focusId is a task locator, not an authentication secret.",
+    "The active REVEX browser must remain authorized and open on the selected project for live Observer calls.",
+    "Unknown or missing evidence must be reported, not invented."
+  ]
+}
