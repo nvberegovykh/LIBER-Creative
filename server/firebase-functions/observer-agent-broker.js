@@ -338,4 +338,5 @@ exports.revexObserverMcp = onRequest({region:REGION,timeoutSeconds:60,memory:'51
   }catch(error){ return json(res,200,mcpResult(id,{error:errorText(error)},true)); }
 });
 
-module.exports = { PROJECT_SCOPES, PUBLIC_SCOPES };
+module.exports.PROJECT_SCOPES = PROJECT_SCOPES;
+module.exports.PUBLIC_SCOPES = PUBLIC_SCOPES;
