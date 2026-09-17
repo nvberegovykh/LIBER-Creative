@@ -63,6 +63,18 @@ function Wait-Operation($Operation) {
   throw 'Timed out waiting for Firebase Hosting operation.'
 }
 
+function Get-FinalizedVersionState([string]$VersionName) {
+  for ($i=0; $i -lt 20; $i++) {
+    $v = Invoke-Json GET "$Api/$VersionName"
+    $props = @($v.PSObject.Properties.Name)
+    if ([string]$v.status -eq 'FINALIZED' -and ($props -contains 'fileCount')) {
+      return $v
+    }
+    Start-Sleep -Seconds 1
+  }
+  throw "Finalized version metadata did not expose fileCount within 20 seconds: $VersionName"
+}
+
 function Get-GzipPayload([string]$Path) {
   $raw = [IO.File]::ReadAllBytes($Path)
   $ms = New-Object IO.MemoryStream
@@ -173,6 +185,7 @@ if ($Mode -eq 'AUDIT') {
 
 $CloneVersion = $null
 $PreviewChannelId = ('observer-public-' + (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss')).ToLowerInvariant()
+$PreviewChannelCreated = $false
 $LiveReleased = $false
 try {
   Say "Cloning current live version $SourceVersion so all existing files/config remain intact."
@@ -196,13 +209,16 @@ try {
     Remove-Item -LiteralPath $tmp -Force
   }
 
-  $final = Invoke-Json PATCH "$Api/$CloneVersion`?updateMask=status" @{ name=$CloneVersion; status='FINALIZED' }
-  if ([string]$final.status -ne 'FINALIZED') { throw "Clone did not finalize: $($final.status)" }
-  Say "Finalized patched clone: $CloneVersion files=$($final.fileCount)"
-  if ([int64]$final.fileCount -lt [int64]$SourceVersionObject.fileCount) { throw 'Patched clone contains fewer files than live source; refusing release.' }
+  $finalPatch = Invoke-Json PATCH "$Api/$CloneVersion`?updateMask=status" @{ name=$CloneVersion; status='FINALIZED' }
+  if ([string]$finalPatch.status -ne 'FINALIZED') { throw "Clone did not finalize: $($finalPatch.status)" }
+  $final = Get-FinalizedVersionState $CloneVersion
+  $finalFileCount = [int64]$final.fileCount
+  Say "Finalized patched clone: $CloneVersion files=$finalFileCount bytes=$($final.versionBytes)"
+  if ($finalFileCount -lt [int64]$SourceVersionObject.fileCount) { throw 'Patched clone contains fewer files than live source; refusing release.' }
 
   # Preview first. The same finalized version is later released live only after this gate passes.
   $channel = Invoke-Json POST "$Api/sites/$SiteId/channels?channelId=$([uri]::EscapeDataString($PreviewChannelId))" @{ ttl='3600s'; retainedReleaseCount=2 }
+  $PreviewChannelCreated = $true
   $previewReleaseUri = "$Api/sites/$SiteId/channels/$PreviewChannelId/releases?versionName=$([uri]::EscapeDataString($CloneVersion))"
   $null = Invoke-Json POST $previewReleaseUri @{ message="Observer public counter preview $Timestamp" }
   $preview = Invoke-Json GET "$Api/sites/$SiteId/channels/$PreviewChannelId"
@@ -241,7 +257,7 @@ catch {
   throw
 }
 finally {
-  if ($PreviewChannelId) {
+  if ($PreviewChannelCreated) {
     try { Invoke-RestMethod -Method Delete -Uri "$Api/sites/$SiteId/channels/$PreviewChannelId" -Headers (Firebase-Headers) | Out-Null; Say "Preview channel removed: $PreviewChannelId" } catch { Say "Preview cleanup warning: $($_.Exception.Message)" }
   }
 }
