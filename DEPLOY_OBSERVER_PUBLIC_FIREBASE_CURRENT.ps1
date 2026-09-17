@@ -66,13 +66,12 @@ function Wait-Operation($Operation) {
 function Get-FinalizedVersionState([string]$VersionName) {
   for ($i=0; $i -lt 20; $i++) {
     $v = Invoke-Json GET "$Api/$VersionName"
-    $props = @($v.PSObject.Properties.Name)
-    if ([string]$v.status -eq 'FINALIZED' -and ($props -contains 'fileCount')) {
+    if ([string]$v.status -eq 'FINALIZED') {
       return $v
     }
     Start-Sleep -Seconds 1
   }
-  throw "Finalized version metadata did not expose fileCount within 20 seconds: $VersionName"
+  throw "Version did not report FINALIZED within 20 seconds: $VersionName"
 }
 
 function Get-GzipPayload([string]$Path) {
@@ -174,6 +173,11 @@ foreach ($kv in $Patch.GetEnumerator()) {
   $payloadByHash[$p.Hash] = $p
   Say "Patch $($kv.Key) raw=$($p.RawBytes) gzip=$($p.GzipBytes) sha256=$($p.Hash)"
 }
+foreach ($path in @($manifest.Keys)) {
+  if ([string]::IsNullOrWhiteSpace([string]$manifest[$path])) {
+    throw "Patch manifest contains an empty hash (Firebase deletion marker): $path"
+  }
+}
 $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $EvidenceDir 'patch-manifest.json') -Encoding UTF8
 
 # AUDIT intentionally stops before any Hosting mutation.
@@ -222,9 +226,15 @@ try {
   $finalPatch = Invoke-Json PATCH "$Api/$CloneVersion`?updateMask=status" @{ name=$CloneVersion; status='FINALIZED' }
   if ([string]$finalPatch.status -ne 'FINALIZED') { throw "Clone did not finalize: $($finalPatch.status)" }
   $final = Get-FinalizedVersionState $CloneVersion
-  $finalFileCount = [int64]$final.fileCount
-  Say "Finalized patched clone: $CloneVersion files=$finalFileCount bytes=$($final.versionBytes)"
-  if ($finalFileCount -lt [int64]$SourceVersionObject.fileCount) { throw 'Patched clone contains fewer files than live source; refusing release.' }
+  $finalProps = @($final.PSObject.Properties.Name)
+  if ($finalProps -contains 'fileCount') {
+    $finalFileCount = [int64]$final.fileCount
+    $finalBytesText = if ($finalProps -contains 'versionBytes') { [string]$final.versionBytes } else { 'not-returned' }
+    Say "Finalized patched clone: $CloneVersion files=$finalFileCount bytes=$finalBytesText"
+    if ($finalFileCount -lt [int64]$SourceVersionObject.fileCount) { throw 'Patched clone contains fewer files than live source; refusing release.' }
+  } else {
+    Say "Finalized patched clone: $CloneVersion; Firebase omitted fileCount. Preservation remains gated by exact live-version clone + non-empty overlay manifest + preview verification."
+  }
 
   # Preview first. The same finalized version is later released live only after this gate passes.
   $channel = Invoke-Json POST "$Api/sites/$SiteId/channels?channelId=$([uri]::EscapeDataString($PreviewChannelId))" @{ ttl='3600s'; retainedReleaseCount=2 }
