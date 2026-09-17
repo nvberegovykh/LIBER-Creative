@@ -1,5 +1,6 @@
 name: Observer export hotfix once
 
+# One-shot trigger refresh: 2026-09-17T18:49Z
 on:
   push:
     paths:
@@ -51,7 +52,7 @@ jobs:
           git config user.name 'LIBER Observer Hotfix'
           git config user.email 'actions@users.noreply.github.com'
           git rm .github/workflows/observer-export-hotfix-once.yml
-          git add server/firebase-functions/observer-agent-broker.js package-lock.json server/firebase-functions/package-lock.json 2>/dev/null || true
           git add server/firebase-functions/observer-agent-broker.js
+          if [ -f server/firebase-functions/package-lock.json ]; then git add server/firebase-functions/package-lock.json; fi
           git commit -m 'Fix Observer broker export clobber after runtime verification'
           git push origin HEAD:main
