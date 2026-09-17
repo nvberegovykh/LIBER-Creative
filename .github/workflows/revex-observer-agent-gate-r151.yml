@@ -1,0 +1,33 @@
+name: REVEX Observer AI Gate r151
+
+on:
+  pull_request:
+    paths:
+      - 'AI_START_HERE.md'
+      - 'docs/.well-known/liber-ai.json'
+      - 'docs/ai/**'
+      - 'docs/liber-apps/apps/revex/observer-agent-bridge-r151.js'
+      - 'docs/liber-apps/apps/revex/ui-integrity.js'
+      - 'server/firebase-functions/observer-agent-broker.js'
+      - 'server/firebase-functions/main.js'
+      - '.github/scripts/verify-revex-observer-agent-gate-r151.js'
+      - '.github/workflows/revex-observer-agent-gate-r151.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-observer-agent-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check broker
+        run: node --check server/firebase-functions/observer-agent-broker.js
+      - name: Syntax check browser relay
+        run: node --check docs/liber-apps/apps/revex/observer-agent-bridge-r151.js
+      - name: Verify Observer AI contract
+        run: node .github/scripts/verify-revex-observer-agent-gate-r151.js
