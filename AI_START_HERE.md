@@ -4,6 +4,23 @@ This repository is the public source landing for AI systems working with LIBER a
 
 Machine-readable discovery: `docs/.well-known/liber-ai.json` (served as `https://liberpict.com/.well-known/liber-ai.json` when this branch reaches the live `docs/` site).
 
+## AI counter — start here for a new AI session
+
+For an external AI session, do **not** search the repository for credentials or invent a second integration path.
+
+1. Fetch `https://liberpict.com/.well-known/liber-ai.json`.
+2. Read `https://liberpict.com/ai/guide.json`.
+3. The human/user opens `https://liberpict.com/ai/`, chooses an accessible REVEX project, and presses **Issue one-time AI session key**.
+4. The AI receives that one-time claim key from the human and exchanges it exactly once at the claim endpoint declared by discovery.
+5. The claim returns an opaque short-lived bearer plus the Observer MCP endpoint.
+6. Connect to the MCP endpoint with `Authorization: Bearer <accessToken>` and call `observer_bootstrap` before other tools.
+7. Keep the selected project open in an authorized REVEX browser session. The browser relay executes only the existing `window.RevexObserver` surface; the external AI never receives the user's Firebase credential.
+8. Call `observer_release` when finished. The lease also expires automatically.
+
+The one-time claim is intentionally different from `focusId`: the claim/key authorizes the AI session; `focusId` locates one bounded task inside the authorized project.
+
+Current external scopes are read-only Observer scopes only: `observer.read`, `observer.preview`, and `observer.focus`. They do not authorize Revit mutation.
+
 ## Operating rule
 
 Use the current runtime owner. Do not create a second BIM viewer, geometry parser, database owner, chat owner, render owner, Energy engine, or Revit mutation engine.
@@ -22,12 +39,14 @@ The current REVEX contract is:
 - WALLT helper/fixer control plane: `docs/liber-apps/apps/revex/wallt-control-plane.js`
 - WALLT bounded fixer adapters: `docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js`
 - Observer / hidden-focus runtime: `docs/liber-apps/apps/revex/observer-focus-api-r143.js`
+- Observer external-AI browser relay: `docs/liber-apps/apps/revex/observer-agent-bridge-r151.js`
+- Observer external-AI broker / one-time claim / MCP surface: `server/firebase-functions/observer-agent-broker.js`
 - Native family Observer: `src/Liber.Revex.Revit/Services/ObserverFamilyService.cs`
 - Observer WebView2 / ExternalEvent bridge: `src/Liber.Revex.Revit/UI/RevexObserverBridge.cs`
 - Elevator proving planner: `docs/liber-apps/apps/revex/observer-elevator-r144.js`
 - Elevator isolated workshop runtime: `docs/liber-apps/apps/revex/observer-elevator-workshop-r146.js`
 - Elevator isolated workshop native service: `src/Liber.Revex.Revit/Services/ElevatorWorkshopService.cs`
-- Authenticated cloud broker / Firebase functions: `server/firebase-functions/index.js`
+- Authenticated cloud broker / Firebase functions: `server/firebase-functions/main.js`
 - Energy worker: `server/revex-energy-worker/app.py`
 
 Historical/versioned files are preserved as evidence and rollback. They are not automatically current runtime owners.
@@ -100,7 +119,9 @@ A later state may be promoted only through a separate explicit project-validatio
 
 - Never place bearer tokens, service-account JSON, private keys, OAuth refresh tokens, API secrets, or signing keys in this repository or in focus records.
 - Browser/runtime observation uses the existing authenticated REVEX session.
-- A future headless-agent capability token must be server-issued, short-lived, project/focus/action scoped, revocable, and never written to Git, Firestore History, browser diagnostics, or model evidence.
+- External AI access starts with a server-issued one-time claim. The raw claim value is returned once; only its SHA-256 is stored server-side. A successful one-time claim returns a short-lived opaque bearer; again only its SHA-256 is stored server-side.
+- AI leases are project-scoped, optionally focus-scoped, action-scoped, revocable, and must never be written to Git, Firestore History, browser diagnostics, model evidence, screenshots, or URLs.
+- The browser relay never receives the AI bearer; it uses the existing authorized Firebase/REVEX session to service bounded Observer requests.
 - A focus key identifies a task. A capability token authorizes an action. They are intentionally different things.
 - Revit remains the final model authority. Browser JavaScript does not directly manufacture authoritative BIM state.
 - Workshop artifact paths are local execution evidence, not secrets or project authority.
@@ -124,4 +145,4 @@ Do not collapse a long repair into one opaque transaction when the system can pr
 
 `docs/CNAME` binds the public docs tree to `liberpict.com`. The live REVEX UI is therefore intended to be served from this repository's `docs/` surface. Do not assume byte-for-byte parity from that fact alone: use the public manifest plus the parity verifier before a production mutation.
 
-The Observer core remains read-only. The elevator workshop may mutate detached candidate family documents only; it does not mutate the active project.
+The Observer core and external-AI lease remain read-only. The elevator workshop may mutate detached candidate family documents only; it does not mutate the active project.
