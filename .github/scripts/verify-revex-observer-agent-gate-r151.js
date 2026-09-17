@@ -32,6 +32,11 @@ must(broker,"CLAIM_TTL_MS = 10 * 60 * 1000",'claim TTL mismatch');
 must(broker,"PAIR_TTL_MS = 10 * 60 * 1000",'pair TTL mismatch');
 must(broker,"SESSION_TTL_MS = 2 * 60 * 60 * 1000",'session TTL mismatch');
 mustNot(broker,'accessToken:accessToken','raw bearer must not be persisted under explicit field');
+// CommonJS export identity is part of the runtime contract: assigning a fresh
+// module.exports object here silently discards every earlier exports.<handler> binding.
+mustNot(broker,"module.exports = { PROJECT_SCOPES, PUBLIC_SCOPES };",'Observer broker may not replace module.exports after declaring handlers');
+must(broker,'module.exports.PROJECT_SCOPES = PROJECT_SCOPES;','Observer broker must append PROJECT_SCOPES without clobbering handlers');
+must(broker,'module.exports.PUBLIC_SCOPES = PUBLIC_SCOPES;','Observer broker must append PUBLIC_SCOPES without clobbering handlers');
 
 must(bridge,'issueRevexObserverPairCode','REVEX browser must issue pairing codes');
 must(bridge,"button.textContent='Pair AI'",'Pair AI control missing');
@@ -77,4 +82,4 @@ must(launcher,'git clone --depth 1 --branch main --single-branch','launcher must
 must(launcher,'DEPLOY_OBSERVER_AGENT_CURRENT.ps1','launcher must call bounded Observer deployment controller');
 must(launcher,'rmdir /s /q "%WORK%"','launcher must remove disposable checkout');
 
-console.log('REVEX_OBSERVER_AGENT_GATE_R153=PASSED');
+console.log('REVEX_OBSERVER_AGENT_GATE_R154=PASSED');
