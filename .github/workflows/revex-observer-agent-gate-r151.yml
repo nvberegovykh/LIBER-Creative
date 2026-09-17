@@ -46,3 +46,46 @@ jobs:
           }
       - name: Verify Observer AI contract
         run: node .github/scripts/verify-revex-observer-agent-gate-r151.js
+
+  live-public-observer-handshake:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Public claim -> MCP bootstrap -> release
+        shell: bash
+        env:
+          ISSUE_URL: https://us-central1-liber-apps-cca20.cloudfunctions.net/issueRevexObserverAnonymousClaim
+          CLAIM_URL: https://us-central1-liber-apps-cca20.cloudfunctions.net/claimRevexObserverAgentSession
+          MCP_URL: https://us-central1-liber-apps-cca20.cloudfunctions.net/revexObserverMcp
+        run: |
+          set -euo pipefail
+          claim_file="$(mktemp)"
+          session_file="$(mktemp)"
+          access_token=""
+          cleanup() {
+            rm -f "$claim_file" "$session_file"
+            if [[ -n "$access_token" ]]; then
+              curl -sS --max-time 20                 -H "Authorization: Bearer $access_token"                 -H "Content-Type: application/json"                 --data '{"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"observer_release","arguments":{}}}'                 "$MCP_URL" >/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
+          curl -sS --fail-with-body --max-time 30             -H 'Content-Type: application/json'             --data '{}'             "$ISSUE_URL" >"$claim_file"
+          claim_key="$(jq -er '.claimKey' "$claim_file")"
+
+          jq -cn --arg claimKey "$claim_key" '{claimKey:$claimKey}' |             curl -sS --fail-with-body --max-time 30               -H 'Content-Type: application/json'               --data-binary @-               "$CLAIM_URL" >"$session_file"
+          access_token="$(jq -er '.accessToken' "$session_file")"
+
+          init_json="$(curl -sS --fail-with-body --max-time 30             -H "Authorization: Bearer $access_token"             -H 'Content-Type: application/json'             --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ChatGPT Observer live handshake","version":"1"}}}'             "$MCP_URL")"
+          test "$(jq -r '.result.serverInfo.name // empty' <<<"$init_json")" = "LIBER REVEX Observer"
+
+          tools_json="$(curl -sS --fail-with-body --max-time 30             -H "Authorization: Bearer $access_token"             -H 'Content-Type: application/json'             --data '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'             "$MCP_URL")"
+          echo "anonymous_tools=$(jq -c '[.result.tools[].name]' <<<"$tools_json")"
+
+          boot_json="$(curl -sS --fail-with-body --max-time 30             -H "Authorization: Bearer $access_token"             -H 'Content-Type: application/json'             --data '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"observer_bootstrap","arguments":{}}}'             "$MCP_URL")"
+          boot_text="$(jq -er '.result.content[0].text' <<<"$boot_json")"
+          echo "observer_bootstrap=$(jq -c '{schema,paired,projectId,focusId,scopes,bridge,mutationAvailable,next}' <<<"$boot_text")"
+
+          release_json="$(curl -sS --fail-with-body --max-time 30             -H "Authorization: Bearer $access_token"             -H 'Content-Type: application/json'             --data '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"observer_release","arguments":{}}}'             "$MCP_URL")"
+          test "$(jq -r '.result.isError // false' <<<"$release_json")" = "false"
+          access_token=""
+          echo "REVEX_OBSERVER_PUBLIC_HANDSHAKE=PASSED"
