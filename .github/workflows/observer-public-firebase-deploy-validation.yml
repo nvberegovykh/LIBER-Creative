@@ -1,0 +1,45 @@
+name: Observer public Firebase deploy validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'DEPLOY_OBSERVER_PUBLIC_FIREBASE_CURRENT.ps1'
+      - 'DEPLOY_OBSERVER_PUBLIC_FIREBASE_CURRENT.cmd'
+      - '.github/workflows/observer-public-firebase-deploy-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: PowerShell syntax
+        shell: pwsh
+        run: |
+          $tokens=$null; $errors=$null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'DEPLOY_OBSERVER_PUBLIC_FIREBASE_CURRENT.ps1'),[ref]$tokens,[ref]$errors)
+          if(@($errors).Count -gt 0){ $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
+          Write-Host 'OBSERVER_FIREBASE_PS_SYNTAX=PASSED'
+      - name: Surgical deployment contract
+        shell: pwsh
+        run: |
+          $text=Get-Content -Raw DEPLOY_OBSERVER_PUBLIC_FIREBASE_CURRENT.ps1
+          foreach($marker in @(
+            'versions:clone',
+            'channels/live',
+            'sourceVersion=$SourceVersion',
+            'finalize=$false',
+            'populateFiles',
+            'Preview passed.',
+            'Automatic rollback after Observer public counter verification failure',
+            "[ValidateSet('AUDIT','APPLY')]",
+            '/observer-ai.html',
+            '/liber-ai.json',
+            '/observer-ai-guide.json'
+          )) { if(-not $text.Contains($marker)){ throw "Missing surgical-deploy marker: $marker" } }
+          if($text -match 'firebase\s+deploy\s+--only\s+hosting'){ throw 'Whole-site firebase deploy is forbidden in the surgical controller.' }
+          Write-Host 'OBSERVER_FIREBASE_SURGICAL_CONTRACT=PASSED'
