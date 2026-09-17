@@ -27,8 +27,16 @@ function Require-Command([string[]]$Names) {
   throw "Required command not found: $($Names -join ', ')"
 }
 
+function Firebase-Headers() {
+  if (-not $script:AccessToken) { throw 'Firebase access token is not initialized.' }
+  return @{
+    Authorization = "Bearer $script:AccessToken"
+    'x-goog-user-project' = $ProjectId
+  }
+}
+
 function Invoke-Json([string]$Method,[string]$Uri,$Body=$null) {
-  $headers = @{ Authorization = "Bearer $script:AccessToken" }
+  $headers = Firebase-Headers
   if ($null -eq $Body) {
     return Invoke-RestMethod -Method $Method -Uri $Uri -Headers $headers
   }
@@ -182,7 +190,7 @@ try {
     $tmp = Join-Path $EvidenceDir ("$hash.gz")
     [IO.File]::WriteAllBytes($tmp,$payloadByHash[[string]$hash].Bytes)
     $uploadUri = ([string]$populate.uploadUrl).TrimEnd('/') + '/' + $hash
-    $resp = Invoke-WebRequest -UseBasicParsing -Method Post -Uri $uploadUri -Headers @{ Authorization="Bearer $script:AccessToken" } -ContentType 'application/octet-stream' -InFile $tmp
+    $resp = Invoke-WebRequest -UseBasicParsing -Method Post -Uri $uploadUri -Headers (Firebase-Headers) -ContentType 'application/octet-stream' -InFile $tmp
     if ($resp.StatusCode -lt 200 -or $resp.StatusCode -ge 300) { throw "Upload failed for ${hash}: HTTP $($resp.StatusCode)" }
     Remove-Item -LiteralPath $tmp -Force
   }
@@ -233,6 +241,6 @@ catch {
 }
 finally {
   if ($PreviewChannelId) {
-    try { Invoke-RestMethod -Method Delete -Uri "$Api/sites/$SiteId/channels/$PreviewChannelId" -Headers @{ Authorization="Bearer $script:AccessToken" } | Out-Null; Say "Preview channel removed: $PreviewChannelId" } catch { Say "Preview cleanup warning: $($_.Exception.Message)" }
+    try { Invoke-RestMethod -Method Delete -Uri "$Api/sites/$SiteId/channels/$PreviewChannelId" -Headers (Firebase-Headers) | Out-Null; Say "Preview channel removed: $PreviewChannelId" } catch { Say "Preview cleanup warning: $($_.Exception.Message)" }
   }
 }
