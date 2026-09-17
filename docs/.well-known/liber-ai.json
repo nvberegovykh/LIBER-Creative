@@ -11,25 +11,31 @@
       "LIBER REVEX BIM Observer"
     ],
     "discoveryUri": "https://liberpict.com/.well-known/liber-ai.json",
+    "counter": "https://liberpict.com/ai/",
+    "machineGuide": "https://liberpict.com/ai/guide.json",
     "humanGuide": "https://github.com/nvberegovykh/LIBER-Creative/blob/main/AI_START_HERE.md",
+    "claimEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/claimRevexObserverAgentSession",
+    "mcpEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/revexObserverMcp",
     "sourceRepository": "https://github.com/nvberegovykh/LIBER-Creative",
-    "candidateBranch": "agent/revex-observer-focus-20260915",
-    "instruction": "Fetch discoveryUri first. If the live manifest is unavailable or stale, inspect AI_START_HERE.md and docs/.well-known/liber-ai.json on candidateBranch. Never infer credentials or bypass the declared capability boundaries."
+    "candidateBranch": "agent/revex-observer-ai-counter-20260917",
+    "instruction": "Fetch discoveryUri first. Read machineGuide. Obtain one one-time claim key from the human/user at counter, claim it exactly once, call observer_bootstrap, then use only returned scopes. Never infer credentials or bypass declared capability boundaries."
   },
   "sourceRepository": "https://github.com/nvberegovykh/LIBER-Creative",
   "defaultBranch": "main",
   "productionRoot": "https://liberpict.com/liber-apps/",
   "humanGuide": "https://github.com/nvberegovykh/LIBER-Creative/blob/main/AI_START_HERE.md",
+  "machineGuide": "https://liberpict.com/ai/guide.json",
   "principles": [
     "integrate-do-not-reconstruct",
     "one-concern-one-runtime-owner",
     "revit-remains-model-authority",
     "observe-before-and-after-every-consequential-transition",
     "focus-keys-are-not-authentication-secrets",
+    "one-time-ai-session-claim-before-headless-tools",
     "isolated-workshop-before-production-mutation"
   ],
   "observer": {
-    "status": "candidate-read-only-core-with-isolated-workshop",
+    "status": "candidate-read-only-core-with-ai-session-relay-and-isolated-workshop",
     "source": "docs/liber-apps/apps/revex/observer-focus-api-r143.js",
     "global": "window.RevexObserver",
     "methods": [
@@ -47,6 +53,20 @@
       "closeFocus",
       "preview"
     ],
+    "agentAccess": {
+      "status": "candidate",
+      "counter": "https://liberpict.com/ai/",
+      "guide": "https://liberpict.com/ai/guide.json",
+      "claimEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/claimRevexObserverAgentSession",
+      "mcpEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/revexObserverMcp",
+      "serverBroker": "server/firebase-functions/observer-agent-broker.js",
+      "browserRelay": "docs/liber-apps/apps/revex/observer-agent-bridge-r151.js",
+      "claimTtlMinutes": 10,
+      "sessionTtlHours": 2,
+      "defaultScopes": ["observer.read", "observer.preview", "observer.focus"],
+      "requiresActiveAuthorizedRevexBrowser": true,
+      "mutation": false
+    },
     "nativeFamilyInspection": {
       "requestType": "liber:revex-observer-family-inspect-r144",
       "responseType": "liber:revex-observer-family-inspection-r144",
@@ -136,6 +156,16 @@
       "source": "src/Liber.Revex.Revit/Services/ObserverFamilyService.cs"
     },
     {
+      "name": "observer-agent-broker",
+      "role": "One-time AI claim, short-lived scoped session, MCP tool broker and authorized browser relay queue",
+      "source": "server/firebase-functions/observer-agent-broker.js"
+    },
+    {
+      "name": "observer-agent-browser-relay",
+      "role": "Executes only the current read-only window.RevexObserver inside the authorized REVEX browser session",
+      "source": "docs/liber-apps/apps/revex/observer-agent-bridge-r151.js"
+    },
+    {
       "name": "elevator-workshop",
       "role": "Detached family candidate transitions only; never active-project authority",
       "source": "src/Liber.Revex.Revit/Services/ElevatorWorkshopService.cs"
@@ -153,7 +183,7 @@
     {
       "name": "firebase-broker",
       "role": "Authenticated cloud function and broker boundary",
-      "source": "server/firebase-functions/index.js"
+      "source": "server/firebase-functions/main.js"
     },
     {
       "name": "energy-worker",
@@ -166,12 +196,14 @@
     "focusRecordsMayContainSecrets": false,
     "browserAuth": "existing-authorized-revex-session",
     "headlessCapabilityToken": {
-      "status": "not-yet-exposed",
+      "status": "candidate-implemented-read-only-observer",
+      "claim": "one-time random claim key; raw value returned once and only SHA-256 stored",
+      "session": "opaque random bearer; raw value returned once and only SHA-256 stored",
       "requirements": [
         "server-issued",
         "short-lived",
         "project-scoped",
-        "focus-scoped",
+        "focus-scoped-when-requested",
         "action-scoped",
         "revocable",
         "never-logged-or-committed"

@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>LIBER / REVEX AI Counter</title>
+<meta name="robots" content="index,follow" />
+<style>
+:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color-scheme:dark;background:#101315;color:#f5f7f8}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at top,#20272c 0,#101315 48%,#0c0f11 100%)}main{width:min(760px,100%);background:#171c20;border:1px solid #2c353b;border-radius:22px;padding:28px;box-shadow:0 24px 80px #0008}h1{font-size:clamp(28px,5vw,44px);margin:0 0 8px}p{line-height:1.55;color:#cbd3d7}a{color:#b7dcff}.grid{display:grid;gap:14px;margin-top:22px}.row{display:grid;gap:7px}label{font-size:13px;color:#aab5bb}select,input,button,textarea{width:100%;border-radius:12px;border:1px solid #38434a;background:#0f1316;color:#f5f7f8;padding:12px 14px;font:inherit}button{cursor:pointer;background:#f4f7f9;color:#101315;border:0;font-weight:700}button.secondary{background:#252d32;color:#eef2f4;border:1px solid #3d484f}button:disabled{opacity:.5;cursor:not-allowed}.status{padding:12px 14px;border-radius:12px;background:#10161a;border:1px solid #2e3940;color:#cbd3d7}.status.good{border-color:#3b6b50;color:#bfe5cc}.status.bad{border-color:#74414a;color:#ffc6cf}.secret{display:none;margin-top:18px;padding:18px;border-radius:16px;background:#0c1012;border:1px solid #3d484f}.secret.show{display:block}.secret code{display:block;word-break:break-all;font:600 13px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;background:#050708;padding:13px;border-radius:10px;margin:10px 0}.actions{display:flex;gap:10px;flex-wrap:wrap}.actions button,.actions a{flex:1;min-width:170px;text-align:center;text-decoration:none;padding:11px 13px;border-radius:11px}.note{font-size:13px;color:#95a2a9}.mini{font-size:12px;color:#839098;margin-top:18px;border-top:1px solid #293238;padding-top:16px}
+</style>
+</head>
+<body>
+<main>
+  <h1>AI Counter</h1>
+  <p>One bounded key for one AI session. The key authorizes the read-only REVEX Observer for a selected project; it is not a Revit credential and never grants silent model mutation.</p>
+  <div id="status" class="status">Connecting to your LIBER session…</div>
+  <div class="grid">
+    <div class="row"><label for="project">REVEX project</label><select id="project" disabled><option>Loading projects…</option></select></div>
+    <div class="row"><label for="focus">Optional existing focus ID</label><input id="focus" placeholder="Leave blank for an unbound Observer session" /></div>
+    <button id="issue" disabled>Issue one-time AI session key</button>
+  </div>
+  <section id="secret" class="secret">
+    <strong>One-time claim key</strong>
+    <code id="claim-key"></code>
+    <div class="actions"><button id="copy-key" class="secondary">Copy key</button><button id="copy-bootstrap" class="secondary">Copy AI bootstrap instruction</button></div>
+    <p id="expiry" class="note"></p>
+    <p class="note">Give this key to exactly one AI session. The AI exchanges it once for a short-lived scoped lease, then connects to the Observer tool endpoint. Keep REVEX open on the selected project so the authorized browser relay can service live Observer calls.</p>
+  </section>
+  <div class="actions" style="margin-top:18px"><a class="secondary" href="/liber-apps/">Open LIBER Apps</a><a class="secondary" href="/liber-apps/apps/revex/">Open REVEX</a><a class="secondary" href="/ai/guide.json">AI guide</a></div>
+  <div class="mini">Discovery: <a href="/.well-known/liber-ai.json">/.well-known/liber-ai.json</a>. No bearer token, service-account secret, OAuth refresh token, or signing key is stored in this page or repository.</div>
+</main>
+<script src="/liber-apps/js/secure-keys.js"></script>
+<script type="module" src="/liber-apps/js/firebase-loader.js"></script>
+<script src="/liber-apps/js/firebase-service.js"></script>
+<script>
+(function(){
+'use strict';
+const status=document.getElementById('status'),project=document.getElementById('project'),issue=document.getElementById('issue'),focus=document.getElementById('focus');
+const secret=document.getElementById('secret'),claimKey=document.getElementById('claim-key'),expiry=document.getElementById('expiry');
+let issued=null;
+function setStatus(text,tone=''){status.textContent=text;status.className='status'+(tone?' '+tone:'');}
+function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+async function serviceReady(){for(let i=0;i<120;i++){if(window.firebaseService?.waitForInit){await window.firebaseService.waitForInit();return window.firebaseService;}await sleep(100);}throw new Error('LIBER authentication runtime did not initialize.');}
+async function load(){
+  try{
+    const fs=await serviceReady();
+    const user=fs.auth?.currentUser;
+    if(!user){setStatus('Sign in to LIBER Apps in this browser, then return here.','bad');project.innerHTML='<option>Sign in required</option>';return;}
+    const result=await fs.callFunction('listRevexObserverAgentProjects',{});
+    const rows=result?.projects||[];
+    project.innerHTML='';
+    if(!rows.length){project.innerHTML='<option>No accessible REVEX projects</option>';setStatus('Signed in, but no accessible REVEX projects were found.','bad');return;}
+    for(const row of rows){const option=document.createElement('option');option.value=row.projectId;option.textContent=`${row.name||row.projectId}${row.code?' · '+row.code:''} · ${row.role||'member'}`;project.appendChild(option);}
+    project.disabled=false;issue.disabled=false;setStatus(`Signed in as ${user.email||user.uid}. Choose a project and issue one session key.`,'good');
+  }catch(error){setStatus(error?.message||String(error),'bad');}
+}
+issue.addEventListener('click',async()=>{
+  issue.disabled=true;secret.classList.remove('show');
+  try{
+    const fs=await serviceReady();
+    const response=await fs.callFunction('issueRevexObserverAgentClaim',{projectId:project.value,focusId:focus.value.trim()||null,scopes:['observer.read','observer.preview','observer.focus']});
+    if(!response?.claimKey)throw new Error('Observer counter returned no claim key.');
+    issued=response;claimKey.textContent=response.claimKey;expiry.textContent=`Claim expires ${response.claimExpiresAt}. Session lease is issued only after the AI claims this key.`;secret.classList.add('show');
+    setStatus('One-time key issued. Copy it into exactly one AI session.','good');
+  }catch(error){setStatus(error?.message||String(error),'bad');}
+  finally{issue.disabled=false;}
+});
+document.getElementById('copy-key').addEventListener('click',async()=>{if(issued?.claimKey)await navigator.clipboard.writeText(issued.claimKey);});
+document.getElementById('copy-bootstrap').addEventListener('click',async()=>{
+  if(!issued)return;
+  const text=[
+    'LIBER / REVEX Observer session bootstrap',
+    `Discovery: ${issued.discoveryUrl}`,
+    `Guide: ${issued.guideUrl}`,
+    `One-time claim endpoint: ${issued.claimUrl}`,
+    `Observer MCP endpoint: ${issued.mcpUrl}`,
+    `Claim key: ${issued.claimKey}`,
+    '',
+    'Fetch the discovery document and guide first. Exchange the claim key exactly once, keep the returned access token private, call observer_bootstrap, then use only the scopes returned by bootstrap. Release the session when finished.'
+  ].join('\n');
+  await navigator.clipboard.writeText(text);
+});
+window.addEventListener('firebase-ready',load,{once:true});setTimeout(load,250);
+})();
+</script>
+</body>
+</html>
