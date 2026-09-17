@@ -9,8 +9,9 @@ const observerAgent = require('./observer-agent-broker');
 module.exports = {
   ...energy,
   ensureProjectChatHttp: projectChat.ensureProjectChatHttp,
-  listRevexObserverAgentProjects: observerAgent.listRevexObserverAgentProjects,
+  issueRevexObserverAnonymousClaim: observerAgent.issueRevexObserverAnonymousClaim,
   issueRevexObserverAgentClaim: observerAgent.issueRevexObserverAgentClaim,
+  issueRevexObserverPairCode: observerAgent.issueRevexObserverPairCode,
   claimRevexObserverAgentSession: observerAgent.claimRevexObserverAgentSession,
   pullRevexObserverAgentRequests: observerAgent.pullRevexObserverAgentRequests,
   completeRevexObserverAgentRequest: observerAgent.completeRevexObserverAgentRequest,

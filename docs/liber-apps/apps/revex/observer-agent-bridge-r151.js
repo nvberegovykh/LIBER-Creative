@@ -1,13 +1,13 @@
-/* REVEX Observer AI session relay r151
+/* REVEX Observer AI session relay r152
  * Executes only the existing read-only window.RevexObserver surface inside an authorized REVEX browser session.
- * No bearer/claim key is ever present in the browser. Browser authorization remains Firebase/REVEX.
+ * The public AI counter never receives Firebase credentials. Project authorization happens here through Pair AI.
  */
 (function(root){
 'use strict';
 if(root.__revexObserverAgentBridgeR151)return;
 root.__revexObserverAgentBridgeR151=true;
 
-const BUILD='20260917r151-agent-gate1';
+const BUILD='20260917r152-public-counter1';
 const CLIENT_KEY='liber.revex.observer.agent.bridge.client.v1';
 let stopped=false;
 let timer=0;
@@ -27,7 +27,7 @@ function clientId(){
 function projectId(){const s=state();return clean(s.projectId||s.currentProjectId||s.project?.id||s.currentProject?.id);}
 function revision(){const s=state();return clean(s.revision||s.currentRevision||s.viewerData?.revision||s.viewerData?.rev||s.project?.revision);}
 function activeView(){const s=state();return clean(s.activeView||s.viewName||s.viewerData?.source?.viewName);}
-function diag(level,stage,message,detail={}){try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'REVEX Observer AI bridge r151',build:BUILD,...detail});}catch(_){}}
+function diag(level,stage,message,detail={}){try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'REVEX Observer AI bridge r152',build:BUILD,...detail});}catch(_){}}
 
 function argsFor(method,args){
   switch(method){
@@ -59,9 +59,39 @@ async function execute(project,request){
   const result=await Promise.resolve(fn.apply(api,argsFor(method,request?.args||{})));
   return result===undefined?null:result;
 }
+async function issuePairCode(options={}){
+  const service=fs(),project=projectId();
+  if(!service?.callFunction)throw new Error('Firebase callable bridge unavailable.');
+  if(!project)throw new Error('Choose a REVEX project before pairing an AI.');
+  const response=await service.callFunction('issueRevexObserverPairCode',{projectId:project,focusId:clean(options.focusId)||null});
+  if(!response?.pairCode)throw new Error('Pairing service returned no code.');
+  try{await navigator.clipboard.writeText(response.pairCode);}catch(_){}
+  diag('INFO','OBSERVER_AGENT_PAIR_CODE','Issued one-time AI pairing code.',{projectId:project,expiresAt:response.expiresAt});
+  return response;
+}
+function ensurePairButton(){
+  if(document.getElementById('observer-ai-pair-button'))return;
+  const select=document.getElementById('project-select'); if(!select)return;
+  const anchor=document.getElementById('project-id-badge')||select.closest('.project-picker')||select;
+  const button=document.createElement('button');
+  button.id='observer-ai-pair-button';button.type='button';button.className='button ghost compact sp-btn sp-btn-ghost sp-btn-sm';button.textContent='Pair AI';button.title='Issue a one-time code that lets one AI Observer session attach to this project.';
+  button.addEventListener('click',async()=>{
+    const original='Pair AI'; button.disabled=true;button.textContent='Pairing…';
+    try{
+      const result=await issuePairCode();
+      button.textContent=`Copied ${result.pairCode}`;
+      setTimeout(()=>{button.textContent=original;button.disabled=false;},7000);
+    }catch(error){
+      button.textContent='Pair failed';diag('WARN','OBSERVER_AGENT_PAIR_FAILED',error?.message||String(error),{projectId:projectId()});
+      setTimeout(()=>{button.textContent=original;button.disabled=false;},4000);
+    }
+  });
+  anchor.insertAdjacentElement('afterend',button);
+}
 async function poll(){
   if(stopped||busy)return schedule();
   const api=observer(),service=fs(),project=projectId();
+  ensurePairButton();
   if(!api||!service?.callFunction||!project)return schedule();
   busy=true;
   try{
@@ -84,10 +114,10 @@ async function poll(){
   }finally{busy=false;schedule();}
 }
 function schedule(){clearTimeout(timer);if(stopped)return;timer=setTimeout(poll,document.visibilityState==='hidden'?2200:900);}
-function start(){stopped=false;schedule();diag('INFO','OBSERVER_AGENT_BRIDGE_READY','External Observer relay ready.',{clientId:clientId()});return {build:BUILD,clientId:clientId()};}
+function start(){stopped=false;ensurePairButton();schedule();diag('INFO','OBSERVER_AGENT_BRIDGE_READY','External Observer relay ready.',{clientId:clientId()});return {build:BUILD,clientId:clientId()};}
 function stop(){stopped=true;clearTimeout(timer);timer=0;}
 
-root.RevexObserverAgentBridge=Object.freeze({build:BUILD,start,stop,clientId:clientId()});
+root.RevexObserverAgentBridge=Object.freeze({build:BUILD,start,stop,issuePairCode,clientId:clientId()});
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
 try{root.dispatchEvent(new CustomEvent('revex:observer-agent-bridge-ready',{detail:{build:BUILD}}));}catch(_){}
 })(window);
