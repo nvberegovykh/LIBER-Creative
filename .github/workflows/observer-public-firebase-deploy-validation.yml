@@ -42,9 +42,12 @@ jobs:
             '/liber-ai.json',
             '/observer-ai-guide.json',
             "'x-goog-user-project' = `$ProjectId",
-            '-Headers (Firebase-Headers)'
+            '-Headers (Firebase-Headers)',
+            '$DomainMatches = [System.Collections.Generic.List[object]]::new()',
+            '.EndsWith($expectedSuffix,[System.StringComparison]::OrdinalIgnoreCase)'
           )) { if(-not $text.Contains($marker)){ throw "Missing surgical-deploy marker: $marker" } }
           if($text -match 'firebase\s+deploy\s+--only\s+hosting'){ throw 'Whole-site firebase deploy is forbidden in the surgical controller.' }
+          if($text -match '(?im)^\s*\$matches\s*='){ throw 'Do not use PowerShell automatic $Matches as a mutable collection.' }
           $launcher=Get-Content -Raw RUN_OBSERVER_PUBLIC_FIREBASE_CURRENT.cmd
           foreach($marker in @('git clone --filter=blob:none --depth 1','DEPLOY_OBSERVER_PUBLIC_FIREBASE_CURRENT.cmd','Current main:')) {
             if(-not $launcher.Contains($marker)){ throw "Missing from-anywhere launcher marker: $marker" }
