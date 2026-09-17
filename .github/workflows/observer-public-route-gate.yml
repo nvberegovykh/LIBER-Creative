@@ -21,26 +21,42 @@ jobs:
   live-route:
     runs-on: ubuntu-latest
     steps:
-      - name: Wait for exact public counter route
+      - name: Diagnose custom domain and Pages origin
+        shell: bash
+        run: |
+          set -u
+          TARGET='https://liberpict.com/observer-ai-20260917.html'
+          GH_PROJECT='https://nvberegovykh.github.io/LIBER-Creative/observer-ai-20260917.html'
+          GH_ROOT='https://nvberegovykh.github.io/observer-ai-20260917.html'
+          echo '=== DNS ==='
+          echo 'liberpict.com A:'; dig +short liberpict.com A || true
+          echo 'liberpict.com AAAA:'; dig +short liberpict.com AAAA || true
+          echo 'liberpict.com CNAME:'; dig +short liberpict.com CNAME || true
+          echo 'nvberegovykh.github.io A:'; dig +short nvberegovykh.github.io A || true
+          echo
+          for url in "$TARGET" "$GH_PROJECT" "$GH_ROOT" 'https://liberpict.com/'; do
+            echo "=== $url ==="
+            curl -L -sS --max-time 20 -D - -o /tmp/body "$url" || true
+            echo 'body-head:'; head -c 260 /tmp/body 2>/dev/null | tr '\n' ' '; echo
+            echo
+          done
+          GH_IP="$(dig +short nvberegovykh.github.io A | head -n1)"
+          if [[ -n "$GH_IP" ]]; then
+            echo "=== bypass DNS, force liberpict.com Host to GitHub Pages IP $GH_IP ==="
+            curl -L -sS --max-time 20 --resolve "liberpict.com:443:$GH_IP" -D - -o /tmp/direct "$TARGET" || true
+            echo 'body-head:'; head -c 260 /tmp/direct 2>/dev/null | tr '\n' ' '; echo
+          fi
+
+      - name: Verify exact public counter route
         shell: bash
         run: |
           set -euo pipefail
           URL='https://liberpict.com/observer-ai-20260917.html'
           TMP="$(mktemp)"
           trap 'rm -f "$TMP"' EXIT
-          ok=0
-          for i in $(seq 1 30); do
-            code="$(curl -L --silent --show-error --output "$TMP" --write-out '%{http_code}' --max-time 20 "$URL" || true)"
-            echo "attempt=$i http=$code sha256=$(sha256sum "$TMP" | awk '{print $1}')"
-            if [[ "$code" == '200' ]] && grep -Fq '<title>LIBER / REVEX AI Counter</title>' "$TMP" && grep -Fq 'Take one AI session package' "$TMP"; then
-              ok=1
-              break
-            fi
-            echo 'body-head:'
-            head -c 240 "$TMP" | tr '\n' ' '; echo
-            sleep 5
-          done
-          if [[ "$ok" != '1' ]]; then
+          code="$(curl -L --silent --show-error --output "$TMP" --write-out '%{http_code}' --max-time 20 "$URL" || true)"
+          echo "http=$code sha256=$(sha256sum "$TMP" | awk '{print $1}')"
+          if [[ "$code" != '200' ]] || ! grep -Fq '<title>LIBER / REVEX AI Counter</title>' "$TMP" || ! grep -Fq 'Take one AI session package' "$TMP"; then
             echo 'OBSERVER_PUBLIC_ROUTE=FAILED'
             exit 1
           fi
