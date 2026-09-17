@@ -1,6 +1,6 @@
 (function(root){
   'use strict';
-  const BUILD='20260820r143-ui-recovery1';
+  const BUILD='20260917r151-agent-gate1';
   const REVEX_R87_REPLAY_CONTRACT='energy-diagnostics-r68.js?v=20260816r87-energy-replay1';
   const REVEX_R87_REPLAY_LABEL="energyDiagnostics:'revision-scoped-replay-r87'";
   const REVEX_R92_REPLAY_COMPAT='energy-replay-r92.js?v=20260816r92-hosted-replay1';
@@ -61,6 +61,7 @@
     loadScript('wallt-control-plane.js?v=20260818-wallt-control2','wallt-control-plane');
     loadScript('wallt-cycle-history.js?v=20260818-wallt-cycle-history1','wallt-cycle-history');
     loadScript('observer-focus-api-r143.js?v=20260915r144-elevator-lab1','observer-focus-api-r143');
+    loadScript('observer-agent-bridge-r151.js?v=20260917r151-agent-gate1','observer-agent-bridge-r151');
     loadScript('observer-coffee-area-r147.js?v=20260915r147-coffee1','observer-coffee-area-r147');
     loadScript('observer-elevator-r144.js?v=20260915r145-elevator-plan1','observer-elevator-r144');
     loadScript('observer-elevator-stops-r149.js?v=20260915r149-stops1','observer-elevator-stops-r149');
@@ -95,5 +96,5 @@
   void REVEX_R122_LOADER_COMPAT;void REVEX_R133_LOADER_COMPAT;void REVEX_R142_LOADER_COMPAT;
   function bind(){installCanonicalOverlayStore();const select=document.getElementById('project-select');if(select&&!select.dataset.revexUiR20){select.dataset.revexUiR20='1';select.addEventListener('change',()=>{updateProjectId();enforceLabels();});}updateProjectId();enforceLabels();loadReviewIntegrity();loadCurrentRepairs();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
-  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r125-preserved+wallt-review',wallt:'visible-helper+bounded-fixer-adapters+24h-history+mobile-actions-menu',observer:'r143-focus+r147-coffee-focus+r144-native-family-inspection+r145-elevator-plan+r149-native-stops+r150-isolated-workshop-through-s7',moduleLoad:'r126-convergence+r133-mobile-safe2+r137-fixer+r138-wallt-ui+r142-bottom-sheet+r150-observer-workshop',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r109-svg+r122-walk+r133-safe-area+r142-reused-node-sheet',docs:'r134-full-set-linked-pages+r126-ownership-guard+r133-content-height-mobile-stack',texture:'instance-uv>type-texture>design-color>revit',render:'google-gemini-client+docked-owner+qwen-shadow+interaction-freeze-guard',chat:'r136-project-isolated-secure-chat-native-ui',issues:'revexIssues+all-active-default+empty-selection-inspector',history:'technical-NYC-day+wallt-24h',dailyReport:'separate-post-sync-worker',blocks:'r135-walk-target+face-host+external-event',bimProperties:'r117-preserved',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
+  console.log('[REVEX] UI integrity '+BUILD,{projectId:'visible',restoreAll:'first-capture+canonical-store-commit',energy:'r125-preserved+wallt-review',wallt:'visible-helper+bounded-fixer-adapters+24h-history+mobile-actions-menu',observer:'r143-focus+r151-ai-relay+r147-coffee-focus+r144-native-family-inspection+r145-elevator-plan+r149-native-stops+r150-isolated-workshop-through-s7',moduleLoad:'r126-convergence+r133-mobile-safe2+r137-fixer+r138-wallt-ui+r142-bottom-sheet+r150-observer-workshop+r151-ai-relay',liveWorkerEdge:'r116-pipeline-aware-recovery',ui:'r109-svg+r122-walk+r133-safe-area+r142-reused-node-sheet',docs:'r134-full-set-linked-pages+r126-ownership-guard+r133-content-height-mobile-stack',texture:'instance-uv>type-texture>design-color>revit',render:'google-gemini-client+docked-owner+qwen-shadow+interaction-freeze-guard',chat:'r136-project-isolated-secure-chat-native-ui',issues:'revexIssues+all-active-default+empty-selection-inspector',history:'technical-NYC-day+wallt-24h',dailyReport:'separate-post-sync-worker',blocks:'r135-walk-target+face-host+external-event',bimProperties:'r117-preserved',qaHardStop:'unchanged',targetFps:30,spatialObjects:'invisible'});
 })(window);
