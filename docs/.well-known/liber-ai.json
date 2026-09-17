@@ -34,7 +34,11 @@
     "focus-keys-are-not-authentication-secrets",
     "public-ai-counter-does-not-equal-project-authorization",
     "pair-private-projects-from-authorized-revex-session",
-    "isolated-workshop-before-production-mutation"
+    "isolated-workshop-before-production-mutation",
+    "slice-do-not-replace",
+    "preserve-identity-across-projections",
+    "separate-object-state-from-observer-state",
+    "declare-lossy-abstraction-boundaries"
   ],
   "observer": {
     "status": "candidate-read-only-core-with-public-ai-counter-pairing-relay-and-isolated-workshop",
@@ -71,8 +75,14 @@
       "claimTtlMinutes": 10,
       "pairCodeTtlMinutes": 10,
       "sessionTtlHours": 2,
-      "initialScopes": ["observer.pair"],
-      "pairedScopes": ["observer.read", "observer.preview", "observer.focus"],
+      "initialScopes": [
+        "observer.pair"
+      ],
+      "pairedScopes": [
+        "observer.read",
+        "observer.preview",
+        "observer.focus"
+      ],
       "requiresActiveAuthorizedRevexBrowserForProjectCalls": true,
       "mutation": false
     },
@@ -231,5 +241,10 @@
     "customDomainSource": "docs/CNAME",
     "expectedDomain": "liberpict.com",
     "rule": "Do not assume live byte parity from repository presence alone; verify the live asset fingerprint before production mutation."
+  },
+  "modelAgnosticGuidance": {
+    "projectionDiscipline": "Use ordered lower-dimensional slices to inspect a richer state while preserving identity across slices. Do not let a correct abstraction replace the object.",
+    "humanCommunication": "Separate observation, deterministic transformation, and inference; preserve unresolved uncertainty instead of hiding it with fluent wording.",
+    "guide": "https://liberpict.com/ai/guide.json"
   }
 }

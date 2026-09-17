@@ -120,6 +120,20 @@ For every consequential step:
 
 Do not collapse a long repair into one opaque transaction when the system can preserve useful intermediate states.
 
+## Projection and abstraction discipline
+
+Dimensional reduction is an observation tool, not permission to replace the observed object.
+
+- Preserve the richest available authoritative state. A render, elevation, plan, section, diagram, label, or language summary is a projection of that state unless it is explicitly the authority.
+- When a higher-dimensional relation is hard to reason about, use an ordered stack of lower-dimensional slices and track the same identities across slices. **Slice; do not replace.**
+- Keep **object state** separate from **observer state** (camera, viewpoint, projection, crop, coordinate frame, wording). Do not rotate, deform, or reinterpret the object merely to make one projection look right.
+- Every lossy abstraction should state what it **preserves**, what it **discards**, and what it is **safe for**. An abstraction may constrain or validate properties it preserves; it must not reconstruct properties it discarded.
+- Prefer two or more non-parallel views, slices, measurements, or independent constraints before promoting a spatial inference.
+- When speaking to humans, distinguish source-backed observation, deterministic transformation, and inference. Fluent presentation must not erase unresolved state or uncertainty.
+- These rules are model-agnostic. They are intended to remain useful for commercial, open-source, local, academic, experimental, and future AI systems.
+
+A useful failure test is **"object demolished by correct abstraction"**: the simplified representation can be internally correct while still being insufficient to recreate the richer object.
+
 ## Production / source parity
 
 `docs/CNAME` binds the public docs tree to `liberpict.com`. The live REVEX UI is therefore intended to be served from this repository's `docs/` surface. Do not assume byte-for-byte parity from that fact alone: use the public manifest plus the parity verifier before a production mutation.
