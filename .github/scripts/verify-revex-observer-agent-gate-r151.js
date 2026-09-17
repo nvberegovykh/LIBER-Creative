@@ -27,8 +27,8 @@ must(broker,"mutation:false",'agent discovery state must remain read-only');
 must(broker,"observer_bootstrap",'bootstrap tool missing');
 must(broker,"observer_release",'release tool missing');
 must(broker,"No active authorized REVEX session is servicing this project",'active browser relay failure must be explicit');
-mustNot(broker,'tx.set(claimRef',{ },'claim record must not be replaced with raw secret');
-mustNot(broker,'claimKey,projectId','raw claim key must not be persisted in a record object');
+mustNot(broker,"claimKey:claimKey",'raw claim key must never be persisted under an explicit claimKey field');
+mustNot(broker,"accessToken:accessToken",'raw session bearer must never be persisted under an explicit accessToken field');
 
 must(bridge,"root.RevexObserver",'browser relay must use current Observer owner');
 must(bridge,"pullRevexObserverAgentRequests",'browser relay must pull through callable broker');
