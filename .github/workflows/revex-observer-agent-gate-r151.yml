@@ -10,6 +10,8 @@ on:
       - 'docs/liber-apps/apps/revex/ui-integrity.js'
       - 'server/firebase-functions/observer-agent-broker.js'
       - 'server/firebase-functions/main.js'
+      - 'server/firebase-functions/DEPLOY_OBSERVER_AGENT_CURRENT.ps1'
+      - 'DEPLOY_REVEX_OBSERVER_AI_CURRENT.cmd'
       - '.github/scripts/verify-revex-observer-agent-gate-r151.js'
       - '.github/workflows/revex-observer-agent-gate-r151.yml'
   workflow_dispatch:
@@ -29,5 +31,11 @@ jobs:
         run: node --check server/firebase-functions/observer-agent-broker.js
       - name: Syntax check browser relay
         run: node --check docs/liber-apps/apps/revex/observer-agent-bridge-r151.js
+      - name: Parse Observer deployment PowerShell
+        shell: pwsh
+        run: |
+          $tokens=$null; $errors=$null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'server/firebase-functions/DEPLOY_OBSERVER_AGENT_CURRENT.ps1'),[ref]$tokens,[ref]$errors)
+          if(@($errors).Count){ throw (@($errors | ForEach-Object {$_.Message}) -join '; ') }
       - name: Verify Observer AI contract
         run: node .github/scripts/verify-revex-observer-agent-gate-r151.js
