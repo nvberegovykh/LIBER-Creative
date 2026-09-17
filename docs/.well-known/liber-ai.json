@@ -14,11 +14,12 @@
     "counter": "https://liberpict.com/ai/",
     "machineGuide": "https://liberpict.com/ai/guide.json",
     "humanGuide": "https://github.com/nvberegovykh/LIBER-Creative/blob/main/AI_START_HERE.md",
+    "publicIssueEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/issueRevexObserverAnonymousClaim",
     "claimEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/claimRevexObserverAgentSession",
     "mcpEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/revexObserverMcp",
     "sourceRepository": "https://github.com/nvberegovykh/LIBER-Creative",
-    "candidateBranch": "agent/revex-observer-ai-counter-20260917",
-    "instruction": "Fetch discoveryUri first. Read machineGuide. Obtain one one-time claim key from the human/user at counter, claim it exactly once, call observer_bootstrap, then use only returned scopes. Never infer credentials or bypass declared capability boundaries."
+    "candidateBranch": "agent/revex-observer-public-counter-20260917",
+    "instruction": "Fetch discoveryUri first. Read machineGuide. The public counter requires no LIBER account and exposes no project data. Take one one-time AI key, claim it once, call observer_bootstrap, then pair a private REVEX project only with a one-time Pair AI code issued inside an authorized REVEX project session. Never infer credentials or bypass declared capability boundaries."
   },
   "sourceRepository": "https://github.com/nvberegovykh/LIBER-Creative",
   "defaultBranch": "main",
@@ -31,11 +32,12 @@
     "revit-remains-model-authority",
     "observe-before-and-after-every-consequential-transition",
     "focus-keys-are-not-authentication-secrets",
-    "one-time-ai-session-claim-before-headless-tools",
+    "public-ai-counter-does-not-equal-project-authorization",
+    "pair-private-projects-from-authorized-revex-session",
     "isolated-workshop-before-production-mutation"
   ],
   "observer": {
-    "status": "candidate-read-only-core-with-ai-session-relay-and-isolated-workshop",
+    "status": "candidate-read-only-core-with-public-ai-counter-pairing-relay-and-isolated-workshop",
     "source": "docs/liber-apps/apps/revex/observer-focus-api-r143.js",
     "global": "window.RevexObserver",
     "methods": [
@@ -56,15 +58,22 @@
     "agentAccess": {
       "status": "candidate",
       "counter": "https://liberpict.com/ai/",
+      "counterAccountRequired": false,
+      "counterExposesProjectData": false,
       "guide": "https://liberpict.com/ai/guide.json",
+      "publicIssueEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/issueRevexObserverAnonymousClaim",
       "claimEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/claimRevexObserverAgentSession",
       "mcpEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/revexObserverMcp",
+      "projectAuthorization": "one-time Pair AI code issued inside an authorized REVEX project session",
+      "pairTool": "observer_pair",
       "serverBroker": "server/firebase-functions/observer-agent-broker.js",
       "browserRelay": "docs/liber-apps/apps/revex/observer-agent-bridge-r151.js",
       "claimTtlMinutes": 10,
+      "pairCodeTtlMinutes": 10,
       "sessionTtlHours": 2,
-      "defaultScopes": ["observer.read", "observer.preview", "observer.focus"],
-      "requiresActiveAuthorizedRevexBrowser": true,
+      "initialScopes": ["observer.pair"],
+      "pairedScopes": ["observer.read", "observer.preview", "observer.focus"],
+      "requiresActiveAuthorizedRevexBrowserForProjectCalls": true,
       "mutation": false
     },
     "nativeFamilyInspection": {
@@ -157,12 +166,12 @@
     },
     {
       "name": "observer-agent-broker",
-      "role": "One-time AI claim, short-lived scoped session, MCP tool broker and authorized browser relay queue",
+      "role": "Public one-time AI claim, project pairing, short-lived scoped session, MCP tool broker and authorized browser relay queue",
       "source": "server/firebase-functions/observer-agent-broker.js"
     },
     {
       "name": "observer-agent-browser-relay",
-      "role": "Executes only the current read-only window.RevexObserver inside the authorized REVEX browser session",
+      "role": "Issues Pair AI codes and executes only the current read-only window.RevexObserver inside the authorized REVEX browser session",
       "source": "docs/liber-apps/apps/revex/observer-agent-bridge-r151.js"
     },
     {
@@ -182,7 +191,7 @@
     },
     {
       "name": "firebase-broker",
-      "role": "Authenticated cloud function and broker boundary",
+      "role": "Authenticated and public-bounded Cloud Function broker boundary",
       "source": "server/firebase-functions/main.js"
     },
     {
@@ -195,14 +204,22 @@
     "repositorySecretsAllowed": false,
     "focusRecordsMayContainSecrets": false,
     "browserAuth": "existing-authorized-revex-session",
+    "publicCounter": {
+      "accountRequired": false,
+      "projectDataExposed": false,
+      "claimSingleUse": true,
+      "rateLimited": true
+    },
     "headlessCapabilityToken": {
-      "status": "candidate-implemented-read-only-observer",
-      "claim": "one-time random claim key; raw value returned once and only SHA-256 stored",
+      "status": "candidate-implemented-read-only-observer-with-separate-project-pairing",
+      "claim": "public one-time random claim key; raw value returned once and only SHA-256 stored",
       "session": "opaque random bearer; raw value returned once and only SHA-256 stored",
+      "projectPairing": "one-time code created only by an authorized REVEX project session; raw code returned once and only SHA-256 stored",
       "requirements": [
         "server-issued",
         "short-lived",
-        "project-scoped",
+        "project-unbound-at-public-counter",
+        "project-scoped-only-after-authorized-pairing",
         "focus-scoped-when-requested",
         "action-scoped",
         "revocable",
