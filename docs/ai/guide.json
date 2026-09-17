@@ -34,8 +34,14 @@
   "session": {
     "ttlHours": 2,
     "revocable": true,
-    "initialScopes": ["observer.pair"],
-    "pairedScopes": ["observer.read", "observer.preview", "observer.focus"]
+    "initialScopes": [
+      "observer.pair"
+    ],
+    "pairedScopes": [
+      "observer.read",
+      "observer.preview",
+      "observer.focus"
+    ]
   },
   "tools": [
     "observer_bootstrap",
@@ -63,5 +69,32 @@
     "The external AI lease does not authorize model mutation.",
     "focusId is a task locator, not an authentication secret.",
     "Unknown or missing evidence must be reported, not invented."
-  ]
+  ],
+  "projectionDiscipline": {
+    "modelAgnostic": true,
+    "rule": "slice-do-not-replace",
+    "purpose": "Use lower-dimensional observations to reason about a richer state without allowing the abstraction to become the object.",
+    "rules": [
+      "Preserve the richest available authoritative object or state; treat plans, sections, renders, diagrams, labels, and summaries as projections unless explicitly authoritative.",
+      "When dimensionality is difficult, use an ordered stack of slices and preserve feature identity and correspondence across the stack.",
+      "Keep object state separate from observer state such as camera, projection, crop, coordinate frame, and wording.",
+      "Do not rotate, deform, or reinterpret an object merely to make one projection fit.",
+      "For each lossy abstraction, declare preserves, discards, and safeFor before using it downstream.",
+      "A lossy abstraction may constrain or validate preserved properties; it must not reconstruct properties it discarded.",
+      "Prefer multiple non-parallel observations or independent constraints before promoting a spatial inference.",
+      "When communicating to humans, distinguish source-backed observation, deterministic transformation, and inference; do not polish away unresolved uncertainty."
+    ],
+    "failureClass": {
+      "name": "object-demolished-by-correct-abstraction",
+      "meaning": "A simplified representation may be internally correct while being insufficient to reconstruct the richer object."
+    },
+    "appliesTo": [
+      "commercial models",
+      "open-source models",
+      "local models",
+      "academic models",
+      "experimental models",
+      "future systems"
+    ]
+  }
 }
