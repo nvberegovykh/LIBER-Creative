@@ -2,8 +2,15 @@
 const assert=require('assert');
 const paper=require('../../docs/ai/runtime/object-paper-r1.js');
 const example=require('../../docs/ai/examples/four-candle-lantern.object-paper.json');
+const workflow=require('../../docs/ai/workflows/projection-render-gate.json');
+const guide=require('../../docs/ai/guide.json');
+const discovery=require('../../docs/.well-known/liber-ai.json');
 
 assert.equal(paper.version,'20260918r1-object-paper');
+assert.equal(workflow.objectPaper.runtime,'https://liberpict.com/ai/runtime/object-paper-r1.js');
+assert.equal(workflow.objectPaper.readinessEvaluator,'LiberObjectPaper.evaluatePaperReady(paper)');
+assert.equal(guide.objectPaper.evaluator,'LiberObjectPaper.evaluatePaperReady');
+assert.equal(discovery.workflows.objectPaper.renderBlockedUntilReady,true);
 
 const valid=paper.validatePaper(example);
 assert.equal(valid.ok,true,valid.errors.join('; '));
