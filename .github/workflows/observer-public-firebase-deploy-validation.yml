@@ -7,6 +7,7 @@ on:
       - 'DEPLOY_OBSERVER_PUBLIC_FIREBASE_CURRENT.ps1'
       - 'DEPLOY_OBSERVER_PUBLIC_FIREBASE_CURRENT.cmd'
       - 'RUN_OBSERVER_PUBLIC_FIREBASE_CURRENT.cmd'
+      - 'docs/ai/public-manifest.json'
       - '.github/workflows/observer-public-firebase-deploy-validation.yml'
   workflow_dispatch:
 
@@ -41,6 +42,11 @@ jobs:
             '/observer-ai.html',
             '/liber-ai.json',
             '/observer-ai-guide.json',
+            'liber.ai.public-manifest.v1',
+            'Public AI manifest loaded:',
+            '/ai/cases/meadowview-palladian-r1.json',
+            '/ai/runtime/dependency-graph-r1.js',
+            'forbidden ghost',
             "'x-goog-user-project' = `$ProjectId",
             '-Headers (Firebase-Headers)',
             '$DomainMatches = [System.Collections.Generic.List[object]]::new()',
