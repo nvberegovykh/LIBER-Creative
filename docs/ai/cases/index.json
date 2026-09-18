@@ -1,0 +1,15 @@
+{
+  "schema": "liber.ai.case-index.v1",
+  "current": [
+    {
+      "id": "meadowview.palladian.front-entry.20260918",
+      "title": "289 Meadowview — Palladian front-entry last-mile handoff",
+      "status": "paper-repair-active",
+      "userAssessedBaselineAccuracyApprox": 0.94,
+      "handoff": "https://liberpict.com/ai/cases/meadowview-palladian-r1.json",
+      "dependencyGraph": "https://liberpict.com/ai/cases/meadowview-palladian-r1.dependency.json",
+      "vectorReference": "https://liberpict.com/ai/cases/meadowview-palladian-r1.svg",
+      "useWhen": "Only when the human task is the Meadowview/Palladian front-entry mockup."
+    }
+  ]
+}
