@@ -41,7 +41,11 @@
     "declare-lossy-abstraction-boundaries",
     "paper-before-render",
     "major-form-before-artifacts",
-    "task-validity-is-conjunctive"
+    "task-validity-is-conjunctive",
+    "explicit-basis-before-projection",
+    "isometry-is-a-special-case-of-axonometry",
+    "vector-markup-constrains-does-not-mutate",
+    "projected-coincidence-does-not-delete-object-features"
   ],
   "observer": {
     "status": "candidate-read-only-core-with-public-ai-counter-pairing-relay-and-isolated-workshop",
@@ -255,6 +259,13 @@
       "uri": "https://liberpict.com/ai/workflows/projection-render-gate.json",
       "humanLaunchRequired": true,
       "renderDefault": "blocked-until-paper-ready-and-human-launch"
+    },
+    "objectPaper": {
+      "schema": "https://liberpict.com/ai/schemas/object-paper-v1.schema.json",
+      "runtime": "https://liberpict.com/ai/runtime/object-paper-r1.js",
+      "example": "https://liberpict.com/ai/examples/four-candle-lantern.object-paper.json",
+      "readinessFunction": "LiberObjectPaper.evaluatePaperReady",
+      "renderBlockedUntilReady": true
     }
   }
 }
