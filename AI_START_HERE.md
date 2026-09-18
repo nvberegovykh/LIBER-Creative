@@ -152,6 +152,20 @@ If the coherence gate fails, continue working on paper. **Do not render to escap
 
 If the gate passes, stop and ask the human to launch the rendering stage. Rendering is downstream evidence; it does not become object authority.
 
+### Object-paper runtime
+
+For nontrivial projection problems, the paper stage is executable rather than purely verbal:
+
+- Schema: `docs/ai/schemas/object-paper-v1.schema.json`
+- Runtime: `docs/ai/runtime/object-paper-r1.js`
+- Teaching example: `docs/ai/examples/four-candle-lantern.object-paper.json`
+
+The runtime keeps one rigid object basis and moves the **observer/projection**, not the object's identity. It supports explicit parallel/orthographic and perspective projections, axonometric foreshortening classification, projected feature-coincidence groups, vector correction constraints, hard topology/count invariants, and a deterministic `evaluatePaperReady(...)` gate.
+
+**Axonometry is the broader family. Isometry is the special case where the three object axes have equal projected foreshortening.** Do not mentally compose uncertain sequential rotations and then bake them into object geometry.
+
+Human redlines or vector markup are evidence/constraints: `preserve`, `expected`, `forbid`, or `note`. They never directly mutate the 3D object. A front projection may legitimately collapse multiple physical features onto fewer visible axes; that is projection, not deletion.
+
 ## Production / source parity
 
 `docs/CNAME` binds the public docs tree to `liberpict.com`. The live REVEX UI is therefore intended to be served from this repository's `docs/` surface. Do not assume byte-for-byte parity from that fact alone: use the public manifest plus the parity verifier before a production mutation.

@@ -33,7 +33,10 @@
         "Assign correspondence identities to the same features across views and slices.",
         "Keep object state separate from observer state: camera, projection, crop, viewpoint and wording.",
         "Declare for every lossy abstraction: preserves, discards and safeFor.",
-        "Maintain an explicit unresolved list instead of guessing."
+        "Maintain an explicit unresolved list instead of guessing.",
+        "For nontrivial spatial objects, encode the paper state in the LIBER/AI object-paper schema and evaluate it with the public projection runtime.",
+        "Prefer explicit basis vectors/matrices over sequential imagined rotations; projection belongs to the observer, not the object.",
+        "Vector markup from a human is constraint/evidence intake. It may forbid, expect or preserve projected features but must not silently manufacture 3D geometry."
       ],
       "next": "P2_COHERENCE_GATE"
     },
@@ -45,7 +48,9 @@
         "Major form, orientation, depth, center/attachment and topology agree across the selected projections/slices.",
         "No projection requires rotating, deforming or simplifying the object to make the view fit.",
         "Every remaining uncertainty is non-gating for major form and placement.",
-        "The paper state is sufficient to explain expected occlusion and perspective without changing object identity."
+        "The paper state is sufficient to explain expected occlusion and perspective without changing object identity.",
+        "LiberObjectPaper.evaluatePaperReady(paper) returns paperReady=true.",
+        "Any required axonometric classification, feature-count, projected-coincidence and vector-correction invariants pass simultaneously."
       ],
       "failAction": "Return to P1_PAPER_OBJECT. Do not render.",
       "passAction": "Set paperReady=true and stop. Ask the human for explicit launch authorization before rendering."
@@ -96,5 +101,19 @@
     "humanAuthorizationRequired": true,
     "assistantPrompt": "Paper stage is ready enough. Launch the rendering stage?",
     "defaultWhenNotAuthorized": "stop-without-rendering"
+  },
+  "objectPaper": {
+    "schema": "https://liberpict.com/ai/schemas/object-paper-v1.schema.json",
+    "runtime": "https://liberpict.com/ai/runtime/object-paper-r1.js",
+    "example": "https://liberpict.com/ai/examples/four-candle-lantern.object-paper.json",
+    "rules": [
+      "Represent the object once in a right-handed orthonormal local basis; do not encode comprehension as a sequence of hidden Euler rotations.",
+      "Use explicit observation frames for orthographic, axonometric/parallel, section and perspective views.",
+      "Treat axonometry as the general equal/unequal foreshortening family; isometry is only the equal-foreshortening special case.",
+      "Store human markup as vector constraints over a named observation, not as direct 3D mutations.",
+      "Projection coincidence is allowed: several physical features may share one visible axis without ceasing to exist in the object.",
+      "A visible ghost is a projection/render error when it has no corresponding authoritative feature or violates a forbid constraint."
+    ],
+    "readinessEvaluator": "LiberObjectPaper.evaluatePaperReady(paper)"
   }
 }

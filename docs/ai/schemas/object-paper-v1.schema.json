@@ -1,0 +1,376 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://liberpict.com/ai/schemas/object-paper-v1.schema.json",
+  "title": "LIBER/AI Object Paper v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "object",
+    "observations",
+    "hardInvariants",
+    "unresolved"
+  ],
+  "properties": {
+    "schema": {
+      "const": "liber.ai.object-paper.v1"
+    },
+    "id": {
+      "type": "string"
+    },
+    "object": {
+      "type": "object",
+      "required": [
+        "id",
+        "frame",
+        "geometry"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "authorityRefs": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "frame": {
+          "type": "object",
+          "required": [
+            "origin",
+            "x",
+            "y",
+            "z"
+          ],
+          "properties": {
+            "origin": {
+              "$ref": "#/$defs/vec3"
+            },
+            "x": {
+              "$ref": "#/$defs/vec3"
+            },
+            "y": {
+              "$ref": "#/$defs/vec3"
+            },
+            "z": {
+              "$ref": "#/$defs/vec3"
+            }
+          }
+        },
+        "geometry": {
+          "type": "object",
+          "required": [
+            "vertices",
+            "segments"
+          ],
+          "properties": {
+            "vertices": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "p"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "p": {
+                    "$ref": "#/$defs/vec3"
+                  }
+                }
+              }
+            },
+            "segments": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "a",
+                  "b",
+                  "kind"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "a": {
+                    "type": "string"
+                  },
+                  "b": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string"
+                  },
+                  "authority": {
+                    "enum": [
+                      "source",
+                      "derived",
+                      "hypothesis"
+                    ]
+                  },
+                  "role": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "observations": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "type",
+              "origin",
+              "normal",
+              "u",
+              "v"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "const": "parallel"
+              },
+              "projection": {
+                "enum": [
+                  "orthographic",
+                  "oblique",
+                  "axonometric"
+                ]
+              },
+              "origin": {
+                "$ref": "#/$defs/vec3"
+              },
+              "normal": {
+                "$ref": "#/$defs/vec3"
+              },
+              "u": {
+                "$ref": "#/$defs/vec3"
+              },
+              "v": {
+                "$ref": "#/$defs/vec3"
+              },
+              "direction": {
+                "$ref": "#/$defs/vec3"
+              },
+              "viewport": {
+                "$ref": "#/$defs/viewport"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "type",
+              "camera",
+              "target"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "const": "perspective"
+              },
+              "camera": {
+                "$ref": "#/$defs/vec3"
+              },
+              "target": {
+                "$ref": "#/$defs/vec3"
+              },
+              "up": {
+                "$ref": "#/$defs/vec3"
+              },
+              "verticalFovDeg": {
+                "type": "number"
+              },
+              "aspect": {
+                "type": "number"
+              },
+              "viewport": {
+                "$ref": "#/$defs/viewport"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "vectorCorrections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "viewId",
+          "intent"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "viewId": {
+            "type": "string"
+          },
+          "intent": {
+            "enum": [
+              "forbid",
+              "expected",
+              "preserve",
+              "note"
+            ]
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "featureKind": {
+                "type": "string"
+              },
+              "featureKinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "featureIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "geometry": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "point",
+                  "line",
+                  "polyline"
+                ]
+              },
+              "points": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/vec2"
+                }
+              }
+            }
+          },
+          "tolerance2d": {
+            "type": "number"
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "hardInvariants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "type"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "unresolved": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "gating": {
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "vec2": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "vec3": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "viewport": {
+      "type": "object",
+      "properties": {
+        "scale": {
+          "oneOf": [
+            {
+              "type": "number"
+            },
+            {
+              "$ref": "#/$defs/vec2"
+            }
+          ]
+        },
+        "offset": {
+          "$ref": "#/$defs/vec2"
+        },
+        "yDown": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

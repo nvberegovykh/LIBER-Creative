@@ -1,0 +1,428 @@
+{
+  "schema": "liber.ai.object-paper.v1",
+  "id": "example.four-candle-lantern",
+  "object": {
+    "id": "fixture",
+    "name": "Four-candle rigid lantern teaching example",
+    "authorityRefs": [
+      {
+        "kind": "conceptual-example",
+        "note": "Topology only; not a commercial product model."
+      }
+    ],
+    "frame": {
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "x": [
+        1,
+        0,
+        0
+      ],
+      "y": [
+        0,
+        1,
+        0
+      ],
+      "z": [
+        0,
+        0,
+        1
+      ]
+    },
+    "geometry": {
+      "vertices": [
+        {
+          "id": "c1a",
+          "p": [
+            -0.5,
+            -0.5,
+            1
+          ]
+        },
+        {
+          "id": "c1b",
+          "p": [
+            -0.5,
+            -0.5,
+            3
+          ]
+        },
+        {
+          "id": "c2a",
+          "p": [
+            0.5,
+            -0.5,
+            1
+          ]
+        },
+        {
+          "id": "c2b",
+          "p": [
+            0.5,
+            -0.5,
+            3
+          ]
+        },
+        {
+          "id": "c3a",
+          "p": [
+            -0.5,
+            0.5,
+            1
+          ]
+        },
+        {
+          "id": "c3b",
+          "p": [
+            -0.5,
+            0.5,
+            3
+          ]
+        },
+        {
+          "id": "c4a",
+          "p": [
+            0.5,
+            0.5,
+            1
+          ]
+        },
+        {
+          "id": "c4b",
+          "p": [
+            0.5,
+            0.5,
+            3
+          ]
+        },
+        {
+          "id": "h0",
+          "p": [
+            0,
+            0,
+            4
+          ]
+        },
+        {
+          "id": "h1",
+          "p": [
+            0,
+            0,
+            5.5
+          ]
+        },
+        {
+          "id": "f000",
+          "p": [
+            -1,
+            -1,
+            0
+          ]
+        },
+        {
+          "id": "f100",
+          "p": [
+            1,
+            -1,
+            0
+          ]
+        },
+        {
+          "id": "f110",
+          "p": [
+            1,
+            1,
+            0
+          ]
+        },
+        {
+          "id": "f010",
+          "p": [
+            -1,
+            1,
+            0
+          ]
+        },
+        {
+          "id": "f001",
+          "p": [
+            -1,
+            -1,
+            4
+          ]
+        },
+        {
+          "id": "f101",
+          "p": [
+            1,
+            -1,
+            4
+          ]
+        },
+        {
+          "id": "f111",
+          "p": [
+            1,
+            1,
+            4
+          ]
+        },
+        {
+          "id": "f011",
+          "p": [
+            -1,
+            1,
+            4
+          ]
+        }
+      ],
+      "segments": [
+        {
+          "id": "candle.fl",
+          "a": "c1a",
+          "b": "c1b",
+          "kind": "candle",
+          "authority": "source"
+        },
+        {
+          "id": "candle.fr",
+          "a": "c2a",
+          "b": "c2b",
+          "kind": "candle",
+          "authority": "source"
+        },
+        {
+          "id": "candle.rl",
+          "a": "c3a",
+          "b": "c3b",
+          "kind": "candle",
+          "authority": "source"
+        },
+        {
+          "id": "candle.rr",
+          "a": "c4a",
+          "b": "c4b",
+          "kind": "candle",
+          "authority": "source"
+        },
+        {
+          "id": "hanger",
+          "a": "h0",
+          "b": "h1",
+          "kind": "hanger",
+          "authority": "source"
+        },
+        {
+          "id": "frame.b0",
+          "a": "f000",
+          "b": "f100",
+          "kind": "frame",
+          "authority": "source"
+        },
+        {
+          "id": "frame.b1",
+          "a": "f100",
+          "b": "f110",
+          "kind": "frame",
+          "authority": "source"
+        },
+        {
+          "id": "frame.b2",
+          "a": "f110",
+          "b": "f010",
+          "kind": "frame",
+          "authority": "source"
+        },
+        {
+          "id": "frame.b3",
+          "a": "f010",
+          "b": "f000",
+          "kind": "frame",
+          "authority": "source"
+        },
+        {
+          "id": "frame.t0",
+          "a": "f001",
+          "b": "f101",
+          "kind": "frame",
+          "authority": "source"
+        },
+        {
+          "id": "frame.t1",
+          "a": "f101",
+          "b": "f111",
+          "kind": "frame",
+          "authority": "source"
+        },
+        {
+          "id": "frame.t2",
+          "a": "f111",
+          "b": "f011",
+          "kind": "frame",
+          "authority": "source"
+        },
+        {
+          "id": "frame.t3",
+          "a": "f011",
+          "b": "f001",
+          "kind": "frame",
+          "authority": "source"
+        },
+        {
+          "id": "frame.v0",
+          "a": "f000",
+          "b": "f001",
+          "kind": "frame",
+          "authority": "source"
+        },
+        {
+          "id": "frame.v1",
+          "a": "f100",
+          "b": "f101",
+          "kind": "frame",
+          "authority": "source"
+        },
+        {
+          "id": "frame.v2",
+          "a": "f110",
+          "b": "f111",
+          "kind": "frame",
+          "authority": "source"
+        },
+        {
+          "id": "frame.v3",
+          "a": "f010",
+          "b": "f011",
+          "kind": "frame",
+          "authority": "source"
+        }
+      ]
+    }
+  },
+  "observations": [
+    {
+      "id": "front",
+      "type": "parallel",
+      "projection": "orthographic",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "normal": [
+        0,
+        1,
+        0
+      ],
+      "u": [
+        1,
+        0,
+        0
+      ],
+      "v": [
+        0,
+        0,
+        1
+      ],
+      "direction": [
+        0,
+        -1,
+        0
+      ]
+    },
+    {
+      "id": "iso",
+      "type": "parallel",
+      "projection": "axonometric",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "normal": [
+        0.5773502692,
+        0.5773502692,
+        0.5773502692
+      ],
+      "u": [
+        0.7071067812,
+        -0.7071067812,
+        0
+      ],
+      "v": [
+        0.4082482905,
+        0.4082482905,
+        -0.8164965809
+      ],
+      "direction": [
+        -0.5773502692,
+        -0.5773502692,
+        -0.5773502692
+      ]
+    }
+  ],
+  "vectorCorrections": [
+    {
+      "id": "no-central-ghost-candle",
+      "viewId": "front",
+      "intent": "forbid",
+      "scope": {
+        "featureKinds": [
+          "candle"
+        ]
+      },
+      "geometry": {
+        "type": "line",
+        "points": [
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            3
+          ]
+        ]
+      },
+      "tolerance2d": 0.1,
+      "note": "A central candle line would be a projection ghost; the four physical candles are at x=±0.5."
+    }
+  ],
+  "hardInvariants": [
+    {
+      "id": "frame-rigid",
+      "type": "frame-orthonormal"
+    },
+    {
+      "id": "four-candles",
+      "type": "feature-count",
+      "kind": "candle",
+      "expected": 4
+    },
+    {
+      "id": "one-hanger",
+      "type": "feature-count",
+      "kind": "hanger",
+      "expected": 1
+    },
+    {
+      "id": "front-candles-collapse-to-two-visible-axes",
+      "type": "projection-coincidence-groups",
+      "viewId": "front",
+      "kind": "candle",
+      "expectedGroups": 2,
+      "tolerance2d": 0.000001
+    },
+    {
+      "id": "isometry-is-axonometry-special-case",
+      "type": "axonometry-class",
+      "viewId": "iso",
+      "expected": "isometric",
+      "tolerance": 0.00001
+    }
+  ],
+  "unresolved": []
+}
