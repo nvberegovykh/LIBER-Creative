@@ -111,5 +111,16 @@
       "Projected coincidence does not delete physical features.",
       "Human vector markup constrains projections and never directly manufactures 3D geometry."
     ]
-  }
+  },
+  "currentPublicHandoffs": [
+    {
+      "id": "meadowview.palladian.front-entry.20260918",
+      "scope": "Only use when the human task is the Meadowview/Palladian front-entry mockup.",
+      "handoff": "https://liberpict.com/ai/cases/meadowview-palladian-r1.json",
+      "dependencyGraph": "https://liberpict.com/ai/cases/meadowview-palladian-r1.dependency.json",
+      "vectorReference": "https://liberpict.com/ai/cases/meadowview-palladian-r1.svg",
+      "userAssessedBaselineAccuracyApprox": 0.94,
+      "renderPolicy": "Resolve paper/dependency hard gates first; require explicit human launch."
+    }
+  ]
 }
