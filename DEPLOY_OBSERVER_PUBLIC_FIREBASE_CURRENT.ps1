@@ -8,6 +8,7 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Docs = Join-Path $Root 'docs'
+$PublicManifestPath = Join-Path $Docs 'ai\public-manifest.json'
 $Api = 'https://firebasehosting.googleapis.com/v1beta1'
 $Timestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
 $EvidenceDir = Join-Path $Root ("evidence\OBSERVER_PUBLIC_FIREBASE_$Timestamp")
@@ -102,7 +103,13 @@ function Test-CounterUrl([string]$BaseUrl) {
   if ($d.StatusCode -ne 200 -or $d.Content -notmatch 'observer') { throw "Discovery gate failed: $discovery" }
   $g = Invoke-WebRequest -UseBasicParsing -Uri $guide -MaximumRedirection 5 -TimeoutSec 30
   if ($g.StatusCode -ne 200 -or $g.Content -notmatch 'Observer') { throw "Guide gate failed: $guide" }
-  Say "Gate PASS: $counter"
+  $handoff = Invoke-WebRequest -UseBasicParsing -Uri "$base/ai/cases/meadowview-palladian-r1.json?gate=$Timestamp" -MaximumRedirection 5 -TimeoutSec 30
+  if ($handoff.StatusCode -ne 200 -or $handoff.Content -notmatch 'meadowview.palladian.front-entry.20260918') { throw "Scoped handoff gate failed." }
+  $dependency = Invoke-WebRequest -UseBasicParsing -Uri "$base/ai/runtime/dependency-graph-r1.js?gate=$Timestamp" -MaximumRedirection 5 -TimeoutSec 30
+  if ($dependency.StatusCode -ne 200 -or $dependency.Content -notmatch '20260918r1-dependency-graph') { throw "Dependency runtime gate failed." }
+  $vector = Invoke-WebRequest -UseBasicParsing -Uri "$base/ai/cases/meadowview-palladian-r1.svg?gate=$Timestamp" -MaximumRedirection 5 -TimeoutSec 30
+  if ($vector.StatusCode -ne 200 -or $vector.Content -notmatch 'forbidden ghost') { throw "Vector reference gate failed." }
+  Say "Gate PASS: $counter + scoped object-paper/dependency assets"
 }
 
 $GCloud = Require-Command @('gcloud.cmd','gcloud.exe','gcloud')
@@ -151,20 +158,32 @@ $baseline = [ordered]@{
 $baseline | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $EvidenceDir 'baseline.json') -Encoding UTF8
 Say "Rollback anchor: $SourceVersion files=$($SourceVersionObject.fileCount) bytes=$($SourceVersionObject.versionBytes)"
 
-# Only these public Observer files are patched. Everything else is inherited from the live version.
-$Patch = [ordered]@{
-  '/observer-ai.html' = (Join-Path $Docs 'observer-ai.html')
-  '/observer-ai-20260917.html' = (Join-Path $Docs 'observer-ai-20260917.html')
-  '/ai.html' = (Join-Path $Docs 'ai.html')
-  '/ai/index.html' = (Join-Path $Docs 'ai\index.html')
-  '/ai/guide.json' = (Join-Path $Docs 'ai\guide.json')
-  '/liber-ai.json' = (Join-Path $Docs 'liber-ai.json')
-  '/observer-ai-guide.json' = (Join-Path $Docs 'observer-ai-guide.json')
-  '/.well-known/liber-ai.json' = (Join-Path $Docs '.well-known\liber-ai.json')
+# Public AI files come from one checked-in manifest. Everything else is inherited
+# from the current live version by the Firebase Hosting clone.
+if (-not (Test-Path -LiteralPath $PublicManifestPath -PathType Leaf)) { throw "Public AI manifest missing: $PublicManifestPath" }
+$PublicManifest = Get-Content -LiteralPath $PublicManifestPath -Raw | ConvertFrom-Json
+if ([string]$PublicManifest.schema -ne 'liber.ai.public-manifest.v1') { throw "Unexpected public AI manifest schema: $($PublicManifest.schema)" }
+$Assets = @($PublicManifest.assets)
+if ($Assets.Count -lt 1) { throw 'Public AI manifest contains no assets.' }
+
+$Patch = [ordered]@{}
+foreach ($asset in $Assets) {
+  $publicPath = ([string]$asset.publicPath).Trim()
+  $sourceRelative = ([string]$asset.source).Trim()
+  if (-not $publicPath.StartsWith('/')) { throw "Public path must start with /: $publicPath" }
+  if (-not $sourceRelative.StartsWith('docs/')) { throw "Public source must stay inside docs/: $sourceRelative" }
+  $sourcePath = Join-Path $Root ($sourceRelative -replace '/', [IO.Path]::DirectorySeparatorChar)
+  $fullRoot = [IO.Path]::GetFullPath($Root).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+  $fullSource = [IO.Path]::GetFullPath($sourcePath)
+  if (-not $fullSource.StartsWith($fullRoot,[System.StringComparison]::OrdinalIgnoreCase)) { throw "Public source escaped repository root: $sourceRelative" }
+  if (-not (Test-Path -LiteralPath $fullSource -PathType Leaf)) { throw "Patch source missing: $sourceRelative" }
+  if ($Patch.Contains($publicPath)) { throw "Duplicate public path in manifest: $publicPath" }
+  $Patch[$publicPath] = $fullSource
 }
-foreach ($kv in $Patch.GetEnumerator()) {
-  if (-not (Test-Path -LiteralPath $kv.Value -PathType Leaf)) { throw "Patch source missing: $($kv.Value)" }
+if (-not $Patch.Contains('/ai/index.html') -or -not $Patch.Contains('/ai/guide.json') -or -not $Patch.Contains('/ai/cases/meadowview-palladian-r1.json')) {
+  throw 'Public AI manifest is missing required counter/guide/handoff assets.'
 }
+Say "Public AI manifest loaded: $($Patch.Count) surgical overlay assets."
 $manifest = [ordered]@{}
 $payloadByHash = @{}
 foreach ($kv in $Patch.GetEnumerator()) {
