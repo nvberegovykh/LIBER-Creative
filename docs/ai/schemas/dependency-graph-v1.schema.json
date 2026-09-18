@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://liberpict.com/ai/schemas/dependency-graph-v1.schema.json",
+  "title": "LIBER/AI Dependency Graph v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "nodes"
+  ],
+  "properties": {
+    "schema": {
+      "const": "liber.ai.dependency-graph.v1"
+    },
+    "id": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "enum": [
+              "input",
+              "formula",
+              "invariant",
+              "output"
+            ]
+          },
+          "deps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "value": {},
+          "expr": {},
+          "severity": {
+            "enum": [
+              "hard",
+              "soft"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

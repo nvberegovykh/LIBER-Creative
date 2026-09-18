@@ -1,0 +1,28 @@
+name: LIBER AI Dependency Graph r1
+
+on:
+  pull_request:
+    paths:
+      - 'docs/ai/**'
+      - 'docs/.well-known/liber-ai.json'
+      - 'docs/liber-ai.json'
+      - 'AI_START_HERE.md'
+      - '.github/scripts/verify-liber-ai-dependency-graph-r1.js'
+      - '.github/workflows/liber-ai-dependency-graph-r1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-graph:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check dependency graph runtime
+        run: node --check docs/ai/runtime/dependency-graph-r1.js
+      - name: Verify formula graph and Meadowview gates
+        run: node .github/scripts/verify-liber-ai-dependency-graph-r1.js
