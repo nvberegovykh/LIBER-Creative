@@ -78,6 +78,12 @@
       "example": "https://liberpict.com/ai/examples/four-candle-lantern.object-paper.json",
       "readinessFunction": "LiberObjectPaper.evaluatePaperReady",
       "renderBlockedUntilReady": true
+    },
+    "dependencyGraph": {
+      "schema": "https://liberpict.com/ai/schemas/dependency-graph-v1.schema.json",
+      "runtime": "https://liberpict.com/ai/runtime/dependency-graph-r1.js",
+      "purpose": "Deterministic formula DAG, propagation, cycle detection and render-eligibility tracing."
     }
-  }
+  },
+  "currentPublicHandoffsIndex": "https://liberpict.com/ai/cases/index.json"
 }
