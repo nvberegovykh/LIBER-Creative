@@ -11,7 +11,7 @@
     "publicIssueEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/issueRevexObserverAnonymousClaim",
     "claimEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/claimRevexObserverAgentSession",
     "mcpEndpoint": "https://us-central1-liber-apps-cca20.cloudfunctions.net/revexObserverMcp",
-    "instruction": "Read machineGuide. The public counter requires no LIBER account and exposes no project data. Claim one one-time AI session key, call observer_bootstrap, then pair a private project only with a one-time Pair AI code issued inside an authorized REVEX project session."
+    "instruction": "Check https://liberpict.com/ai/continue.json first. For a matching public handoff, continue in the current chat from public assets; Work mode, Observer claim and Pair AI are not prerequisites. Use the Observer claim/pairing flow only when private REVEX project data is actually required."
   },
   "observer": {
     "agentAccess": {
@@ -85,5 +85,14 @@
       "purpose": "Deterministic formula DAG, propagation, cycle detection and render-eligibility tracing."
     }
   },
-  "currentPublicHandoffsIndex": "https://liberpict.com/ai/cases/index.json"
+  "currentPublicHandoffsIndex": "https://liberpict.com/ai/cases/index.json",
+  "publicContinuation": {
+    "entrypoint": "https://liberpict.com/ai/continue.json",
+    "precedence": "before-observer-for-matching-public-task",
+    "requiresWorkMode": false,
+    "requiresObserverLease": false,
+    "requiresPairAI": false,
+    "declinedWorkHandoffIsBlocker": false,
+    "instruction": "If the human task matches a current public handoff, continue in the current chat from public assets. Use Observer/Pair AI only if private REVEX project data is actually required."
+  }
 }

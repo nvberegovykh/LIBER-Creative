@@ -7,14 +7,12 @@
   "claim": "https://us-central1-liber-apps-cca20.cloudfunctions.net/claimRevexObserverAgentSession",
   "mcp": "https://us-central1-liber-apps-cca20.cloudfunctions.net/revexObserverMcp",
   "flow": [
-    "Open the public AI Counter. No LIBER account is required and no project data is exposed.",
-    "Take one full package for exactly one AI session.",
-    "The AI exchanges the claim key exactly once, keeps the returned bearer private, and calls observer_bootstrap.",
-    "For a private REVEX project, an authorized collaborator opens that project and presses Pair AI.",
-    "The collaborator sends the one-time pairing code to the AI; the AI calls observer_pair.",
-    "After pairing, call observer_bootstrap again and use only observer.read, observer.preview, and observer.focus scopes.",
-    "Keep the authorized REVEX project open while live Observer calls are being serviced.",
-    "Call observer_release when finished."
+    "First check https://liberpict.com/ai/continue.json and currentPublicHandoffs.",
+    "If the current human task matches a public handoff, continue directly in the current chat from the public handoff/dependency/vector assets. No Work mode, claim key, Observer lease, Pair AI code, or authenticated REVEX browser is required.",
+    "If a Work handoff is declined or unavailable, continue the public task anyway; that is not a blocker.",
+    "Only if private REVEX project data is actually needed, use the Observer counter: take one one-time AI session key, claim it once, and call observer_bootstrap.",
+    "For private project attachment, an authorized REVEX collaborator opens that project, presses Pair AI, and sends the one-time pairing code to the AI.",
+    "Use only the scopes returned by bootstrap and call observer_release when finished."
   ],
   "publicCounter": {
     "accountRequired": false,
@@ -120,7 +118,25 @@
       "dependencyGraph": "https://liberpict.com/ai/cases/meadowview-palladian-r1.dependency.json",
       "vectorReference": "https://liberpict.com/ai/cases/meadowview-palladian-r1.svg",
       "userAssessedBaselineAccuracyApprox": 0.94,
-      "renderPolicy": "Resolve paper/dependency hard gates first; require explicit human launch."
+      "renderPolicy": "Resolve paper/dependency hard gates first; require explicit human launch.",
+      "continuation": "https://liberpict.com/ai/continue.json",
+      "requiresWorkMode": false,
+      "requiresPairAI": false
     }
-  ]
+  ],
+  "routing": {
+    "order": [
+      "public-continuation",
+      "observer-private-project"
+    ],
+    "publicContinuation": {
+      "entrypoint": "https://liberpict.com/ai/continue.json",
+      "rule": "If the human task matches a current public handoff, continue in the current chat from public assets. Work mode, Observer lease, claim key and Pair AI are not prerequisites.",
+      "workHandoffDeclined": "Continue normally; do not treat the declined Work handoff as a task blocker.",
+      "observerEscalation": "Use Observer/Pair AI only when private REVEX project data is actually needed."
+    },
+    "observerPrivateProject": {
+      "rule": "Use the Observer claim/pairing flow only for private project state or live authorized REVEX access."
+    }
+  }
 }

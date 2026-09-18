@@ -103,13 +103,15 @@ function Test-CounterUrl([string]$BaseUrl) {
   if ($d.StatusCode -ne 200 -or $d.Content -notmatch 'observer') { throw "Discovery gate failed: $discovery" }
   $g = Invoke-WebRequest -UseBasicParsing -Uri $guide -MaximumRedirection 5 -TimeoutSec 30
   if ($g.StatusCode -ne 200 -or $g.Content -notmatch 'Observer') { throw "Guide gate failed: $guide" }
+  $continuation = Invoke-WebRequest -UseBasicParsing -Uri "$base/ai/continue.json?gate=$Timestamp" -MaximumRedirection 5 -TimeoutSec 30
+  if ($continuation.StatusCode -ne 200 -or $continuation.Content -notmatch '"workMode"\s*:\s*false' -or $continuation.Content -notmatch '"pairAI"\s*:\s*false' -or $continuation.Content -notmatch 'declined or unavailable Work handoff') { throw "Public continuation routing gate failed." }
   $handoff = Invoke-WebRequest -UseBasicParsing -Uri "$base/ai/cases/meadowview-palladian-r1.json?gate=$Timestamp" -MaximumRedirection 5 -TimeoutSec 30
-  if ($handoff.StatusCode -ne 200 -or $handoff.Content -notmatch 'meadowview.palladian.front-entry.20260918') { throw "Scoped handoff gate failed." }
+  if ($handoff.StatusCode -ne 200 -or $handoff.Content -notmatch 'meadowview.palladian.front-entry.20260918' -or $handoff.Content -notmatch '"requiresWorkMode"\s*:\s*false') { throw "Scoped handoff gate failed." }
   $dependency = Invoke-WebRequest -UseBasicParsing -Uri "$base/ai/runtime/dependency-graph-r1.js?gate=$Timestamp" -MaximumRedirection 5 -TimeoutSec 30
   if ($dependency.StatusCode -ne 200 -or $dependency.Content -notmatch '20260918r1-dependency-graph') { throw "Dependency runtime gate failed." }
   $vector = Invoke-WebRequest -UseBasicParsing -Uri "$base/ai/cases/meadowview-palladian-r1.svg?gate=$Timestamp" -MaximumRedirection 5 -TimeoutSec 30
   if ($vector.StatusCode -ne 200 -or $vector.Content -notmatch 'forbidden ghost') { throw "Vector reference gate failed." }
-  Say "Gate PASS: $counter + scoped object-paper/dependency assets"
+  Say "Gate PASS: $counter + public-continuation + scoped object-paper/dependency assets"
 }
 
 $GCloud = Require-Command @('gcloud.cmd','gcloud.exe','gcloud')

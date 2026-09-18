@@ -9,7 +9,11 @@
       "handoff": "https://liberpict.com/ai/cases/meadowview-palladian-r1.json",
       "dependencyGraph": "https://liberpict.com/ai/cases/meadowview-palladian-r1.dependency.json",
       "vectorReference": "https://liberpict.com/ai/cases/meadowview-palladian-r1.svg",
-      "useWhen": "Only when the human task is the Meadowview/Palladian front-entry mockup."
+      "useWhen": "Only when the human task is the Meadowview/Palladian front-entry mockup.",
+      "continuation": "https://liberpict.com/ai/continue.json",
+      "requiresWorkMode": false,
+      "requiresPairAI": false
     }
-  ]
+  ],
+  "publicContinuation": "https://liberpict.com/ai/continue.json"
 }

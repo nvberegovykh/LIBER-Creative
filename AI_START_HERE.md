@@ -4,7 +4,17 @@ This repository is the public source landing for AI systems working with LIBER a
 
 Machine-readable discovery: `docs/.well-known/liber-ai.json` (served as `https://liberpict.com/.well-known/liber-ai.json` when this branch reaches the live `docs/` site).
 
-## AI counter — start here for a new AI session
+## Route before authenticating
+
+First decide whether the task already has a **public continuation**.
+
+1. Fetch `https://liberpict.com/ai/continue.json`.
+2. If the human's task matches the current public handoff, continue in the **current chat/session** from the public handoff, dependency graph and vector/object-paper assets.
+3. For that public route, **Work mode, an Observer lease, a claim key, Pair AI and an authenticated REVEX browser are not prerequisites**.
+4. If a Work handoff is declined or unavailable, continue the public task normally. Do not convert that product/UI event into a task blocker.
+5. Escalate to the Observer counter and Pair AI only when the task genuinely requires private REVEX project data that the public handoff does not contain.
+
+## AI counter — private project / Observer route
 
 For an external AI session, do **not** search the repository for credentials or invent a second integration path.
 

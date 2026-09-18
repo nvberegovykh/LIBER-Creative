@@ -58,5 +58,17 @@
     "dependencyRuntime": "https://liberpict.com/ai/runtime/dependency-graph-r1.js",
     "dependencyGraph": "https://liberpict.com/ai/cases/meadowview-palladian-r1.dependency.json"
   },
-  "next": "Resolve formulas/vector constraints first. Rendering remains downstream and should not run until the dependency graph hard gates pass and the human explicitly launches it."
+  "next": "Continue in the current chat from the public handoff and dependency/vector assets. Work/Observer/Pair AI are not prerequisites. Resolve hard gates first; render only after explicit human launch.",
+  "access": {
+    "mode": "public-continuation",
+    "continuation": "https://liberpict.com/ai/continue.json",
+    "requiresWorkMode": false,
+    "requiresObserverLease": false,
+    "requiresClaimKey": false,
+    "requiresPairAI": false,
+    "requiresAuthenticatedRevexBrowser": false,
+    "privateProjectDataRequired": false,
+    "ifWorkHandoffDeclined": "Continue in the current chat from the public handoff; do not stop.",
+    "observerEscalation": "Only if later work requires private REVEX project data that is not present in this public handoff."
+  }
 }

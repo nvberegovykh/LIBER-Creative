@@ -23,6 +23,10 @@
       "source": "docs/ai/guide.json"
     },
     {
+      "publicPath": "/ai/continue.json",
+      "source": "docs/ai/continue.json"
+    },
+    {
       "publicPath": "/ai/public-manifest.json",
       "source": "docs/ai/public-manifest.json"
     },
