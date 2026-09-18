@@ -1,0 +1,33 @@
+{
+  "schema": "liber.ai.public-continuation.v1",
+  "mode": "public-task",
+  "currentTask": {
+    "id": "meadowview.palladian.front-entry.20260918",
+    "title": "289 Meadowview — Palladian front-entry last-mile handoff",
+    "handoff": "https://liberpict.com/ai/cases/meadowview-palladian-r1.json",
+    "dependencyGraph": "https://liberpict.com/ai/cases/meadowview-palladian-r1.dependency.json",
+    "vectorReference": "https://liberpict.com/ai/cases/meadowview-palladian-r1.svg",
+    "userAssessedBaselineAccuracyApprox": 0.94
+  },
+  "prerequisites": {
+    "workMode": false,
+    "observerLease": false,
+    "claimKey": false,
+    "pairAI": false,
+    "authenticatedRevexBrowser": false,
+    "privateProjectData": false
+  },
+  "routing": [
+    "Continue in the current chat/session using the public handoff, dependency graph, vector reference, object-paper runtime and public guide.",
+    "A declined or unavailable Work handoff is not a blocker for this public task.",
+    "Do not request Pair AI or an Observer claim merely to continue this public task.",
+    "Escalate to Observer/Pair AI only if the task actually requires private REVEX project data not present in the public handoff.",
+    "Resolve paper/vector/dependency gates before rendering; rendering still requires explicit human launch."
+  ],
+  "stopConditions": [
+    "A required input is genuinely absent from the public handoff and cannot be inferred safely.",
+    "The human explicitly requests private project state.",
+    "A hard dependency/invariant remains unresolved."
+  ],
+  "next": "Fetch the three currentTask public assets and continue the task in the current chat. Do not stop because Work or Pair AI is unavailable."
+}
