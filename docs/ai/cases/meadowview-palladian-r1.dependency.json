@@ -1,0 +1,204 @@
+{
+  "schema": "liber.ai.dependency-graph.v1",
+  "id": "meadowview.palladian.front-entry.r1",
+  "description": "Last-mile dependency graph for the 94%-accepted Meadowview/Palladian baseline. Rendering is downstream only.",
+  "nodes": [
+    {
+      "id": "surroundingsFrozen",
+      "kind": "input",
+      "value": true
+    },
+    {
+      "id": "physicalCandleCount",
+      "kind": "input",
+      "value": 4
+    },
+    {
+      "id": "frontVisibleCandleAxes",
+      "kind": "input",
+      "value": 2
+    },
+    {
+      "id": "centralGhostCandlePresent",
+      "kind": "input",
+      "value": false
+    },
+    {
+      "id": "hangerTopology",
+      "kind": "input",
+      "value": "single-straight-central-rod"
+    },
+    {
+      "id": "outerCageYawDeg",
+      "kind": "input",
+      "value": 0
+    },
+    {
+      "id": "paperReady",
+      "kind": "input",
+      "value": true
+    },
+    {
+      "id": "humanLaunch",
+      "kind": "input",
+      "value": false
+    },
+    {
+      "id": "inv.surroundings",
+      "kind": "invariant",
+      "severity": "hard",
+      "expr": {
+        "op": "eq",
+        "args": [
+          {
+            "ref": "surroundingsFrozen"
+          },
+          true
+        ]
+      },
+      "message": "Surroundings must remain frozen."
+    },
+    {
+      "id": "inv.candleTopology",
+      "kind": "invariant",
+      "severity": "hard",
+      "expr": {
+        "op": "eq",
+        "args": [
+          {
+            "ref": "physicalCandleCount"
+          },
+          4
+        ]
+      },
+      "message": "Palladian state must preserve four physical candles."
+    },
+    {
+      "id": "inv.frontProjection",
+      "kind": "invariant",
+      "severity": "hard",
+      "expr": {
+        "op": "eq",
+        "args": [
+          {
+            "ref": "frontVisibleCandleAxes"
+          },
+          2
+        ]
+      },
+      "message": "Frontal projection should read as two dominant candle axes from front/rear coincidence."
+    },
+    {
+      "id": "inv.noGhost",
+      "kind": "invariant",
+      "severity": "hard",
+      "expr": {
+        "op": "not",
+        "args": [
+          {
+            "ref": "centralGhostCandlePresent"
+          }
+        ]
+      },
+      "message": "No unsupported central ghost candle."
+    },
+    {
+      "id": "inv.hanger",
+      "kind": "invariant",
+      "severity": "hard",
+      "expr": {
+        "op": "eq",
+        "args": [
+          {
+            "ref": "hangerTopology"
+          },
+          "single-straight-central-rod"
+        ]
+      },
+      "message": "Hanger must remain a single straight central rod."
+    },
+    {
+      "id": "inv.cageFacing",
+      "kind": "invariant",
+      "severity": "hard",
+      "expr": {
+        "op": "approxEq",
+        "args": [
+          {
+            "ref": "outerCageYawDeg"
+          },
+          0,
+          0.5
+        ]
+      },
+      "message": "Outer cage must face the facade; do not rotate it to fit one projection."
+    },
+    {
+      "id": "inv.paperReady",
+      "kind": "invariant",
+      "severity": "hard",
+      "expr": {
+        "op": "eq",
+        "args": [
+          {
+            "ref": "paperReady"
+          },
+          true
+        ]
+      },
+      "message": "Paper/object gate must pass before rendering."
+    },
+    {
+      "id": "formula.objectCoherent",
+      "kind": "formula",
+      "expr": {
+        "op": "and",
+        "args": [
+          {
+            "ref": "inv.candleTopology"
+          },
+          {
+            "ref": "inv.frontProjection"
+          },
+          {
+            "ref": "inv.noGhost"
+          },
+          {
+            "ref": "inv.hanger"
+          },
+          {
+            "ref": "inv.cageFacing"
+          }
+        ]
+      }
+    },
+    {
+      "id": "formula.renderEligible",
+      "kind": "formula",
+      "expr": {
+        "op": "and",
+        "args": [
+          {
+            "ref": "inv.surroundings"
+          },
+          {
+            "ref": "formula.objectCoherent"
+          },
+          {
+            "ref": "inv.paperReady"
+          },
+          {
+            "ref": "humanLaunch"
+          }
+        ]
+      }
+    },
+    {
+      "id": "renderAllowed",
+      "kind": "output",
+      "expr": {
+        "ref": "formula.renderEligible"
+      }
+    }
+  ]
+}
