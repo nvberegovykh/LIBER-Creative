@@ -3,12 +3,30 @@ const assert=require('assert');
 const graphRuntime=require('../../docs/ai/runtime/dependency-graph-r1.js');
 const graph=require('../../docs/ai/cases/meadowview-palladian-r1.dependency.json');
 const handoff=require('../../docs/ai/cases/meadowview-palladian-r1.json');
+const caseIndex=require('../../docs/ai/cases/index.json');
+const guide=require('../../docs/ai/guide.json');
+const discovery=require('../../docs/.well-known/liber-ai.json');
+const fs=require('fs');
+const aiPage=fs.readFileSync('docs/ai/index.html','utf8');
 
 assert.equal(graphRuntime.version,'20260918r1-dependency-graph');
 assert.equal(handoff.userAssessment.acceptedBaselineAccuracyApprox,0.94);
 assert.equal(handoff.objectState.candles.physicalCount,4);
 assert.equal(handoff.objectState.candles.frontProjectionExpectedDominantAxes,2);
 assert.equal(handoff.objectState.hanger.topology,'single-straight-central-rod');
+assert.equal(caseIndex.current[0].id,handoff.id);
+assert.equal(caseIndex.current[0].handoff,'https://liberpict.com/ai/cases/meadowview-palladian-r1.json');
+assert.equal(guide.currentPublicHandoffs[0].id,handoff.id);
+assert.equal(discovery.currentPublicHandoffsIndex,'https://liberpict.com/ai/cases/index.json');
+assert.equal(discovery.workflows.dependencyGraph.runtime,'https://liberpict.com/ai/runtime/dependency-graph-r1.js');
+for(const needle of [
+  'Current public task handoff',
+  'USER-ASSESSED BASELINE ≈ 94%',
+  '/ai/cases/meadowview-palladian-r1.svg',
+  '/ai/cases/meadowview-palladian-r1.json',
+  '/ai/cases/meadowview-palladian-r1.dependency.json',
+  'copy-handoff'
+]) assert(aiPage.includes(needle),'AI page missing '+needle);
 
 const order=graphRuntime.topologicalOrder(graph);
 assert(order.indexOf('physicalCandleCount')<order.indexOf('inv.candleTopology'));
