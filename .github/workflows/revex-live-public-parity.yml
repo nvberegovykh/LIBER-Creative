@@ -6,6 +6,17 @@ on:
     paths:
       - 'AI_START_HERE.md'
       - 'docs/.well-known/liber-ai.json'
+      - 'docs/liber-ai.json'
+      - 'docs/ai/**'
+      - 'docs/liber-apps/apps/revex/**'
+      - '.github/scripts/verify-revex-live-public-parity.py'
+      - '.github/workflows/revex-live-public-parity.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'docs/.well-known/liber-ai.json'
+      - 'docs/liber-ai.json'
+      - 'docs/ai/**'
       - 'docs/liber-apps/apps/revex/**'
       - '.github/scripts/verify-revex-live-public-parity.py'
       - '.github/workflows/revex-live-public-parity.yml'
@@ -22,5 +33,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Compare public REVEX owners with liberpict.com
-        run: python .github/scripts/verify-revex-live-public-parity.py
+      - name: Validate public source inventory
+        if: github.event_name == 'pull_request'
+        run: python .github/scripts/verify-revex-live-public-parity.py --source-only
+      - name: Wait for liberpict.com to converge to main
+        if: github.event_name != 'pull_request'
+        run: python .github/scripts/verify-revex-live-public-parity.py --wait-seconds 300 --interval-seconds 10
