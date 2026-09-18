@@ -46,10 +46,13 @@ mustNot(bridge,'accessToken','AI bearer must never enter browser relay');
 mustNot(bridge,'claimKey','public claim must never enter browser relay');
 must(ui,"observer-agent-bridge-r151.js?v=20260917r151-agent-gate1",'runtime must load Observer relay');
 
-must(counter,'No LIBER account is required here','counter must explicitly be accountless');
-must(counter,'issueRevexObserverAnonymousClaim','counter must use public issue endpoint');
-must(counter,'Take one AI session package','public package action missing');
-must(counter,'Counter access and project authorization are intentionally separate','counter/project separation missing');
+must(counter,'Continue current public task','public continuation must be first-class');
+must(counter,'Work mode, an Observer lease, a claim key, Pair AI','public continuation must state auth is not prerequisite');
+must(counter,'/ai/continue.json','public continuation machine entrypoint missing');
+must(counter,'No LIBER account is required at the counter','Observer counter must explicitly be accountless');
+must(counter,'issueRevexObserverAnonymousClaim','Observer counter must use public issue endpoint');
+must(counter,'Take one Observer session package','Observer package action missing');
+must(counter,'Use this path only for private project access','public/private routing separation missing');
 mustNot(counter,'firebase-service.js','public counter must not load Firebase auth runtime');
 mustNot(counter,'Sign in','public counter must not request sign-in');
 
