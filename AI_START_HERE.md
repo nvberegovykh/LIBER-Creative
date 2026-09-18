@@ -134,6 +134,24 @@ Dimensional reduction is an observation tool, not permission to replace the obse
 
 A useful failure test is **"object demolished by correct abstraction"**: the simplified representation can be internally correct while still being insufficient to recreate the richer object.
 
+## Paper before render
+
+For spatial, visual, reconstruction, product-placement, and similar tasks, do not solve comprehension and rendering in one opaque step.
+
+Use the public machine workflow at `docs/ai/workflows/projection-render-gate.json`.
+
+The short contract is:
+
+`authority freeze -> paper object -> coherence gate -> stop -> human launch -> render -> verify`
+
+**Paper** means the object is established without image synthesis: identity/topology, one stable object coordinate frame, major dimensions and host relations, linked non-parallel projections, ordered depth slices where needed, feature correspondence across views, and an explicit unresolved list.
+
+The paper stage is **ready enough** when all hard invariants and major-form relations agree simultaneously and any remaining uncertainty is non-gating. “Enough” is deliberately not maximal detail.
+
+If the coherence gate fails, continue working on paper. **Do not render to escape an unresolved major-form contradiction.**
+
+If the gate passes, stop and ask the human to launch the rendering stage. Rendering is downstream evidence; it does not become object authority.
+
 ## Production / source parity
 
 `docs/CNAME` binds the public docs tree to `liberpict.com`. The live REVEX UI is therefore intended to be served from this repository's `docs/` surface. Do not assume byte-for-byte parity from that fact alone: use the public manifest plus the parity verifier before a production mutation.
