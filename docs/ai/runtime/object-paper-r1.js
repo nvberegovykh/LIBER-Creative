@@ -189,7 +189,7 @@ function projectedCoincidenceGroups(paper,viewId,filter={},tolerance=1e-5){
 
 function measureAxonometry(paper,viewId,tolerance=AXON_TOL){
   const view=(paper.observations||[]).find(v=>v.id===viewId);
-  if(!view||view.type==='perspective')throw new Error('Axonometry classification requires a parallel view.');
+  if(!view||view.type==='perspective'||view.projection==='oblique')throw new Error('Axonometry classification requires an orthogonal/axonometric parallel view, not perspective or oblique projection.');
   const f=assertOrthonormalFrame(paper.object.frame,'object.frame');
   const b=viewBasis(view);
   const projectVector=axis=>{
@@ -296,7 +296,10 @@ function validatePaper(paper){
 function evaluatePaperReady(paper){
   const structural=validatePaper(paper);
   if(!structural.ok)return {paperReady:false,structural,invariants:[],corrections:[],gatingUnresolved:[],reasons:structural.errors};
-  const invariants=(paper.hardInvariants||[]).map(inv=>evaluateInvariant(paper,inv));
+  const invariants=(paper.hardInvariants||[]).map(inv=>{
+    try{return evaluateInvariant(paper,inv);}
+    catch(error){return {id:inv?.id||null,type:inv?.type||null,pass:false,error:error.message};}
+  });
   const corrections=evaluateVectorCorrections(paper);
   const gatingUnresolved=(paper.unresolved||[]).filter(x=>x.gating!==false);
   const reasons=[
