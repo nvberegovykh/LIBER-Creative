@@ -96,5 +96,19 @@
       "experimental models",
       "future systems"
     ]
+  },
+  "paperBeforeRender": {
+    "workflow": "https://liberpict.com/ai/workflows/projection-render-gate.json",
+    "sequence": [
+      "P0_AUTHORITY_FREEZE",
+      "P1_PAPER_OBJECT",
+      "P2_COHERENCE_GATE",
+      "P3_HUMAN_LAUNCH",
+      "P4_RENDER",
+      "P5_VERIFY"
+    ],
+    "paperReadyMeaning": "All hard invariants and major-form relations are mutually consistent; remaining uncertainty is explicit and non-gating. Enough does not mean maximal detail.",
+    "renderAuthorization": "After paperReady=true, stop and ask the human to launch rendering. Do not render automatically.",
+    "failureRule": "Partially correct reasoning does not make a failed deliverable valid; hard invariants gate task validity simultaneously."
   }
 }
