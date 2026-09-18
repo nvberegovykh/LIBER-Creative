@@ -1,0 +1,82 @@
+{
+  "schema": "liber.ai.public-manifest.v1",
+  "purpose": "Single public-asset authority for the LIBER/REVEX AI counter, guides, object-paper runtime, dependency graph, and scoped handoffs.",
+  "assets": [
+    {
+      "publicPath": "/observer-ai.html",
+      "source": "docs/observer-ai.html"
+    },
+    {
+      "publicPath": "/observer-ai-20260917.html",
+      "source": "docs/observer-ai-20260917.html"
+    },
+    {
+      "publicPath": "/ai.html",
+      "source": "docs/ai.html"
+    },
+    {
+      "publicPath": "/ai/index.html",
+      "source": "docs/ai/index.html"
+    },
+    {
+      "publicPath": "/ai/guide.json",
+      "source": "docs/ai/guide.json"
+    },
+    {
+      "publicPath": "/ai/public-manifest.json",
+      "source": "docs/ai/public-manifest.json"
+    },
+    {
+      "publicPath": "/ai/workflows/projection-render-gate.json",
+      "source": "docs/ai/workflows/projection-render-gate.json"
+    },
+    {
+      "publicPath": "/ai/runtime/object-paper-r1.js",
+      "source": "docs/ai/runtime/object-paper-r1.js"
+    },
+    {
+      "publicPath": "/ai/runtime/dependency-graph-r1.js",
+      "source": "docs/ai/runtime/dependency-graph-r1.js"
+    },
+    {
+      "publicPath": "/ai/schemas/object-paper-v1.schema.json",
+      "source": "docs/ai/schemas/object-paper-v1.schema.json"
+    },
+    {
+      "publicPath": "/ai/schemas/dependency-graph-v1.schema.json",
+      "source": "docs/ai/schemas/dependency-graph-v1.schema.json"
+    },
+    {
+      "publicPath": "/ai/examples/four-candle-lantern.object-paper.json",
+      "source": "docs/ai/examples/four-candle-lantern.object-paper.json"
+    },
+    {
+      "publicPath": "/ai/cases/index.json",
+      "source": "docs/ai/cases/index.json"
+    },
+    {
+      "publicPath": "/ai/cases/meadowview-palladian-r1.json",
+      "source": "docs/ai/cases/meadowview-palladian-r1.json"
+    },
+    {
+      "publicPath": "/ai/cases/meadowview-palladian-r1.dependency.json",
+      "source": "docs/ai/cases/meadowview-palladian-r1.dependency.json"
+    },
+    {
+      "publicPath": "/ai/cases/meadowview-palladian-r1.svg",
+      "source": "docs/ai/cases/meadowview-palladian-r1.svg"
+    },
+    {
+      "publicPath": "/liber-ai.json",
+      "source": "docs/liber-ai.json"
+    },
+    {
+      "publicPath": "/observer-ai-guide.json",
+      "source": "docs/observer-ai-guide.json"
+    },
+    {
+      "publicPath": "/.well-known/liber-ai.json",
+      "source": "docs/.well-known/liber-ai.json"
+    }
+  ]
+}
