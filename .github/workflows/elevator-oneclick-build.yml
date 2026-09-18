@@ -1,0 +1,29 @@
+name: Elevator one-click Revit 2026 helper
+
+on:
+  push:
+    branches: [elevator-oneclick-20260918]
+    paths:
+      - '.tools/elevator-oneclick/**'
+      - '.github/workflows/elevator-oneclick-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build Revit 2026 startup helper
+        run: dotnet build .tools/elevator-oneclick/Liber.ElevatorOneShot.csproj -c Release --nologo
+      - name: Upload helper DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: Liber.ElevatorOneShot-Revit2026
+          path: .tools/elevator-oneclick/bin/Release/net8.0-windows/Liber.ElevatorOneShot.dll
+          if-no-files-found: error
