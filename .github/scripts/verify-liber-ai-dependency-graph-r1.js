@@ -6,6 +6,8 @@ const handoff=require('../../docs/ai/cases/meadowview-palladian-r1.json');
 const caseIndex=require('../../docs/ai/cases/index.json');
 const guide=require('../../docs/ai/guide.json');
 const discovery=require('../../docs/.well-known/liber-ai.json');
+const continuation=require('../../docs/ai/continue.json');
+const publicManifest=require('../../docs/ai/public-manifest.json');
 const fs=require('fs');
 const aiPage=fs.readFileSync('docs/ai/index.html','utf8');
 
@@ -19,14 +21,35 @@ assert.equal(caseIndex.current[0].handoff,'https://liberpict.com/ai/cases/meadow
 assert.equal(guide.currentPublicHandoffs[0].id,handoff.id);
 assert.equal(discovery.currentPublicHandoffsIndex,'https://liberpict.com/ai/cases/index.json');
 assert.equal(discovery.workflows.dependencyGraph.runtime,'https://liberpict.com/ai/runtime/dependency-graph-r1.js');
+assert.equal(continuation.mode,'public-task');
+assert.equal(continuation.prerequisites.workMode,false);
+assert.equal(continuation.prerequisites.observerLease,false);
+assert.equal(continuation.prerequisites.claimKey,false);
+assert.equal(continuation.prerequisites.pairAI,false);
+assert.equal(continuation.prerequisites.authenticatedRevexBrowser,false);
+assert.equal(handoff.access.requiresWorkMode,false);
+assert.equal(handoff.access.requiresPairAI,false);
+assert.equal(guide.routing.order[0],'public-continuation');
+assert.equal(guide.routing.publicContinuation.workHandoffDeclined,'Continue normally; do not treat the declined Work handoff as a task blocker.');
+assert.equal(discovery.publicContinuation.declinedWorkHandoffIsBlocker,false);
+assert(publicManifest.assets.some(x=>x.publicPath==='/ai/continue.json'&&x.source==='docs/ai/continue.json'));
 for(const needle of [
-  'Current public task handoff',
+  'Continue current public task',
+  'Public continuation:',
+  'Work mode, an Observer lease, a claim key, Pair AI',
+  '/ai/continue.json',
+  'Private project / Observer access',
   'USER-ASSESSED BASELINE ≈ 94%',
   '/ai/cases/meadowview-palladian-r1.svg',
   '/ai/cases/meadowview-palladian-r1.json',
   '/ai/cases/meadowview-palladian-r1.dependency.json',
   'copy-handoff'
 ]) assert(aiPage.includes(needle),'AI page missing '+needle);
+assert(
+  aiPage.indexOf('Continue current public task') < aiPage.indexOf('Private project / Observer access'),
+  'public route must appear before Observer route'
+);
+assert(aiPage.includes('A Work handoff is NOT required.'),'copy package must explicitly survive declined Work handoff');
 
 const order=graphRuntime.topologicalOrder(graph);
 assert(order.indexOf('physicalCandleCount')<order.indexOf('inv.candleTopology'));
