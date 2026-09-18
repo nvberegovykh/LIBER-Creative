@@ -20,25 +20,36 @@ import urllib.request
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 LIVE_ROOT = "https://liberpict.com/"
 
-PUBLIC_OWNERS = [
+BASE_PUBLIC_OWNERS = [
     "docs/liber-apps/apps/revex/app.js",
     "docs/liber-apps/apps/revex/store.js",
     "docs/liber-apps/apps/revex/wallt-control-plane.js",
     "docs/liber-apps/apps/revex/wallt-fixer-adapters-r137.js",
-    "docs/.well-known/liber-ai.json",
-    "docs/liber-ai.json",
-    "docs/ai/index.html",
-    "docs/ai/guide.json",
-    "docs/ai/workflows/projection-render-gate.json",
-    "docs/ai/runtime/object-paper-r1.js",
-    "docs/ai/runtime/dependency-graph-r1.js",
-    "docs/ai/schemas/object-paper-v1.schema.json",
-    "docs/ai/schemas/dependency-graph-v1.schema.json",
-    "docs/ai/cases/index.json",
-    "docs/ai/cases/meadowview-palladian-r1.json",
-    "docs/ai/cases/meadowview-palladian-r1.dependency.json",
-    "docs/ai/cases/meadowview-palladian-r1.svg",
 ]
+
+AI_PUBLIC_MANIFEST = ROOT / "docs/ai/public-manifest.json"
+
+
+def manifest_public_owners() -> list[str]:
+    import json
+    data = json.loads(AI_PUBLIC_MANIFEST.read_text(encoding="utf-8"))
+    if data.get("schema") != "liber.ai.public-manifest.v1":
+        raise RuntimeError("Unexpected LIBER/AI public manifest schema.")
+    owners: list[str] = []
+    for row in data.get("assets", []):
+        public_path = str(row.get("publicPath", "")).strip()
+        source = str(row.get("source", "")).strip()
+        if not public_path.startswith("/"):
+            raise RuntimeError(f"Manifest publicPath must start with /: {public_path}")
+        if not source.startswith("docs/"):
+            raise RuntimeError(f"Manifest source must stay inside docs/: {source}")
+        owners.append(source)
+    if not owners:
+        raise RuntimeError("LIBER/AI public manifest contains no assets.")
+    return owners
+
+
+PUBLIC_OWNERS = list(dict.fromkeys(BASE_PUBLIC_OWNERS + manifest_public_owners()))
 
 
 def sha256(data: bytes) -> str:
