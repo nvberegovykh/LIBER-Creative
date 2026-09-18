@@ -1,0 +1,28 @@
+name: LIBER AI Object Paper r1
+
+on:
+  pull_request:
+    paths:
+      - 'AI_START_HERE.md'
+      - 'docs/ai/**'
+      - 'docs/.well-known/liber-ai.json'
+      - 'docs/liber-ai.json'
+      - '.github/scripts/verify-liber-ai-object-paper-r1.js'
+      - '.github/workflows/liber-ai-object-paper-r1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  object-paper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check object-paper runtime
+        run: node --check docs/ai/runtime/object-paper-r1.js
+      - name: Verify object-paper projection runtime
+        run: node .github/scripts/verify-liber-ai-object-paper-r1.js
