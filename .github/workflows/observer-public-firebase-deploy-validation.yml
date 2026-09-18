@@ -1,6 +1,14 @@
 name: Observer public Firebase deploy validation
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'DEPLOY_OBSERVER_PUBLIC_FIREBASE_CURRENT.ps1'
+      - 'DEPLOY_OBSERVER_PUBLIC_FIREBASE_CURRENT.cmd'
+      - 'RUN_OBSERVER_PUBLIC_FIREBASE_CURRENT.cmd'
+      - 'docs/ai/public-manifest.json'
+      - '.github/workflows/observer-public-firebase-deploy-validation.yml'
   push:
     branches: [main]
     paths:
