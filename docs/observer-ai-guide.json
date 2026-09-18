@@ -92,5 +92,24 @@
     "paperReadyMeaning": "All hard invariants and major-form relations are mutually consistent; remaining uncertainty is explicit and non-gating. Enough does not mean maximal detail.",
     "renderAuthorization": "After paperReady=true, stop and ask the human to launch rendering. Do not render automatically.",
     "failureRule": "Partially correct reasoning does not make a failed deliverable valid; hard invariants gate task validity simultaneously."
+  },
+  "objectPaper": {
+    "schema": "https://liberpict.com/ai/schemas/object-paper-v1.schema.json",
+    "runtime": "https://liberpict.com/ai/runtime/object-paper-r1.js",
+    "example": "https://liberpict.com/ai/examples/four-candle-lantern.object-paper.json",
+    "evaluator": "LiberObjectPaper.evaluatePaperReady",
+    "vectorCorrectionIntents": [
+      "preserve",
+      "expected",
+      "forbid",
+      "note"
+    ],
+    "projectionRules": [
+      "Keep one rigid right-handed object basis; do not encode uncertain sequential rotations into object geometry.",
+      "Move the observer/projection frame instead of rotating the object to fit a picture.",
+      "Axonometry is broader than isometry; isometry is the equal-foreshortening special case.",
+      "Projected coincidence does not delete physical features.",
+      "Human vector markup constrains projections and never directly manufactures 3D geometry."
+    ]
   }
 }
