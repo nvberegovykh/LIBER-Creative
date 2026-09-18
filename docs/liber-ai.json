@@ -52,11 +52,21 @@
     "slice-do-not-replace",
     "preserve-identity-across-projections",
     "separate-object-state-from-observer-state",
-    "declare-lossy-abstraction-boundaries"
+    "declare-lossy-abstraction-boundaries",
+    "paper-before-render",
+    "major-form-before-artifacts",
+    "task-validity-is-conjunctive"
   ],
   "modelAgnosticGuidance": {
     "projectionDiscipline": "Use ordered lower-dimensional slices to inspect a richer state while preserving identity across slices. Do not let a correct abstraction replace the object.",
     "humanCommunication": "Separate observation, deterministic transformation, and inference; preserve unresolved uncertainty instead of hiding it with fluent wording.",
     "guide": "https://liberpict.com/observer-ai-guide.json"
+  },
+  "workflows": {
+    "paperBeforeRender": {
+      "uri": "https://liberpict.com/ai/workflows/projection-render-gate.json",
+      "humanLaunchRequired": true,
+      "renderDefault": "blocked-until-paper-ready-and-human-launch"
+    }
   }
 }
