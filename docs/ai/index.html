@@ -3,36 +3,43 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>LIBER / REVEX AI Counter</title>
+<title>LIBER / REVEX AI</title>
 <meta name="robots" content="index,follow" />
 <style>
-:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color-scheme:dark;background:#101315;color:#f5f7f8}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at top,#20272c 0,#101315 48%,#0c0f11 100%)}main{width:min(760px,100%);background:#171c20;border:1px solid #2c353b;border-radius:22px;padding:28px;box-shadow:0 24px 80px #0008}h1{font-size:clamp(28px,5vw,44px);margin:0 0 8px}p{line-height:1.55;color:#cbd3d7}a{color:#b7dcff}button{width:100%;border-radius:12px;border:1px solid #38434a;background:#f4f7f9;color:#101315;padding:13px 15px;font:inherit;font-weight:700;cursor:pointer}button.secondary{background:#252d32;color:#eef2f4}button:disabled{opacity:.5;cursor:not-allowed}.status{padding:12px 14px;border-radius:12px;background:#10161a;border:1px solid #2e3940;color:#cbd3d7;margin:18px 0}.status.good{border-color:#3b6b50;color:#bfe5cc}.status.bad{border-color:#74414a;color:#ffc6cf}.secret{display:none;margin-top:18px;padding:18px;border-radius:16px;background:#0c1012;border:1px solid #3d484f}.secret.show{display:block}.secret code{display:block;word-break:break-all;font:600 13px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;background:#050708;padding:13px;border-radius:10px;margin:10px 0}.actions{display:flex;gap:10px;flex-wrap:wrap}.actions button,.actions a{flex:1;min-width:170px;text-align:center;text-decoration:none;padding:11px 13px;border-radius:11px}.note{font-size:13px;color:#95a2a9}.task{margin-top:22px;padding:18px;border-radius:16px;background:#11171b;border:1px solid #334149}.task h2{font-size:18px;margin:0 0 6px}.task img{width:100%;max-height:250px;object-fit:contain;background:#f7f5ef;border-radius:10px;margin:12px 0}.task .metric{font:700 12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;color:#bfe5cc}.mini{font-size:12px;color:#839098;margin-top:18px;border-top:1px solid #293238;padding-top:16px}
+:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color-scheme:dark;background:#101315;color:#f5f7f8}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at top,#20272c 0,#101315 48%,#0c0f11 100%)}main{width:min(760px,100%);background:#171c20;border:1px solid #2c353b;border-radius:22px;padding:28px;box-shadow:0 24px 80px #0008}h1{font-size:clamp(28px,5vw,44px);margin:0 0 8px}p{line-height:1.55;color:#cbd3d7}a{color:#b7dcff}button{width:100%;border-radius:12px;border:1px solid #38434a;background:#f4f7f9;color:#101315;padding:13px 15px;font:inherit;font-weight:700;cursor:pointer}button.secondary{background:#252d32;color:#eef2f4}button:disabled{opacity:.5;cursor:not-allowed}.status{padding:12px 14px;border-radius:12px;background:#10161a;border:1px solid #2e3940;color:#cbd3d7;margin:18px 0}.status.good{border-color:#3b6b50;color:#bfe5cc}.status.bad{border-color:#74414a;color:#ffc6cf}.secret{display:none;margin-top:18px;padding:18px;border-radius:16px;background:#0c1012;border:1px solid #3d484f}.secret.show{display:block}.secret code{display:block;word-break:break-all;font:600 13px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;background:#050708;padding:13px;border-radius:10px;margin:10px 0}.actions{display:flex;gap:10px;flex-wrap:wrap}.actions button,.actions a{flex:1;min-width:170px;text-align:center;text-decoration:none;padding:11px 13px;border-radius:11px}.note{font-size:13px;color:#95a2a9}.task{margin-top:22px;padding:18px;border-radius:16px;background:#11171b;border:1px solid #334149}.task h2{font-size:18px;margin:0 0 6px}.task img{width:100%;max-height:250px;object-fit:contain;background:#f7f5ef;border-radius:10px;margin:12px 0}.task .metric{font:700 12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;color:#bfe5cc}.route{padding:12px 14px;border-radius:12px;background:#102018;border:1px solid #315c43;color:#c9efd6;margin:12px 0}.divider{margin:24px 0 14px;border-top:1px solid #293238;padding-top:18px}.divider h2{margin:0 0 6px;font-size:18px}.mini{font-size:12px;color:#839098;margin-top:18px;border-top:1px solid #293238;padding-top:16px}
 </style>
 </head>
 <body>
 <main>
-  <h1>AI Counter</h1>
-  <p>Take one guide + one one-time key for one AI session. <strong>No LIBER account is required here.</strong> The counter does not expose any project data.</p>
-  <div id="status" class="status">Ready.</div>
-  <button id="issue">Take one AI session package</button>
+  <h1>LIBER / REVEX AI</h1>
+  <section class="task" id="current-handoff">
+    <h2>Continue current public task</h2>
+    <div class="metric">289 MEADOWVIEW / PALLADIAN · USER-ASSESSED BASELINE ≈ 94%</div>
+    <div class="route"><strong>Public continuation:</strong> stay in the current chat. Work mode, an Observer lease, a claim key, Pair AI, and an authenticated REVEX browser are <strong>not prerequisites</strong> for this named public task. If a Work handoff is declined or unavailable, continue here from the public assets.</div>
+    <p class="note">The surroundings and accepted composition are frozen. Continue only the last-mile object-form correction through the paper/vector/dependency layer. Escalate to Observer/Pair AI only if private REVEX project data becomes genuinely necessary.</p>
+    <img src="/ai/cases/meadowview-palladian-r1.svg" alt="Vector projection reference for the Palladian lantern: four physical candle axes, two dominant frontal axes, and a forbidden center ghost." />
+    <div class="actions">
+      <a class="secondary" href="/ai/continue.json">Public continuation JSON</a>
+      <a class="secondary" href="/ai/cases/meadowview-palladian-r1.json">Handoff JSON</a>
+      <a class="secondary" href="/ai/cases/meadowview-palladian-r1.dependency.json">Dependency graph</a>
+      <button id="copy-handoff">Copy public continuation package</button>
+    </div>
+  </section>
+  <div class="actions" style="margin-top:18px"><a class="secondary" href="/ai/guide.json">AI guide</a><a class="secondary" href="/.well-known/liber-ai.json">Discovery</a></div>
+
+  <div class="divider">
+    <h2>Private project / Observer access</h2>
+    <p class="note">Use this only when the task actually needs private REVEX project state. It is separate from the public continuation above.</p>
+  </div>
+  <p>Take one guide + one one-time key for one AI Observer session. <strong>No LIBER account is required at the counter.</strong> Private project access still requires Pair AI from an authorized REVEX project.</p>
+  <div id="status" class="status">Observer counter ready.</div>
+  <button id="issue" class="secondary">Take one Observer session package</button>
   <section id="secret" class="secret">
     <strong>One-time claim key</strong>
     <code id="claim-key"></code>
-    <div class="actions"><button id="copy-key" class="secondary">Copy key</button><button id="copy-bootstrap" class="secondary">Copy full package</button></div>
+    <div class="actions"><button id="copy-key" class="secondary">Copy key</button><button id="copy-bootstrap" class="secondary">Copy Observer package</button></div>
     <p id="expiry" class="note"></p>
-    <p class="note">Paste the full package into Claude, ChatGPT, or another tool-capable AI. The AI claims the key once and gets a short-lived Observer lease. To attach a private REVEX project later, an authorized REVEX collaborator opens that project, presses <strong>Pair AI</strong>, and sends the one-time pairing code to the AI. Counter access and project authorization are intentionally separate.</p>
-  </section>
-  <div class="actions" style="margin-top:18px"><a class="secondary" href="/ai/guide.json">AI guide</a><a class="secondary" href="/.well-known/liber-ai.json">Discovery</a></div>
-  <section class="task" id="current-handoff">
-    <h2>Current public task handoff</h2>
-    <div class="metric">289 MEADOWVIEW / PALLADIAN · USER-ASSESSED BASELINE ≈ 94%</div>
-    <p class="note">Use this only for the Meadowview/Palladian front-entry task. The surroundings and accepted composition are frozen; the remaining work is a last-mile object-form correction through the paper/vector/dependency layer. Rendering is downstream and stays blocked until the hard gates pass and the human launches it.</p>
-    <img src="/ai/cases/meadowview-palladian-r1.svg" alt="Vector projection reference for the Palladian lantern: four physical candle axes, two dominant frontal axes, and a forbidden center ghost." />
-    <div class="actions">
-      <a class="secondary" href="/ai/cases/meadowview-palladian-r1.json">Handoff JSON</a>
-      <a class="secondary" href="/ai/cases/meadowview-palladian-r1.dependency.json">Dependency graph</a>
-      <button id="copy-handoff" class="secondary">Copy handoff package</button>
-    </div>
+    <p class="note">Use this path only for private project access. Counter access and project authorization are intentionally separate.</p>
   </section>
   <div class="mini">The counter itself is public. Project access is never granted here. No Firebase credential, bearer token, service-account secret, OAuth refresh token, or signing key is stored in this page.</div>
 </main>
@@ -40,6 +47,7 @@
 (function(){
 'use strict';
 const ISSUE_URL='https://us-central1-liber-apps-cca20.cloudfunctions.net/issueRevexObserverAnonymousClaim';
+const ACTIVE_CONTINUATION='https://liberpict.com/ai/continue.json';
 const ACTIVE_HANDOFF='https://liberpict.com/ai/cases/meadowview-palladian-r1.json';
 const ACTIVE_GRAPH='https://liberpict.com/ai/cases/meadowview-palladian-r1.dependency.json';
 const ACTIVE_VECTOR='https://liberpict.com/ai/cases/meadowview-palladian-r1.svg';
@@ -59,8 +67,11 @@ issue.addEventListener('click',async()=>{
 document.getElementById('copy-key').addEventListener('click',async()=>{if(issued?.claimKey)await navigator.clipboard.writeText(issued.claimKey);});
 document.getElementById('copy-handoff').addEventListener('click',async()=>{
   const text=[
-    'LIBER/AI scoped task handoff — 289 Meadowview / Palladian',
-    'Use only for this named task.',
+    'LIBER/AI PUBLIC CONTINUATION — 289 Meadowview / Palladian',
+    'Continue in this current chat/session. A Work handoff is NOT required.',
+    'If Work mode is declined or unavailable, continue anyway; do not stop.',
+    'No Observer lease, claim key, Pair AI code, or authenticated REVEX browser is required for this public continuation.',
+    `Continuation: ${ACTIVE_CONTINUATION}`,
     `Handoff: ${ACTIVE_HANDOFF}`,
     `Dependency graph: ${ACTIVE_GRAPH}`,
     `Vector reference: ${ACTIVE_VECTOR}`,
@@ -70,7 +81,8 @@ document.getElementById('copy-handoff').addEventListener('click',async()=>{
     'Forbid unsupported central ghost candle.',
     'Preserve one straight central hanger rod; no chain/duplicate/ghost hanger.',
     'Keep outer cage facade-facing; do not rotate the object to fit one picture.',
-    'Work through formulas/vector constraints first. Render only after hard gates pass and the human explicitly launches it.'
+    'Work through formulas/vector constraints first. Render only after hard gates pass and the human explicitly launches it.',
+    'Escalate to Observer/Pair AI only if private REVEX project data later becomes genuinely necessary.'
   ].join('\n');
   await navigator.clipboard.writeText(text);
 });
