@@ -110,7 +110,7 @@ function Test-CounterUrl([string]$BaseUrl) {
   $dependency = Invoke-WebRequest -UseBasicParsing -Uri "$base/ai/runtime/dependency-graph-r1.js?gate=$Timestamp" -MaximumRedirection 5 -TimeoutSec 30
   if ($dependency.StatusCode -ne 200 -or $dependency.Content -notmatch '20260918r1-dependency-graph') { throw "Dependency runtime gate failed." }
   $vector = Invoke-WebRequest -UseBasicParsing -Uri "$base/ai/cases/meadowview-palladian-r1.svg?gate=$Timestamp" -MaximumRedirection 5 -TimeoutSec 30
-  if ($vector.StatusCode -ne 200 -or $vector.Content -notmatch 'forbidden ghost') { throw "Vector reference gate failed." }
+  if ($vector.StatusCode -ne 200 -or $vector.Content -notmatch 'center axis = reference / symmetry line') { throw "Vector reference gate failed." }
   Say "Gate PASS: $counter + public-continuation + scoped object-paper/dependency assets"
 }
 

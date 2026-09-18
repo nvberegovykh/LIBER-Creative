@@ -112,7 +112,7 @@
       "Treat axonometry as the general equal/unequal foreshortening family; isometry is only the equal-foreshortening special case.",
       "Store human markup as vector constraints over a named observation, not as direct 3D mutations.",
       "Projection coincidence is allowed: several physical features may share one visible axis without ceasing to exist in the object.",
-      "A visible ghost is a projection/render error when it has no corresponding authoritative feature or violates a forbid constraint."
+      "An unsupported visible feature is a projection/render error when it has no corresponding authoritative feature or violates a forbid constraint."
     ],
     "readinessEvaluator": "LiberObjectPaper.evaluatePaperReady(paper)"
   }

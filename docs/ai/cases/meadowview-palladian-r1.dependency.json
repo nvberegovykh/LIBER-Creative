@@ -1,7 +1,7 @@
 {
   "schema": "liber.ai.dependency-graph.v1",
   "id": "meadowview.palladian.front-entry.r1",
-  "description": "Last-mile dependency graph for the 94%-accepted Meadowview/Palladian baseline. Rendering is downstream only.",
+  "description": "Last-mile dependency graph for the accepted Palladian front-entry baseline. Rendering is downstream only.",
   "nodes": [
     {
       "id": "surroundingsFrozen",
@@ -19,7 +19,7 @@
       "value": 2
     },
     {
-      "id": "centralGhostCandlePresent",
+      "id": "physicalCandleOnCenterAxis",
       "kind": "input",
       "value": false
     },
@@ -89,18 +89,18 @@
       "message": "Frontal projection should read as two dominant candle axes from front/rear coincidence."
     },
     {
-      "id": "inv.noGhost",
+      "id": "inv.centerAxisClear",
       "kind": "invariant",
       "severity": "hard",
       "expr": {
         "op": "not",
         "args": [
           {
-            "ref": "centralGhostCandlePresent"
+            "ref": "physicalCandleOnCenterAxis"
           }
         ]
       },
-      "message": "No unsupported central ghost candle."
+      "message": "The center line is a valid reference/symmetry axis; no physical candle may be modeled on it."
     },
     {
       "id": "inv.hanger",
@@ -161,7 +161,7 @@
             "ref": "inv.frontProjection"
           },
           {
-            "ref": "inv.noGhost"
+            "ref": "inv.centerAxisClear"
           },
           {
             "ref": "inv.hanger"

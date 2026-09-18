@@ -27,20 +27,20 @@ assert.equal(isoCandles.length,4,'isometric 3/4 observation should separate all 
 
 const corrections=paper.evaluateVectorCorrections(example);
 assert.equal(corrections.length,1);
-assert.equal(corrections[0].id,'no-central-ghost-candle');
-assert.equal(corrections[0].pass,true,'no physical candle may occupy the forbidden central ghost axis');
+assert.equal(corrections[0].id,'center-axis-clear-of-candle');
+assert.equal(corrections[0].pass,true,'the center reference axis is valid, but no physical candle may occupy it');
 
 const readiness=paper.evaluatePaperReady(example);
 assert.equal(readiness.paperReady,true,JSON.stringify(readiness,null,2));
 assert.match(readiness.next,/human launch authorization/i);
 
 const bad=JSON.parse(JSON.stringify(example));
-bad.object.geometry.vertices.push({id:'ghostA',p:[0,0,1]},{id:'ghostB',p:[0,0,3]});
-bad.object.geometry.segments.push({id:'ghost.central',a:'ghostA',b:'ghostB',kind:'candle',authority:'hypothesis'});
+bad.object.geometry.vertices.push({id:'centerA',p:[0,0,1]},{id:'centerB',p:[0,0,3]});
+bad.object.geometry.segments.push({id:'candle.center.invalid',a:'centerA',b:'centerB',kind:'candle',authority:'hypothesis'});
 const badReady=paper.evaluatePaperReady(bad);
 assert.equal(badReady.paperReady,false,'fifth/central candle must fail paper gate');
 assert(badReady.invariants.some(x=>x.id==='four-candles'&&!x.pass));
-assert(badReady.corrections.some(x=>x.id==='no-central-ghost-candle'&&!x.pass));
+assert(badReady.corrections.some(x=>x.id==='center-axis-clear-of-candle'&&!x.pass));
 
 console.log('LIBER_AI_OBJECT_PAPER_R1=PASSED');
 console.log(JSON.stringify({
@@ -48,5 +48,5 @@ console.log(JSON.stringify({
   isometricForeshortening:iso.foreshortening,
   isometricCandleGroups:isoCandles,
   paperReady:readiness.paperReady,
-  ghostRejected:!badReady.paperReady
+  centerAxisCandleRejected:!badReady.paperReady
 },null,2));

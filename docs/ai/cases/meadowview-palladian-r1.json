@@ -1,7 +1,7 @@
 {
   "schema": "liber.ai.task-handoff.v1",
   "id": "meadowview.palladian.front-entry.20260918",
-  "title": "289 Meadowview — Palladian front-entry last-mile handoff",
+  "title": "Palladian front-entry last-mile handoff",
   "status": "paper-repair-active",
   "userAssessment": {
     "acceptedBaselineAccuracyApprox": 0.94,
@@ -10,7 +10,7 @@
   "authority": {
     "environment": {
       "kind": "user-supplied-high-resolution-image",
-      "rule": "Freeze the current Meadowview house, arch, glazing, landscaping, lighting, crop, camera and composition. Do not regenerate surroundings during the object correction."
+      "rule": "Freeze the current accepted house/environment, arch, glazing, landscaping, lighting, crop, camera and composition. Do not regenerate surroundings during the object correction."
     },
     "object": {
       "name": "Arhaus Palladian Outdoor Pendant",
@@ -27,13 +27,14 @@
     "hanger": {
       "topology": "single-straight-central-rod",
       "chainForbidden": true,
-      "ghostOrDuplicateHangerForbidden": true
+      "duplicateHangerForbidden": true
     },
     "candles": {
       "physicalCount": 4,
       "frontProjectionExpectedDominantAxes": 2,
       "reason": "Front/rear physical candle pairs may coincide or nearly coincide in a frontal projection.",
-      "centralGhostCandleForbidden": true,
+      "centerAxisIsReference": true,
+      "physicalCandleOnCenterAxisForbidden": true,
       "doNotDeleteRearCandles": true
     }
   },

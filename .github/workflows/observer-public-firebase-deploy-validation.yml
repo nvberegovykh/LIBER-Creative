@@ -55,7 +55,7 @@ jobs:
             '/ai/cases/meadowview-palladian-r1.json',
             '/ai/continue.json',
             '/ai/runtime/dependency-graph-r1.js',
-            'forbidden ghost',
+            'center axis = reference / symmetry line',
             'Public continuation routing gate failed.',
             "'x-goog-user-project' = `$ProjectId",
             '-Headers (Firebase-Headers)',

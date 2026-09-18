@@ -3,7 +3,7 @@
   "mode": "public-task",
   "currentTask": {
     "id": "meadowview.palladian.front-entry.20260918",
-    "title": "289 Meadowview — Palladian front-entry last-mile handoff",
+    "title": "Palladian front-entry last-mile handoff",
     "handoff": "https://liberpict.com/ai/cases/meadowview-palladian-r1.json",
     "dependencyGraph": "https://liberpict.com/ai/cases/meadowview-palladian-r1.dependency.json",
     "vectorReference": "https://liberpict.com/ai/cases/meadowview-palladian-r1.svg",

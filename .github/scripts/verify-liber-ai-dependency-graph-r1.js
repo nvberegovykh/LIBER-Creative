@@ -53,7 +53,7 @@ assert(aiPage.includes('A Work handoff is NOT required.'),'copy package must exp
 
 const order=graphRuntime.topologicalOrder(graph);
 assert(order.indexOf('physicalCandleCount')<order.indexOf('inv.candleTopology'));
-assert(order.indexOf('inv.noGhost')<order.indexOf('formula.objectCoherent'));
+assert(order.indexOf('inv.centerAxisClear')<order.indexOf('formula.objectCoherent'));
 assert(order.indexOf('formula.objectCoherent')<order.indexOf('formula.renderEligible'));
 
 const base=graphRuntime.evaluateGraph(graph);
@@ -65,10 +65,10 @@ assert.equal(base.nodes.renderAllowed.value,false,'human launch false must block
 const launched=graphRuntime.evaluateGraph(graph,{humanLaunch:true});
 assert.equal(launched.nodes.renderAllowed.value,true,'all hard gates plus human launch should allow downstream renderer');
 
-const ghost=graphRuntime.evaluateGraph(graph,{humanLaunch:true,centralGhostCandlePresent:true});
-assert.equal(ghost.hardPass,false);
-assert.equal(ghost.nodes['inv.noGhost'].pass,false);
-assert.equal(ghost.nodes.renderAllowed.value,false);
+const centerAxisCandle=graphRuntime.evaluateGraph(graph,{humanLaunch:true,physicalCandleOnCenterAxis:true});
+assert.equal(centerAxisCandle.hardPass,false);
+assert.equal(centerAxisCandle.nodes['inv.centerAxisClear'].pass,false);
+assert.equal(centerAxisCandle.nodes.renderAllowed.value,false);
 
 const wrongCandles=graphRuntime.evaluateGraph(graph,{humanLaunch:true,physicalCandleCount:3});
 assert.equal(wrongCandles.hardPass,false);
@@ -85,14 +85,14 @@ assert.equal(rotated.hardPass,false);
 assert.equal(rotated.nodes['inv.cageFacing'].pass,false);
 assert.equal(rotated.nodes.renderAllowed.value,false);
 
-const downstream=graphRuntime.downstream(graph,['centralGhostCandlePresent']);
-assert(downstream.includes('inv.noGhost'));
+const downstream=graphRuntime.downstream(graph,['physicalCandleOnCenterAxis']);
+assert(downstream.includes('inv.centerAxisClear'));
 assert(downstream.includes('formula.objectCoherent'));
 assert(downstream.includes('formula.renderEligible'));
 assert(downstream.includes('renderAllowed'));
 
 const closure=graphRuntime.dependencyClosure(graph,['renderAllowed']);
-for(const required of ['surroundingsFrozen','physicalCandleCount','frontVisibleCandleAxes','centralGhostCandlePresent','hangerTopology','outerCageYawDeg','paperReady','humanLaunch']){
+for(const required of ['surroundingsFrozen','physicalCandleCount','frontVisibleCandleAxes','physicalCandleOnCenterAxis','hangerTopology','outerCageYawDeg','paperReady','humanLaunch']){
   assert(closure.includes(required),'render closure missing '+required);
 }
 
@@ -106,7 +106,7 @@ console.log('LIBER_AI_DEPENDENCY_GRAPH_R1=PASSED');
 console.log(JSON.stringify({
   baseRenderAllowed:base.nodes.renderAllowed.value,
   launchedRenderAllowed:launched.nodes.renderAllowed.value,
-  ghostRejected:!ghost.hardPass,
+  centerAxisCandleRejected:!centerAxisCandle.hardPass,
   rotatedFiveDegreesRejected:!rotated.hardPass,
-  centralGhostDownstream:downstream
+  centerAxisDownstream:downstream
 },null,2));

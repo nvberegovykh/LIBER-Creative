@@ -366,7 +366,7 @@
   ],
   "vectorCorrections": [
     {
-      "id": "no-central-ghost-candle",
+      "id": "center-axis-clear-of-candle",
       "viewId": "front",
       "intent": "forbid",
       "scope": {
@@ -388,7 +388,7 @@
         ]
       },
       "tolerance2d": 0.1,
-      "note": "A central candle line would be a projection ghost; the four physical candles are at x=±0.5."
+      "note": "The central line is a valid reference/symmetry axis. No physical candle belongs on it; the four physical candles are at x=±0.5."
     }
   ],
   "hardInvariants": [
