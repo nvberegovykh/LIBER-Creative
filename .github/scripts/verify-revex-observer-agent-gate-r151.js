@@ -11,6 +11,7 @@ const ui=read('docs/liber-apps/apps/revex/ui-integrity.js');
 const counter=read('docs/ai/index.html');
 const guide=JSON.parse(read('docs/ai/guide.json'));
 const discovery=JSON.parse(read('docs/.well-known/liber-ai.json'));
+const projectionRender=JSON.parse(read('docs/ai/workflows/projection-render-gate.json'));
 const deploy=read('server/firebase-functions/DEPLOY_OBSERVER_AGENT_CURRENT.ps1');
 const launcher=read('DEPLOY_REVEX_OBSERVER_AI_CURRENT.cmd');
 const repair=read('server/firebase-functions/REPAIR_OBSERVER_AGENT_PUBLIC_ACCESS.ps1');
@@ -63,6 +64,12 @@ if(discovery.observer?.agentAccess?.counterExposesProjectData!==false)throw new 
 if(discovery.observer?.agentAccess?.pairTool!=='observer_pair')throw new Error('discovery pair tool mismatch');
 if(discovery.security?.publicCounter?.accountRequired!==false)throw new Error('security discovery account policy mismatch');
 if(discovery.security?.headlessCapabilityToken?.status!=='candidate-implemented-read-only-observer-with-separate-project-pairing')throw new Error('headless status mismatch');
+if(projectionRender.schema!=='liber.ai.projection-render-workflow.v1')throw new Error('paper-before-render workflow schema mismatch');
+if(projectionRender.launchContract?.humanAuthorizationRequired!==true)throw new Error('render launch must require human authorization');
+if(projectionRender.launchContract?.defaultWhenNotAuthorized!=='stop-without-rendering')throw new Error('render must stop by default without human launch');
+const gate=projectionRender.states?.find(row=>row.id==='P2_COHERENCE_GATE');
+if(!gate||!String(gate.failAction||'').includes('Do not render'))throw new Error('coherence gate must block render on failure');
+if(discovery.workflows?.paperBeforeRender?.humanLaunchRequired!==true)throw new Error('discovery must expose human render launch gate');
 
 for(const name of functions){must(deploy,`'${name}'`,`Observer-only deployment must include ${name}`);must(repair,`'${name}'`,`Observer public-access repair must include ${name}`);}
 must(deploy,"$ObserverSaName = 'revex-observer-broker'",'Observer deployment must use its own runtime identity');

@@ -1,0 +1,100 @@
+{
+  "schema": "liber.ai.projection-render-workflow.v1",
+  "name": "Paper Before Render",
+  "status": "model-agnostic",
+  "purpose": "Separate spatial comprehension from image synthesis so a partly correct internal model cannot silently become an incorrect rendered object.",
+  "principle": "Think in linked projections and slices first. Render only after the paper model is sufficiently coherent and a human explicitly launches the render stage.",
+  "definitions": {
+    "enough": "All hard invariants and major-form relations are mutually consistent; remaining uncertainty is non-gating and explicitly listed. Enough is not maximal detail.",
+    "paper": "A non-rendered object state expressed through authority references, topology, dimensions, coordinate frames, linked projections, ordered slices, feature correspondence and unresolved items.",
+    "render": "A downstream visual experiment or deliverable. It is evidence of projection behavior, never a replacement authority for the object."
+  },
+  "states": [
+    {
+      "id": "P0_AUTHORITY_FREEZE",
+      "output": "authority-manifest",
+      "requirements": [
+        "Identify the richest available object authority and environment authority separately.",
+        "Freeze protected surroundings when the task is an object-only edit.",
+        "List hard invariants, allowed changes and forbidden changes.",
+        "Do not promote a generated image, diagram or projection above its source authority."
+      ],
+      "next": "P1_PAPER_OBJECT"
+    },
+    {
+      "id": "P1_PAPER_OBJECT",
+      "output": "paper-object-state",
+      "requirements": [
+        "Preserve object identity and topology before appearance.",
+        "Define one local object frame and keep it fixed across every view.",
+        "Record major dimensions, proportions and attachment/host relations.",
+        "Use enough non-parallel projections to constrain the major form.",
+        "Use ordered sections or slices where depth is ambiguous.",
+        "Assign correspondence identities to the same features across views and slices.",
+        "Keep object state separate from observer state: camera, projection, crop, viewpoint and wording.",
+        "Declare for every lossy abstraction: preserves, discards and safeFor.",
+        "Maintain an explicit unresolved list instead of guessing."
+      ],
+      "next": "P2_COHERENCE_GATE"
+    },
+    {
+      "id": "P2_COHERENCE_GATE",
+      "output": "paper-ready-or-return",
+      "passWhen": [
+        "All hard invariants are satisfied simultaneously.",
+        "Major form, orientation, depth, center/attachment and topology agree across the selected projections/slices.",
+        "No projection requires rotating, deforming or simplifying the object to make the view fit.",
+        "Every remaining uncertainty is non-gating for major form and placement.",
+        "The paper state is sufficient to explain expected occlusion and perspective without changing object identity."
+      ],
+      "failAction": "Return to P1_PAPER_OBJECT. Do not render.",
+      "passAction": "Set paperReady=true and stop. Ask the human for explicit launch authorization before rendering."
+    },
+    {
+      "id": "P3_HUMAN_LAUNCH",
+      "output": "render-authorization",
+      "requirements": [
+        "Present the paper-ready summary and unresolved non-gating details.",
+        "Ask the human whether to launch rendering.",
+        "No render call occurs without explicit launch authorization."
+      ],
+      "next": "P4_RENDER"
+    },
+    {
+      "id": "P4_RENDER",
+      "output": "candidate-render",
+      "requirements": [
+        "Render from the paper-ready object state; do not derive new geometry from the target image silhouette.",
+        "For bounded image edits, preserve pixels outside the authorized edit region whenever the tool permits.",
+        "Observer/camera changes may alter projection and visibility but may not mutate the object state.",
+        "Do not count visible subcomponents as geometry authority; visibility is an outcome of projection and occlusion.",
+        "Treat the render as a candidate observation, not as the new object authority."
+      ],
+      "next": "P5_VERIFY"
+    },
+    {
+      "id": "P5_VERIFY",
+      "output": "accepted-or-rejected-render",
+      "requirements": [
+        "Compare the candidate to frozen authorities and the paper-ready invariants.",
+        "Judge major form before small artifacts.",
+        "If any hard invariant or major-form relation fails, reject the candidate and return to P1 or P4 as appropriate.",
+        "Never average a failed final result with partially correct reasoning: task validity is gated by simultaneous hard invariants."
+      ]
+    }
+  ],
+  "antiPatterns": [
+    "fit-the-silhouette-by-rotating-the-object",
+    "reconstruct-rich-object-from-one-lossy-projection",
+    "regenerate-authoritative-surroundings-during-object-only-edit",
+    "let-render-become-new-authority",
+    "optimize-small-artifacts-before-major-form",
+    "treat-partial-model-truth-as-task-validity"
+  ],
+  "launchContract": {
+    "beforeRender": "paperReady must be true",
+    "humanAuthorizationRequired": true,
+    "assistantPrompt": "Paper stage is ready enough. Launch the rendering stage?",
+    "defaultWhenNotAuthorized": "stop-without-rendering"
+  }
+}
