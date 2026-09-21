@@ -14,13 +14,13 @@ $Root = (Resolve-Path $PSScriptRoot).Path
 $RunId = Get-Date -Format "yyyyMMdd-HHmmss"
 $ReleaseTag = "0.8.19-r49"
 $Build = "20260813r49"
-$PublisherOrchestration = "20260815r49-comcheck-roof-v4"
-$GbxmlEvidenceProducerSha256 = "f9b48ebce0b98c134f81b8e174c8fb0e576186c2200290c5d1ccb0ea8e6af214"
-$CanonicalSourceCommit = "89131bf4bbff6e5bcaa34936c07cee25887375e9"
-$CanonicalSourceRef = "agent/revex-r49-review-integrity-20260814"
-$CanonicalSourceArchiveName = "REVEX_R49_SOURCE_89131bf4bbff6e5bcaa34936c07cee25887375e9.zip"
-$CanonicalSourceArchiveSha256 = "6d35bb32372b2b74d29cd3ab0c230c2efc74f95d6383aaf11a5d93d1cae6d0fe"
-$CanonicalSourceArchiveSize = 52891290L
+$PublisherOrchestration = "20260815r49-google-render-walk-v6"
+$GbxmlEvidenceProducerSha256 = "523effcbb97240290153964974ee769c9fb5c98be3e9452b136619a862b4939b"
+$CanonicalSourceCommit = "70ab6594a0199ac5b1616fddcba32bc2a6860adb"
+$CanonicalSourceRef = "release/revex-r49-google-render-walk-20260815"
+$CanonicalSourceArchiveName = "REVEX_R49_SOURCE_70ab6594a0199ac5b1616fddcba32bc2a6860adb.zip"
+$CanonicalSourceArchiveSha256 = "25aceb5d18d3a043372142207648daf3638a69a5f8f77781b8333dc29bb3195b"
+$CanonicalSourceArchiveSize = 52836467L
 $CanonicalSourceArchive = Join-Path $Root $CanonicalSourceArchiveName
 $StageRoot = Join-Path $env:LOCALAPPDATA "LIBER\REVEX-R49-Publish\$RunId"
 $CanonicalSourceRoot = Join-Path $StageRoot "canonical-source"
@@ -553,6 +553,7 @@ function New-IsolatedCanonicalSourceStage([System.Collections.IDictionary]$Expec
     fullRevitSourceTree = $true
     fullCompanionSourceTree = $true
     nativeSpecificationsCompatibility = $true
+    sharedFirebaseOAuthLoader = $true
     fullWorkerAndBrokerSourceTrees = $true
     independentOfDriveAfterCreation = $true
   })
@@ -566,6 +567,9 @@ function Assert-ReleaseBundleClosure([string]$SourceRoot) {
   $companionBridgePath = Join-Path $SourceRoot "src\Liber.Revex.Revit\Services\CompanionWebBridge.cs"
   $settingsServicePath = Join-Path $SourceRoot "src\Liber.Revex.Revit\Services\SettingsService.cs"
   $reviewRuntimePath = Join-Path $SourceRoot "src\Live-Companion\review-integrity-r50.js"
+  $renderRuntimePath = Join-Path $SourceRoot "src\Live-Companion\render-agent.js"
+  $workspaceRuntimePath = Join-Path $SourceRoot "src\Live-Companion\workspace-r51.js"
+  $firebaseLoaderPath = Join-Path $SourceRoot "docs\liber-apps\js\firebase-loader.js"
   $specCompatPath = Join-Path $SourceRoot "src\Live-Specifications\revex-source-compat-r49.js"
   $workflowPath = Join-Path $SourceRoot ".github\workflows\revex-r27-0819-engineering-release.yml"
   $dockerPath = Join-Path $SourceRoot "server\revex-energy-worker\Dockerfile"
@@ -576,7 +580,7 @@ function Assert-ReleaseBundleClosure([string]$SourceRoot) {
   $acceptancePath = Join-Path $SourceRoot "server\revex-energy-worker\run_revex_r49_release_acceptance.py"
   $pipelinePath = Join-Path $SourceRoot "src\Liber.Revex.Revit\Engineering\Energy\revex_energy_pipeline.py"
   $geometryRequirementsPath = Join-Path $SourceRoot "src\Liber.Revex.Revit\Engineering\Energy\GeometryCo\requirements.txt"
-  foreach ($required in @($graphPath,$pythonPath,$servicePath,$companionBridgePath,$settingsServicePath,$reviewRuntimePath,$specCompatPath,$workflowPath,$dockerPath,$cloudBuildPath,$brokerPath,$workerPath,$workerVerifierPath,$acceptancePath,$pipelinePath,$geometryRequirementsPath)) {
+  foreach ($required in @($graphPath,$pythonPath,$servicePath,$companionBridgePath,$settingsServicePath,$reviewRuntimePath,$renderRuntimePath,$workspaceRuntimePath,$firebaseLoaderPath,$specCompatPath,$workflowPath,$dockerPath,$cloudBuildPath,$brokerPath,$workerPath,$workerVerifierPath,$acceptancePath,$pipelinePath,$geometryRequirementsPath)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Release dependency closure is missing: $required" }
   }
   $graph = Get-Content -LiteralPath $graphPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -585,6 +589,7 @@ function Assert-ReleaseBundleClosure([string]$SourceRoot) {
   if (@($pythonNodes[0].Inputs).Count -ne 8) { throw "gbXML Dynamo graph must expose exactly eight inputs." }
   $embedded = ([string]$pythonNodes[0].Code).Replace("`r`n","`n").Replace("`r","`n")
   $external = ([IO.File]::ReadAllText($pythonPath, [Text.Encoding]::UTF8)).Replace("`r`n","`n").Replace("`r","`n")
+  if (-not $external.Contains("reconcile_publication_message_severity(messages, publication_threshold_met)")) { throw "The accepted gbXML publication path does not reconcile strict geometry severity with the >=80% publication contract." }
   if ($embedded -ne $external) { throw "gbXML Dynamo embedded Python and external Python are not byte-equivalent after newline normalization." }
   $versionMatch = [regex]::Match($external, 'TOOL_VERSION\s*=\s*"([^"]+)"')
   if (-not $versionMatch.Success) { throw "gbXML Python engine has no TOOL_VERSION." }
@@ -602,6 +607,12 @@ function Assert-ReleaseBundleClosure([string]$SourceRoot) {
   $producerMaterial = ((Get-FileHash -LiteralPath $pythonPath -Algorithm SHA256).Hash.ToLowerInvariant()) + "`n" + ((Get-FileHash -LiteralPath $graphPath -Algorithm SHA256).Hash.ToLowerInvariant()) + "`n" + ((Get-FileHash -LiteralPath $servicePath -Algorithm SHA256).Hash.ToLowerInvariant())
   $producerDigest = Get-Utf8TextSha256 $producerMaterial
   if ($producerDigest -ne $GbxmlEvidenceProducerSha256) { throw "gbXML evidence producer bundle digest is stale: expected $GbxmlEvidenceProducerSha256; actual $producerDigest" }
+  $renderer = [IO.File]::ReadAllText($renderRuntimePath, [Text.Encoding]::UTF8)
+  $workspace = [IO.File]::ReadAllText($workspaceRuntimePath, [Text.Encoding]::UTF8)
+  $firebaseLoader = [IO.File]::ReadAllText($firebaseLoaderPath, [Text.Encoding]::UTF8)
+  if (-not $renderer.Contains("gemini-3.1-flash-image") -or -not $renderer.Contains("x-goog-user-project") -or -not $renderer.Contains("GEOMETRY LOCK") -or $renderer.Contains("x-goog-api-key")) { throw "Direct Google renderer contract is incomplete or unsafe." }
+  if (-not $workspace.Contains("requestPointerLock") -or -not $workspace.Contains("REVEX_LIGHTWEIGHT_OBJECT_OUTLINES") -or -not $workspace.Contains("spatialObjectsVisible: false")) { throw "ACC-like Walk/lightweight workspace contract is incomplete." }
+  if (-not $firebaseLoader.Contains("reauthenticateWithPopup")) { throw "Shared Firebase auth loader is missing incremental Google OAuth support." }
   $workflow = [IO.File]::ReadAllText($workflowPath, [Text.Encoding]::UTF8)
   $docker = [IO.File]::ReadAllText($dockerPath, [Text.Encoding]::UTF8)
   $cloudBuild = [IO.File]::ReadAllText($cloudBuildPath, [Text.Encoding]::UTF8)
@@ -903,14 +914,21 @@ function Verify-LiveCompanion {
       $app = Invoke-WebRequest -UseBasicParsing -Uri ($base + "app.js?r49_verify=" + $stamp) -TimeoutSec 20 -Headers $headers
       $viewer = Invoke-WebRequest -UseBasicParsing -Uri ($base + "viewer-r26.js?r49_verify=" + $stamp) -TimeoutSec 20 -Headers $headers
       $review = Invoke-WebRequest -UseBasicParsing -Uri ($base + "review-integrity-r50.js?r49_verify=" + $stamp) -TimeoutSec 20 -Headers $headers
+      $renderer = Invoke-WebRequest -UseBasicParsing -Uri ($base + "render-agent.js?r49_verify=" + $stamp) -TimeoutSec 20 -Headers $headers
+      $workspace = Invoke-WebRequest -UseBasicParsing -Uri ($base + "workspace-r51.js?r49_verify=" + $stamp) -TimeoutSec 20 -Headers $headers
+      $sharedBase = $base.Replace("/apps/revex/", "/js/")
+      $firebaseLoader = Invoke-WebRequest -UseBasicParsing -Uri ($sharedBase + "firebase-loader.js?r49_verify=" + $stamp) -TimeoutSec 20 -Headers $headers
       $specBase = $base.Replace("/revex/", "/specifications/")
       $specCompat = Invoke-WebRequest -UseBasicParsing -Uri ($specBase + "revex-source-compat-r49.js?r49_verify=" + $stamp) -TimeoutSec 20 -Headers $headers
       if ($index.StatusCode -eq 200 -and $index.Content.Contains($Build) -and $index.Content.Contains("Show hidden only") -and
           $app.Content.Contains("activationToken") -and $app.Content.Contains("revex:native-project-binding") -and
           $viewer.Content.Contains("REVEX_PAGED_MISSING_GEOMETRY_PROXY") -and $viewer.Content.Contains("clearEditGroups") -and
           $review.Content.Contains("spatialObjectsVisible: false") -and $review.Content.Contains("setSectionFace") -and $review.Content.Contains("commitBimOverlay") -and
+          $renderer.Content.Contains("gemini-3.1-flash-image") -and $renderer.Content.Contains("x-goog-user-project") -and $renderer.Content.Contains("GEOMETRY LOCK") -and
+          $workspace.Content.Contains("requestPointerLock") -and $workspace.Content.Contains("REVEX_LIGHTWEIGHT_OBJECT_OUTLINES") -and $workspace.Content.Contains("spatialObjectsVisible: false") -and
+          $firebaseLoader.Content.Contains("reauthenticateWithPopup") -and
           $specCompat.Content.Contains("revex-storage-index-v1") -and $specCompat.Content.Contains("nativePresentation:true")) {
-        Write-Log "Live Companion verified: $Build with current paged geometry, physical-only review controls, reversible visibility, per-position versions and native Revit schedules." Green
+        Write-Log "Live Companion verified: $Build with current paged geometry, physical-only review controls, direct Google renderer, ACC-like Walk and native Revit schedules." Green
         return
       }
     } catch { Write-Log ("Live verification pending: " + $_.Exception.Message) Yellow }
@@ -1520,13 +1538,13 @@ try {
     "src\Liber.Revex.Revit\Services\DesignBookScheduleService.cs" = "c9f0c97b1f91131a61119f7dc88199408e8c5ab1ab92397d9845448d6680b6bb"
     "src\Liber.Revex.Revit\Services\EngineeringSyncService.cs" = "e515c497057b3f653027bf4c8763bbe17143320c95163b82221f0948b58932d8"
     "src\Liber.Revex.Revit\Services\GbxmlEngineeringService.cs" = "111c05b2f490fc3d2fbb5715940e6412f3707180be3c2fa69fb7c99c2ec5ca80"
-    "src\Liber.Revex.Revit\Engineering\Gbxml\LIBER_gbXML_Preflight_and_Export.py" = "3655e8fe0e3d8eb95cd1ea4c41284cda3d9f1f4a86d66c32e7adc4925c73f760"
-    "src\Liber.Revex.Revit\Engineering\Gbxml\LIBER_gbXML_Preflight_and_Export.dyn" = "bf167fa2242434376d163c7ed1dd2c29e61e0489cac4b220e6370bc8ee89e908"
+    "src\Liber.Revex.Revit\Engineering\Gbxml\LIBER_gbXML_Preflight_and_Export.py" = "472c387c3aa70440aa67e8cdf2d8bd47c6157dc36786f91c989162a4cd9e14cb"
+    "src\Liber.Revex.Revit\Engineering\Gbxml\LIBER_gbXML_Preflight_and_Export.dyn" = "edf0728ebc429e34e00f33d49ffd3bbf883a50cb49a623e90561c3024ff9b638"
     "src\Liber.Revex.Revit\Services\EngineeringCompanionWebBridge.cs" = "f763c77c0b514a9d404e2f98cefccd323deb98c73edc248dd741d5d133449184"
     "src\Liber.Revex.Revit\Engineering\Companion\native-managed-energy-bridge.js" = "82d6442254f468533532d88eedd63112f30a2fc1e407b47e1f86ac1b9ba726d2"
     "src\Liber.Revex.Revit\Engineering\Energy\revex_energy_pipeline.py" = "6519e268a9a0909ef24bf55cf69c273b415c7b573c1c71a209e4846b8fc0c82a"
     "src\Liber.Revex.Revit\Engineering\Energy\comcheck_backstop.py" = "c29433a0da6ebbcd6af599f3f461120f096b7ce5b4248c6a421f19373ffe2df2"
-    "src\Liber.Revex.Revit\Engineering\Energy\verify_revex_r49_energy.py" = "092e53ca2f1d4c8de50566bc7ab7b49024b12064d3f883b7a6719d73c7c45cf2"
+    "src\Liber.Revex.Revit\Engineering\Energy\verify_revex_r49_energy.py" = "258cfc8084beff7961f7c9a577e60a73a7d0c496bc76cd98665cb68f6f905365"
     "src\Liber.Revex.Revit\Engineering\Energy\requirements.txt" = "598d9b57a4c9bcfdce8266c1241331ee7acea61eb33ce162c6b91546603ff20a"
     "src\Liber.Revex.Revit\Engineering\Energy\GeometryCo\requirements.txt" = "1318bd4139433c6815ed35dc78321cf3000fbeb203e1de0621f22dc49342f659"
     "src\Liber.Revex.Revit\Engineering\Energy\GeometryCo\OpenStudio_Energy_Model_Geometry_Compiler.py" = "1fbd45afcfbc6120f56f8f4eb8947385de0c4d4b159f2bbfb70dbf8e067da85f"
@@ -1536,8 +1554,13 @@ try {
     "src\Liber.Revex.Revit\Engineering\Energy\References\79_WINTHROP_APPROVED_PROPOSED.osm" = "6c4954f5427e4bebec7cf2a26681161be96407646ebf6902a38b1d2f62a7abdb"
     "src\Liber.Revex.Revit\Engineering\Energy\References\EN-1_79_WINTHROP_AMENDMENT.xlsx" = "3468acae967ac123a19c3d0f3232c39f701df09c914df8a144184afbd4a7524e"
     "src\Liber.Revex.Revit\Engineering\Energy\References\COMcheck_250_MIDWOOD_STRUCTURE_REFERENCE.cxl" = "b3259682b844c7d7b03c2bd5adabd0930c0a6d98708cec21e09ab17354022657"
-    "src\Live-Companion\index.html" = "ff2ef758899fe9427f0eb2172eb5b4bee5eeb7e8a1821e11c50aded94b5d7f94"
-    "src\Live-Companion\diagnostics-r29.js" = "19b5acf13953ef551f9fd634c1e1620a5c3e1ddc5b66bd8ef5aa98cec4e77cb1"
+    "src\Live-Companion\index.html" = "1d671c9518ed2c2c791c1b4a3c6407e63a6cf3744163abed36d6ea4fde373bf6"
+    "src\Live-Companion\render-agent.js" = "bdd7bbe9dd3ac15b1e5eed9ac9410040ca51db2c5966fe2cba324d13524ce2ca"
+    "src\Live-Companion\render-agent.css" = "60b4915e7e3d85850de2c113f5930fcc23272ae41c29ed6a6b32cfc1c4182eb8"
+    "src\Live-Companion\workspace-r51.js" = "633e0fb60fb1d3cf118637857b2797598d7a3e11d44cb27a09e38337670e7440"
+    "src\Live-Companion\workspace-r51.css" = "c7a4b52d7ebd7d2386469135c00759a834da83f8699d10dfa2eb6bb9750a2b00"
+    "docs\liber-apps\js\firebase-loader.js" = "d1b843895d94bfa37510e76de7165c73afb67ab31e0286b826b7f4f6c054dbf6"
+    "src\Live-Companion\diagnostics-r29.js" = "d95375158056ac90bb305664c040a504ff5ba4edeff01bfcd82c565e59a98960"
     "src\Live-Companion\shell-integrity.js" = "e769c8053ffc6c69f6ccb97e5feff264bd7f048e5cfd992bfdd7fd365ff7193e"
     "src\Live-Companion\ui-integrity.js" = "24aec7248fee3d153bdcc0c02554054d0446125c767cda9b49dfe79f0e10372a"
     "src\Live-Companion\review-integrity-r50.js" = "098ec2f9c1fbf37314110fcde57bbc1b3dfb1d1896aa71f3c3b39a929b447a84"
@@ -1550,7 +1573,7 @@ try {
     "src\Live-Companion\styles.css" = "1d5c2d11a800e967b1d9e5d2cd92a6eebbb209b8183f927eba7d2267d8a734e9"
     "src\Live-Companion\energy-r27.js" = "9ffc2760247d9572e9f862698a9f2d3e1b69d58e4e17637689492f7b52353957"
     "src\Live-Specifications\index.html" = "569caa35fbbd019eaece940af6f6b2a16f67f5075e1685d2c68ce697d219160f"
-    "src\Live-Specifications\revex-source-compat-r49.js" = "8e23ffc60872dd572c13216148520ba58b50d6d966e6398dbdc32bce89df5bca"
+    "src\Live-Specifications\revex-source-compat-r49.js" = "1bd66ae0e8fa121726ab45e9d451783aa18b37e73d3829ab93b0a167f269bb29"
     "server\revex-energy-worker\app.py" = "07cc88813e158a29f7b7090422eecdbef8bc007fecf5706080c4cf84ee6fa1d5"
     "server\revex-energy-worker\verify_revex_r49_worker.py" = "27afb8e07fa1991d25981b631a32586a44aaa8d541407e397dda46f88cb86fee"
     "server\revex-energy-worker\run_revex_r49_release_acceptance.py" = "93533a8cf3792d9c41882de62ee9469a07c93a9ddebfe7452562458666eb88df"
@@ -1679,6 +1702,9 @@ try {
   Invoke-Native "Parse live Companion" $Node @("--check", (Join-Path $StageSource "src\Live-Companion\app.js"))
   Invoke-Native "Parse progressive BIM viewer" $Node @("--check", (Join-Path $StageSource "src\Live-Companion\viewer-r26.js"))
   Invoke-Native "Parse physical-model review controls" $Node @("--check", (Join-Path $StageSource "src\Live-Companion\review-integrity-r50.js"))
+  Invoke-Native "Parse direct Google renderer" $Node @("--check", (Join-Path $StageSource "src\Live-Companion\render-agent.js"))
+  Invoke-Native "Parse ACC-like workspace runtime" $Node @("--check", (Join-Path $StageSource "src\Live-Companion\workspace-r51.js"))
+  Invoke-Native "Parse shared Firebase OAuth loader" $Node @("--check", (Join-Path $StageSource "docs\liber-apps\js\firebase-loader.js"))
   Invoke-Native "Parse Engineering cloud store" $Node @("--check", (Join-Path $StageSource "src\Live-Companion\store.js"))
   Invoke-Native "Parse native Revit schedule compatibility" $Node @("--check", (Join-Path $StageSource "src\Live-Specifications\revex-source-compat-r49.js"))
   Invoke-Native "Parse revision-scoped managed Energy bridge" $Node @("--check", (Join-Path $StageSource "src\Liber.Revex.Revit\Engineering\Companion\native-managed-energy-bridge.js"))
@@ -1832,6 +1858,8 @@ try {
   $branch = "agent/revex-r49-final-$RunId"
   Invoke-Native "Create isolated r49 publication branch" $Git @("checkout", "-b", $branch) -WorkingDirectory $RepoRoot
   Copy-SourceTree (Join-Path $StageSource "src\Live-Companion") (Join-Path $RepoRoot "docs\liber-apps\apps\revex")
+  New-Item -ItemType Directory -Path (Join-Path $RepoRoot "docs\liber-apps\js") -Force | Out-Null
+  Copy-Item -LiteralPath (Join-Path $StageSource "docs\liber-apps\js\firebase-loader.js") -Destination (Join-Path $RepoRoot "docs\liber-apps\js\firebase-loader.js") -Force
   Copy-SourceTree (Join-Path $StageSource "src\Live-Specifications") (Join-Path $RepoRoot "docs\liber-apps\apps\specifications")
   Copy-SourceTree (Join-Path $StageSource "src\Liber.Revex.Revit") (Join-Path $RepoRoot "src\Liber.Revex.Revit")
   Copy-SourceTree (Join-Path $StageSource "server\revex-energy-worker") (Join-Path $RepoRoot "server\revex-energy-worker")
