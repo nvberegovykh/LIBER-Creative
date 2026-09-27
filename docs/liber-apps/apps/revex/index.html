@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="color-scheme" content="dark" />
   <meta name="theme-color" content="#080a0e" />
+  <meta name="revex-platform-build" content="20260904r178-project-boundary1" />
+  <meta name="revex-render-provider" content="google-gemini-only" data-build="20260907r185-render-ui1" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -12,15 +14,15 @@
   <link rel="manifest" href="manifest.webmanifest?v=20260813r49" />
   <link rel="apple-touch-icon" href="/liber-apps/images/LIBER%20LOGO.png" />
   <title>REVEX Companion — LIBER Apps</title>
-  <link rel="stylesheet" href="../specifications/styles.css?v=20260813r49" />
-  <link rel="stylesheet" href="styles.css?v=20260813r49" />
-  <link rel="stylesheet" href="runtime.css?v=20260813r49" />
-  <link rel="stylesheet" href="render-agent.css?v=20260815r49-google-render1" />
-  <link rel="stylesheet" href="workspace-r51.css?v=20260815r49-workspace1" />
-  <link rel="stylesheet" href="history-r24.css?v=20260813r49" />
-  <link rel="stylesheet" href="integrity.css?v=20260813r49" />
-  <link rel="stylesheet" href="r20.css?v=20260813r49" />
-  <link rel="stylesheet" href="energy-r27.css?v=20260813r49" />
+  <link rel="stylesheet" href="../specifications/styles.css?v=20260914r193-books1" />
+  <link rel="stylesheet" href="styles.css?v=20260914r193-books1" />
+  <link rel="stylesheet" href="runtime.css?v=20260914r192-morning1" />
+  <link rel="stylesheet" href="render-agent.css?v=20260914r192-morning1" />
+  <link rel="stylesheet" href="workspace-r51.css?v=20260914r192-morning1" />
+  <link rel="stylesheet" href="history-r24.css?v=20260914r192-morning1" />
+  <link rel="stylesheet" href="integrity.css?v=20260914r192-morning1" />
+  <link rel="stylesheet" href="r20.css?v=20260914r192-morning1" />
+  <link rel="stylesheet" href="energy-r27.css?v=20260914r192-morning1" />
   <style id="revex-action-label-integrity">
     .main-nav .utility { font-size: 12px !important; }
     .main-nav .utility::before,
@@ -75,7 +77,7 @@
       <input id="revex-sync-upload" data-liber-revex-sync-upload="1" type="file" multiple
         accept=".json,.ifc,.fbx,.gz,.pdf,application/json,application/pdf,application/gzip,application/octet-stream" hidden />
       <input id="revex-energy-sync-upload" data-liber-revex-energy-input="1" type="file" multiple
-        accept=".json,.xml,.txt,application/json,application/xml,text/xml,text/plain" hidden />
+        accept=".json,.xml,.txt,.epw,.pdf,application/json,application/xml,text/xml,text/plain,application/pdf" hidden />
       <input id="revex-energy-result-upload" data-liber-revex-energy-output="1" type="file" multiple hidden />
     </header>
 
@@ -128,8 +130,10 @@
           <div class="viewport-tools viewer-controls" aria-label="BIM navigation">
             <button id="fit-model" type="button" class="tool" title="Fit whole model">Fit</button>
             <button id="detail-toggle" type="button" class="tool" title="Exact Revit geometry loads automatically; use this control to retry the model stream if needed">Model</button>
+            <button id="reference-toggle" type="button" class="tool" data-r109-icon="◇" data-revex-icon="◇" aria-pressed="false" aria-label="Show or hide reference volume" title="Show or hide the enclosing height/setback reference volume; source geometry is preserved" hidden>References off</button>
             <button id="section-toggle" type="button" class="tool" aria-expanded="false">Section</button>
             <button id="walk-toggle" type="button" class="tool">Walk</button>
+            <button id="camera-tools-toggle" type="button" class="tool" aria-expanded="false" aria-controls="detail-toggle walk-floor walk-height walk-fov" title="Show camera and model options">Tools</button>
             <select id="walk-floor" class="tool-select" aria-label="Walkthrough floor"><option value="">Floor</option></select>
             <label class="tool-field" title="Camera eye height above selected floor"><span>Eye</span><input id="walk-height" type="number" value="5.5" min="2.5" max="9" step="0.25" /><b>ft</b></label>
             <label class="tool-field" title="Camera field of view"><span>FOV</span><input id="walk-fov" type="range" value="55" min="30" max="90" step="1" /></label>
@@ -176,6 +180,11 @@
               <h1 id="chapter-title">Design Book</h1>
               <p id="chapter-subtitle">Revit-derived positions; user-owned selections, images and approvals.</p>
             </div>
+          </div>
+          <div class="design-search-row" role="search" aria-label="Search Design Book">
+            <input id="design-search" class="search sp-inp" type="search" aria-label="Search all Design Book positions" placeholder="Search positions, materials, rooms or levels…" />
+            <span id="design-search-count" role="status" aria-live="polite"></span>
+            <button id="design-book-preview" class="button ghost" type="button">View book</button>
           </div>
           <div id="design-lanes" class="design-lanes" aria-label="Chapter visual development"></div>
           <div id="design-grid" class="design-grid"></div>
@@ -228,7 +237,7 @@
           <div>
             <div class="eyebrow">SEPARATE ENGINEERING REVISION</div>
             <h1>Energy</h1>
-            <p>Revit evidence in; reviewed Baseline/Proposed models and standalone filing PDFs out.</p>
+            <p>Prepare, calculate and review energy models and reports from your Revit project.</p>
           </div>
           <span id="energy-source-badge" class="energy-badge" data-tone="quiet">No Engineering Sync</span>
         </header>
@@ -248,26 +257,28 @@
               </div>
             </div>
             <div id="energy-source-summary" class="energy-summary">Choose a project here, then click <b>SYNC ENGINEERING</b> in Revit.</div>
-            <dl id="energy-source-facts" class="energy-facts"></dl>
+            <button id="energy-import-package" class="button ghost" type="button">Import Engineering package</button>
+            <p id="energy-import-help" class="energy-summary">For a saved export, select all files from its Engineering Sync folder, including the weather and evidence files.</p>
+            <details class="energy-source-details"><summary>Source, weather &amp; quality details</summary><dl id="energy-source-facts" class="energy-facts"></dl></details>
           </section>
 
           <section class="energy-card energy-form">
-            <div class="eyebrow">02 · AUTOMATIC PIPELINE</div>
-            <h2>GeometryCo → Baseline + Proposed</h2>
-            <p class="energy-summary">There is no second run step here. After every required Revit evidence domain clears the ≥80% hard-stop gate, REVEX automatically creates the current-project Baseline and Proposed OSMs, runs both EnergyPlus models, runs the official PNNL COMcheck Backstop engine, and prepares the EN-1 and review package. Published evidence below the 95% quality target stays visibly flagged for review; sub-80% evidence is preserved for repair and is not published.</p>
-            <p class="energy-summary">The selected Weather file (.EPW) travels inside the immutable Engineering Sync revision and is shown here read-only with its LOCATION metadata.</p>
-            <div class="energy-identity-policy">
-              <strong>Identity boundary preserved</strong>
-              <span>Current project identity is read only from the bound active Revit document and its T/Z pages. Applicant and modeler stay blank; professional execution is never fabricated. No filing PDF is inserted into Revit by this workflow.</span>
-            </div>
+            <div class="eyebrow">02 · CALCULATE</div>
+            <h2>Run Energy analysis</h2>
+            <p class="energy-summary">Import the complete Engineering package, then authorize this revision to start. REVEX prepares the baseline and proposed models, runs the calculations, and gathers the reports here.</p>
+            <p class="energy-summary">Your selected weather file stays attached to this revision. Quality warnings remain visible for review.</p>
+            <details class="energy-identity-policy"><summary>Processing and quality rules</summary>
+              <p>Each required evidence domain must reach 80%; below 95% remains flagged for review. GeometryCo prepares the models for OpenStudio/EnergyPlus. The authorized generated CXL is checked by the official PNNL COMcheck Backstop service.</p>
+              <p>Project identity comes from the active Revit document and its T/Z pages. Applicant and modeler remain blank in generated outputs. Filing PDFs are saved separately for review.</p>
+            </details>
             <div id="energy-run-status" class="energy-run-status" role="status">Waiting for SYNC ENGINEERING.</div>
             <button id="energy-authorize-backstop" class="button sp-btn" type="button" hidden>Authorize this revision</button>
           </section>
 
           <section class="energy-card energy-results-card">
-            <div class="eyebrow">03 · REVIEW / FILING OUTPUT</div>
-            <h2>Energy package</h2>
-            <p class="energy-summary">EN-1, the official 2020 NYCECC Appendix CA Modeling Envelope Backstop COMcheck report, its current-project CXL, both compiled OSMs, simulation evidence, and PRM review outputs are generated from the current immutable Engineering Sync revision. The bound active Revit document and its T/Z pages supply project identity, EN pages supply current model facts, and internal templates supply structure and enums only. Applicant, modeler, signature, and seal remain blank.</p>
+            <div class="eyebrow">03 · REVIEW &amp; EXPORT</div>
+            <h2>Models &amp; reports</h2>
+            <p class="energy-summary">View or download this revision’s models, calculation evidence, EN-1 and COMcheck reports. Review any flagged findings before using the package for filing.</p>
             <div id="energy-result-summary" class="energy-result-summary">No result yet.</div>
             <div id="energy-artifacts" class="energy-artifacts"></div>
           </section>        </div>
@@ -294,6 +305,8 @@
 
       <dialog id="design-image-lightbox" class="design-image-lightbox" aria-label="Design Book image viewer">
         <button id="design-image-lightbox-close" type="button" aria-label="Close full-screen image">×</button>
+        <button id="design-image-previous" type="button" aria-label="Previous image">‹</button>
+        <button id="design-image-next" type="button" aria-label="Next image">›</button>
         <img id="design-image-lightbox-image" alt="Design Book full-screen visual" />
         <p id="design-image-lightbox-caption"></p>
       </dialog>
@@ -429,7 +442,7 @@
       }
 
       if ('serviceWorker' in navigator && location.protocol === 'https:') {
-        navigator.serviceWorker.register('/liber-apps/sw.js').catch((error) => diagnostic('WARN', 'PWA_SERVICE_WORKER', error?.message || error));
+        navigator.serviceWorker.register('/liber-apps/sw.js?v=20260914r192-morning1').catch((error) => diagnostic('WARN', 'PWA_SERVICE_WORKER', error?.message || error));
       }
 
       window.addEventListener('beforeinstallprompt', (event) => {
@@ -475,29 +488,33 @@
       show();
     })();
   </script>
-  <script src="../../js/secure-keys.js"></script>
-  <script src="../../js/firebase-loader.js?v=20260815r49-google-oauth1"></script>
-  <script src="../../js/firebase-service.js"></script>
-  <script src="../../js/chat-iframe-bridge.js"></script>
-  <script src="diagnostics-r29.js?v=20260813r49-review2"></script>
-  <script src="../../js/wallt-agent.js?v=20260813r49"></script>
-  <script src="store.js?v=20260813r49"></script>
-  <script src="cache-r21.js?v=20260813r49"></script>
-  <script src="runtime.js?v=20260813r49"></script>
-  <script src="integrity.js?v=20260813r49"></script>
-  <script src="firestore-compat.js?v=20260813r49"></script>
-  <script src="shell-integrity.js?v=20260813r49-review2"></script>
-  <script src="ui-integrity.js?v=20260820r143-ui-recovery1"></script>
-  <script src="projection-integrity.js?v=20260813r49"></script>
+  <script src="../../js/secure-keys.js?v=20260914r192-morning1"></script>
+  <script src="../../js/firebase-loader.js?v=20260914r192-morning1"></script>
+  <script src="../../js/firebase-service.js?v=20260914r192-morning1"></script>
+  <script src="../../js/chat-iframe-bridge.js?v=20260914r192-morning1"></script>
+  <script src="diagnostics-r29.js?v=20260914r192-morning1"></script>
+  <script src="../../js/wallt-agent.js?v=20260914r192-morning1"></script>
+  <script type="module" src="wallt-controller.js?v=20260914r192-morning1"></script>
+  <script src="store.js?v=20260914r192-morning1"></script>
+  <script src="cache-r21.js?v=20260914r192-morning1"></script>
+  <script src="runtime.js?v=20260914r192-morning1"></script>
+  <script src="integrity.js?v=20260914r192-morning1"></script>
+  <script src="firestore-compat.js?v=20260914r192-morning1"></script>
+  <script src="shell-integrity.js?v=20260914r192-morning1"></script>
+  <script src="ui-integrity.js?v=20260914r197-family-flow1"></script>
+  <script src="projection-integrity.js?v=20260914r192-morning1"></script>
   <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.179.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.179.1/examples/jsm/"}}</script>
-  <script src="sync-docs-r24.js?v=20260813r49"></script>
-  <script src="workflow-r20.js?v=20260813r49"></script>
-  <script src="viewer-host-guard-r21.js?v=20260813r49"></script>
-  <script type="module" src="app.js?v=20260813r49"></script>
-  <script type="module" src="viewer-r26.js?v=20260813r49"></script>
-  <script type="module" src="workspace-r51.js?v=20260818-current-workspace1"></script>
-  <script type="module" src="render-agent.js?v=20260818-google-render1"></script>
-  <script type="module" src="history-r24.js?v=20260813r49"></script>
-  <script type="module" src="energy-r27.js?v=20260817r123-package-download1"></script>
+  <script src="document-controller.js?v=20260914r192-morning1"></script>
+  <script src="sync-docs-r24.js?v=20260914r192-morning1"></script>
+  <script src="viewer-host-guard-r21.js?v=20260914r192-morning1"></script>
+  <script type="module" src="app.js?v=20260914r193-books1"></script>
+  <script type="module" src="viewer-r26.js?v=20260914r197-render-return1"></script>
+  <script type="module" src="workspace-r51.js?v=20260914r192-morning1"></script>
+  <script type="module" src="render-agent.js?v=20260914r197-render-return1"></script>
+  <script type="module" src="history-r24.js?v=20260914r192-morning1"></script>
+  <script type="module" src="history-daily-r126.js?v=20260914r192-morning1"></script>
+  <script src="assets-library-r157.js?v=20260914r197-family-flow1"></script>
+  <script src="post-recovery-r157.js?v=20260914r192-morning1"></script>
+  <script type="module" src="energy-r27.js?v=20260914r192-morning1"></script>
 </body>
 </html>

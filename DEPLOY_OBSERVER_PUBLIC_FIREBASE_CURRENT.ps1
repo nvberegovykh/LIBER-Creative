@@ -7,6 +7,7 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $Root '.github/scripts/hosting-preservation.ps1')
 $Docs = Join-Path $Root 'docs'
 $PublicManifestPath = Join-Path $Docs 'ai\public-manifest.json'
 $Api = 'https://firebasehosting.googleapis.com/v1beta1'
@@ -151,6 +152,7 @@ $live = Invoke-Json GET "$Api/sites/$SiteId/channels/live"
 $SourceVersion = [string]$live.release.version.name
 if (-not $SourceVersion) { throw 'Live channel has no current version.' }
 $SourceVersionObject = Invoke-Json GET "$Api/$SourceVersion"
+$SourceFiles = Get-HostingFileMap $SourceVersion
 if ([string]$SourceVersionObject.status -ne 'FINALIZED') { throw "Live source version is not FINALIZED: $($SourceVersionObject.status)" }
 $baseline = [ordered]@{
   project=$ProjectId; domain=$Domain; site=$SiteId; liveUrl=$live.url; sourceVersion=$SourceVersion;
@@ -247,6 +249,8 @@ try {
   $finalPatch = Invoke-Json PATCH "$Api/$CloneVersion`?updateMask=status" @{ name=$CloneVersion; status='FINALIZED' }
   if ([string]$finalPatch.status -ne 'FINALIZED') { throw "Clone did not finalize: $($finalPatch.status)" }
   $final = Get-FinalizedVersionState $CloneVersion
+  $CandidateFiles = Get-HostingFileMap $CloneVersion
+  Assert-HostingPreserved $SourceFiles $CandidateFiles $manifest
   $finalProps = @($final.PSObject.Properties.Name)
   if ($finalProps -contains 'fileCount') {
     $finalFileCount = [int64]$final.fileCount
@@ -269,6 +273,8 @@ try {
   Test-CounterUrl $PreviewUrl
 
   # Live cutover is one release pointer change; source version is retained as immediate rollback.
+  $latestLive = Invoke-Json GET "$Api/sites/$SiteId/channels/live"
+  Assert-HostingLiveVersion $SourceVersion ([string]$latestLive.release.version.name)
   Say "Preview passed. Releasing patched clone to live; rollback remains $SourceVersion."
   $liveReleaseUri = "$Api/sites/$SiteId/channels/live/releases?versionName=$([uri]::EscapeDataString($CloneVersion))"
   $null = Invoke-Json POST $liveReleaseUri @{ message="Observer public counter surgical patch $Timestamp" }
@@ -288,6 +294,8 @@ catch {
   if ($LiveReleased) {
     Say "Live verification failed after cutover. Rolling live channel back to $SourceVersion."
     try {
+      $rollbackLive = Invoke-Json GET "$Api/sites/$SiteId/channels/live"
+      Assert-HostingLiveVersion $CloneVersion ([string]$rollbackLive.release.version.name)
       $rollbackUri = "$Api/sites/$SiteId/channels/live/releases?versionName=$([uri]::EscapeDataString($SourceVersion))"
       $null = Invoke-Json POST $rollbackUri @{ message="Automatic rollback after Observer public counter verification failure $Timestamp" }
       Say 'ROLLBACK RELEASED.'

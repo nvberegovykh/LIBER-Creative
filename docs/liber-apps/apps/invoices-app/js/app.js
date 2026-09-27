@@ -72,7 +72,10 @@ class InvoiceGenerator {
         await this.loadDataFromStore();
         
         // Set current date
-        const today = new Date().toISOString().split('T')[0];
+        // A date input represents the user's calendar date, not the UTC date.
+        // Keep the default consistent with the locally dated invoice number.
+        const now = new Date();
+        const today = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
         document.getElementById('invoiceDate').value = today;
         
         // Generate invoice ID

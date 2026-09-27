@@ -3,7 +3,6 @@
 
   const COLLECTION = 'downloads';
   const PLATFORM_ORDER = ['windows', 'macos', 'android', 'ios', 'linux', 'web', 'other'];
-  const GITHUB_API_BASE = 'https://api.github.com/repos/';
   const state = { editId: '' };
 
   function byId(id) {
@@ -66,10 +65,6 @@
       const segments = path.split('/').filter(Boolean);
       fileName = decodeURIComponent(segments[segments.length - 1] || '');
 
-      const relIdx = segments.findIndex((s) => s.toLowerCase() === 'download');
-      if (host.includes('github.com') && relIdx >= 1 && segments.length > relIdx + 2) {
-        tag = decodeURIComponent(segments[relIdx + 1] || '');
-      }
 
       const match = /(?:^|[^a-z0-9])(v?\d+\.\d+\.\d+(?:[-._][a-z0-9]+)*)/i.exec(`${fileName} ${tag} ${path}`);
       versionNumber = match ? match[1].replace(/_/g, '.') : '';
@@ -87,9 +82,7 @@
       versionName = 'Download';
     }
 
-    const source = host.includes('github.com')
-      ? 'GitHub'
-      : host.includes('play.google.com')
+    const source = host.includes('play.google.com')
       ? 'Google Play'
       : host.includes('apps.apple.com')
       ? 'App Store'
@@ -101,19 +94,32 @@
     return { versionName, versionNumber, tag, fileName, source, platform };
   }
 
-  function parseGithubRepo(rawUrl) {
+
+  function isApprovedCloudDownloadUrl(rawUrl) {
     try {
       const u = new URL(String(rawUrl || '').trim());
-      if (!/github\.com$/i.test(u.hostname)) return null;
-      const parts = u.pathname.split('/').filter(Boolean);
-      if (parts.length < 2) return null;
-      const owner = parts[0];
-      const repo = parts[1];
-      if (!owner || !repo) return null;
-      return { owner, repo, key: `${owner}/${repo}` };
-    } catch (_) {
-      return null;
-    }
+      if (u.protocol !== 'https:') return false;
+      const host = String(u.hostname || '').toLowerCase();
+      return host === 'liberpict.com'
+        || host.endsWith('.liberpict.com')
+        || host === 'storage.googleapis.com'
+        || host === 'firebasestorage.googleapis.com'
+        || host === 'play.google.com'
+        || host === 'apps.apple.com';
+    } catch (_) { return false; }
+  }
+
+  function isLegacyReleaseAuthorityUrl(rawUrl) {
+    try {
+      const host = String(new URL(String(rawUrl || '').trim()).hostname || '').toLowerCase();
+      return host.includes('github') || host === ['g', 'hcr.io'].join('');
+    } catch (_) { return false; }
+  }
+
+  function isLegacyReleaseAuthorityRow(row) {
+    const source = String(row?.source || '').trim().toLowerCase();
+    const repo = String(row?.githubRepo || '').trim();
+    return Boolean(repo) || source === 'github' || isLegacyReleaseAuthorityUrl(row?.directUrl);
   }
 
   function extractVersionNumber(input) {
@@ -148,150 +154,10 @@
       .trim();
   }
 
-  async function fetchGithubReadmeDescription(owner, repo) {
-    try {
-      const url = `${GITHUB_API_BASE}${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/readme`;
-      const res = await fetch(url, { method: 'GET', headers: { Accept: 'application/vnd.github+json' } });
-      if (!res.ok) return '';
-      const data = await res.json();
-      const raw = decodeBase64Utf8(data?.content || '');
-      const text = stripMarkdown(raw);
-      const firstLongLine = text
-        .split('\n')
-        .map((line) => line.trim())
-        .find((line) => line.length >= 24);
-      return String(firstLongLine || text.split('\n')[0] || '').slice(0, 280).trim();
-    } catch (_) {
-      return '';
-    }
-  }
-
-  async function fetchGithubRepoMeta(owner, repo) {
-    const url = `${GITHUB_API_BASE}${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: { Accept: 'application/vnd.github+json' }
-    });
-    if (!res.ok) return null;
-    return res.json();
-  }
-
-  async function fetchLatestGithubRelease(owner, repo) {
-    const url = `${GITHUB_API_BASE}${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases/latest`;
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: { Accept: 'application/vnd.github+json' }
-    });
-    if (!res.ok) throw new Error(`GitHub latest release fetch failed (${res.status})`);
-    return res.json();
-  }
-
-  async function getAllRows() {
-    const fs = getFirebaseService();
-    if (!fs?.db) return [];
-    const snap = await fb().getDocs(fb().collection(fs.db, COLLECTION));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  }
-
-  async function syncGithubRepoLatest(repoInfo, actorUid) {
-    const fs = getFirebaseService();
-    if (!fs?.db || !repoInfo?.owner || !repoInfo?.repo) return { synced: 0, removed: 0, tag: '' };
-
-    const release = await fetchLatestGithubRelease(repoInfo.owner, repoInfo.repo);
-    const repoMeta = await fetchGithubRepoMeta(repoInfo.owner, repoInfo.repo);
-    const readmeDescription = await fetchGithubReadmeDescription(repoInfo.owner, repoInfo.repo);
-    const tag = String(release?.tag_name || release?.name || '').trim();
-    const repoDescription = String(repoMeta?.description || '').trim();
-    const releaseDescription = String(release?.body || '').trim();
-    const mergedDescription = [readmeDescription, repoDescription, releaseDescription].find((x) => String(x || '').trim()) || '';
-    const assets = Array.isArray(release?.assets) ? release.assets : [];
-    if (!assets.length) throw new Error('Latest release has no downloadable assets');
-
-    const existing = (await getAllRows()).filter((r) => String(r.githubRepo || '') === repoInfo.key);
-    const byAssetId = new Map(existing.map((r) => [String(r.githubAssetId || ''), r]));
-    const latestAssetIds = new Set();
-    let upserts = 0;
-
-    for (const a of assets) {
-      const assetId = String(a?.id || '').trim();
-      const directUrl = String(a?.browser_download_url || '').trim();
-      const fileName = String(a?.name || '').trim() || 'download';
-      if (!assetId || !directUrl) continue;
-      latestAssetIds.add(assetId);
-
-      const platform = normalizePlatform(detectPlatform(directUrl, fileName));
-      const now = new Date().toISOString();
-      const versionNumber = extractVersionNumber(`${tag} ${fileName}`);
-      const payload = {
-        directUrl,
-        platform,
-        versionName: fileName.replace(/\.[a-z0-9]{1,8}$/i, ''),
-        versionNumber: versionNumber || '',
-        version: tag || '',
-        tag: tag || '',
-        fileName,
-        source: 'GitHub',
-        readmeDescription,
-        repoDescription,
-        releaseDescription,
-        description: mergedDescription,
-        githubRepo: repoInfo.key,
-        githubAssetId: assetId,
-        githubReleaseId: String(release?.id || ''),
-        githubPublishedAt: String(release?.published_at || release?.created_at || now),
-        updatedAt: now,
-        createdBy: actorUid || ''
-      };
-      const existingRow = byAssetId.get(assetId);
-      if (existingRow?.id) {
-        await fb().updateDoc(fb().doc(fs.db, COLLECTION, existingRow.id), payload);
-      } else {
-        await fb().addDoc(fb().collection(fs.db, COLLECTION), {
-          ...payload,
-          createdAt: now
-        });
-      }
-      upserts += 1;
-    }
-
-    let removed = 0;
-    for (const row of existing) {
-      const aid = String(row.githubAssetId || '');
-      if (!aid || latestAssetIds.has(aid)) continue;
-      await fb().deleteDoc(fb().doc(fs.db, COLLECTION, row.id));
-      removed += 1;
-    }
-
-    return { synced: upserts, removed, tag };
-  }
 
   async function maybeAutoRefreshGithubRows(rows) {
-    const repos = Array.from(new Set(
-      (rows || [])
-        .map((r) => String(r.githubRepo || '').trim())
-        .filter(Boolean)
-    ));
-    // Return existing rows immediately so the UI renders now.
-    // Sync GitHub releases in the background and re-render when done.
-    if (repos.length) {
-      const fs = getFirebaseService();
-      const me = fs?.auth?.currentUser;
-      Promise.resolve().then(async () => {
-        let changed = false;
-        for (const key of repos) {
-          const [owner, repo] = key.split('/');
-          if (!owner || !repo) continue;
-          try {
-            await syncGithubRepoLatest({ owner, repo, key }, me?.uid || '');
-            changed = true;
-          } catch (_) {}
-        }
-        if (changed) {
-          try { renderRows(await loadRowsRaw()); } catch (_) {}
-        }
-      });
-    }
-    return rows || [];
+    const all = Array.isArray(rows) ? rows : [];
+    return all.filter((row) => !isLegacyReleaseAuthorityRow(row));
   }
 
   // Raw load without auto-refresh to avoid recursion
@@ -532,12 +398,12 @@
     const platformInput = String(byId('download-platform')?.value || 'auto').trim();
     const customName = String(byId('download-name')?.value || '').trim();
     if (!url) return notify('Direct link is required', 'error');
+    if (!isApprovedCloudDownloadUrl(url)) return notify('Cloud recovery accepts only LIBER/GCP or approved app-store download hosts.', 'error');
 
     const meta = parseDownloadMeta(url);
     const platform = platformInput === 'auto' ? meta.platform : normalizePlatform(platformInput);
     const now = new Date().toISOString();
 
-    const ghRepo = parseGithubRepo(url);
     if (state.editId) {
       try {
         const updatePayload = {
@@ -559,18 +425,6 @@
         return;
       } catch (err) {
         notify(err?.message || 'Failed to update download', 'error');
-        return;
-      }
-    }
-    if (ghRepo) {
-      try {
-        const synced = await syncGithubRepoLatest(ghRepo, me.uid);
-        byId('download-form')?.reset();
-        notify(`Synced latest ${ghRepo.key} release ${synced.tag ? `(${synced.tag})` : ''}: ${synced.synced} assets`, 'success');
-        renderRows(await loadRows());
-        return;
-      } catch (err) {
-        notify(err?.message || 'Failed to sync latest GitHub release', 'error');
         return;
       }
     }

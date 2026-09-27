@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Media Enhancer</title>
-  <link rel="stylesheet" href="../../css/style.css" />
+  <link rel="stylesheet" href="../../css/style.css?v=20260914r192-morning1" />
   <style>
     body{background:var(--primary-bg,#000);color:var(--primary-text,#eaeaea);font-family:var(--app-font,"Courier Prime","Courier New","Lucida Console",monospace)}
     .wrap{max-width:900px;margin:0 auto;padding:16px;padding-top:max(16px,env(safe-area-inset-top))}
@@ -17,6 +17,7 @@
   </style>
 </head>
 <body>
+  <!-- R163_FFMPEG_SINGLE_THREAD_0_11: @ffmpeg/ffmpeg 0.11.6 + @ffmpeg/core-st 0.11.1 -->
   <div class="wrap">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
       <h2>Media Enhancer</h2>
@@ -37,6 +38,7 @@
       <div class="row">
         <input id="img-input" type="file" accept="image/*" />
         <button id="upscale-btn">Upscale</button>
+        <button id="download-upscale-btn" disabled>Download PNG</button>
       </div>
       <div id="img-status" style="margin-top:8px;opacity:.85"></div>
       <div class="grid">
@@ -46,7 +48,7 @@
     </div>
   </div>
 
-  <!-- Lightweight models via CDN; for production host locally -->
+  <!-- Browser audio engine loaded on demand from a pinned CDN version. -->
   <script>
     (function(){
       const back = document.getElementById('back-to-cp');
@@ -54,71 +56,89 @@
     })();
   </script>
   <script>
-    // Load ffmpeg.wasm with resilient CDN fallbacks
+    // R163: sequential wrapper fallback prevents two CDN copies from racing the namespace.
     (function(){
-      const add = (src, onload)=>{ const s=document.createElement('script'); s.src=src; s.async=true; s.onload=onload; s.onerror=()=>{}; document.head.appendChild(s); };
-      const boot = ()=>{ if (window.FFmpeg) initEnhancer(); else setTimeout(boot, 80); };
-      if (!window.FFmpeg){
-        add('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/ffmpeg.min.js', boot);
-        add('https://unpkg.com/@ffmpeg/ffmpeg@0.12.6/dist/ffmpeg.min.js', boot);
-      } else { initEnhancer(); }
-      function initEnhancer(){
-        try{ window.__FFMPEG__ = window.FFmpeg; }catch(_){ }
-      }
+      const loadScript=(src)=>new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=src;s.async=true;s.crossOrigin='anonymous';s.onload=()=>resolve(src);s.onerror=()=>{s.remove();reject(new Error('Could not load '+src))};document.head.appendChild(s)});
+      const urls=['https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js','https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js'];
+      let pending=null;
+      window.waitForEnhancerFFmpeg=function(){if((window.__FFMPEG__||window.FFmpeg)?.createFFmpeg)return Promise.resolve(window.__FFMPEG__||window.FFmpeg);if(pending)return pending;pending=(async()=>{let last=null;for(const src of urls){try{await loadScript(src);if(window.FFmpeg?.createFFmpeg){window.__FFMPEG__=window.FFmpeg;return window.__FFMPEG__}last=new Error('FFmpeg wrapper loaded without createFFmpeg: '+src)}catch(error){last=error}}throw last||new Error('FFmpeg audio engine failed to load.')})().catch(error=>{pending=null;throw error;});return pending};
     })();
   </script>
   <script>
     // --- Audio Splitter (vocal/instrumental) ---
-    // Simple frequency-domain mask approximation using STFT to separate vocals vs background.
-    // For higher quality, integrate a server-side model (e.g., Demucs) later.
+    // High/low-pass frequency bands only; this is not AI voice/instrument separation.
     const getFF = ()=>{ const ns = (window.__FFMPEG__||window.FFmpeg); return { createFFmpeg: ns.createFFmpeg, fetchFile: ns.fetchFile }; };
     let ff; // lazily created instance
     const A = (id)=>document.getElementById(id);
     async function ensureFF(){
-      if (!ff){ const { createFFmpeg } = getFF(); ff = createFFmpeg({ log:false }); }
+      const ns=await window.waitForEnhancerFFmpeg();
+      if (!ns?.createFFmpeg) throw new Error('FFmpeg audio engine failed to load.');
+      if (!ff){ const { createFFmpeg } = getFF(); const coreCandidates=['https://cdn.jsdelivr.net/npm/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js','https://unpkg.com/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js']; let last=null; for(const corePath of coreCandidates){ let candidate; try{ candidate=createFFmpeg({ log:false, mainName:'main', corePath }); await candidate.load(); ff=candidate; break; }catch(e){ try{candidate?.exit?.();}catch(_){} last=e; ff=null; } } if(!ff) throw last||new Error('FFmpeg audio core failed to load.'); return ff; }
       if (!ff.isLoaded()){ A('audio-status').textContent='Loading audio engine...'; await ff.load(); }
     }
     function downloadBlob(blob, name){ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 5000); }
 
+    let audioObjectUrls=[];
     A('split-btn').onclick = async()=>{
       const f = A('audio-input').files[0];
       if (!f){ alert('Choose an audio/video file'); return; }
+      const button=A('split-btn');if(button.disabled)return;button.disabled=true;
+      try {
+      A('audio-status').textContent='Loading audio engine...';
       await ensureFF();
       A('audio-status').textContent = 'Extracting audio...';
-      // Step 1: Extract mono wav for analysis
+      // Produce both outputs in one invocation. The single-thread core exits
+      // after main() and cannot reliably run another command in that instance.
       const { fetchFile } = getFF();
       ff.FS('writeFile','in.bin', await fetchFile(f));
-      await ff.run('-i','in.bin','-vn','-ac','1','-ar','44100','in.wav');
-      // Very naive spectral gating: create two filtered versions (vocal-like band and rest)
       A('audio-status').textContent = 'Separating bands (approx)...';
-      await ff.run('-i','in.wav','-af','highpass=f=150, lowpass=f=4000', 'vocals.wav');
-      await ff.run('-i','in.wav','-af','acompressor,anequalizer=f=120:width_type=h:width=100:g=10,anequalizer=f=6000:width_type=h:width=2000:g=10', 'music.wav');
+      // Complementary low/high bands, not an AI stem-separation claim.
+      await ff.run('-y','-i','in.bin','-vn','-filter_complex','[0:a]aformat=channel_layouts=mono,aresample=44100,asplit=3[v][lo][hi];[v]highpass=f=150,lowpass=f=4000[vocals];[lo]lowpass=f=150[low];[hi]highpass=f=4000[high];[low][high]amix=inputs=2,volume=2[music]','-map','[vocals]','vocals.wav','-map','[music]','music.wav');
       const vData = ff.FS('readFile','vocals.wav');
       const mData = ff.FS('readFile','music.wav');
-      const vBlob = new Blob([vData.buffer], {type:'audio/wav'});
-      const mBlob = new Blob([mData.buffer], {type:'audio/wav'});
+      const vBlob = new Blob([vData], {type:'audio/wav'});
+      const mBlob = new Blob([mData], {type:'audio/wav'});
       const out = A('audio-outputs'); out.innerHTML = '';
+      audioObjectUrls.forEach(url=>URL.revokeObjectURL(url));
       const vUrl = URL.createObjectURL(vBlob); const mUrl = URL.createObjectURL(mBlob);
+      audioObjectUrls=[vUrl,mUrl];
       out.insertAdjacentHTML('beforeend', `<div><strong>Vocals (approx)</strong><audio controls src="${vUrl}"></audio><div><a download="vocals.wav" href="${vUrl}"><button>Download</button></a></div></div>`);
       out.insertAdjacentHTML('beforeend', `<div><strong>Music (approx)</strong><audio controls src="${mUrl}"></audio><div><a download="music.wav" href="${mUrl}"><button>Download</button></a></div></div>`);
       A('audio-status').textContent = 'Done.';
+      } catch(e) {
+        A('audio-status').textContent='Audio split failed: '+(e?.message||'The audio engine could not process this file. Try another file.');
+        // A failed wasm engine must be recreated for the next attempt.
+        try { ff?.exit?.(); } catch(_) {} ff=null;
+      } finally {
+        if(ff?.isLoaded?.())for(const name of ['in.bin','in.wav','vocals.wav','music.wav']){try{ff.FS('unlink',name);}catch(_){}}
+        try { ff?.exit?.(); } catch(_) {} ff=null;
+        button.disabled=false;
+      }
     };
 
     // --- Image Upscaler (2x) ---
     A('upscale-btn').onclick = async()=>{
       const f = A('img-input').files[0]; if (!f){ alert('Choose an image'); return; }
+      const button=A('upscale-btn');if(button.disabled)return;button.disabled=true;
+      A('download-upscale-btn').disabled=true;
       const src = A('img-src'); const out = A('img-out');
+      const url=URL.createObjectURL(f);
+      const done=()=>{URL.revokeObjectURL(url);button.disabled=false;};
       const img = new Image(); img.onload = ()=>{
+        try {
         const w = img.naturalWidth, h = img.naturalHeight;
+        if(!w||!h||w*h>10000000)throw new Error('Use an image no larger than 10 megapixels for 2× upscaling.');
         src.width = w; src.height = h; out.width = w*2; out.height = h*2;
         const sctx = src.getContext('2d'); sctx.imageSmoothingEnabled = false; sctx.drawImage(img,0,0);
         const octx = out.getContext('2d'); octx.imageSmoothingEnabled = true; octx.imageSmoothingQuality = 'high';
         octx.drawImage(img,0,0,out.width,out.height);
         A('img-status').textContent = `Upscaled to ${out.width}×${out.height}`;
-      }; img.src = URL.createObjectURL(f);
+        A('download-upscale-btn').disabled=false;
+        } catch(e) {A('img-status').textContent='Upscaling failed: '+e.message;}
+        finally {done();}
+      }; img.onerror=()=>{A('img-status').textContent='Upscaling failed: could not decode this image.';done();};img.src=url;
     };
+    A('download-upscale-btn').onclick=()=>A('img-out').toBlob(blob=>{if(blob)downloadBlob(blob,'upscaled-2x.png');},'image/png');
   </script>
 </body>
 </html>
-
-

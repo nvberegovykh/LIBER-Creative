@@ -218,6 +218,7 @@
     _applyAuthState(user, source = 'auth') {
       const previousMode = this.mode;
       const previousUid = this._lastAuthUid;
+      const initialAuthState = !this.authSettled;
       this.user = user || null;
       this._lastAuthUid = this.user?.uid || null;
       this.mode = this.user ? 'cloud' : 'local';
@@ -230,7 +231,7 @@
       } : null;
       try {
         root.dispatchEvent(new CustomEvent('revex:auth-mode-changed', { detail: {
-          mode: this.mode, uid: this._lastAuthUid, source, pendingLocalRevision: pending
+          mode: this.mode, uid: this._lastAuthUid, previousUid, initialAuthState, source, pendingLocalRevision: pending
         } }));
       } catch (_) {}
       return this.mode;
@@ -258,22 +259,19 @@
       }
       if (this.fs?.db && this.api?.collection) {
         this.db = this.api.firestore && this.fs.app ? this.api.firestore(this.fs.app) : this.fs.db;
-        this.user = this.fs.auth?.currentUser || null;
-        if (this.api.onAuthStateChanged && this.fs.auth) {
-          await new Promise((resolve) => {
-            let settled = false;
-            const timer = setTimeout(() => {
-              if (!settled) { settled = true; this._applyAuthState(this.fs.auth?.currentUser || null, 'auth-timeout'); resolve(); }
-            }, 2500);
-            try {
-              this.api.onAuthStateChanged(this.fs.auth, (user) => {
-                this._applyAuthState(user, 'auth-listener');
-                if (!settled) { settled = true; clearTimeout(timer); resolve(); }
-              });
-            } catch (_) { clearTimeout(timer); this._applyAuthState(this.fs.auth?.currentUser || null, 'auth-listener-error'); resolve(); }
-          });
+        if (typeof this.fs.waitForAuthState !== 'function') {
+          throw new Error('Firebase Auth readiness is unavailable. REVEX will not open project data until sign-in state is confirmed.');
         }
-        else this._applyAuthState(this.user, 'auth-initial');
+        const initialUser = await this.fs.waitForAuthState(15000);
+        this._applyAuthState(initialUser, 'auth-service-ready');
+        if (this.api.onAuthStateChanged && this.fs.auth) {
+          try {
+            this._authUnsubscribe?.();
+            this._authUnsubscribe = this.api.onAuthStateChanged(this.fs.auth, (user) => this._applyAuthState(user, 'auth-listener'));
+          } catch (error) {
+            console.warn('[REVEX] live auth listener unavailable after initial auth confirmation', error);
+          }
+        }
       }
       return this.mode;
     },
@@ -290,12 +288,14 @@
       const f = this.api;
       const uid = this.user.uid;
       const out = new Map();
+      const errors = [];
       const grab = async (query) => {
         const snap = await f.getDocs(query);
         snap.docs.forEach((d) => out.set(d.id, { id: d.id, ...d.data() }));
       };
-      try { await grab(f.query(f.collection(this.db, 'projects'), f.where('ownerId', '==', uid), f.limit(50))); } catch (e) { console.warn('[REVEX] owner projects', e); }
-      try { await grab(f.query(f.collection(this.db, 'projects'), f.where('memberIds', 'array-contains', uid), f.limit(50))); } catch (e) { console.warn('[REVEX] member projects', e); }
+      try { await grab(f.query(f.collection(this.db, 'projects'), f.where('ownerId', '==', uid), f.limit(50))); } catch (e) { errors.push(e); console.warn('[REVEX] owner projects', e); }
+      try { await grab(f.query(f.collection(this.db, 'projects'), f.where('memberIds', 'array-contains', uid), f.limit(50))); } catch (e) { errors.push(e); console.warn('[REVEX] member projects', e); }
+      if (!out.size && errors.length) throw new Error('Could not retrieve the live REVEX project list.');
       return [...out.values()].sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
     },
 
@@ -419,16 +419,19 @@
       return null;
     },
 
-    async ensureSpecProject(projectId, preferredId, suppliedProject = null) {
+    async ensureSpecProject(projectId, preferredId, suppliedProject = null, assertCurrent = () => {}) {
       const existing = await this.resolveSpecProject(projectId, preferredId);
+      assertCurrent();
       if (existing) {
         if (this.isCloud()) {
           await this.api.setDoc(this.api.doc(this.db, 'specProjects', existing), plain({ linkedProjectId: projectId, updatedAt: iso(), managedByRevex: true }), plain({ merge: true }));
+          assertCurrent();
           await this.api.updateDoc(this.api.doc(this.db, 'projects', projectId), plain({ revexSpecProjectId: existing, updatedAt: iso() }));
         }
         return existing;
       }
       const project = suppliedProject || await this.getProject(projectId);
+      assertCurrent();
       if (!project) throw new Error('The shared LIBER project could not be loaded.');
       const specProjectId = `spec_${docId(projectId)}`;
       const at = iso();
@@ -460,6 +463,7 @@
         return specProjectId;
       }
       await this.api.setDoc(this.api.doc(this.db, 'specProjects', specProjectId), plain(specData), plain({ merge: true }));
+      assertCurrent();
       await this.api.updateDoc(this.api.doc(this.db, 'projects', projectId), plain({ revexSpecProjectId: specProjectId, updatedAt: at }));
       return specProjectId;
     },
@@ -590,7 +594,16 @@
     },
 
     async syncEngineeringPackage(fileList, preferredProjectId) {
+      const cloud = this.isCloud(), owner = this.user?.uid || null;
+      const activation = root.__revexState?.activationToken;
+      const assertCurrent = () => {
+        if ((this.user?.uid || null) !== owner || (cloud && this.fs?.auth?.currentUser?.uid !== owner) ||
+            (activation !== undefined && root.__revexState?.activationToken !== activation))
+          throw new Error('The account or project changed during Engineering import. Nothing further was published.');
+      };
       const files = Array.from(fileList || []);
+      if (new Set(files.map(f => String(f.name).toLowerCase())).size !== files.length)
+        throw new Error('Engineering Sync contains duplicate file names.');
       const manifestFile = byName(files, 'engineering-sync.json');
       const gbxmlFile = files.find((file) => /\.xml$/i.test(file.name)) || null;
       if (!manifestFile || !gbxmlFile) throw new Error('The Engineering Sync package must include engineering-sync.json and the Revit gbXML.');
@@ -603,9 +616,9 @@
       const publication = manifest?.publicationIntegrity || {};
       const integrityRatios = Object.values(publication.ratios || {}).map((value) => Number(value));
       const declaredQualityTarget = Number(publication.qualityTarget || publication.threshold || 0);
-      if (Number(publication.threshold || 0) < ENERGY_HARD_STOP || !integrityRatios.length || integrityRatios.some((value) => value < ENERGY_HARD_STOP))
+      if (!Number.isFinite(Number(publication.threshold)) || Number(publication.threshold || 0) < ENERGY_HARD_STOP || !integrityRatios.length || integrityRatios.some((value) => !Number.isFinite(value) || value < ENERGY_HARD_STOP || value > 1))
         throw new Error('Energy Sync requires at least 80% integrity in every required Revit evidence domain.');
-      if (declaredQualityTarget < ENERGY_QUALITY_TARGET)
+      if (!Number.isFinite(declaredQualityTarget) || declaredQualityTarget < ENERGY_QUALITY_TARGET)
         throw new Error('Energy Sync is missing the 80% hard-stop / 95% quality-target integrity contract.');
       const projectId = preferredProjectId || manifest.projectId || null;
       if (!projectId) throw new Error('Choose a LIBER project before importing Engineering Sync.');
@@ -637,6 +650,7 @@
       }
 
       const revision = docId(manifest.revision || `eng_${Date.now()}`);
+      assertCurrent();
       const at = iso();
       const localArtifacts = files.map((file, index) => ({
         name: file.name, bytes: file.size || 0, kind: index === 0 ? 'manifest' : 'engineering-evidence',
@@ -646,41 +660,60 @@
         schema: 'liber.revex.engineering-state.v1', projectId, revision, syncedAt: at,
         manifest, artifacts: localArtifacts, cloud: false, writeBackToRevitAfterExport: false, pdfInsertion: false
       };
-      localStorage.setItem(`liber.revex.engineering.${projectId}`, JSON.stringify({
+      try { localStorage.setItem(`liber.revex.engineering.${projectId}`, JSON.stringify({
         ...state, artifacts: localArtifacts.map(({ url, ...row }) => row), localOnly: true
-      }));
-      if (!this.isCloud()) return state;
+      })); } catch (_) {}
+      if (!cloud) return state;
       if (!this.fs.storage) throw new Error('LIBER Storage is not available in this session.');
 
-      const base = `projects/${projectId}/revex/engineering/revisions/${revision}`;
-      const artifacts = [];
-      for (let index = 0; index < files.length; index += 1) {
-        const file = files[index];
-        const uploaded = await this.uploadFile(`${base}/${String(index + 1).padStart(3, '0')}_${safe(file.name)}`, file);
-        artifacts.push({
-          name: file.name, bytes: file.size || 0,
-          sha256: fileIntegrity.get(String(file.name || '').toLowerCase()),
-          kind: index === 0 ? 'manifest' : 'engineering-evidence',
-          url: uploaded.url, path: uploaded.path, cloud: true
-        });
-      }
-      const cloudState = plain({ ...state, artifacts, cloud: true, syncedBy: this.user.uid });
+      if (!this.api.runTransaction) throw new Error('Reload LIBER to enable safe Engineering publication.');
       const currentRef = this.api.doc(this.db, 'projects', projectId, 'library', ENGINEERING_CURRENT_ID);
       const immutableRef = this.api.doc(this.db, 'projects', projectId, 'library', `revex_engineering_revision_${revision}`);
+      const manifestHash = fileIntegrity.get('engineering-sync.json');
+      const matches = previous => previous?.projectId === projectId && previous?.revision === revision &&
+        previous?.artifacts?.find(a => String(a.name).toLowerCase() === 'engineering-sync.json')?.sha256 === manifestHash;
+      const previous = await this.api.getDoc(immutableRef); assertCurrent();
+      if (previous.exists()) {
+        if (!matches(previous.data())) throw new Error('This Engineering revision already contains different evidence. Export a new revision.');
+        return previous.data();
+      }
+      const base = `projects/${projectId}/revex/engineering/revisions/${revision}/${manifestHash}`;
+      const artifacts = [];
+      for (const file of files) {
+        assertCurrent();
+        const digest = fileIntegrity.get(String(file.name).toLowerCase());
+        const objectPath = `${base}/${digest}_${safe(file.name)}`;
+        const ref = this.api.ref(this.fs.storage, objectPath);
+        let url;
+        try { url = await this.api.getDownloadURL(ref); }
+        catch (error) { if (error.code !== 'storage/object-not-found') throw error; }
+        assertCurrent();
+        if (url) {
+          const response = await fetch(url); assertCurrent();
+          if (!response.ok) throw new Error(`Could not verify preserved Engineering artifact: ${file.name}.`);
+          const blob = await response.blob();
+          if (blob.size !== file.size || await sha256File(blob) !== digest)
+            throw new Error(`Preserved Engineering artifact differs from its source: ${file.name}.`);
+        } else {
+          const uploaded = await this.uploadFile(objectPath, file); url = uploaded.url;
+        }
+        assertCurrent();
+        artifacts.push({name:file.name,bytes:file.size,sha256:digest,
+          kind:file === manifestFile ? 'manifest' : 'engineering-evidence',url,path:objectPath,cloud:true});
+      }
+      const cloudState = plain({ ...state, artifacts, cloud: true, syncedBy: owner });
       const currentRecord = revexRecord('engineering', cloudState, at);
       const immutableRecord = revexRecord('engineering-revision', { ...cloudState, immutable: true }, at);
-      if (this.api.writeBatch) {
-        const batch = this.api.writeBatch(this.db);
-        batch.set(immutableRef, immutableRecord, plain({ merge: false }));
-        batch.set(currentRef, currentRecord, plain({ merge: false }));
-        await batch.commit();
-      } else {
-        // Safe fallback for older shared Firebase wrappers: an orphan immutable
-        // revision is recoverable; a current pointer without its immutable source is not.
-        await this.api.setDoc(immutableRef, immutableRecord, plain({ merge: false }));
-        await this.api.setDoc(currentRef, currentRecord, plain({ merge: false }));
-      }
-      return cloudState;
+      return this.api.runTransaction(this.db, async transaction => {
+        const existing = await transaction.get(immutableRef); assertCurrent();
+        if (existing.exists()) {
+          if (!matches(existing.data())) throw new Error('Another publication used this Engineering revision with different evidence. Export a new revision.');
+          return existing.data();
+        }
+        transaction.set(immutableRef, immutableRecord);
+        transaction.set(currentRef, currentRecord);
+        return cloudState;
+      });
     },
 
     async getEngineeringState(projectId) {
@@ -696,12 +729,12 @@
       return null;
     },
 
-    subscribeEngineeringState(projectId, callback) {
+    subscribeEngineeringState(projectId, callback, onError) {
       if (!this.isCloud() || !projectId || !this.api.onSnapshot) return () => {};
       return this.api.onSnapshot(
         this.api.doc(this.db, 'projects', projectId, 'library', ENGINEERING_CURRENT_ID),
         (snap) => callback(snap.exists() ? { id: snap.id, ...snap.data() } : null),
-        (error) => console.warn('[REVEX] Engineering state subscription', error)
+        (error) => { console.warn('[REVEX] Engineering state subscription', error); onError?.(error); }
       );
     },
 
@@ -833,12 +866,12 @@
       return snap.exists() ? { id: snap.id, ...snap.data() } : null;
     },
 
-    subscribeEnergyResult(projectId, callback) {
+    subscribeEnergyResult(projectId, callback, onError) {
       if (!this.isCloud() || !projectId || !this.api.onSnapshot) return () => {};
       return this.api.onSnapshot(
         this.api.doc(this.db, 'projects', projectId, 'library', ENERGY_CURRENT_ID),
         (snap) => callback(snap.exists() ? { id: snap.id, ...snap.data() } : null),
-        (error) => console.warn('[REVEX] Energy result subscription', error)
+        (error) => { console.warn('[REVEX] Energy result subscription', error); onError?.(error); }
       );
     },
 
@@ -882,15 +915,18 @@
       return { id: chapterId, ...data };
     },
 
-    async uploadChapterImage(projectId, chapterId, field, file, currentImages) {
+    async uploadChapterImage(projectId, chapterId, field, file, currentImages, assertCurrent = () => {}) {
+      assertCurrent();
       if (!['inspiration', 'renders', 'versionImages'].includes(field)) throw new Error('Unknown Design Book image lane.');
       const name = safe(file.name || 'image');
       if (!this.isCloud()) {
         const images = [...(currentImages || []), { url: await readDataUrl(file), path: null, name }].slice(-24);
+        assertCurrent();
         await this.saveChapterEdit(projectId, chapterId, { [field]: images });
         return images;
       }
       const uploaded = await this.uploadFile(`projects/${projectId}/revex/design/chapters/${docId(chapterId)}/${field}/${Date.now()}_${name}`, file);
+      assertCurrent();
       const images = [...(currentImages || []), { url: uploaded.url, path: uploaded.path, name }].slice(-24);
       await this.saveChapterEdit(projectId, chapterId, { [field]: images });
       return images;
@@ -995,6 +1031,20 @@
       });
       await this.api.setDoc(this.api.doc(this.db, 'projects', projectId, 'library', id), data, plain({ merge: true }));
       return { id, ...data };
+    },
+
+    async updateLibraryFile(projectId, libraryId, patch = {}) {
+      if (!projectId || !libraryId) throw new Error('Project and library record are required.');
+      const data = plain({ ...patch, updatedAt: iso(), updatedBy: this.user?.uid || 'local' });
+      if (!this.isCloud()) return { id: libraryId, ...data };
+      await this.api.setDoc(this.api.doc(this.db, 'projects', projectId, 'library', libraryId), data, plain({ merge: true }));
+      return { id: libraryId, ...data };
+    },
+
+    async updateLibraryFiles(projectId, libraryIds, patch = {}) {
+      const ids = Array.from(new Set((libraryIds || []).map(String).filter(Boolean)));
+      for (const id of ids) await this.updateLibraryFile(projectId, id, patch);
+      return ids.length;
     },
 
     async listHistory(projectId) {

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
-const BUILD='20260813r49', Store=window.RevexStore;
+const BUILD='20260909r190-mobile-controls1', Store=window.RevexStore;
 const $=(s,r=document)=>r.querySelector(s);
 if(!Store||window.__revexViewerR26){}else{
 window.__revexViewerR26=true;THREE.Cache.enabled=true;
@@ -16,24 +16,29 @@ class StreamBytes{
   async i32(){const b=await this.readExact(4);return new DataView(b.buffer).getInt32(0,true);}
   async f64(){const b=await this.readExact(8);return new DataView(b.buffer).getFloat64(0,true);}
 }
-const nextFrame=()=>new Promise(resolve=>requestAnimationFrame(()=>resolve()));
+const nextFrame=()=>new Promise(resolve=>document.hidden?setTimeout(resolve,0):requestAnimationFrame(()=>resolve()));
 class Viewer{
   constructor(host){
+    $('#reference-toggle')?.addEventListener('click',()=>this.setReferenceVisible(!this.showReferences));
     this.host=host;this.scene=new THREE.Scene();this.scene.background=new THREE.Color(0x101319);this.camera=new THREE.PerspectiveCamera(50,1,.01,1e8);
     this.embedded=!!window.chrome?.webview;
     this.renderer=new THREE.WebGLRenderer({antialias:!this.embedded,powerPreference:this.embedded?'default':'high-performance'});this.renderer.setPixelRatio(Math.min(devicePixelRatio||1,this.embedded?1:1.25));this.renderer.outputColorSpace=THREE.SRGBColorSpace;this.renderer.toneMapping=THREE.ACESFilmicToneMapping;this.renderer.toneMappingExposure=1.05;this.renderer.localClippingEnabled=true;host.append(this.renderer.domElement);
     this.controls=new OrbitControls(this.camera,this.renderer.domElement);this.controls.enableDamping=false;this.controls.screenSpacePanning=true;this.controls.mouseButtons.LEFT=THREE.MOUSE.ROTATE;this.controls.mouseButtons.MIDDLE=THREE.MOUSE.PAN;this.controls.mouseButtons.RIGHT=THREE.MOUSE.PAN;this.controls.addEventListener('change',()=>this.requestRender());
     this.scene.add(new THREE.HemisphereLight(0xdbe9f5,0x28323b,2.0));const sun=new THREE.DirectionalLight(0xffffff,2.0);sun.position.set(18,28,14);this.scene.add(sun);
     this.model=null;this.bounds=null;this.data=null;this.byId=new Map();this.byUid=new Map();this.materialByName=new Map();this.materialById=new Map();this.materialCache=new Map();this.helper=null;this.section={enabled:false,x:1,y:1,z:1};this.walk=false;this.floor=0;this.eye=5.5;this.yaw=0;this.pitch=0;this.keys=new Set();this.drag=false;this.last=null;this.walkFrame=0;this.lastStep=0;this.renderFrame=0;this.spatial=null;this.loadToken=0;this.active=true;this.sourceState=null;this.detailLoaded=false;this.detailLoading=false;this.proxyReady=false;
-    this.ray=new THREE.Raycaster();this.pointer=new THREE.Vector2();this.overlays=new Map();this.editGroups=new Map();this.elementNodes=new Map();this.overlayRevision='';
+    this.ray=new THREE.Raycaster();this.pointer=new THREE.Vector2();this.overlays=new Map();this.editGroups=new Map();this.elementNodes=new Map();this.overlayRevision='';this.referenceProjectId='';this.showReferences=false;
     this.renderer.domElement.addEventListener('click',e=>{if(!this.walk)this.pick(e)});
-    this.renderer.domElement.addEventListener('pointerdown',e=>{if(this.walk){this.drag=true;this.last=[e.clientX,e.clientY];this.renderer.domElement.setPointerCapture?.(e.pointerId)}});
+    this.renderer.domElement.addEventListener('pointerdown',e=>{if(this.walk){this.drag=true;this.last=[e.clientX,e.clientY];if(!document.pointerLockElement)this.renderer.domElement.setPointerCapture?.(e.pointerId)}});
     this.renderer.domElement.addEventListener('pointermove',e=>{if(!this.walk||!this.drag||!this.last)return;const dx=e.clientX-this.last[0],dy=e.clientY-this.last[1];this.last=[e.clientX,e.clientY];this.yaw-=dx*.004;this.pitch=Math.max(-1.35,Math.min(1.35,this.pitch-dy*.003));this.look();this.requestRender()});
     this.renderer.domElement.addEventListener('pointerup',()=>{this.drag=false;this.last=null});
     addEventListener('keydown',e=>{const k=e.key.toLowerCase();if(this.walk&&'wasdqe'.includes(k)){this.keys.add(k);e.preventDefault();this.startWalkFrames()}});
     addEventListener('keyup',e=>{this.keys.delete(e.key.toLowerCase())});
     new ResizeObserver(()=>this.resize()).observe(host);this.resize();
   }
+  // Walking belongs to the viewer; controls subscribe to actual transitions, including Fit/module resets.
+  get walk(){return this._walk===true;}
+  set walk(value){const previous=this._walk;this._walk=Boolean(value);if(typeof previous==='boolean'&&previous!==this._walk)window.dispatchEvent(new CustomEvent('revex:walk-mode-changed',{detail:{active:this._walk}}));}
+  walkUsesTouch(){return document.body?.classList.contains('revex-mobile-touch')||window.matchMedia?.('(max-width:860px)')?.matches===true;}
   requestRender(){if(this.renderFrame||document.hidden||!this.active)return;this.renderFrame=requestAnimationFrame(()=>{this.renderFrame=0;this.renderer.render(this.scene,this.camera);this.updatePins()})}
   resize(){const w=Math.max(this.host.clientWidth,1),h=Math.max(this.host.clientHeight,1);this.renderer.setSize(w,h,false);this.camera.aspect=w/h;this.camera.updateProjectionMatrix();this.requestRender()}
   setActive(active){this.active=!!active;if(!this.active){this.walk=false;this.keys.clear();if(this.walkFrame){cancelAnimationFrame(this.walkFrame);this.walkFrame=0}}else this.requestRender();if(this.sourceState?.modelUrl&&!this.detailLoaded&&!this.detailLoading)setTimeout(()=>this.loadDetailed(),this.active?20:180)}
@@ -101,14 +106,25 @@ class Viewer{
     }
     this.editGroups.clear();this.elementNodes.clear();
   }
-  clear(){this.clearEditGroups();if(this.model){this.scene.remove(this.model);this.disposeObject(this.model);this.model=null}if(this.helper){this.scene.remove(this.helper);this.helper=null}this.materialCache.clear()}
+  loadDiagnostic(phase,detail={}){
+    const history=window.__revexViewerLoadDiagnostics||(window.__revexViewerLoadDiagnostics=[]);
+    const entry={phase,token:this.loadToken,revision:String(this.sourceState?.revision||''),elapsedMs:Math.round(performance.now()-(this.loadStartedAt||performance.now())),...detail};
+    history.push(entry);if(history.length>40)history.splice(0,history.length-40);
+    window.__revexBrowserDiagnostics?.emit?.(phase==='failed'?'WARN':'INFO','VIEWER_LOAD',JSON.stringify(entry),{initiator:'viewer request owner'});
+  }
+  cancelGeometryRequests(){for(const controller of this.geometryRequests||[])controller.abort();this.geometryRequests?.clear();}
+  clear(){this.cancelGeometryRequests();clearTimeout(this.__r75DetailTimer);this.clearEditGroups();if(this.__r75InteractionProxy){this.scene.remove(this.__r75InteractionProxy);this.disposeObject(this.__r75InteractionProxy);this.__r75InteractionProxy=null}if(this.model){this.scene.remove(this.model);this.disposeObject(this.model);this.model=null}if(this.helper){this.scene.remove(this.helper);this.helper=null}this.materialCache.clear()}
   async load(state,preloadedSource=null){
-    const token=++this.loadToken,msg=$('#viewer-message');this.sourceState=state||null;this.detailLoaded=false;this.detailLoading=false;this.proxyReady=false;
+    const projectId=String(state?.projectId||window.__revexState?.projectId||'');
+    if(projectId!==this.referenceProjectId){this.referenceProjectId=projectId;this.showReferences=false;}
+    const token=++this.loadToken,msg=$('#viewer-message');this.cancelGeometryRequests();clearTimeout(this.__r75DetailTimer);this.sourceState=state||null;this.detailLoaded=false;this.detailLoading=false;this.proxyReady=false;this.loadStartedAt=performance.now();this.loadDiagnostic('index-start');
     if(msg){msg.hidden=false;msg.classList.remove('fallback');msg.textContent='Loading BIM index…'}
     const source=preloadedSource||await Store.fetchJson(state?.viewerUrl);if(token!==this.loadToken)return;
     const rows=(source?.elements||[]).filter(usableRow),data={...source,elements:rows};this.data=data;this.byId=new Map(rows.map(r=>[String(r.id),r]));this.byUid=new Map();for(const r of rows){if(r.uniqueId){this.byUid.set(String(r.uniqueId),r);this.byUid.set(String(r.uniqueId).toLowerCase(),r)}}this.materialByName=new Map();this.materialById=new Map();this.materialCache=new Map();for(const row of rows)for(const m of row.materials||[]){const k=String(m.name||'').trim().toLowerCase();if(k&&!this.materialByName.has(k))this.materialByName.set(k,{...m,row});const id=String(m.id??'');if(id&&!this.materialById.has(id))this.materialById.set(id,{material:m,row});}
     const target=this.metaBounds();this.clear();this.bounds=target;this.buildSpatial();
     if(target&&rows.length){this.model=this.proxy(rows);this.scene.add(this.model);this.proxyReady=true;this.indexElementNodes(this.model);this.applyOverlays();this.sectionApply();this.fit();this.floors();this.requestRender()}
+    this.loadDiagnostic('index-ready',{elements:rows.length,geometryAvailable:!!state?.modelUrl});
+    window.dispatchEvent(new CustomEvent('revex:viewer-mode',{detail:{mode:'fallback',stats:{elements:rows.length}}}));
     const detailButton=$('#detail-toggle');if(detailButton){detailButton.disabled=!state?.modelUrl;detailButton.textContent=state?.modelUrl?'Loading…':'No model';detailButton.classList.toggle('active',Boolean(state?.modelUrl))}
     if(msg){msg.hidden=!state?.modelUrl;msg.textContent=state?.modelUrl?'Loading exact Revit geometry…':'BIM index ready.'}
     console.info('[REVEX] viewer '+BUILD,{elements:rows.length,levels:data.levels?.length||0,mode:'metadata-index',exactGeometry:state?.modelFormat||data?.geometry?.displayFormat||null,onDemand:true,embedded:this.embedded});
@@ -116,82 +132,149 @@ class Viewer{
   }
   async loadDetailed(){
     if(this.detailLoaded||this.detailLoading||!this.sourceState?.modelUrl)return this.detailLoaded;
-    const token=this.loadToken,msg=$('#viewer-message'),button=$('#detail-toggle');this.detailLoading=true;if(button){button.disabled=true;button.textContent='Loading…';button.classList.add('active')}if(msg){msg.hidden=false;msg.classList.remove('fallback');msg.textContent='Loading exact Revit geometry…'}
+    const token=this.loadToken,source=this.sourceState,msg=$('#viewer-message'),button=$('#detail-toggle');let root=null;this.detailLoading=true;this.loadDiagnostic('geometry-start',{format:source.modelFormat||'auto'});if(button){button.disabled=true;button.textContent='Loading…';button.classList.add('active')}if(msg){msg.hidden=false;msg.classList.remove('fallback');msg.textContent='Loading exact Revit geometry…'}
     try{
       await new Promise(resolve=>setTimeout(resolve,16));
-      const format=this.sourceState?.modelFormat||this.data?.geometry?.displayFormat||(String(this.sourceState.modelUrl).includes('rvxmesh')?'rvxmesh-gzip':'fbx');
-      let root=null,stats=null;
-      let installedProgressively=false;
+      if(token!==this.loadToken)return false;
+      const format=source.modelFormat||this.data?.geometry?.displayFormat||(String(source.modelUrl).includes('rvxmesh')?'rvxmesh-gzip':'fbx');
+      let stats=null;
       if(format==='rvxmesh-gzip-pages'){
-        const pages=(this.sourceState?.modelPages||[]).filter(page=>page?.url);
+        const pages=(source.modelPages||[]).filter(page=>page?.url);
         if(!pages.length)throw new Error('The paged BIM revision has no immutable geometry page URLs.');
-        ({root,stats}=await this.loadRvxPages(pages,token,msg,(staging,pageStats)=>{
-          if(installedProgressively||token!==this.loadToken)return;
-          const old=this.model;this.clearEditGroups();if(old){this.scene.remove(old);this.disposeObject(old,{disposeMaterials:this.proxyReady})}
-          this.model=staging;this.scene.add(staging);this.proxyReady=false;installedProgressively=true;this.indexElementNodes(staging);this.applyOverlays();this.sectionApply();this.requestRender();
-          if(msg)msg.textContent=`Current revision visible · loading ${pageStats.total-pageStats.loaded} remaining geometry page(s) in background…`;
-        }));
+        ({root,stats}=await this.loadRvxPages(pages,token,msg));
       }else if(format==='rvxmesh-gzip'){
-        try{({root,stats}=await this.loadRvxMesh(this.sourceState.modelUrl,token,msg));}
-        catch(e){console.warn('[REVEX r26] RVX mesh load failed',e);if(this.sourceState?.fallbackModelUrl){if(msg)msg.textContent='Native stream unavailable; loading compatibility geometry…';({root,stats}=await this.loadFbx(this.sourceState.fallbackModelUrl,token,msg));}else throw e;}
-      }else ({root,stats}=await this.loadFbx(this.sourceState.modelUrl,token,msg));
-      if(token!==this.loadToken){this.disposeObject(root);return false}
+        try{({root,stats}=await this.loadRvxMesh(source.modelUrl,token,msg));}
+        catch(e){if(token!==this.loadToken)return false;console.warn('[REVEX r26] RVX mesh load failed');if(source.fallbackModelUrl){if(msg)msg.textContent='Native stream unavailable; loading compatibility geometry…';({root,stats}=await this.loadFbx(source.fallbackModelUrl,token,msg));}else throw e;}
+      }else ({root,stats}=await this.loadFbx(source.modelUrl,token,msg));
+      if(token!==this.loadToken){this.disposeObject(root,{disposeMaterials:false});return false}
       if(!root)throw new Error('Detailed BIM geometry could not be parsed.');
-      if(!installedProgressively){const old=this.model;this.clearEditGroups();if(old){this.scene.remove(old);this.disposeObject(old,{disposeMaterials:this.proxyReady})}this.model=root;this.scene.add(root)}
-      this.bounds=this.metaBounds()||new THREE.Box3().setFromObject(root);this.indexElementNodes(this.scene);this.applyOverlays();this.sectionApply();this.floors();this.detailLoaded=true;this.proxyReady=false;this.requestRender();if(msg)msg.hidden=true;if(button){button.classList.add('active');button.textContent='Model'}window.dispatchEvent(new CustomEvent('revex:viewer-mode',{detail:{mode:stats?.format||format,stats}}));console.info('[REVEX] exact BIM '+BUILD,stats||{});return true;
-    }catch(e){console.warn('[REVEX r26] detail load',e);if(msg){msg.hidden=false;msg.classList.add('fallback');msg.textContent='Exact BIM geometry could not load. The physical metadata model remains available.'}if(button){button.classList.remove('active');button.textContent='Retry'}return false}
-    finally{this.detailLoading=false;if(button)button.disabled=!this.sourceState?.modelUrl}
+      const old=this.model;this.clearEditGroups();if(old){this.scene.remove(old);this.disposeObject(old,{disposeMaterials:this.proxyReady})}this.model=root;this.scene.add(root);
+      this.bounds=this.metaBounds()||new THREE.Box3().setFromObject(root);this.indexElementNodes(root);this.applyOverlays();this.sectionApply();this.floors();this.detailLoaded=true;this.proxyReady=false;this.requestRender();this.loadDiagnostic('ready',{format:stats?.format||format,elements:stats?.elements||0,parts:stats?.parts||stats?.meshCount||0,pages:stats?.pages||1});if(msg)msg.hidden=true;if(button){button.classList.add('active');button.textContent='Model'}window.dispatchEvent(new CustomEvent('revex:viewer-mode',{detail:{mode:stats?.format||format,stats}}));console.info('[REVEX] exact BIM '+BUILD,stats||{});return true;
+    }catch(e){if(root&&root!==this.model)this.disposeObject(root);if(token!==this.loadToken)return false;this.loadDiagnostic('failed',{reason:String(e?.message||e).replace(/https?:\/\/\S+/g,'[geometry URL]').slice(0,180)});console.warn('[REVEX r26] detail load');if(msg){msg.hidden=false;msg.classList.add('fallback');msg.textContent='Exact BIM geometry could not load. The physical metadata model remains available.'}if(button){button.classList.remove('active');button.textContent='Retry'}return false}
+    finally{if(token===this.loadToken){this.detailLoading=false;if(button)button.disabled=!this.sourceState?.modelUrl}}
   }
   async loadRvxMesh(url,token,msg){
-    if(typeof DecompressionStream==='undefined')throw new Error('This browser does not support streaming gzip decompression.');
-    const response=await this.fetchGeometry(url,'REVEX geometry');
-    const reader=response.body.pipeThrough(new DecompressionStream('gzip')).getReader(),bytes=new StreamBytes(reader),decoder=new TextDecoder();
-    const magic=decoder.decode(await bytes.readExact(8));if(!magic.startsWith('RVXSCN2'))throw new Error('REVEX geometry stream has an invalid header.');const version=await bytes.i32();if(version!==2)throw new Error(`Unsupported REVEX geometry version ${version}.`);
-    const root=new THREE.Group();root.name='REVEX_EXACT_MODEL';let elements=0,parts=0,vertices=0;const expected=Number(this.data?.geometry?.highDetail?.elements||0),seen=new Set();
-    while(true){if(token!==this.loadToken){await reader.cancel();return{root:null,stats:null}}const type=await bytes.u8();if(type===0)break;if(type!==1)throw new Error(`Unknown REVEX geometry record ${type}.`);const elementId=String(Math.trunc(await bytes.f64())),partCount=await bytes.i32(),row=this.byId.get(elementId);seen.add(elementId);for(let i=0;i<partCount;i++){const materialId=await bytes.f64(),vertexCount=await bytes.i32();if(vertexCount<0||vertexCount>50000000)throw new Error(`Invalid REVEX vertex count ${vertexCount}.`);const raw=await bytes.readExact(vertexCount*6*4),floats=new Float32Array(raw.buffer,raw.byteOffset,raw.byteLength/4),ib=new THREE.InterleavedBuffer(floats,6),g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.InterleavedBufferAttribute(ib,3,0,false));g.setAttribute('normal',new THREE.InterleavedBufferAttribute(ib,3,3,false));g.computeBoundingSphere();const mesh=new THREE.Mesh(g,this.materialFor(materialId,row));mesh.name=`REVEX_${elementId}`;mesh.userData.revexElementId=elementId;mesh.frustumCulled=true;root.add(mesh);parts++;vertices+=vertexCount;}elements++;if(elements%24===0){if(msg)msg.textContent=`Loading exact Revit geometry · ${elements.toLocaleString()}${expected?` / ${expected.toLocaleString()}`:''} elements`;await nextFrame();}}
-    const missingRows=(this.data?.elements||[]).filter(r=>!seen.has(String(r.id)));if(missingRows.length){const fallback=this.proxy(missingRows);fallback.name='REVEX_MISSING_GEOMETRY_PROXY';fallback.userData.revexFallbackOnly=true;root.add(fallback);console.warn('[REVEX r26] exact geometry missing for physical metadata rows; retaining bounded fallback only for those rows',{missing:missingRows.length,total:this.data?.elements?.length||0});}
-    return{root,stats:{format:'rvxmesh',elements,parts,vertices,triangles:Math.floor(vertices/3),missing:missingRows.length,coverage:(this.data?.elements?.length||0)?elements/(this.data.elements.length):1,streamed:true}};
+    // Single-file exports can be much larger than a bounded page. Keep them
+    // streaming instead of retaining the whole decompressed file beside meshes.
+    const result=await this.loadRvxPages([{url}],token,msg,{streaming:true});
+    if(result.root)result.root.name='REVEX_EXACT_MODEL';
+    if(result.stats)result.stats.format='rvxmesh';
+    return result;
   }
-  async loadRvxPages(pages,token,msg,onFirst){
+  async loadRvxPages(pages,token,msg,{streaming=false}={}){
     const root=new THREE.Group();root.name='REVEX_CURRENT_PAGED_MODEL';const seen=new Set();let elements=0,parts=0,vertices=0;
+    try{
     for(let index=0;index<pages.length;index++){
-      if(token!==this.loadToken)return{root:null,stats:null};
+      if(token!==this.loadToken){this.disposeObject(root,{disposeMaterials:false});return{root:null,stats:null}}
       const page=pages[index];if(msg)msg.textContent=`Loading current BIM geometry · page ${index+1} / ${pages.length}`;
-      const parsed=await this.loadRvxPageInto(page.url,root,seen,token);elements+=parsed.elements;parts+=parsed.parts;vertices+=parsed.vertices;
-      if(index===0)onFirst?.(root,{loaded:1,total:pages.length});
+      const parsed=await (streaming?this.loadRvxStreamInto(page.url,root,seen,token):this.loadRvxPageInto(page.url,root,seen,token));elements+=parsed.elements;parts+=parsed.parts;vertices+=parsed.vertices;
+      if(token!==this.loadToken){this.disposeObject(root,{disposeMaterials:false});return{root:null,stats:null}}
+      this.loadDiagnostic('page-ready',{loaded:index+1,total:pages.length,elements,parts});
       if(this.active)await nextFrame();else await new Promise(resolve=>setTimeout(resolve,120));
     }
+    if(token!==this.loadToken){this.disposeObject(root,{disposeMaterials:false});return{root:null,stats:null}}
     const missingRows=(this.data?.elements||[]).filter(row=>!seen.has(String(row.id)));if(missingRows.length){const fallback=this.proxy(missingRows);fallback.name='REVEX_PAGED_MISSING_GEOMETRY_PROXY';fallback.userData.revexFallbackOnly=true;root.add(fallback);console.warn('[REVEX r49] paged geometry retained bounded fallback only for unsupported physical rows',{missing:missingRows.length,total:this.data?.elements?.length||0});}
-    return{root,stats:{format:'rvxmesh-pages',pages:pages.length,elements,parts,vertices,triangles:Math.floor(vertices/3),missing:missingRows.length,coverage:(this.data?.elements?.length||0)?elements/this.data.elements.length:1,streamed:true,backgroundContinued:true}};
+    return{root,stats:{format:'rvxmesh-pages',pages:pages.length,elements,parts,vertices,triangles:Math.floor(vertices/3),missing:missingRows.length,coverage:(this.data?.elements?.length||0)?elements/this.data.elements.length:1,streamed:true,backgroundContinued:true,proxyPreservedUntilComplete:true}};
+    }catch(error){this.disposeObject(root,{disposeMaterials:false});throw error}
   }
-  async fetchGeometry(url,label){let last=null;for(let attempt=1;attempt<=3;attempt++){try{const response=await fetch(url,{cache:'no-store'});if(response.ok&&response.body)return response;last=new Error(`${label} fetch failed (${response.status}).`)}catch(error){last=error}if(attempt<3)await new Promise(resolve=>setTimeout(resolve,attempt*350));}throw last||new Error(`${label} fetch failed.`)}
-  async loadRvxPageInto(url,root,seen,token){
+  async fetchGeometry(url,label,{token=this.loadToken,timeoutMs=45000}={}){
+    let last=null;this.geometryRequests=this.geometryRequests||new Set();
+    for(let attempt=1;attempt<=3;attempt++){
+      if(token!==this.loadToken)throw new DOMException('Superseded geometry request','AbortError');
+      const controller=new AbortController();this.geometryRequests.add(controller);let timedOut=false;
+      const timer=setTimeout(()=>{timedOut=true;controller.abort()},timeoutMs);
+      const finish=()=>{clearTimeout(timer);this.geometryRequests.delete(controller)};
+      const failure=error=>timedOut?new Error(`${label} timed out after ${Math.ceil(timeoutMs/1000)} seconds.`):error;
+      try{
+        const response=await fetch(url,{cache:attempt===1?'force-cache':'default',signal:controller.signal});
+        if(!response.ok||!response.body){await response.body?.cancel();throw new Error(`${label} fetch failed (${response.status}).`)}
+        const reader=response.body.getReader();
+        // Keep the deadline active until the body is consumed, not just headers.
+        const body=new ReadableStream({pull:async stream=>{try{const next=await reader.read();if(next.done){finish();stream.close()}else stream.enqueue(next.value)}catch(error){finish();stream.error(failure(error))}},cancel:async reason=>{finish();controller.abort();await reader.cancel(reason)}});
+        return new Response(body,{status:response.status,statusText:response.statusText,headers:response.headers});
+      }catch(error){finish();last=failure(error);if(controller.signal.aborted||token!==this.loadToken)throw last}
+      if(attempt<3)await new Promise(resolve=>setTimeout(resolve,attempt*180));
+    }
+    throw last||new Error(`${label} fetch failed.`);
+  }
+  async loadRvxPageInto(url,root,seen,token){return this.loadRvxStreamInto(url,root,seen,token)}
+  async loadRvxStreamInto(url,root,seen,token){
     if(typeof DecompressionStream==='undefined')throw new Error('This browser does not support streaming gzip decompression.');
-    const response=await this.fetchGeometry(url,'REVEX geometry page');
+    const response=await this.fetchGeometry(url,'REVEX geometry page',{token});
     const reader=response.body.pipeThrough(new DecompressionStream('gzip')).getReader(),bytes=new StreamBytes(reader),decoder=new TextDecoder();
+    try{
     const magic=decoder.decode(await bytes.readExact(8));if(!magic.startsWith('RVXSCN2'))throw new Error('REVEX geometry page has an invalid header.');const version=await bytes.i32();if(version!==2)throw new Error(`Unsupported REVEX geometry version ${version}.`);
-    let elements=0,parts=0,vertices=0;
-    while(true){if(token!==this.loadToken){await reader.cancel();return{elements,parts,vertices}}const type=await bytes.u8();if(type===0)break;if(type!==1)throw new Error(`Unknown REVEX geometry record ${type}.`);const elementId=String(Math.trunc(await bytes.f64())),partCount=await bytes.i32(),row=this.byId.get(elementId);seen.add(elementId);for(let i=0;i<partCount;i++){const materialId=await bytes.f64(),vertexCount=await bytes.i32();if(vertexCount<0||vertexCount>50000000)throw new Error(`Invalid REVEX vertex count ${vertexCount}.`);const raw=await bytes.readExact(vertexCount*6*4),floats=new Float32Array(raw.buffer,raw.byteOffset,raw.byteLength/4),ib=new THREE.InterleavedBuffer(floats,6),g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.InterleavedBufferAttribute(ib,3,0,false));g.setAttribute('normal',new THREE.InterleavedBufferAttribute(ib,3,3,false));g.computeBoundingSphere();const mesh=new THREE.Mesh(g,this.materialFor(materialId,row));mesh.name=`REVEX_${elementId}`;mesh.userData.revexElementId=elementId;mesh.frustumCulled=true;root.add(mesh);parts++;vertices+=vertexCount;}elements++;}
+    let elements=0,parts=0,vertices=0,slice=performance.now();
+    while(true){
+      if(token!==this.loadToken)return{elements,parts,vertices};
+      const type=await bytes.u8();if(type===0)break;if(type!==1)throw new Error(`Unknown REVEX geometry record ${type}.`);
+      const elementId=String(Math.trunc(await bytes.f64())),partCount=await bytes.i32(),row=this.byId.get(elementId);
+      if(partCount<0||partCount>1000000)throw new Error(`Invalid REVEX part count ${partCount}.`);
+      seen.add(elementId);
+      for(let i=0;i<partCount;i++){
+        if(token!==this.loadToken)return{elements,parts,vertices};
+        const materialId=await bytes.f64(),vertexCount=await bytes.i32();if(vertexCount<0||vertexCount>50000000)throw new Error(`Invalid REVEX vertex count ${vertexCount}.`);
+        const raw=await bytes.readExact(vertexCount*6*4);if(token!==this.loadToken)return{elements,parts,vertices};
+        const floats=new Float32Array(raw.buffer,raw.byteOffset,raw.byteLength/4),ib=new THREE.InterleavedBuffer(floats,6),g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.InterleavedBufferAttribute(ib,3,0,false));g.setAttribute('normal',new THREE.InterleavedBufferAttribute(ib,3,3,false));g.computeBoundingSphere();
+        const mesh=new THREE.Mesh(g,this.materialFor(materialId,row));mesh.name=`REVEX_${elementId}`;mesh.userData.revexElementId=elementId;mesh.frustumCulled=true;root.add(mesh);parts++;vertices+=vertexCount;
+        if(performance.now()-slice>5){await nextFrame();slice=performance.now()}
+      }
+      elements++;
+    }
     return{elements,parts,vertices};
+    }finally{await reader.cancel().catch(()=>{})}
   }
   async loadFbx(url,token,msg){
-    let obj=await new Promise((res,rej)=>new FBXLoader().load(url,res,p=>{if(msg&&p.total)msg.textContent=`Loading compatibility geometry · ${Math.round(p.loaded/p.total*100)}%`;},rej));if(token!==this.loadToken)return{root:null,stats:null};let meshCount=0,vertexCount=0;obj.traverse(n=>{if(!n.isMesh)return;meshCount++;vertexCount+=n.geometry?.attributes?.position?.count||0});const root=new THREE.Group();root.add(obj);const target=this.bounds;if(target)this.registerFixed(root,target);if(meshCount<4000&&target)this.pruneFloating(root,target);if(meshCount<3500)this.applyMaterials(root);return{root,stats:{format:'fbx',meshCount,vertices:vertexCount,streamed:false}};
+    const response=await this.fetchGeometry(url,'Compatibility geometry',{token}),buffer=await response.arrayBuffer();if(token!==this.loadToken)return{root:null,stats:null};
+    const obj=new FBXLoader().parse(buffer,String(url).slice(0,String(url).lastIndexOf('/')+1));if(token!==this.loadToken){this.disposeObject(obj);return{root:null,stats:null}}let meshCount=0,vertexCount=0;obj.traverse(n=>{if(!n.isMesh)return;meshCount++;vertexCount+=n.geometry?.attributes?.position?.count||0});const root=new THREE.Group();root.add(obj);const target=this.bounds;if(target)this.registerFixed(root,target);if(meshCount<4000&&target)this.pruneFloating(root,target);if(meshCount<3500)this.applyMaterials(root);return{root,stats:{format:'fbx',meshCount,vertices:vertexCount,streamed:false}};
   }
 
 
   stableKey(row){return String(row?.uniqueId||row?.id||'')}
+  isReferenceRow(row){
+    // Owner-approved presentation of this existing reference volume only.
+    // It remains in the source, index, exports and model; no cloud edit is made.
+    return this.referenceProjectId==='revex_mspgzb7h_729b2936bfaa'&&String(row?.id)==='1395971'&&String(row?.type||'').trim().toUpperCase()==='HEIGHT&SITEBACK';
+  }
+  applyReferenceVisibility(){
+    const references=(this.data?.elements||[]).filter(row=>this.isReferenceRow(row));
+    for(const row of references){
+      const key=this.stableKey(row),overlay=this.overlays.get(key)||this.overlays.get(String(row.id));
+      const visible=this.showReferences&&!overlay?.hidden&&!overlay?.deleted&&!['hidden','deleted'].includes(overlay?.visibility);
+      for(const node of this.elementNodes.get(key)||[]){node.userData.revexReferenceLayer=true;node.visible=visible;}
+      this.__r75InteractionProxy?.traverse?.(node=>{if(String(node.userData?.revexElementId)===String(row.id))node.visible=visible;});
+    }
+    const button=$('#reference-toggle');
+    if(button){button.hidden=!references.length;button.setAttribute('aria-pressed',String(this.showReferences));button.classList.toggle('active',this.showReferences);button.textContent=this.showReferences?'References on':'References off';}
+    this.requestRender();
+  }
+  setReferenceVisible(visible){this.showReferences=!!visible;this.applyReferenceVisibility();}
   cameraState(){return{position:this.camera.position.toArray(),quaternion:this.camera.quaternion.toArray(),fov:this.camera.fov,target:this.controls?.target?.toArray?.()||null,walk:this.walk,floor:this.floor,eye:this.eye}}
+  restoreCameraState(saved){
+    const vector=(value,size)=>Array.isArray(value)&&value.length===size&&value.every(Number.isFinite);
+    if(!saved||!vector(saved.position,3)||!vector(saved.quaternion,4)||!Number.isFinite(saved.fov)||saved.fov<10||saved.fov>150)return false;
+    if(saved.target!=null&&!vector(saved.target,3))return false;
+    this.walk=!!saved.walk;this.keys?.clear?.();if(this.controls)this.controls.enabled=!this.walk;
+    if(Number.isFinite(saved.floor))this.floor=saved.floor;if(Number.isFinite(saved.eye)&&saved.eye>0)this.eye=saved.eye;
+    this.camera.position.fromArray(saved.position);this.camera.quaternion.fromArray(saved.quaternion).normalize();this.camera.fov=saved.fov;
+    if(saved.target&&this.controls)this.controls.target.fromArray(saved.target);
+    if(this.walk){const direction=new THREE.Vector3();this.camera.getWorldDirection(direction);this.yaw=Math.atan2(-direction.x,-direction.z);this.pitch=Math.asin(Math.max(-1,Math.min(1,direction.y)));}
+    $('#walk-toggle')?.classList.toggle('active',this.walk);if($('#walk-controls'))$('#walk-controls').hidden=!this.walk;
+    if($('#walk-floor'))$('#walk-floor').value=String(this.floor);if($('#walk-height'))$('#walk-height').value=String(this.eye);
+    if($('#walk-fov'))$('#walk-fov').value=String(saved.fov);if($('#walk-fov-value'))$('#walk-fov-value').textContent=`${Math.round(saved.fov)}°`;
+    this.camera.updateProjectionMatrix();this.camera.updateMatrixWorld();this.requestRender();return true;
+  }
   snapshot(){try{this.renderer.render(this.scene,this.camera);return this.renderer.domElement.toDataURL('image/png')}catch(_){return ''}}
   setOverlays(rows){this.overlays=new Map((rows||[]).map(o=>[String(o.uniqueId||o.elementId||o.id),o]));this.applyOverlays()}
-  indexElementNodes(root){this.elementNodes=new Map();root?.traverse?.(n=>{if(!n.isMesh||!n.visible)return;const explicit=String(n.userData?.revexElementId||''),row=(explicit&&this.byId.get(explicit))||this.elementForNode(n);if(!row)return;const key=this.stableKey(row);if(!key)return;if(!this.elementNodes.has(key))this.elementNodes.set(key,[]);this.elementNodes.get(key).push(n);});}
+  indexElementNodes(root){this.elementNodes=new Map();root?.traverse?.(n=>{if(!n.isMesh||(!n.visible&&!n.userData?.revexReferenceLayer))return;const explicit=String(n.userData?.revexElementId||''),row=(explicit&&this.byId.get(explicit))||this.elementForNode(n);if(!row)return;const key=this.stableKey(row);if(!key)return;if(!this.elementNodes.has(key))this.elementNodes.set(key,[]);this.elementNodes.get(key).push(n);});}
   ensureEditGroup(row){const key=this.stableKey(row);if(!key)return null;if(this.editGroups.has(key))return this.editGroups.get(key);const nodes=this.elementNodes.get(key)||[];if(!nodes.length)return null;const box=this.box(row);if(!box)return null;const center=box.getCenter(new THREE.Vector3());const group=new THREE.Group();group.name='REVEX_EDIT_'+key;group.position.copy(center);this.scene.add(group);nodes.forEach(n=>{if(!n.userData.revexBaseMaterials)n.userData.revexBaseMaterials=(Array.isArray(n.material)?n.material:[n.material]).filter(Boolean);if(!n.userData.revexOriginalParent)n.userData.revexOriginalParent=n.parent;group.attach(n)});group.userData.revexBaseCenter=center.clone();group.userData.revexNodes=nodes;this.editGroups.set(key,group);return group;}
   resetEditGroup(group){const c=group?.userData?.revexBaseCenter;if(!group||!c)return;group.position.copy(c);group.rotation.set(0,0,0);group.scale.set(1,1,1);group.visible=true;for(const n of group.userData.revexNodes||[]){const base=n.userData.revexBaseMaterials;if(base?.length){const current=(Array.isArray(n.material)?n.material:[n.material]).filter(Boolean);for(const material of current)if(material.userData?.revexOverlayMaterial)material.dispose?.();n.material=Array.isArray(n.material)?[...base]:base[0]}}}
   applyOverlayTo(row,overlay){const group=this.ensureEditGroup(row);if(!group)return false;this.resetEditGroup(group);const tr=overlay?.transform||{};const delta=this.raw([+tr.x||0,+tr.y||0,+tr.z||0]);group.position.add(delta);group.rotation.y=(+tr.rotateZ||0)*Math.PI/180;group.visible=!(overlay?.hidden||overlay?.deleted);const color=overlay?.material?.color,opacity=overlay?.material?.opacity;if(color||opacity!=null){for(const n of group.userData.revexNodes||[]){const base=n.userData.revexBaseMaterials||[];const next=base.map(source=>{const m=source.clone?.()||source;m.userData={...(m.userData||{}),revexOverlayMaterial:true};if(color&&m.color)m.color.set(color);if(opacity!=null){m.opacity=Math.max(.05,Math.min(1,+opacity));m.transparent=m.opacity<.995}m.needsUpdate=true;return m});if(next.length)n.material=Array.isArray(n.material)?next:next[0]}}return true;}
-  applyOverlays(){if(!this.data)return;for(const [key,group] of this.editGroups)this.resetEditGroup(group);for(const row of this.data.elements||[]){const key=this.stableKey(row),overlay=this.overlays.get(key)||this.overlays.get(String(row.id));if(overlay)this.applyOverlayTo(row,overlay)}this.requestRender()}
+  applyOverlays(){if(!this.data)return;for(const [key,group] of this.editGroups)this.resetEditGroup(group);for(const row of this.data.elements||[]){const key=this.stableKey(row),overlay=this.overlays.get(key)||this.overlays.get(String(row.id));if(overlay)this.applyOverlayTo(row,overlay)}this.applyReferenceVisibility();this.requestRender()}
   canTransform(row){return Boolean(this.elementNodes.get(this.stableKey(row))?.length)}
   captureTopPlan(levelName=''){try{const rows=(this.data?.elements||[]).filter(r=>usableRow(r)&&(!levelName||String(r.level||'')===String(levelName)));const box=new THREE.Box3();box.makeEmpty();rows.forEach(r=>{const b=this.box(r);if(b)box.union(b)});if(box.isEmpty()){if(this.bounds)box.copy(this.bounds);else return ''}const size=box.getSize(new THREE.Vector3()),c=box.getCenter(new THREE.Vector3()),aspect=Math.max(this.host.clientWidth,1)/Math.max(this.host.clientHeight,1),half=Math.max(size.x,size.z)*.58;const cam=new THREE.OrthographicCamera(-half*aspect,half*aspect,half,-half,-100000,100000);cam.position.set(c.x,box.max.y+Math.max(size.y,10)+10,c.z);cam.up.set(0,0,-1);cam.lookAt(c.x,c.y,c.z);this.renderer.render(this.scene,cam);const png=this.renderer.domElement.toDataURL('image/png');this.requestRender();return png}catch(e){console.warn('[REVEX r26] plan capture',e);this.requestRender();return ''}}
   proxy(rows){const root=new THREE.Group(),geometry=new THREE.BoxGeometry(1,1,1),materials=new Map();for(const r of rows){const d=this.descriptor(r),key=d?.name||r.typeUniqueId||r.categoryKey||'other';if(!materials.has(key))materials.set(key,new THREE.MeshStandardMaterial({color:d?.c||PALETTE.other,roughness:.75,opacity:d?.o??.9,transparent:(d?.o??1)<.995}));const b=this.box(r);if(!b)continue;const mesh=new THREE.Mesh(geometry,materials.get(key)),center=b.getCenter(new THREE.Vector3()),size=b.getSize(new THREE.Vector3()).max(new THREE.Vector3(.02,.02,.02));mesh.position.copy(center);mesh.scale.copy(size);mesh.name=`REVEX_PROXY_${r.id}`;mesh.userData.revexElementId=String(r.id);root.add(mesh)}return root}
-  fit(box=this.bounds){if(!box||box.isEmpty())return;this.walk=false;this.keys.clear();this.controls.enabled=true;const c=box.getCenter(new THREE.Vector3()),s=Math.max(box.getSize(new THREE.Vector3()).length(),.1);this.controls.target.copy(c);this.camera.position.copy(c).add(new THREE.Vector3(s*.58,s*.45,s*.58));this.camera.near=Math.max(s/10000,.01);this.camera.far=Math.max(s*20,2000);this.camera.updateProjectionMatrix();this.camera.lookAt(c);this.requestRender()}
+  fit(box=this.bounds){if(!box||box.isEmpty())return;this.walk=false;this.keys.clear();this.controls.enabled=true;const c=box.getCenter(new THREE.Vector3()),s=Math.max(box.getSize(new THREE.Vector3()).length(),.1);const vertical=(this.camera.fov||50)*Math.PI/180,horizontal=2*Math.atan(Math.tan(vertical/2)*Math.max(this.camera.aspect||1,.01)),distance=(s/2)/Math.sin(Math.min(vertical,horizontal)/2)*1.05;this.controls.target.copy(c);this.camera.position.copy(c).add(new THREE.Vector3(.58,.45,.58).normalize().multiplyScalar(distance));this.camera.near=Math.max(s/10000,.01);this.camera.far=Math.max(s*20,distance+s*4,2000);this.camera.updateProjectionMatrix();this.camera.lookAt(c);this.requestRender()}
   select(r){if(this.helper)this.scene.remove(this.helper);const g=this.editGroups.get(this.stableKey(r));const b=g?new THREE.Box3().setFromObject(g):this.box(r);if(!b||b.isEmpty())return;this.helper=new THREE.Box3Helper(b,0xff2f6e);this.scene.add(this.helper);this.requestRender()}
   pick(e){if(!this.model)return;const rect=this.renderer.domElement.getBoundingClientRect();this.pointer.set((e.clientX-rect.left)/rect.width*2-1,-((e.clientY-rect.top)/rect.height*2-1));this.ray.setFromCamera(this.pointer,this.camera);const h=this.ray.intersectObject(this.model,true).find(x=>x.object.visible!==false);if(!h)return;let node=h.object,best=null;while(node&&!best){const id=String(node.userData?.revexElementId||'');if(id)best=this.byId.get(id)||null;node=node.parent}if(!best)best=this.nearestRow(h.point);if(best)this.selectAndRoute(best)}
   selectAndRoute(r){this.select(r);let btn=$(`.tree-item[data-element-id="${CSS.escape(String(r.id))}"]`);if(!btn){const q=$('#element-search');if(q){q.value=String(r.id);q.dispatchEvent(new Event('input',{bubbles:true}));btn=$(`.tree-item[data-element-id="${CSS.escape(String(r.id))}"]`)}}btn?.click()}

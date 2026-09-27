@@ -30,6 +30,7 @@ class DashboardManager {
         this._postLibrarySyncState = new Map();
         this._realtimeFeedUnsubs = new Map();
         this._realtimeFeedTimers = new Map();
+        this._postActionContainers = new Set();
         this._resumeBySrc = new Map();
         this._isAdminSession = false;
         this._pendingRequestUnsub = null;
@@ -42,17 +43,13 @@ class DashboardManager {
 
     async resolveCurrentUser(){
         try{
-            const u = await window.firebaseService.getCurrentUser();
+            if (!window.firebaseService) return null;
+            const u = (typeof window.firebaseService.waitForAuthState === 'function')
+                ? await window.firebaseService.waitForAuthState(15000)
+                : await window.firebaseService.getCurrentUser();
             if (u && u.uid) return u;
         }catch(_){ }
-        try{
-            const u2 = window.firebaseService?.auth?.currentUser;
-            if (u2 && u2.uid) return u2;
-        }catch(_){ }
-        try{
-            const am = window.authManager?.currentUser;
-            if (am && am.id) return { uid: am.id, email: am.email || '' };
-        }catch(_){ }
+        // R158: never promote authManager/localStorage identity into Firebase cloud authority.
         return null;
     }
 
@@ -441,19 +438,28 @@ class DashboardManager {
             if (!firebase || typeof firebase.onSnapshot !== 'function') return;
             const k = String(key || '').trim();
             if (!k || typeof queryFactory !== 'function' || typeof onChange !== 'function') return;
+            this.clearRealtimeFeedSubscription(k);
+            const requiredSection = k === 'feed-global-public' ? 'feed' : (k.startsWith('space-') ? 'space' : '');
+            const service = window.firebaseService, uid = service?.auth?.currentUser?.uid;
+            const revision = service?._authStateRevision || 0;
+            const isCurrent = () => !!uid && window.firebaseService === service && service.auth?.currentUser?.uid === uid &&
+                (service._authStateRevision || 0) === revision && !this._dashboardSuspended &&
+                (!requiredSection || this.currentSection === requiredSection);
+            if (!isCurrent()) return;
             const q = queryFactory();
             if (!q) return;
-            this.clearRealtimeFeedSubscription(k);
             const trigger = (payload = null)=>{
+                if (!isCurrent()) return;
                 const prev = this._realtimeFeedTimers.get(k);
                 if (prev) clearTimeout(prev);
-                const t = setTimeout(()=>{ Promise.resolve(onChange(payload)).catch(()=>{}); }, 240);
+                const t = setTimeout(()=>{ if (isCurrent()) Promise.resolve(onChange(payload)).catch(()=>{}); }, 240);
                 this._realtimeFeedTimers.set(k, t);
             };
             let initialDelivered = false;
             const unsub = firebase.onSnapshot(
                 q,
                 (snap)=>{
+                    if (!isCurrent()) return;
                     if (!initialDelivered){ initialDelivered = true; return; }
                     trigger({ snapshot: snap, key: k });
                 },
@@ -736,12 +742,149 @@ class DashboardManager {
         }catch(_){ return 0; }
     }
 
+    async ensureDashboardChatConversation(participantIds, expectedUid) {
+        const service = window.firebaseService;
+        const uid = String(expectedUid || service?.auth?.currentUser?.uid || '').trim();
+        const revision = service?._authStateRevision || 0;
+        const isCurrent = () => window.firebaseService === service && service?.auth?.currentUser?.uid === uid &&
+            (service._authStateRevision || 0) === revision;
+        if (!uid || !isCurrent()) throw new Error('Sign in before opening a conversation.');
+        const ids = [...new Set((participantIds || []).map(value => String(value || '').trim()))].sort();
+        if (ids.length < 2 || ids.length > 40 || !ids.includes(uid) || ids.some(id => !id || id.includes('|'))) {
+            throw new Error('The conversation participants are invalid.');
+        }
+        const modular = window.firebaseModular;
+        if (!service.app || !modular?.getFunctions || !modular?.httpsCallable) throw new Error('The secure conversation service is unavailable.');
+        const ensure = modular.httpsCallable(modular.getFunctions(service.app, 'us-central1'), 'ensureSecureChatConversation', { timeout: 30000 });
+        const result = (await ensure({ schema: 'liber.secure-chat.ensure-conversation-request.v1', participantIds: ids }))?.data;
+        if (!isCurrent()) throw new Error('Your sign-in changed while opening the conversation. Please retry.');
+        if (result?.ok !== true || result.schema !== 'liber.secure-chat.ensure-conversation-response.v1' ||
+            result.connId !== ids.join('|') || !Array.isArray(result.participantIds) ||
+            JSON.stringify(result.participantIds) !== JSON.stringify(ids)) {
+            throw new Error('The secure conversation service returned an invalid conversation.');
+        }
+        return result;
+    }
+
+    isConnectionIntroCurrent(draft) {
+        return !!draft && window.firebaseService === draft.service &&
+            draft.service.auth?.currentUser?.uid === draft.uid &&
+            (draft.service._authStateRevision || 0) === draft.revision;
+    }
+
+    clearStaleConnectionIntroDrafts() {
+        for (const [key, draft] of this._connectionIntroDrafts || []) {
+            if (this.isConnectionIntroCurrent(draft)) continue;
+            draft.notice?.remove();
+            draft.text = '';
+            this._connectionIntroDrafts.delete(key);
+        }
+    }
+
+    showConnectionIntroRetry(draft) {
+        if (!this.isConnectionIntroCurrent(draft)) { this.clearStaleConnectionIntroDrafts(); return; }
+        draft.notice?.remove();
+        const notice = document.createElement('div');
+        notice.className = 'notification notification-error';
+        notice.setAttribute('role', 'alert');
+        notice.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:24000;max-width:min(440px,calc(100vw - 40px));padding:16px;display:flex;gap:12px;flex-wrap:wrap';
+        const message = document.createElement('span');
+        message.textContent = draft.uncertain
+            ? 'Your connection request was saved. The introduction may also have been sent, but confirmation was interrupted. Check Chat before sending anything again.'
+            : 'Your connection request was saved, but its introduction was not sent. It is kept here until you retry or discard it.';
+        const retry = document.createElement('button');
+        retry.type = 'button'; retry.className = 'btn btn-primary'; retry.textContent = draft.uncertain ? 'Check Chat' : 'Retry introduction';
+        retry.onclick = async () => {
+            if (draft.uncertain) {
+                if (!this.isConnectionIntroCurrent(draft)) { this.clearStaleConnectionIntroDrafts(); return; }
+                const url = new URL('apps/secure-chat/index.html', window.location.href);
+                url.searchParams.set('connId', draft.conversation.connId);
+                window.appsManager?.openAppInShell({ id: 'secure-chat', name: 'Connections' }, url.href);
+                return;
+            }
+            retry.disabled = true;
+            try { await this.sendConnectionIntroToChat(draft); }
+            catch (_) { this.showConnectionIntroRetry(draft); }
+        };
+        const discard = document.createElement('button');
+        discard.type = 'button'; discard.className = 'btn btn-secondary'; discard.textContent = 'Discard introduction';
+        discard.onclick = () => { notice.remove(); draft.text = ''; this._connectionIntroDrafts?.delete(draft.key); };
+        notice.append(message, retry, discard); document.body.appendChild(notice); draft.notice = notice;
+    }
+
+    async sendConnectionIntroToChat(draft) {
+        if (draft?.pending) return draft.pending;
+        const assertCurrent = () => {
+            if (!this.isConnectionIntroCurrent(draft)) throw new Error('Your sign-in changed. This introduction was not sent.');
+        };
+        assertCurrent();
+        if (draft.uncertain) throw new Error('Check Chat for the previous introduction before sending again.');
+        const operation = (async () => {
+            const conversation = draft.conversation || await this.ensureDashboardChatConversation([draft.uid, draft.peerUid], draft.uid);
+            assertCurrent(); draft.conversation = conversation;
+            const chat = await this.openDashboardChatConversation(conversation, draft);
+            assertCurrent();
+            let result;
+            try { result = await chat.sendConnectionRequestIntro(conversation.connId, draft.text); }
+            catch (error) { draft.uncertain = error?.introSendMayHaveCommitted !== false; throw error; }
+            assertCurrent();
+            if (result?.ok !== true || result.connId !== conversation.connId || !result.messageId || result.cryptoVersion !== 'liber.secure-chat.message-envelope.v4') {
+                draft.uncertain = true;
+                throw new Error('The secure introduction was not confirmed.');
+            }
+            draft.notice?.remove(); draft.text = ''; this._connectionIntroDrafts?.delete(draft.key);
+            this.showSuccess('Connection request and encrypted introduction sent.');
+            return result;
+        })();
+        draft.pending = operation;
+        try { return await operation; }
+        finally { if (draft.pending === operation) draft.pending = null; }
+    }
+
+    async openDashboardChatConversation(conversation, context) {
+        const assertCurrent = () => {
+            if (!this.isConnectionIntroCurrent(context)) throw new Error('Your sign-in changed. Please reopen this conversation.');
+        };
+        assertCurrent();
+        const frame = document.getElementById('app-shell-frame');
+        if (!frame || typeof window.appsManager?.openAppInShell !== 'function') throw new Error('The LIBER app shell is unavailable.');
+        const url = new URL('apps/secure-chat/index.html', window.location.href);
+        url.searchParams.set('connId', conversation.connId);
+        window.appsManager.openAppInShell({ id: 'secure-chat', name: 'Connections' }, url.href);
+        const deadline = Date.now() + 20000;
+        while (Date.now() < deadline) {
+            assertCurrent();
+            let chat = null;
+            try {
+                const child = frame.contentWindow, childUrl = new URL(child.location.href), candidate = child.secureChatApp;
+                if (childUrl.origin === window.location.origin && childUrl.pathname === url.pathname &&
+                    child.firebaseService !== context.service && candidate?.currentUser?.uid === context.uid &&
+                    child.firebaseService?.auth?.currentUser?.uid === context.uid && candidate.db &&
+                    typeof candidate.setActive === 'function' && typeof candidate.sendConnectionRequestIntro === 'function') chat = candidate;
+            } catch (_) { /* same-origin app may still be loading */ }
+            if (chat) {
+                // A kept-alive Chat document does not consume a new URL query.
+                // Explicitly select the requested room without recreating its SDK.
+                if (chat.activeConnection !== conversation.connId) await chat.setActive(conversation.connId);
+                assertCurrent();
+                return chat;
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        throw new Error('Secure Chat is not ready. Please retry.');
+    }
+
     async openShareToChatSheet(payload){
         try{
             const me = await this.resolveCurrentUser();
             if (!me || !me.uid) return;
+            const service = window.firebaseService;
+            const revision = service?._authStateRevision || 0;
+            const isCurrent = () => window.firebaseService === service && service?.auth?.currentUser?.uid === me.uid &&
+                (service._authStateRevision || 0) === revision;
+            if (!isCurrent()) return;
             let rows = [];
-            try{
+            {
                 const seen = new Set();
                 const push = (d)=>{
                     const id = String(d?.id || '').trim();
@@ -749,52 +892,14 @@ class DashboardManager {
                     seen.add(id);
                     rows.push({ id, ...(d?.data?.() || {}) });
                 };
-                const q1 = firebase.query(firebase.collection(window.firebaseService.db,'chatConnections'), firebase.where('participants','array-contains', me.uid), firebase.limit(220));
+                const q1 = firebase.query(firebase.collection(service.db,'chatConnections'), firebase.where('participantIds','array-contains', me.uid), firebase.limit(220));
                 const s1 = await firebase.getDocs(q1);
+                if (!isCurrent()) return;
                 s1.forEach(push);
-                try{
-                    const q2 = firebase.query(firebase.collection(window.firebaseService.db,'chatConnections'), firebase.where('users','array-contains', me.uid), firebase.limit(220));
-                    const s2 = await firebase.getDocs(q2);
-                    s2.forEach(push);
-                }catch(_){ }
-                try{
-                    const q3 = firebase.query(firebase.collection(window.firebaseService.db,'chatConnections'), firebase.where('memberIds','array-contains', me.uid), firebase.limit(220));
-                    const s3 = await firebase.getDocs(q3);
-                    s3.forEach(push);
-                }catch(_){ }
-                // Legacy docs fallback: key-only rows without participant arrays.
-                try{
-                    let allSnap;
-                    try{
-                        const qAll = firebase.query(
-                            firebase.collection(window.firebaseService.db,'chatConnections'),
-                            firebase.orderBy('updatedAt','desc'),
-                            firebase.limit(700)
-                        );
-                        allSnap = await firebase.getDocs(qAll);
-                    }catch(_){
-                        allSnap = await firebase.getDocs(firebase.collection(window.firebaseService.db,'chatConnections'));
-                    }
-                    allSnap.forEach((d)=>{
-                        const c = d.data() || {};
-                        const key = String(c.key || '');
-                        if (!key) return;
-                        const keyParts = key.split('|').filter(Boolean);
-                        if (keyParts.includes(me.uid)) push(d);
-                    });
-                }catch(_){ }
-            }catch(_){
-                const s2 = await firebase.getDocs(firebase.collection(window.firebaseService.db,'chatConnections'));
-                s2.forEach((d)=>{
-                    const c = d.data() || {};
-                    const parts = Array.isArray(c.participants) ? c.participants : (Array.isArray(c.users) ? c.users : (Array.isArray(c.memberIds) ? c.memberIds : []));
-                    const keyParts = String(c.key || '').split('|').filter(Boolean);
-                    if (parts.includes(me.uid) || keyParts.includes(me.uid)) rows.push({ id: d.id, ...c });
-                });
             }
             if (!rows.length){ this.showError('No existing chats found'); return; }
             const getParticipants = (c)=>{
-                const p = Array.isArray(c?.participants) ? c.participants : (Array.isArray(c?.users) ? c.users : (Array.isArray(c?.memberIds) ? c.memberIds : []));
+                const p = Array.isArray(c?.participantIds) ? c.participantIds : [];
                 return p.filter(Boolean);
             };
             const byKey = new Map();
@@ -844,6 +949,7 @@ class DashboardManager {
                 return { title, subtitle: 'Direct chat', cover };
             };
             await Promise.all(rows.map(async (c)=> metaMap.set(c.id, await resolveMeta(c))));
+            if (!isCurrent()) return;
             rows.forEach((c)=>{
                 const meta = metaMap.get(c.id) || { title: this.getConnectionDisplayName(c), subtitle: '', cover: 'images/default-bird.png' };
                 const btn = document.createElement('button');
@@ -851,6 +957,7 @@ class DashboardManager {
                 btn.style.cssText = 'display:flex;align-items:center;gap:10px;width:100%;text-align:left;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
                 btn.innerHTML = `<img src="${String(meta.cover || 'images/default-bird.png').replace(/"/g,'&quot;')}" alt="" style="width:28px;height:28px;border-radius:8px;object-fit:cover;flex:0 0 auto"><span style="min-width:0;display:flex;flex-direction:column"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${String(meta.title || 'Chat').replace(/</g,'&lt;')}</span><span style="opacity:.72;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${String(meta.subtitle || '').replace(/</g,'&lt;')}</span></span>`;
                 btn.onclick = ()=>{
+                    if (!isCurrent()) { overlay.remove(); return; }
                     try{
                         const key = 'liber_chat_pending_shares_v1';
                         const raw = localStorage.getItem(key);
@@ -879,7 +986,7 @@ class DashboardManager {
     getConnectionDisplayName(conn){
         try{
             const meName = String(this.currentUser?.displayName || this.currentUser?.email || '').toLowerCase();
-            const parts = Array.isArray(conn?.participants) ? conn.participants : (Array.isArray(conn?.users) ? conn.users : []);
+            const parts = Array.isArray(conn?.participantIds) ? conn.participantIds : [];
             const names = Array.isArray(conn?.participantUsernames) ? conn.participantUsernames : [];
             const resolved = parts.map((uid, i)=> names[i] || uid).filter(Boolean);
             const others = resolved.filter((n)=> String(n || '').toLowerCase() !== meName);
@@ -2019,13 +2126,29 @@ class DashboardManager {
                 this._postActionUnsubsByContainer.get(container).forEach((u) => { try { u(); } catch (_) {} });
                 this._postActionUnsubsByContainer.set(container, []);
             }
+            this._postActionContainers?.delete(container);
         }catch(_){ }
+    }
+
+    isPostActionContainerActive(container) {
+        if (!container || container.isConnected === false || this._dashboardSuspended || !window.firebaseService?.auth?.currentUser) return false;
+        const section = container.closest?.('.content-section');
+        return !section || section.classList.contains('active');
+    }
+
+    clearInactiveFeedListeners(all = false) {
+        for (const container of this._postActionContainers || []) {
+            if (all || !this.isPostActionContainerActive(container)) this.clearPostActionListeners(container);
+        }
+        for (const key of this._realtimeFeedUnsubs?.keys() || []) {
+            const requiredSection = key === 'feed-global-public' ? 'feed' : (key.startsWith('space-') ? 'space' : '');
+            if (all || this._dashboardSuspended || (requiredSection && this.currentSection !== requiredSection)) this.clearRealtimeFeedSubscription(key);
+        }
     }
 
     suspendDashboardActivity(){
         this._dashboardSuspended = true;
-        this.clearPostActionListeners(document.getElementById('global-feed'));
-        this.clearPostActionListeners(document.getElementById('space-feed'));
+        this.clearInactiveFeedListeners(true);
     }
 
     resumeDashboardActivity(){
@@ -4282,6 +4405,7 @@ class DashboardManager {
         document.addEventListener('focusin', (e)=>{
             const el = e.target;
             if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return;
+            if (el.closest('#auth-screen')) return;
             try{
                 if ((el.type || '').toLowerCase() === 'password') return;
                 el.setAttribute('autocomplete', 'off');
@@ -4295,9 +4419,11 @@ class DashboardManager {
             const fromHash = (window.location.hash||'').replace('#','');
             const stored = localStorage.getItem('liber_last_section') || '';
             const preferred = fromHash || stored || 'apps';
-            const runInitialLoad = ()=>{
+            const runInitialLoad = async ()=>{
                 if (this._dashboardSuspended) return;
                 try{
+                    const user = await this.resolveCurrentUser();
+                    if (!user || !user.uid) return;
                     this.switchSection(preferred);
                     if (preferred === 'feed'){
                         setTimeout(()=> this.loadGlobalFeed(this._wallSearchTerm || ''), 120);
@@ -4311,17 +4437,17 @@ class DashboardManager {
                 }catch(_){ this.switchSection('apps'); }
             };
             if (window.firebaseService && window.firebaseService.isInitialized){
-                runInitialLoad();
+                runInitialLoad().catch(()=>{});
             } else {
                 const onReady = ()=>{
                     window.removeEventListener('firebase-ready', onReady);
-                    runInitialLoad();
+                    runInitialLoad().catch(()=>{});
                 };
                 window.addEventListener('firebase-ready', onReady);
                 setTimeout(()=>{
                     if (window.firebaseService && window.firebaseService.isInitialized){
                         window.removeEventListener('firebase-ready', onReady);
-                        runInitialLoad();
+                        runInitialLoad().catch(()=>{});
                     }
                 }, 800);
             }
@@ -4345,16 +4471,31 @@ class DashboardManager {
 
         // Cache current user for feed actions
         (async()=>{
-            try{ this.currentUser = await this.resolveCurrentUser(); }catch(_){ this.currentUser = null; }
+            try{
+                const user = await this.resolveCurrentUser();
+                const liveUser = window.firebaseService?.auth?.currentUser || null;
+                this.currentUser = (user?.uid || '') === (liveUser?.uid || '') ? user : liveUser;
+            }catch(_){ this.currentUser = null; }
             // Keep it fresh
             try{
-                firebase.onAuthStateChanged(window.firebaseService.auth, (u)=>{
-                    this.currentUser = u || null;
-                    this.updateVerificationBanner();
-                    this.updateNavigation();
-                    this.stopPendingRequestListener();
-                    if (u && u.uid) this.startPendingRequestListener();
-                });
+                const authSource = window.firebaseService.auth;
+                // init() runs again after sign-in/account switching. Reuse one
+                // observer for this Auth instance instead of multiplying reads.
+                if (this._dashboardAuthSource !== authSource || !this._dashboardAuthUnsubscribe) {
+                    try { this._dashboardAuthUnsubscribe?.(); } catch(_) {}
+                    this._dashboardAuthSource = authSource;
+                    this._dashboardAuthUnsubscribe = firebase.onAuthStateChanged(authSource, (u)=>{
+                        if (window.firebaseService?.auth !== authSource || (authSource.currentUser?.uid || '') !== (u?.uid || '')) return;
+                        if (this._dashboardObservedUid !== (u?.uid || '')) this.clearInactiveFeedListeners(true);
+                        this._dashboardObservedUid = u?.uid || '';
+                        this.currentUser = u || null;
+                        this.clearStaleConnectionIntroDrafts();
+                        this.updateVerificationBanner();
+                        this.updateNavigation();
+                        this.stopPendingRequestListener();
+                        if (u && u.uid) this.startPendingRequestListener();
+                    });
+                }
             }catch(_){ }
             this.updateVerificationBanner();
         })();
@@ -6295,6 +6436,7 @@ class DashboardManager {
         if (target) target.classList.add('active');
 
         this.currentSection = section;
+        this.clearInactiveFeedListeners();
         try{
             document.body.classList.toggle('waveconnect-active', section === 'waveconnect');
         }catch(_){ }
@@ -9128,8 +9270,8 @@ class DashboardManager {
         if (profileForceBtn){
             profileForceBtn.onclick = async ()=>{
                 const ok = await this.showConfirm(
-`You will log out and force reload the LIBER App.
-This will clear cached files (including Service Worker caches) to align with the most recent version of the app and reload all pages.
+`Reload the latest LIBER App?
+Your sign-in and saved data will stay on this device.
 Do you want to proceed?`);
                 if (!ok) return;
                 await this.forceHardReload();
@@ -9625,9 +9767,10 @@ Do you want to proceed?`);
 
             localStorage.setItem('liber_settings', JSON.stringify(settings));
             
-            // Apply session timeout change
-            if (authManager.currentUser) {
-                authManager.startSessionTimer();
+            // Apply session timeout using the session API that actually exists.
+            if (window.authManager) {
+                authManager.sessionTimeout = sessionTimeout;
+                if (authManager.currentUser && typeof authManager.createSession === 'function') authManager.createSession();
             }
 
             // Only show toast if UI exists
@@ -9752,38 +9895,12 @@ Do you want to proceed?`);
     }
 
     async forceHardReload(){
-        try {
-            if (window.authManager) await window.authManager.logout();
-        } catch(_) {}
-
-        // Preserve secure keys URL if present
-        let keysUrl = null;
-        try { keysUrl = localStorage.getItem('liber_keys_url'); } catch(_){ keysUrl = null; }
-
-        // Unregister all service workers
-        try{
-            if ('serviceWorker' in navigator){
-                const regs = await navigator.serviceWorker.getRegistrations();
-                for (const r of regs){ try { await r.unregister(); } catch(_){} }
-            }
-        }catch(_){ }
-
-        // Clear Cache Storage
-        try{
-            if (window.caches && caches.keys){
-                const names = await caches.keys();
-                await Promise.all(names.map(n=> caches.delete(n)));
-            }
-        }catch(_){ }
-
-        // Clear local/session storage (restore keys URL afterwards)
-        try { sessionStorage.clear(); } catch(_){}
-        try { localStorage.clear(); } catch(_){}
-        try { if (keysUrl) localStorage.setItem('liber_keys_url', keysUrl); } catch(_){}
-
-        // Bypass cache on reload
-        const href = window.location.pathname + '?reload=' + Date.now();
-        window.location.replace(href);
+        // Updating app code is not a device/account reset. Firebase persistence,
+        // encryption keys, drafts and offline data must survive an ordinary reload.
+        // Keep existing workers: reinstalling the legacy worker also purges caches.
+        const url = new URL(window.location.href);
+        url.searchParams.set('reload', String(Date.now()));
+        window.location.replace(url.href);
     }
 
     /**
@@ -10420,6 +10537,12 @@ Do you want to proceed?`);
       const data = (u && u.username) ? u : ((await window.firebaseService.getUserData(uid)) || {});
       const me = await this.resolveCurrentUser();
       if (!me || !me.uid) return;
+      const previewService = window.firebaseService;
+      const previewRevision = previewService?._authStateRevision || 0;
+      const assertPreviewCurrent = () => {
+        if (window.firebaseService !== previewService || previewService.auth?.currentUser?.uid !== me.uid ||
+            (previewService._authStateRevision || 0) !== previewRevision) throw new Error('Your sign-in changed. Please reopen this profile.');
+      };
       this.ensurePreviewAddButtonStyles();
       const myVisualIndex = await this.getMyVisualLibraryIndex(me.uid);
       const popupUnsubs = [];
@@ -10513,12 +10636,15 @@ Do you want to proceed?`);
       if (connectBtn) connectBtn.onclick = async ()=>{
         try{
           connectBtn.disabled = true;
+          assertPreviewCurrent();
           const currentState = await readConnState();
+          assertPreviewCurrent();
           const status = currentState.status;
           const requestedBy = currentState.requestedBy;
           const requestedTo = currentState.requestedTo;
           const now = new Date().toISOString();
           const meData = (await window.firebaseService.getUserData(me.uid)) || {};
+          assertPreviewCurrent();
           const mePeer = {
             uid: me.uid,
             username: meData.username || me.email || me.uid,
@@ -10554,40 +10680,31 @@ Do you want to proceed?`);
             }
             const requesterName = mePeer.username || me.email || 'User';
             connectionRequestIntro = String(promptText || '').trim() || `${requesterName} just sent a connection request`;
-            await firebase.setDoc(myRef, {
+            const requestBatch = firebase.writeBatch(previewService.db);
+            requestBatch.set(myRef, {
               ...otherPeer, status:'pending', requestedBy:me.uid, requestedTo:uid, requestedAt:now, updatedAt:now
             }, { merge:true });
-            await firebase.setDoc(peerRef, {
+            requestBatch.set(peerRef, {
               ...mePeer, status:'pending', requestedBy:me.uid, requestedTo:uid, requestedAt:now, updatedAt:now
             }, { merge:true });
+            assertPreviewCurrent();
+            await requestBatch.commit();
+            assertPreviewCurrent();
+            this._connectionIntroDrafts = this._connectionIntroDrafts || new Map();
+            const draftKey = `${me.uid}|${uid}`;
+            const draft = this._connectionIntroDrafts.get(draftKey) || {
+              key: draftKey, uid: me.uid, peerUid: uid, text: connectionRequestIntro,
+              service: previewService, revision: previewRevision
+            };
+            this._connectionIntroDrafts.set(draftKey, draft);
+            closeOverlay();
             try{
-              const key = [me.uid, uid].sort().join('|');
-              const connRef = firebase.doc(window.firebaseService.db, 'chatConnections', key);
-              await firebase.setDoc(connRef, {
-                id: key,
-                key,
-                participants: [me.uid, uid],
-                participantUsernames: [mePeer.username || me.email || me.uid, data.username || data.email || uid],
-                admins: [me.uid],
-                createdAt: now,
-                updatedAt: now,
-                lastMessage: connectionRequestIntro.slice(0, 200)
-              }, { merge: true });
-              const msgRef = firebase.doc(firebase.collection(window.firebaseService.db, 'chatMessages', key, 'messages'));
-              await firebase.setDoc(msgRef, {
-                id: msgRef.id,
-                connId: key,
-                sender: me.uid,
-                text: connectionRequestIntro,
-                previewText: connectionRequestIntro.slice(0, 220),
-                createdAt: new Date().toISOString(),
-                createdAtTS: firebase.serverTimestamp(),
-                systemType: 'connection_request_intro'
-              });
+              await this.sendConnectionIntroToChat(draft);
             }catch(err){
-              console.warn('Failed to send connection intro message', err);
+              this.showConnectionIntroRetry(draft);
             }
           }
+          assertPreviewCurrent();
           const nextState = await readConnState();
           connectBtn.innerHTML = connectLabelFor(nextState);
           await this.loadConnectionsForSpace();
@@ -10600,17 +10717,15 @@ Do you want to proceed?`);
 
       if (chatBtn) {
         chatBtn.onclick = async () => {
+          chatBtn.disabled = true;
           try {
-            const key = [me.uid, uid].sort().join('|');
+            const conversation = await this.ensureDashboardChatConversation([me.uid, uid], me.uid);
+            assertPreviewCurrent();
             closeOverlay();
-            const qs = new URLSearchParams({ connId: key });
-            const full = new URL(`apps/secure-chat/index.html?${qs.toString()}`, window.location.href).href;
-            if (window.appsManager && typeof window.appsManager.openAppInShell === 'function') {
-              window.appsManager.openAppInShell({ id: 'secure-chat', name: 'Connections' }, full);
-            } else {
-              window.location.href = full;
-            }
-          } catch(_) {}
+            await this.openDashboardChatConversation(conversation, { uid: me.uid, service: previewService, revision: previewRevision });
+          } catch(error) {
+            this.showError(error?.message || 'Unable to open the secure conversation.');
+          } finally { chatBtn.disabled = false; }
         };
       }
 
@@ -10999,8 +11114,12 @@ Do you want to proceed?`);
     }
 
     activatePostActions(container = document) {
+      this.clearPostActionListeners(container);
+      if (!this.isPostActionContainerActive(container)) return;
       if (!this._postActionUnsubsByContainer) this._postActionUnsubsByContainer = new WeakMap();
       if (!this._postActionUnsubsByContainer.get(container)) this._postActionUnsubsByContainer.set(container, []);
+      this._postActionContainers = this._postActionContainers || new Set();
+      this._postActionContainers.add(container);
       // Delegate clicks once per container to ensure handlers always work
       if (!container.__postActionsDelegated) {
         container.__postActionsDelegated = true;

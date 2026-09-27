@@ -11,7 +11,16 @@ class FirebaseService {
         this.auth = null;
         this.db = null;
         this.isInitialized = false;
-        this.init();
+        // R158 viability boundary: Firebase service readiness and Firebase Auth-state
+        // readiness are distinct.  Cloud consumers must wait for the first
+        // onAuthStateChanged callback before deciding whether a user exists.
+        this._authStateReady = false;
+        this._authStateRevision = 0;
+        this._initError = null;
+        this._authStateUser = null;
+        this._resolveAuthStateReady = null;
+        this._authStateReadyPromise = new Promise((resolve) => { this._resolveAuthStateReady = resolve; });
+        this.ready = this.init();
     }
 
     getOrCreateDeviceId() {
@@ -57,7 +66,7 @@ class FirebaseService {
                 const path = location.pathname || '';
                 const swPath = path.includes('/control-panel/')
                     ? '/control-panel/sw.js'
-                    : (path.includes('/liber-apps/') ? '/liber-apps/sw.js' : '/sw.js');
+                    : (path.includes('/liber-apps/') ? '/liber-apps/sw.js?v=20260914r192-morning1' : '/sw.js');
                 swReg = await navigator.serviceWorker.getRegistration(swPath);
                 if (!swReg) swReg = await navigator.serviceWorker.register(swPath);
             }catch(_){
@@ -119,7 +128,15 @@ class FirebaseService {
 
             // Initialize services with modular SDK
             if (window.__devLog) window.__devLog('Initializing Firebase services...');
-            this.auth = firebase.auth(this.app);
+            // Select the remembered storage before the SDK creates its observer.
+            // getAuth() first chooses IndexedDB; switching it to localStorage
+            // afterwards needlessly migrates the session on every document load
+            // and can desynchronize other open apps. Keep the existing key/app
+            // namespace, and let the SDK recover existing IndexedDB/session users.
+            this.auth = firebase.initializeAuth(this.app, {
+                persistence: [firebase.browserLocalPersistence, firebase.indexedDBLocalPersistence, firebase.browserSessionPersistence],
+                popupRedirectResolver: firebase.browserPopupRedirectResolver
+            });
             this.db = firebase.firestore(this.app);
             this.storage = firebase.getStorage ? firebase.getStorage(this.app) : null;
             this.firebase = (typeof firebase !== 'undefined' ? firebase : null) || window.firebase;
@@ -148,25 +165,11 @@ class FirebaseService {
                 }
             } catch(_){ this.functions = null; this.functionsByRegion = null; }
             
-            // Set up persistence for better offline support
-            try {
-                // Prefer IndexedDB persistence if available; fallback to local storage
-                // This helps survive reloads, app updates, and iOS webview quirks better
-                if (firebase.inMemoryPersistence && firebase.indexedDBLocalPersistence) {
-                    try {
-                        await firebase.setPersistence(this.auth, firebase.indexedDBLocalPersistence);
-                        if (window.__devLog) window.__devLog('✅ Auth persistence set to IndexedDB');
-                    } catch (_) {
-                        await firebase.setPersistence(this.auth, firebase.browserLocalPersistence);
-                        if (window.__devLog) window.__devLog('✅ Auth persistence set to local storage');
-                    }
-                } else {
-                    await firebase.setPersistence(this.auth, firebase.browserLocalPersistence);
-                    if (window.__devLog) window.__devLog('✅ Auth persistence set to local storage');
-                }
-            } catch (error) {
-                console.warn('⚠️ Auth persistence setup failed:', error.message);
-            }
+            // Settle SDK restoration before publishing legacy isInitialized.
+            // Several existing app entry points read auth.currentUser immediately
+            // at that milestone. The service-owned auth callback below still owns
+            // waitForAuthState and subsequent account-change notifications.
+            await this.auth.authStateReady();
             
             // Add missing methods to auth object for compatibility
             this.auth.fetchSignInMethodsForEmail = (email) => {
@@ -207,7 +210,25 @@ class FirebaseService {
 
             // Set up auth state listener
             firebase.onAuthStateChanged(this.auth, (user) => {
+                if ((this.auth?.currentUser?.uid || '') !== (user?.uid || '')) return;
+                this._authStateRevision++;
                 if (window.__DEBUG_AUTH__) console.log('Auth state changed:', user ? 'User logged in' : 'User logged out');
+                this._authStateUser = user || null;
+                const isInitialAuthState = !this._authStateReady;
+                if (isInitialAuthState) {
+                    this._authStateReady = true;
+                    try {
+                        if (this._resolveAuthStateReady) this._resolveAuthStateReady(this._authStateUser);
+                    } finally {
+                        this._resolveAuthStateReady = null;
+                    }
+                    try {
+                        window.dispatchEvent(new CustomEvent('firebase-auth-ready', { detail: { uid: user?.uid || null, authenticated: !!user } }));
+                    } catch (_) { }
+                }
+                try {
+                    window.dispatchEvent(new CustomEvent('firebase-auth-state', { detail: { uid: user?.uid || null, authenticated: !!user } }));
+                } catch (_) { }
                 if (user) {
                     if (window.__DEBUG_AUTH__) {
                         console.log('Current user:', user.email);
@@ -268,13 +289,22 @@ class FirebaseService {
                     // rebuild the session in-place (used after account switch).
                     try{
                         if (window.authManager && typeof window.authManager.onFirebaseUserChanged === 'function'){
-                            window.authManager.onFirebaseUserChanged(user);
+                            Promise.resolve(window.authManager.onFirebaseUserChanged(user)).catch(()=>{});
+                        }
+                    }catch(_){ /* ignore */ }
+                } else {
+                    // Initial/sign-out null is authoritative.  Do not let a stale
+                    // LIBER local session impersonate a Firebase-authenticated user.
+                    try{
+                        if (window.authManager && typeof window.authManager.onFirebaseUserChanged === 'function'){
+                            Promise.resolve(window.authManager.onFirebaseUserChanged(null)).catch(()=>{});
                         }
                     }catch(_){ /* ignore */ }
                 }
             });
 
         } catch (error) {
+            this._initError = error;
             console.error('❌ Firebase initialization error:', error);
             console.error('Error details:', error.message);
             console.error('Error stack:', error.stack);
@@ -287,15 +317,16 @@ class FirebaseService {
      */
     async waitForFirebaseSDK() {
         let attempts = 0;
-        const maxAttempts = 100; // 10 seconds
+        const maxAttempts = 300; // 15 seconds
         
         while (typeof firebase === 'undefined' && attempts < maxAttempts) {
+            if (window.firebaseLoadError) throw window.firebaseLoadError;
             await new Promise(resolve => setTimeout(resolve, 50));
             attempts++;
         }
         
         if (typeof firebase === 'undefined') {
-            throw new Error('Firebase SDK failed to load within 10 seconds. Please check your internet connection.');
+            throw new Error('Firebase SDK failed to load within 15 seconds. Please check your internet connection.');
         }
     }
 
@@ -365,19 +396,85 @@ class FirebaseService {
      * Wait for Firebase to be initialized
      */
     async waitForInit() {
-        let attempts = 0;
-        const maxAttempts = 150; // up to 15 seconds to accommodate CDN + Gist fetch
-        
-        while (!this.isInitialized && attempts < maxAttempts) {
-            await new Promise(resolve => setTimeout(resolve, 50));
-            attempts++;
+        if (this.isInitialized) return true;
+        let timer;
+        try {
+            await Promise.race([
+                this.ready,
+                new Promise((_, reject) => {
+                    timer = setTimeout(() => reject(new Error('Firebase initialization timed out. Please try again.')), 15000);
+                })
+            ]);
+            if (!this.isInitialized) throw this._initError || new Error('Firebase is not initialized. Please check your connection.');
+            return true;
+        } finally {
+            clearTimeout(timer);
         }
-        
-        if (!this.isInitialized) {
-            throw new Error('❌ Firebase is required but not initialized. Please check your configuration and internet connection.');
+    }
+
+    /**
+     * Recreate Firestore payloads and execute writes inside the Firebase SDK realm.
+     * Child apps such as Spec Book run in iframes; passing their object literals
+     * directly to the parent SDK can be rejected as a custom Object object.
+     */
+    toFirestorePlain(value) {
+        let json;
+        try { json = JSON.stringify(value === undefined ? null : value); } catch (_) { return value; }
+        return JSON.parse(json);
+    }
+
+    async setDocPlain(ref, data, options = null) {
+        if (!this.firebase?.setDoc) throw new Error('Firestore setDoc is unavailable.');
+        const payload = this.toFirestorePlain(data);
+        if (options == null) return this.firebase.setDoc(ref, payload);
+        return this.firebase.setDoc(ref, payload, this.toFirestorePlain(options));
+    }
+
+    async addDocPlain(ref, data) {
+        if (!this.firebase?.addDoc) throw new Error('Firestore addDoc is unavailable.');
+        return this.firebase.addDoc(ref, this.toFirestorePlain(data));
+    }
+
+    async updateDocPlain(ref, data) {
+        if (!this.firebase?.updateDoc) throw new Error('Firestore updateDoc is unavailable.');
+        return this.firebase.updateDoc(ref, this.toFirestorePlain(data));
+    }
+
+    async uploadBytesPlain(ref, file, metadata = null) {
+        if (!this.firebase?.uploadBytes) throw new Error('Firebase Storage uploadBytes is unavailable.');
+        // Files/Blobs created inside child iframes belong to another Window realm.
+        // Rebuild binary input as a Uint8Array here so Storage sees a same-realm value.
+        let body = file;
+        if (file && typeof file.arrayBuffer === 'function') {
+            body = new Uint8Array(await file.arrayBuffer());
         }
-        
-        return true;
+        if (metadata == null) return this.firebase.uploadBytes(ref, body);
+        return this.firebase.uploadBytes(ref, body, this.toFirestorePlain(metadata));
+    }
+
+    /**
+     * Wait until Firebase Auth has emitted its initial state.  A resolved null
+     * is a valid signed-out state; timeout is a dependency failure, not logout.
+     */
+    async waitForAuthState(timeoutMs = 15000) {
+        await this.waitForInit();
+        if (this._authStateReady) return this._authStateUser;
+        const timeout = Math.max(1000, Number(timeoutMs) || 15000);
+        let timer = null;
+        try {
+            return await Promise.race([
+                this._authStateReadyPromise,
+                new Promise((_, reject) => {
+                    timer = setTimeout(() => reject(new Error('Firebase initial auth state did not resolve within '+timeout+'ms.')), timeout);
+                })
+            ]);
+        } finally {
+            if (timer) clearTimeout(timer);
+        }
+    }
+
+    isAuthStateReady() {
+        return this._authStateReady === true;
     }
 
     /**
@@ -437,8 +534,12 @@ class FirebaseService {
             const userCredential = await firebase.signInWithEmailAndPassword(this.auth, email, password);
             const user = userCredential.user;
             
-            // Update last login and login count
-            await this.updateUserLastLogin(user.uid);
+            // Statistics are optional, not part of credential validation. The
+            // helper already catches Firestore failures; do not also make a
+            // successful Auth response wait for a slow/offline statistics write.
+            Promise.resolve().then(() => {
+                if (this.auth?.currentUser?.uid === user.uid) return this.updateUserLastLogin(user.uid);
+            }).catch((error) => console.warn('Optional login statistics unavailable:', error?.code || error?.message));
             
             if (window.__DEBUG_AUTH__) console.log('User signed in successfully:', user.uid);
             return user;
@@ -547,7 +648,7 @@ class FirebaseService {
      * Get current user
      */
     async getCurrentUser() {
-        await this.waitForInit();
+        await this.waitForAuthState();
         return this.auth.currentUser;
     }
 
@@ -562,36 +663,30 @@ class FirebaseService {
         const cache = window.__chatConnectionsPrefetchCache;
         if (cache && cache.uid === user.uid && (Date.now() - (cache.ts || 0)) < 30000) return;
         try {
-            const byId = new Map();
-            const fields = ['participants', 'users', 'memberIds'];
-            for (const field of fields) {
-                try {
-                    const q = firebase.query(
-                        firebase.collection(this.db, 'chatConnections'),
-                        firebase.where(field, 'array-contains', user.uid),
-                        firebase.orderBy('updatedAt', 'desc')
-                    );
-                    const s = await firebase.getDocs(q);
-                    s.forEach(d => byId.set(d.id, { id: d.id, ...d.data() }));
-                } catch (_) {
-                    try {
-                        const q2 = firebase.query(
-                            firebase.collection(this.db, 'chatConnections'),
-                            firebase.where(field, 'array-contains', user.uid)
-                        );
-                        const s2 = await firebase.getDocs(q2);
-                        s2.forEach(d => byId.set(d.id, { id: d.id, ...d.data() }));
-                    } catch (_2) {}
-                }
+            // Clean R178 rules authorize chat listing solely through the
+            // immutable canonical participantIds field.
+            let snapshot;
+            try {
+                snapshot = await firebase.getDocs(firebase.query(
+                    firebase.collection(this.db, 'chatConnections'),
+                    firebase.where('participantIds', 'array-contains', user.uid),
+                    firebase.orderBy('updatedAt', 'desc')
+                ));
+            } catch (_) {
+                snapshot = await firebase.getDocs(firebase.query(
+                    firebase.collection(this.db, 'chatConnections'),
+                    firebase.where('participantIds', 'array-contains', user.uid)
+                ));
             }
-            const temp = Array.from(byId.values());
+            const temp = (snapshot.docs || []).map(d => ({ id: d.id, ...d.data() }));
             temp.sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
             window.__chatConnectionsPrefetchCache = { connections: temp, ts: Date.now(), uid: user.uid };
         } catch (_) {}
     }
 
     /**
-     * Get user data from Firestore
+     * Get an own private profile or a safe peer-display profile. Peer reads
+     * must never expose users/{uid}, which can contain private account state.
      */
     async getUserData(uid) {
         await this.waitForInit();
@@ -600,7 +695,11 @@ class FirebaseService {
         }
         
         try {
-            const userDocRef = firebase.doc(this.db, 'users', uid);
+            const targetUid = String(uid || '').trim();
+            if (!targetUid) return null;
+            const ownProfile = this.auth?.currentUser?.uid === targetUid;
+            const collection = ownProfile ? 'users' : 'publicProfiles';
+            const userDocRef = firebase.doc(this.db, collection, targetUid);
             const docSnap = await firebase.getDoc(userDocRef);
             if (docSnap.exists()) {
                 return docSnap.data();
@@ -1349,6 +1448,20 @@ class FirebaseService {
                     throw new Error('REVEX managed Energy broker returned no response.');
                 return response.data;
             }
+            if (name === 'adminSetLiberAdmin') {
+                const user = this.auth?.currentUser || null;
+                if (!user) throw new Error('Sign in before changing admin access.');
+                const modular = window.firebaseModular;
+                const functions = this.functionsByRegion?.['us-central1']
+                    || (modular?.getFunctions && this.app ? modular.getFunctions(this.app, 'us-central1') : null);
+                if (!modular?.httpsCallable || !functions)
+                    throw new Error('The verified admin-access service is unavailable in this session.');
+                const callable = modular.httpsCallable(functions, name, { timeout: 30000 });
+                const response = await callable(payload);
+                if (!response || response.data == null)
+                    throw new Error('The verified admin-access service returned no response.');
+                return response.data;
+            }
             if (name === 'saveFcmToken' || name === 'saveSwitchToken'){
                 const user = this.auth?.currentUser || null;
                 if (!user) return null;
@@ -1451,7 +1564,7 @@ class FirebaseService {
                 return null;
             }
             console.warn('Callable function failed:', name, e?.message || e);
-            if (name === 'runRevexEnergy' || name === 'sendProjectRespondEmail' || name === 'approveProject' || name === 'ensureProjectChat' || name === 'inviteProjectMemberByEmail' || name === 'removeProjectMember' || name === 'submitProjectRequest' || name === 'submitProjectReview' || name === 'deleteProjectReview' || name === 'adminDeleteUser') throw e;
+            if (name === 'runRevexEnergy' || name === 'sendProjectRespondEmail' || name === 'approveProject' || name === 'ensureProjectChat' || name === 'inviteProjectMemberByEmail' || name === 'removeProjectMember' || name === 'submitProjectRequest' || name === 'submitProjectReview' || name === 'deleteProjectReview' || name === 'adminDeleteUser' || name === 'adminSetLiberAdmin') throw e;
             return null;
         }
     }
@@ -1674,91 +1787,37 @@ class FirebaseService {
     }
 
     /**
-     * Search users by username or email
+     * Search the bounded public profile directory. This is deliberately a
+     * callable rather than a browser collection scan: user records and emails
+     * are private after the clean rules rollout.
      */
     async searchUsers(searchTerm) {
         await this.waitForInit();
-        
-        try {
-            const usersCollectionRef = firebase.collection(this.db, 'users');
-
-            const term = (searchTerm || '').toLowerCase();
-            // Prefix queries for case-insensitive matching
-            let results = [];
-            try {
-                // Try exact equality first for usernameLower/emailLower
-                const exactUser = firebase.query(
-                    usersCollectionRef,
-                    firebase.where('usernameLower', '==', term)
-                );
-                const exactEmail = firebase.query(
-                    usersCollectionRef,
-                    firebase.where('emailLower', '==', term)
-                );
-                const [exU, exE] = await Promise.all([
-                    firebase.getDocs(exactUser),
-                    firebase.getDocs(exactEmail)
-                ]);
-                const exactSet = new Map();
-                exU.forEach(doc => exactSet.set(doc.id, { id: doc.id, ...doc.data() }));
-                exE.forEach(doc => exactSet.set(doc.id, { id: doc.id, ...doc.data() }));
-                if (exactSet.size > 0) {
-                    return Array.from(exactSet.values());
-                }
-                const qUsernameLower = firebase.query(
-                    usersCollectionRef,
-                    firebase.where('usernameLower', '>=', term),
-                    firebase.where('usernameLower', '<=', term + '\\uf8ff')
-                );
-                const qEmailLower = firebase.query(
-                    usersCollectionRef,
-                    firebase.where('emailLower', '>=', term),
-                    firebase.where('emailLower', '<=', term + '\\uf8ff')
-                );
-                const [snapU, snapE] = await Promise.all([
-                    firebase.getDocs(qUsernameLower),
-                    firebase.getDocs(qEmailLower)
-                ]);
-                const set = new Map();
-                snapU.forEach(doc => set.set(doc.id, { id: doc.id, ...doc.data() }));
-                snapE.forEach(doc => set.set(doc.id, { id: doc.id, ...doc.data() }));
-                results = Array.from(set.values());
-                // Client-side fallback if still empty or fields missing: fuzzy contains/subsequence
-                if (results.length === 0 && term) {
-                    const snapAll = await firebase.getDocs(usersCollectionRef);
-                    const matches = [];
-                    const contains = (s)=> (s||'').toLowerCase().includes(term);
-                    const isSubseq = (s)=>{ const t=term; let i=0; for (const ch of (s||'').toLowerCase()){ if (ch===t[i]) i++; if (i===t.length) return true; } return t.length===0; };
-                    snapAll.forEach(doc => {
-                        const d = doc.data() || {};
-                        const u = (d.usernameLower || (d.username||'').toLowerCase());
-                        const em = (d.emailLower || (d.email||'').toLowerCase());
-                        if (contains(u) || contains(em) || isSubseq(u) || isSubseq(em)) matches.push({ id: doc.id, ...d });
-                    });
-                    results = matches;
-                }
-            } catch (e) {
-                // Client-side fallback if composite queries are restricted
-                const snapAll = await firebase.getDocs(usersCollectionRef);
-                const matches = [];
-                snapAll.forEach(doc => {
-                    const d = doc.data() || {};
-                    const u = (d.usernameLower || (d.username||'').toLowerCase());
-                    const em = (d.emailLower || (d.email||'').toLowerCase());
-                    // Allow contains or ordered subsequence fuzzy match
-                    const contains = (s)=> s && s.includes(term);
-                    const isSubseq = (s)=>{
-                        let i=0; for (const ch of s){ if (ch===term[i]) i++; if (i===term.length) return true; } return term.length===0;
-                    };
-                    if (contains(u) || contains(em) || isSubseq(u) || isSubseq(em)) matches.push({ id: doc.id, ...d });
-                });
-                results = matches;
-            }
-            return results;
-        } catch (error) {
-            console.error('Error searching users:', error);
-            throw error;
+        const query = String(searchTerm || '').trim().toLowerCase();
+        if (query.length < 2) return [];
+        const modular = window.firebaseModular;
+        const functions = this.functionsByRegion?.['us-central1']
+            || (modular?.getFunctions && this.app ? modular.getFunctions(this.app, 'us-central1') : null);
+        if (!modular?.httpsCallable || !functions) {
+            throw new Error('The secure public profile directory is unavailable.');
         }
+        const callable = modular.httpsCallable(functions, 'searchPublicProfiles', { timeout: 15000 });
+        const response = await callable({ query, limit:20 });
+        const data = response?.data || {};
+        if (!data.ok || !Array.isArray(data.profiles)) {
+            throw new Error('The secure public profile directory returned an invalid response.');
+        }
+        return data.profiles.map((profile)=>{
+            const uid = String(profile?.uid || profile?.id || '').trim();
+            const username = String(profile?.username || profile?.displayName || '').trim();
+            return {
+                id:uid,
+                uid,
+                username,
+                displayName:String(profile?.displayName || username).trim(),
+                avatarUrl:String(profile?.avatarUrl || '').trim()
+            };
+        }).filter((profile)=>profile.uid && profile.username);
     }
 
     /**

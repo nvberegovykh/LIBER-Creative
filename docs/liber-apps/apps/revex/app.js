@@ -1,8 +1,12 @@
+import { isBookDivision, bookDivisionItems, bookFilename, printBookDocument } from './book-structure.js?v=20260914r193-books1';
+import { loadSpreadsheetEngine, createBookWorkbook } from './book-spreadsheet.js?v=20260914r193-books1';
+import './product-sourcing.js?v=20260914r193-books1';
 
 const Store = window.RevexStore;
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const params = new URLSearchParams(location.search);
+const currentParams = () => new URLSearchParams(location.search);
 
 const state = {
   projects: [],
@@ -33,6 +37,7 @@ const state = {
   chatLoaded: false,
   historyEvents: [],
   bimOverlays: new Map(),
+  bimAppearances: new Map(),
   derivedPlans: [],
   showHiddenOnly: false
 };
@@ -41,6 +46,24 @@ window.__revexState = state;
 let projectReturnFocus = null;
 let renderReturnFocus = null;
 let pendingNativeRender = null;
+let appInitialized = false;
+let pendingAuthReconcile = false;
+let authReconcileQueued = false;
+let authReconcileGeneration = 0;
+let reconciledAuthUid = null;
+let hardBoundaryNavigating = false;
+let projectEntryPending = false;
+let appStartupFailed = false;
+let startupRetryNavigating = false;
+
+function captureProjectContext() {
+  return { projectId: String(state.projectId || ''), activationToken: state.activationToken, uid: Store.user?.uid || null };
+}
+
+function isCurrentProjectContext(context) {
+  return Boolean(context?.projectId) && state.projectId === context.projectId &&
+    state.activationToken === context.activationToken && (Store.user?.uid || null) === context.uid;
+}
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -96,18 +119,22 @@ function contextFor(kind, record) {
 
 async function ensureChatEmbedded(context = state.selectedContext) {
   if (!state.projectId) return;
+  const projectId = state.projectId;
+  const activationToken = state.activationToken;
   const frame = $('#chat-frame');
   const placeholder = $('#chat-placeholder');
   if (!frame) return;
   try {
     if (!state.chatConnId) {
-      const result = await Store.ensureProjectChat(state.projectId);
+      const result = await Store.ensureProjectChat(projectId);
+      if (state.activationToken !== activationToken || state.projectId !== projectId) return;
       if (!result?.connId) throw new Error('No project connection was returned.');
       state.chatConnId = result.connId;
     }
+    if (state.activationToken !== activationToken || state.projectId !== projectId) return;
     if (context) {
       sessionStorage.setItem('liber_revex_chat_draft', context);
-      try { frame.contentWindow?.postMessage({ type: 'liber:revex-chat-context', context, projectId: state.projectId }, location.origin); } catch (_) {}
+      try { frame.contentWindow?.postMessage({ type: 'liber:revex-chat-context', context, projectId }, location.origin); } catch (_) {}
     }
     if (!state.chatLoaded) {
       frame.src = appUrl('secure-chat', { connId: state.chatConnId, embedded: 'revex' });
@@ -147,7 +174,7 @@ function showView(name) {
     button.tabIndex = active ? 0 : -1;
   });
   if (hasProject) {
-    history.replaceState(null, '', `${location.pathname}?${new URLSearchParams({ ...(params.get('inShell') ? { inShell: '1' } : {}), projectId: state.projectId, ...(state.preferredSpecId ? { specProjectId: state.preferredSpecId } : {}), view: name })}`);
+    history.replaceState(null, '', `${location.pathname}?${new URLSearchParams({ ...(currentParams().get('inShell') ? { inShell: '1' } : {}), projectId: state.projectId, ...(state.preferredSpecId ? { specProjectId: state.preferredSpecId } : {}), view: name })}`);
     const av = activeBimViewer();
     av?.setActive?.(name === 'bim');
     if (name === 'bim') setTimeout(() => { av?.resize?.(); av?.requestRender?.(); }, 0);
@@ -218,6 +245,9 @@ function closeProjectDialog() {
 async function createProject(event) {
   event.preventDefault();
   const button = $('#project-create');
+  const creationToken = state.activationToken;
+  const creationUid = Store.user?.uid || null;
+  const stillCreatingForCurrentIdentity = () => !hardBoundaryNavigating && state.activationToken === creationToken && (Store.user?.uid || null) === creationUid;
   button.disabled = true;
   button.textContent = 'Creating…';
   setSync('Creating REVEX project…', 'busy');
@@ -228,26 +258,100 @@ async function createProject(event) {
       driveFileId: $('#project-drive-id').value,
       description: $('#project-description').value
     });
+    if (!stillCreatingForCurrentIdentity()) return;
     state.projects = await Store.listProjects();
+    if (!stillCreatingForCurrentIdentity()) return;
     if (!state.projects.some((row) => row.id === created.id)) state.projects.unshift(created);
     renderProjects();
     closeProjectDialog();
-    await activateProject(created.id, { explicitUserSelection: true });
+    const navigated = await activateProject(created.id, { explicitUserSelection: true });
+    if (!stillCreatingForCurrentIdentity() || navigated) return;
     toast('REVEX project, Spec Book and project connection created.');
   } catch (error) {
+    if (!stillCreatingForCurrentIdentity()) return;
     setSync('Project creation failed', 'bad');
     toast(error.message || 'Could not create the project.', true);
   } finally {
+    if (!stillCreatingForCurrentIdentity()) return;
     button.disabled = false;
     button.textContent = 'Create project';
   }
 }
 
-function connectExistingProject() {
-  if (!state.projects.length) return openProjectDialog();
-  $('#project-select').focus();
-  try { $('#project-select').showPicker?.(); } catch (_) {}
-  toast('Choose the existing LIBER project from the project field.');
+function retryFailedStartup() {
+  // Only an explicit retry from the cleaned-up, uninitialized empty workspace
+  // may reload. Never replay Store.init or replace a meaningful live workspace.
+  if (!appStartupFailed || appInitialized || hardBoundaryNavigating || state.projectId || state.project) return false;
+  if (['#project-dialog', '#issue-drawer', '#render-dialog'].some((selector) => {
+    const panel = $(selector);
+    return panel && !panel.hidden;
+  })) return false;
+  startupRetryNavigating = true;
+  setSync('Retrying connection; keeping your sign-in…', 'busy');
+  toast('Retrying REVEX startup. Your sign-in and current link will be kept.');
+  const button = $('#empty-connect-button');
+  if (button) button.textContent = 'Retrying connection…';
+  try { location.reload(); } catch (error) { startupRetryNavigating = false; throw error; }
+  return true;
+}
+
+async function connectExistingProject() {
+  if (projectEntryPending || hardBoundaryNavigating || startupRetryNavigating) return;
+  const button = $('#empty-connect-button');
+  projectEntryPending = true;
+  if (button) button.disabled = true;
+  try {
+    if (!appInitialized) {
+      if (appStartupFailed) {
+        if (!retryFailedStartup()) toast('Finish or close the open project work before retrying startup.', true);
+        return;
+      }
+      setSync('Checking remembered sign-in…', 'busy');
+      await appStartup;
+    }
+    if (!Store.authSettled) {
+      return toast('Sign-in is still unavailable. Check your connection, then try again.', true);
+    }
+    if (!Store.isCloud()) {
+      // Use the existing LIBER sign-in owner on this origin. Never sign out,
+      // create a project, or clear persistence to enter an existing project.
+      const target = new URL('../../index.html', location.href);
+      const current = currentParams();
+      target.searchParams.set('returnTo', 'revex');
+      for (const key of ['projectId', 'specProjectId', 'view']) {
+        const value = current.get(key);
+        if (value) target.searchParams.set(key, value);
+      }
+      target.hash = 'apps';
+      let host = window;
+      try {
+        if (window.top.location.origin === location.origin) host = window.top;
+      } catch (_) {}
+      host.location.assign(target.href);
+      return;
+    }
+    const uid = Store.user?.uid;
+    const generation = authReconcileGeneration;
+    setSync('Checking accessible projects…', 'busy');
+    const projects = await Store.listProjects();
+    if (hardBoundaryNavigating || generation !== authReconcileGeneration || !Store.isCloud() || Store.user?.uid !== uid) return;
+    state.projects = projects;
+    renderProjects();
+    if (!projects.length) {
+      setSync('No accessible REVEX projects found', 'quiet');
+      return toast('No existing projects are available to this account. Ask a project member for an invitation.');
+    }
+    $('#project-select').focus();
+    try { $('#project-select').showPicker?.(); } catch (_) {}
+    setSync('Choose a project to start', 'quiet');
+    toast('Choose the existing LIBER project from the project field.');
+  } catch (_) {
+    setSync('Project connection unavailable', 'bad');
+    toast(appStartupFailed ? 'Startup did not complete. Press Retry connection to reload this link without signing out.' : 'Could not check sign-in or load your projects. Check your connection and try again.', true);
+  } finally {
+    projectEntryPending = false;
+    if (button) button.disabled = false;
+  }
 }
 
 function renderModelTree() {
@@ -410,6 +514,23 @@ function chapters() {
   return current;
 }
 
+function bookChapters() {
+  return chapters().filter(chapter => isBookDivision(chapter, state.chapterEdits.get(chapter.id), state.designEdits));
+}
+function bookItems(chapter) { return bookDivisionItems(chapter,state.chapterEdits.get(chapter.id),state.designEdits); }
+async function setBookVisibility(chapterId, visibility, button) {
+  const context = captureProjectContext();
+  if (!context.projectId || !isCurrentProjectContext(context)) return;
+  button.disabled = true;
+  try {
+    const patch = { bookVisibility: visibility };
+    await Store.saveChapterEdit(context.projectId, chapterId, patch);
+    if (!isCurrentProjectContext(context)) return;
+    state.chapterEdits.set(chapterId, { ...(state.chapterEdits.get(chapterId) || {}), ...patch });
+    renderDesign(); toast(visibility === 'included' ? 'Division included in Design Book.' : 'Kept in synced sources. All selections are preserved.');
+  } catch(error) { if (isCurrentProjectContext(context)) { button.disabled = false; toast(error.message, true); } }
+}
+
 function mergedChapter(chapter) {
   return { ...chapter, ...(state.chapterEdits.get(chapter.id) || {}) };
 }
@@ -425,9 +546,18 @@ function openDesignPosition(chapter, sourceItem, switchView = false) {
   renderDesignInspector();
 }
 
+window.RevexDesignContext = {
+  positions: () => chapters().flatMap(chapter => (chapter.items || []).map(source => ({ chapterId:chapter.id, chapterTitle:chapter.title, ...mergedItem(source) }))),
+  open: (chapterId, itemId) => {
+    const chapter=chapters().find(row=>row.id===chapterId), item=chapter?.items?.find(row=>String(row.id)===String(itemId));
+    if (!item) return false;
+    $('#design-search').value=''; openDesignPosition(chapter,item,true); rootMobilePosition(); return true;
+  }
+};
+
 
 function renderDesignProgress() {
-  const sourceItems = chapters().flatMap((chapter) => (chapter.items || []).map((item) => ({ chapter, item })));
+  const sourceItems = bookChapters().flatMap((chapter) => bookItems(chapter).map((item) => ({ chapter, item })));
   const active = sourceItems.map(({ item }) => mergedItem(item));
   const specified = active.filter((item) => {
     const status = String(item.status || 'Not Selected');
@@ -437,35 +567,122 @@ function renderDesignProgress() {
   const percent = total ? Math.round(specified / total * 100) : 0;
   const host = $('#design-progress');
   if (!host) return;
-  const needs = specified < total;
-  host.innerHTML = `<div class="design-progress-head"><div><strong>${needs ? 'Needs attention' : 'Design Book complete'}</strong><span> · whole project</span></div><b>${percent}%</b></div><div class="design-progress-meta">${specified.toLocaleString()} of ${total.toLocaleString()} positions carry a decision, note, source or image</div><div class="design-progress-track"><i style="width:${percent}%"></i></div><small>${needs ? `${(total-specified).toLocaleString()} positions still need a designer decision` : 'No unreviewed positions left'}</small>`;
+  const approved = active.filter(item => item.status === 'Approved').length;
+  host.innerHTML = `<div class="design-progress-head"><div><strong>Design Book progress</strong><span> · whole project</span></div><b>${percent}%</b></div><div class="design-progress-meta">${specified.toLocaleString()} of ${total.toLocaleString()} positions have selections or notes</div><div class="design-progress-track"><i style="width:${percent}%"></i></div><small>${approved.toLocaleString()} approved · ${(total-approved).toLocaleString()} awaiting approval</small>`;
+}
+function designSearchTerms(item, chapter) {
+  const fields = [chapter.title, item.label, item.description, item.source, item.status,
+    item.originalChapterTitle, item.location, item.room, item.level,
+    item.revit?.category, item.revit?.family, item.revit?.type,
+    ...(item.revit?.levels || []), ...(item.candidateMaterials || [])];
+  return fields.filter(value => typeof value === 'string' || typeof value === 'number').join(' ').normalize('NFKC').toLocaleLowerCase();
 }
 function renderDesign() {
   renderDesignProgress();
-  const list = chapters();
-  if (!state.activeChapter || !list.some((chapter) => chapter.id === state.activeChapter)) state.activeChapter = list[0]?.id || '';
-  $('#chapter-list').innerHTML = list.map((chapter) => `<button type="button" class="${chapter.id === state.activeChapter ? 'active' : ''}" data-chapter="${escapeHtml(chapter.id)}"><span>${escapeHtml(chapter.title)}</span><small>${chapter.items?.length || 0}</small></button>`).join('') || '<p class="muted">Sync from Revit to form the Design Book.</p>';
-  $$('#chapter-list button').forEach((button) => button.addEventListener('click', () => { state.activeChapter = button.dataset.chapter; state.selectedDesign = null; renderDesign(); renderDesignInspector(); closeWorkspaceRail(); }));
+  const list = chapters(), divisions = bookChapters(), source = list.filter(chapter => !divisions.includes(chapter));
+  if (!state.activeChapter || !list.some(chapter => chapter.id === state.activeChapter)) state.activeChapter = divisions[0]?.id || list[0]?.id || '';
+  const chapterButton = chapter => `<button type="button" class="${chapter.id === state.activeChapter ? 'active' : ''}" data-chapter="${escapeHtml(chapter.id)}"><span>${escapeHtml(chapter.title)}</span><small>${chapter.items?.length || 0}</small></button>`;
+  const sourcesOpen = $('#design-source-records')?.open || source.some(chapter => chapter.id === state.activeChapter);
+  $('#chapter-list').innerHTML = divisions.map(chapterButton).join('') + (source.length ? `<details id="design-source-records" ${sourcesOpen ? 'open' : ''}><summary>Synced spaces &amp; model records <small>${source.length}</small></summary><p>Preserved source records. Include a space when it needs its own design division.</p><input class="search" id="design-source-filter" type="search" placeholder="Find a synced space or model type" aria-label="Find a synced space or model type"><div id="design-source-list">${source.map(chapterButton).join('')}</div></details>` : '') || '<p class="muted">Sync from Revit to form the Design Book.</p>';
+  $('#design-source-filter')?.addEventListener('input', event => { const query=event.target.value.normalize('NFKC').toLocaleLowerCase(); $$('#design-source-list [data-chapter]').forEach(button=>button.hidden=!button.textContent.normalize('NFKC').toLocaleLowerCase().includes(query)); });
+  $$('#chapter-list [data-chapter]').forEach(button => button.addEventListener('click', () => { state.activeChapter = button.dataset.chapter; state.selectedDesign = null; $('#design-search').value=''; renderDesign(); renderDesignInspector(); closeWorkspaceRail(); }));
   const chapter = list.find((row) => row.id === state.activeChapter);
+  const query = String($('#design-search')?.value || '').normalize('NFKC').trim().toLocaleLowerCase();
+  const tokens = query.split(/\s+/).filter(Boolean);
+  const positions = (query ? list : chapter ? [chapter] : []).flatMap(owner => (owner.items || []).map(source => ({ owner, source, item: mergedItem(source) })))
+    .filter(({ owner, item }) => tokens.every(token => designSearchTerms(item, owner).includes(token)));
   const formedChapter = chapter ? mergedChapter(chapter) : null;
-  $('#chapter-title').textContent = chapter?.title || 'Design Book';
-  $('#chapter-subtitle').textContent = chapter
-    ? `${chapter.items?.length || 0} positions · ${chapter.sourceKind === 'revit-model-fallback' ? 'formed from visible Revit model types' : 'approved Design Book reference enriched by Revit schedules'}`
+  $('#chapter-title').textContent = query ? 'Search results' : chapter?.title || 'Design Book';
+  $('#chapter-subtitle').textContent = query ? 'Matching positions across design divisions and preserved sources.' : chapter
+    ? `${chapter.items?.length || 0} positions · ${divisions.includes(chapter) ? 'Design Book division' : 'Synced source · excluded from book pages until included'}`
     : 'Sync room, material and design schedules from Revit.';
+  let visibilityButton = $('#design-division-visibility');
+  if (!visibilityButton) { visibilityButton=document.createElement('button'); visibilityButton.id='design-division-visibility'; visibilityButton.type='button'; visibilityButton.className='button ghost compact'; $('#chapter-subtitle').after(visibilityButton); }
+  visibilityButton.hidden=Boolean(query || !chapter);
+  visibilityButton.textContent=divisions.includes(chapter) ? 'Move division to synced sources' : 'Include division in Design Book';
+  visibilityButton.onclick=()=>setBookVisibility(chapter.id,divisions.includes(chapter)?'source':'included',visibilityButton);
   renderDesignLanes(formedChapter);
-  $('#design-grid').innerHTML = (chapter?.items || []).map((sourceItem) => {
-    const item = mergedItem(sourceItem);
+  $('#design-lanes').hidden = Boolean(query || !divisions.includes(chapter));
+  const count = $('#design-search-count');
+  if (count) count.textContent = query ? `${positions.length.toLocaleString()} result${positions.length === 1 ? '' : 's'}` : '';
+  $('#design-grid').innerHTML = positions.map(({ owner, item }) => {
     const image = item.images?.at?.(-1)?.url || item.images?.[item.images.length - 1]?.url;
-    return `<button class="design-card${state.selectedDesign?.id === item.id ? ' active' : ''}" data-item="${escapeHtml(item.id)}" type="button">
+    return `<button class="design-card${state.selectedDesign?.id === item.id ? ' active' : ''}" data-item="${escapeHtml(item.id)}" data-chapter="${escapeHtml(owner.id)}" type="button">
       <div class="design-image">${image ? `<img src="${escapeHtml(image)}" alt="" />` : 'ADD REFERENCE / RENDER'}</div>
-      <div class="design-copy"><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.description || 'No decision note yet.')}</p><span class="status-chip">${escapeHtml(item.status || 'Not Selected')}</span>${item.revit ? `<span class="source-chip">REVIT · ${Number(item.revit.instanceCount || 0).toLocaleString()}</span>` : ''}</div>
+      <div class="design-copy">${query ? `<small class="design-result-location">${escapeHtml([owner.title, ...(item.revit?.levels || [])].filter(Boolean).join(' · '))}</small>` : ''}<strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.description || 'No decision note yet.')}</p><span class="status-chip">${escapeHtml(item.status || 'Not Selected')}</span>${item.revit ? `<span class="source-chip">REVIT · ${Number(item.revit.instanceCount || 0).toLocaleString()}</span>` : ''}</div>
     </button>`;
-  }).join('') || '<p class="muted">No positions in this chapter.</p>';
+  }).join('') || `<p class="muted">${query ? 'No matching positions. Try a material, room, level or a shorter name.' : 'No positions in this chapter.'}</p>`;
   $$('.design-card', $('#design-grid')).forEach((card) => card.addEventListener('click', () => {
-    const source = chapter.items.find((item) => item.id === card.dataset.item);
-    openDesignPosition(chapter, source);
+    const owner = list.find(row => row.id === card.dataset.chapter);
+    const source = owner?.items.find((item) => item.id === card.dataset.item);
+    if (owner && source) openDesignPosition(owner, source);
   }));
 }
+$('#design-search')?.addEventListener('input', renderDesign);
+window.addEventListener('revex:project-boundary', () => { const search = $('#design-search'); if (search) search.value = ''; });
+
+function publishedBookRows() {
+  return bookChapters().flatMap(chapter => bookItems(chapter).map(source => ({ chapter, item: mergedItem(source) })));
+}
+function productLink(value) {
+  try { const url = new URL(String(value || '')); return ['http:', 'https:'].includes(url.protocol) ? url.href : ''; } catch (_) { return ''; }
+}
+function bookDialog() {
+  let dialog = $('#design-book-dialog');
+  if (dialog) return dialog;
+  dialog = document.createElement('dialog'); dialog.id = 'design-book-dialog'; dialog.className = 'design-book-dialog'; dialog.setAttribute('aria-labelledby','design-book-title');
+  dialog.innerHTML = '<header class="design-book-head"><div><div class="eyebrow">PUBLISHED SELECTIONS</div><h2 id="design-book-title"></h2><p id="design-book-summary"></p></div><div class="design-book-actions"><button type="button" class="button ghost" id="design-book-csv">Download table</button><button type="button" class="button" id="design-book-print">Print / PDF</button><button type="button" class="icon-button" id="design-book-close" aria-label="Close Design Book">×</button></div></header><div class="design-book-table-wrap" id="design-book-rows"></div>';
+  document.body.appendChild(dialog);
+  $('#design-book-close').addEventListener('click',()=>dialog.close());
+  $('#design-book-print').addEventListener('click',()=>{try{printBookDocument({title:bookFilename('Design Book',state.project?.name),html:$('#design-book-rows').innerHTML});}catch(error){toast(error.message,true);}});
+  $('#design-book-csv').addEventListener('click',downloadDesignBook);
+  const excel=document.createElement('button');excel.type='button';excel.className='button ghost';excel.id='design-book-xlsx';excel.textContent='Excel (.xlsx)';
+  $('#design-book-csv').textContent='CSV';$('#design-book-csv').before(excel);
+  excel.addEventListener('click',downloadDesignWorkbook);
+  dialog.addEventListener('click',event=>{if(event.target===dialog)dialog.close();const button=event.target.closest('[data-book-position]');if(!button)return;const chapter=chapters().find(row=>row.id===button.dataset.bookChapter),source=chapter?.items.find(row=>row.id===button.dataset.bookPosition);if(!source)return;dialog.close();$('#design-search').value='';openDesignPosition(chapter,source,true);rootMobilePosition();});
+  return dialog;
+}
+function rootMobilePosition() { window.__revexMobileSheetR142?.sync?.(); window.__revexMobileSheetR142?.openPane?.('b'); }
+function renderBookPreview() {
+  const divisions=bookChapters(), rows=publishedBookRows(), approved=rows.filter(({item})=>item.status==='Approved').length;
+  const project=state.project?.name||'Project', date=new Date().toISOString().slice(0,10);
+  $('#design-book-title').textContent = `Design Book · ${project}`;
+  $('#design-book-summary').textContent = `${divisions.length} divisions · ${rows.length} positions · ${approved} approved · ${date}. Working versions appear here after Publish to Design Book. ${chapters().length-divisions.length} source groups remain available in Synced spaces & model records.`;
+  $('#design-book-rows').innerHTML=divisions.map((chapter,index)=>{
+    const formed=mergedChapter(chapter);
+    const lanes=[['inspiration','Inspiration'],['renders','Renderings'],['versionImages','Design studies']].map(([key,label])=>formed[key]?.length?`<div class="book-lane"><h3>${label}</h3><div class="book-lane-images">${formed[key].map(image=>`<img class="design-book-image" src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name||label)}">`).join('')}</div></div>`:'').join('');
+    return `<section class="design-book-division" data-book-division="${escapeHtml(chapter.id)}"><header class="design-book-division-head"><div><small>DESIGN BOOK · ${escapeHtml(project)}</small><h2>${escapeHtml(chapter.title)}</h2></div><small>${String(index+1).padStart(2,'0')} / ${divisions.length}<br>${date}</small></header>${lanes}<div class="design-book-position-grid">${bookItems(chapter).map(source=>{
+      const item=mergedItem(source),image=item.images?.at(-1),link=productLink(item.source);
+      return `<article class="design-book-position"><h3><button type="button" data-book-position="${escapeHtml(item.id)}" data-book-chapter="${escapeHtml(chapter.id)}">${escapeHtml(item.label)}</button></h3>${item.revit?.levels?.length?`<small>${escapeHtml(item.revit.levels.join(' · '))}</small>`:''}<div class="design-book-position-body">${image?.url?`<img class="design-book-image" src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name||item.label)}" tabindex="0" role="button" aria-label="View ${escapeHtml(item.label)} image">`:''}<div><p class="design-book-notes">${escapeHtml(item.description||'Selection to be developed.')}</p>${!image?.url?'<span class="book-empty-image">No image selected</span>':''}<div class="book-position-meta"><span class="status-chip">${escapeHtml(item.status||'Not Selected')}</span>${link?`<a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer">View product ↗</a>`:''}</div></div></div></article>`;
+    }).join('')}</div></section>`;
+  }).join('') || '<p>No design divisions included yet. Include a division from Synced spaces &amp; model records.</p>';
+}
+
+function downloadDesignBook() {
+  const cell = value => { let text=String(value??'');if(/^[\s]*[=+@-]/.test(text))text="'"+text;return '"'+text.replace(/"/g,'""')+'"'; };
+  const rows = [['Chapter','Position','Location','Status','Description','Product link','Image links'],...publishedBookRows().map(({chapter,item})=>[chapter.title,item.label,(item.revit?.levels||[]).join('; '),item.status||'Not Selected',item.description||'',productLink(item.source),(item.images||[]).map(row=>row.url).join('; ')])];
+  const blob = new Blob(['\uFEFF'+rows.map(row=>row.map(cell).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+  a.href=url;a.download=bookFilename('Design Book',state.project?.name)+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);
+}
+async function downloadDesignWorkbook() {
+  const context=captureProjectContext(),button=$('#design-book-xlsx');
+  if(!context.projectId||!isCurrentProjectContext(context))return;
+  button.disabled=true;button.textContent='Preparing Excel…';
+  try{
+    const XLSX=await loadSpreadsheetEngine();
+    if(!isCurrentProjectContext(context))return;
+    const project=state.project?.name||'Project',date=new Date();
+    const workbook=createBookWorkbook(XLSX,{project,date,divisions:bookChapters().map(chapter=>({...chapter,items:bookItems(chapter).map(mergedItem)}))});
+    XLSX.writeFile(workbook,bookFilename('Design Book',project,date)+'.xlsx',{compression:true,bookType:'xlsx'});
+  }catch(error){if(isCurrentProjectContext(context))toast(error.message,true);}
+  finally{if(button.isConnected){button.disabled=false;button.textContent='Excel (.xlsx)';}}
+}
+$('#design-book-preview')?.addEventListener('click',()=>{const dialog=bookDialog();renderBookPreview();dialog.showModal();});
+window.addEventListener('revex:project-boundary',()=>{const dialog=$('#design-book-dialog');dialog?.close();dialog?.remove();});
+
+const chapterImageBusy = new Set(), chapterImageUndo = new Map();
+function chapterImageKey(chapterId, field) { return `${Store.user?.uid || 'local'}::${state.projectId}::${chapterId}::${field}`; }
+window.addEventListener('revex:project-boundary', () => chapterImageUndo.clear());
 
 function renderDesignLanes(chapter) {
   const host = $('#design-lanes');
@@ -479,26 +696,53 @@ function renderDesignLanes(chapter) {
     <section class="design-lane" data-field="${lane.field}">
       <div class="design-lane-head"><div><strong>${lane.title}</strong><small>${lane.hint}</small></div><label class="lane-upload">Add<input type="file" accept="image/*" data-chapter-field="${lane.field}" /></label></div>
       ${lane.versions?.length ? `<div class="version-list">${lane.versions.map((version) => `<span>${escapeHtml(version.name)}</span>`).join('')}</div>` : ''}
-      <div class="lane-images">${lane.images.map((image) => `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name || lane.title)}" />`).join('') || '<span>Drop in the first visual</span>'}</div>
+      <div class="lane-images">${lane.images.map((image,index) => `<figure class="design-lane-image"><img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name || lane.title)}" tabindex="0" role="button" aria-label="View ${escapeHtml(image.name || lane.title)}" /><button type="button" data-remove-chapter-image="${index}" data-lane="${lane.field}" aria-label="Remove ${escapeHtml(image.name || 'image')} from ${lane.title}">×</button></figure>`).join('') || '<span>Drop in the first visual</span>'}</div>
+      ${chapterImageUndo.has(chapterImageKey(chapter.id,lane.field)) ? `<button type="button" class="button ghost" data-undo-chapter-image="${lane.field}">Undo removal</button>` : ''}
     </section>`).join('');
   $$('[data-chapter-field]', host).forEach((input) => input.addEventListener('change', uploadChapterImage));
+  $$('[data-remove-chapter-image]', host).forEach(button => button.addEventListener('click', () => void changeChapterImage(chapter.id,button.dataset.lane,Number(button.dataset.removeChapterImage))));
+  $$('[data-undo-chapter-image]', host).forEach(button => button.addEventListener('click', () => void changeChapterImage(chapter.id,button.dataset.undoChapterImage,null)));
+  $$('.design-lane',host).forEach(lane => { const busy=chapterImageBusy.has(chapterImageKey(chapter.id,lane.dataset.field));lane.setAttribute('aria-busy',String(busy));lane.querySelectorAll('input,button').forEach(control=>{control.disabled=busy;}); });
+}
+
+async function changeChapterImage(chapterId,field,index) {
+  const context=captureProjectContext(),chapter=chapters().find(row=>row.id===chapterId),key=chapterImageKey(chapterId,field);
+  if(!chapter||chapterImageBusy.has(key)||!isCurrentProjectContext(context))return;
+  const current=mergedChapter(chapter)[field]||[], undo=chapterImageUndo.get(key);
+  if(index===null&&!undo)return;
+  const images=index===null?undo:current.filter((_,i)=>i!==index);
+  chapterImageBusy.add(key);renderDesignLanes(mergedChapter(chapter));
+  try {
+    await Store.saveChapterImages(context.projectId,chapterId,field,images,current);
+    if(!isCurrentProjectContext(context))return;
+    state.chapterEdits.set(chapterId,{...(state.chapterEdits.get(chapterId)||{}),[field]:images});
+    if(index===null)chapterImageUndo.delete(key);else chapterImageUndo.set(key,current);
+    setSync('Chapter images saved','good');toast(index===null?'Image restored.':'Image removed. Use Undo removal to restore it.');
+  } catch(error) {if(isCurrentProjectContext(context))toast(error.message||'Could not update chapter images.',true);}
+  finally {chapterImageBusy.delete(key);if(isCurrentProjectContext(context))renderDesign();}
 }
 
 async function uploadChapterImage(event) {
+  const context = captureProjectContext();
   const file = event.target.files?.[0];
   const chapter = chapters().find((row) => row.id === state.activeChapter);
-  if (!file || !chapter) return;
+  if (!context.projectId || !file || !chapter || !isCurrentProjectContext(context)) return;
   const field = event.target.dataset.chapterField;
   const current = mergedChapter(chapter)[field] || [];
+  const key=chapterImageKey(chapter.id,field);
+  if(chapterImageBusy.has(key))return;
+  chapterImageBusy.add(key);event.target.disabled=true;
   try {
     setSync(`Uploading ${field === 'inspiration' ? 'inspiration' : field === 'renders' ? 'rendering' : 'version'}…`, 'busy');
-    const images = await Store.uploadChapterImage(state.projectId, chapter.id, field, file, current);
+    const images = await Store.uploadChapterImage(context.projectId, chapter.id, field, file, current);
+    if (!isCurrentProjectContext(context)) return;
     const edit = { ...(state.chapterEdits.get(chapter.id) || {}), [field]: images };
     state.chapterEdits.set(chapter.id, edit);
     renderDesign();
     setSync('Design Book visual saved', Store.isCloud() ? 'good' : 'quiet');
     toast('Chapter visual saved outside the RVT.');
-  } catch (error) { setSync('Visual upload failed', 'bad'); toast(error.message, true); }
+  } catch (error) { if(isCurrentProjectContext(context)){setSync('Visual upload failed', 'bad'); toast(error.message, true);} }
+  finally { chapterImageBusy.delete(key);event.target.value='';if(isCurrentProjectContext(context))renderDesign(); }
 }
 
 function renderDesignInspector() {
@@ -509,17 +753,18 @@ function renderDesignInspector() {
   }
   $('#design-inspector').innerHTML = `
     <div class="eyebrow">${escapeHtml(item.chapterTitle)}</div><h2>${escapeHtml(item.label)}</h2>
-    ${item.revit ? `<div class="design-source-summary">
+    ${item.revit ? `<details class="design-source-summary"><summary>Model location and properties</summary>
       <span>REVIT MODEL SOURCE</span>
       <strong>${Number(item.revit.instanceCount || 0).toLocaleString()} visible instance${Number(item.revit.instanceCount || 0) === 1 ? '' : 's'}</strong>
       <p>${escapeHtml([item.revit.category, item.revit.family, item.revit.type].filter(Boolean).join(' · '))}</p>
       ${(item.revit.levels || []).length ? `<small>${escapeHtml(item.revit.levels.join(' · '))}</small>` : ''}
       <button class="button ghost" id="design-show-bim" type="button">Show representative in BIM</button>
-    </div>` : ''}
+    </details>` : ''}
     <form id="design-edit-form" class="edit-form">
       <label>Status<select id="design-status"><option>Not Selected</option><option>Research</option><option>Proposed</option><option>Approved</option><option>On Hold</option></select></label>
       <label>Description<textarea id="design-description" rows="4" placeholder="Selection, intent, dimensions…">${escapeHtml(item.description || '')}</textarea></label>
       <label>Source / product link<input id="design-source" type="url" value="${escapeHtml(item.source || '')}" placeholder="https://…" /></label>
+      <button class="button ghost" id="design-source-products" type="button">Find products with WALLT</button>
       <label>Images<input id="design-image-upload" type="file" accept="image/*" /></label>
       <div class="image-strip">${(item.images || []).map((image) => `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name || '')}" />`).join('')}</div>
       <div><span class="eyebrow">REVIT MATERIAL CANDIDATES</span><div>${(item.candidateMaterials || []).map((name) => `<b class="material-chip">${escapeHtml(name)}</b>`).join('') || '<span class="muted">None inferred.</span>'}</div></div>
@@ -531,6 +776,7 @@ function renderDesignInspector() {
   $('#design-status').value = item.status || 'Not Selected';
   $('#design-edit-form').addEventListener('submit', saveDesign);
   $('#design-image-upload').addEventListener('change', uploadDesignImage);
+  $('#design-source-products').addEventListener('click',()=>window.dispatchEvent(new CustomEvent('revex:source-products')));
   $('#design-show-bim')?.addEventListener('click', () => {
     const element = (item.revit?.elementIds || []).map(String).map((id) => state.viewerData?.elements?.find((row) => String(row.id) === id)).find(Boolean);
     if (!element) return toast('This type is not visible in the current synced 3D view.', true);
@@ -544,7 +790,10 @@ function renderDesignInspector() {
 
 async function saveDesign(event) {
   event.preventDefault();
+  const context = captureProjectContext();
   const item = state.selectedDesign;
+  if (!context.projectId || !item || !isCurrentProjectContext(context)) return;
+  const sourceRevision = state.cloudState?.revision || null;
   const patch = {
     status: $('#design-status').value,
     description: $('#design-description').value.trim(),
@@ -554,34 +803,42 @@ async function saveDesign(event) {
   };
   try {
     setSync('Saving Design Book…', 'busy');
-    const saved = await Store.saveDesignEdit(state.projectId, item.id, patch);
+    const saved = await Store.saveDesignEdit(context.projectId, item.id, patch);
+    if (!isCurrentProjectContext(context)) return;
+    try { await Store.appendHistory(context.projectId, { sourceRevision, kind: 'design', operation: 'edit', label: `Design Book · ${item.chapterTitle} / ${item.label}`, affectedElementIds: item.revit?.elementIds || [], affectedUniqueIds: [], affectedLevels: item.revit?.levels || [], before: { status: item.status || 'Not Selected', description: item.description || '', source: item.source || '', images: item.images || [] }, after: { status: saved.status, description: saved.description, source: saved.source, images: saved.images || [] }, relatedId: item.id }); } catch (historyError) { console.warn('[REVEX] Design history', historyError); }
+    if (!isCurrentProjectContext(context)) return;
     state.designEdits.set(item.id, { ...(state.designEdits.get(item.id) || {}), ...saved });
     state.selectedDesign = { ...item, ...saved };
     state.selectedContext = contextFor('Design', state.selectedDesign);
-    try { await Store.appendHistory(state.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'design', operation: 'edit', label: `Design Book · ${item.chapterTitle} / ${item.label}`, affectedElementIds: item.revit?.elementIds || [], affectedUniqueIds: [], affectedLevels: item.revit?.levels || [], before: { status: item.status || 'Not Selected', description: item.description || '', source: item.source || '', images: item.images || [] }, after: { status: saved.status, description: saved.description, source: saved.source, images: saved.images || [] }, relatedId: item.id }); } catch (historyError) { console.warn('[REVEX] Design history', historyError); }
-  window.dispatchEvent(new CustomEvent('revex:design-selection', { detail: { item: state.selectedDesign } }));
+    window.dispatchEvent(new CustomEvent('revex:design-selection', { detail: { item: state.selectedDesign } }));
     renderDesign(); renderDesignInspector();
     setSync(Store.isCloud() ? 'Design Book saved' : 'Saved on this device', Store.isCloud() ? 'good' : 'quiet');
     toast('Design Book position saved.');
-  } catch (error) { setSync('Save failed', 'bad'); toast(error.message, true); }
+  } catch (error) { if(isCurrentProjectContext(context)){setSync('Save failed', 'bad'); toast(error.message, true);} }
 }
 
 async function uploadDesignImage(event) {
+  const context = captureProjectContext();
   const file = event.target.files?.[0];
-  if (!file || !state.selectedDesign) return;
+  const item = state.selectedDesign;
+  if (!context.projectId || !file || !item || !isCurrentProjectContext(context)) return;
+  const beforeImages = item.images || [];
+  const sourceRevision = state.cloudState?.revision || null;
   try {
     setSync('Uploading design image…', 'busy');
-    const beforeImages = state.selectedDesign.images || [];
-    const images = await Store.uploadDesignImage(state.projectId, state.selectedDesign.id, file, beforeImages);
-    try { await Store.appendHistory(state.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'design', operation: 'image-upload', label: `Design Book image · ${state.selectedDesign.chapterTitle} / ${state.selectedDesign.label}`, affectedElementIds: state.selectedDesign.revit?.elementIds || [], affectedLevels: state.selectedDesign.revit?.levels || [], before: { images: beforeImages }, after: { images }, relatedId: state.selectedDesign.id }); } catch (historyError) { console.warn('[REVEX] Design image history', historyError); }
-    const edit = { ...(state.designEdits.get(state.selectedDesign.id) || {}), images };
-    state.designEdits.set(state.selectedDesign.id, edit);
-    state.selectedDesign = { ...state.selectedDesign, images };
+    const images = await Store.uploadDesignImage(context.projectId, item.id, file, beforeImages);
+    if (!isCurrentProjectContext(context)) return;
+    try { await Store.appendHistory(context.projectId, { sourceRevision, kind: 'design', operation: 'image-upload', label: `Design Book image · ${item.chapterTitle} / ${item.label}`, affectedElementIds: item.revit?.elementIds || [], affectedLevels: item.revit?.levels || [], before: { images: beforeImages }, after: { images }, relatedId: item.id }); } catch (historyError) { console.warn('[REVEX] Design history', historyError); }
+    if (!isCurrentProjectContext(context)) return;
+    const edit = { ...(state.designEdits.get(item.id) || {}), images };
+    state.designEdits.set(item.id, edit);
+    state.selectedDesign = { ...item, images };
     renderDesign(); renderDesignInspector(); setSync('Design image saved', 'good');
-  } catch (error) { setSync('Image upload failed', 'bad'); toast(error.message, true); }
+  } catch (error) { if(isCurrentProjectContext(context)){setSync('Image upload failed', 'bad'); toast(error.message, true);} }
 }
 
 function renderSpec() {
+  const liveParams = currentParams();
   const spec = state.cloudState?.spec;
   const linked = state.preferredSpecId || spec?.projectId;
   $('#spec-status').textContent = linked
@@ -597,11 +854,11 @@ function renderSpec() {
   const query = {
     embedded: '1',
     specProjectId: linked,
-    specUrl: params.get('specUrl'),
-    specTitle: params.get('specTitle'),
-    specNote: params.get('specNote'),
-    section: params.get('section'),
-    item: params.get('item')
+    specUrl: liveParams.get('specUrl'),
+    specTitle: liveParams.get('specTitle'),
+    specNote: liveParams.get('specNote'),
+    section: liveParams.get('section'),
+    item: liveParams.get('item')
   };
   const next = appUrl('specifications', query);
   if (frame.src !== next) {
@@ -693,10 +950,16 @@ function postNativeRender(payload) {
 
 async function prepareRender(event) {
   event.preventDefault();
-  if (!state.projectId) return openProjectDialog();
+  const context = captureProjectContext();
+  if (!context.projectId || !isCurrentProjectContext(context)) return openProjectDialog();
   const prompt = $('#render-prompt').value.trim();
   if (!prompt) return setRenderStatus('Add a render instruction first.', 'bad');
   const chapter = chapters().find((row) => row.id === $('#render-chapter').value) || null;
+  const selectedDesign = state.selectedDesign;
+  const selectedElement = state.selectedElement;
+  const contextLabel = renderContextLabel();
+  const sourceRevision = state.cloudState?.revision || null;
+  const specProjectId = state.preferredSpecId || null;
   const settings = {
     environment: $('#render-environment').value,
     staging: $('#render-staging').value,
@@ -707,26 +970,28 @@ async function prepareRender(event) {
   };
   setRenderStatus('Preparing the BIM source and AI workspace…', 'busy');
   try {
-    const job = await Store.createRenderJob(state.projectId, {
-      contextKind: state.selectedDesign ? 'design' : state.selectedElement ? 'bim' : 'view',
-      contextLabel: renderContextLabel(),
-      elementId: state.selectedElement?.id || null,
-      designItemId: state.selectedDesign?.id || null,
+    const job = await Store.createRenderJob(context.projectId, {
+      contextKind: selectedDesign ? 'design' : selectedElement ? 'bim' : 'view',
+      contextLabel,
+      elementId: selectedElement?.id || null,
+      designItemId: selectedDesign?.id || null,
       chapterId: chapter?.id || null,
       chapterTitle: chapter?.title || null,
-      revision: state.cloudState?.revision || null,
+      revision: sourceRevision,
       prompt,
       settings,
       status: 'bridging'
     });
-    try { await Store.appendHistory(state.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'render', operation: 'prepare', label: `Render prepared · ${renderContextLabel()}`, affectedElementIds: state.selectedElement?.id ? [state.selectedElement.id] : [], affectedLevels: state.selectedElement?.level ? [state.selectedElement.level] : [], before: null, after: { renderJobId: job.id, prompt, settings }, relatedId: job.id }); } catch (historyError) { console.warn('[REVEX] Render history', historyError); }
+    if (!isCurrentProjectContext(context)) return;
+    try { await Store.appendHistory(context.projectId, { sourceRevision, kind: 'render', operation: 'prepare', label: `Render prepared · ${contextLabel}`, affectedElementIds: selectedElement?.id ? [selectedElement.id] : [], affectedLevels: selectedElement?.level ? [selectedElement.level] : [], before: null, after: { renderJobId: job.id, prompt, settings }, relatedId: job.id }); } catch (historyError) { console.warn('[REVEX] Render history', historyError); }
+    if (!isCurrentProjectContext(context)) return;
     state.activeRenderJob = job;
     state.renderJobs = [job, ...state.renderJobs.filter((row) => row.id !== job.id)].slice(0, 40);
     renderRenderHistory();
     pendingNativeRender = {
-      type: 'liber:revex-render-request', action: 'capture-current', projectId: state.projectId,
-      specProjectId: state.preferredSpecId || null, renderJobId: job.id, prompt, settings,
-      context: { label: renderContextLabel(), elementId: state.selectedElement?.id || null, designItemId: state.selectedDesign?.id || null, chapterId: chapter?.id || null }
+      type: 'liber:revex-render-request', action: 'capture-current', projectId: context.projectId,
+      specProjectId, renderJobId: job.id, prompt, settings,
+      context: { label: contextLabel, elementId: selectedElement?.id || null, designItemId: selectedDesign?.id || null, chapterId: chapter?.id || null }
     };
     const frame = $('#render-frame');
     const workspace = $('.render-workspace');
@@ -737,50 +1002,162 @@ async function prepareRender(event) {
       setRenderStatus('Revit is capturing the active 3D view and attaching it to the embedded AI workspace…', 'busy');
     } else if (!window.chrome?.webview?.postMessage) {
       try { await navigator.clipboard?.writeText(prompt); } catch (_) {}
-      await Store.updateRenderJob(state.projectId, job.id, { status: 'workspace-ready' });
+      if (!isCurrentProjectContext(context)) return;
+      await Store.updateRenderJob(context.projectId, job.id, { status: 'workspace-ready' });
+      if (!isCurrentProjectContext(context)) return;
       job.status = 'workspace-ready';
       renderRenderHistory();
       setRenderStatus('AI workspace ready. The prompt is copied; attach the prepared source preview in the embedded workspace, then save the result below.', 'good');
     }
   } catch (error) {
-    setRenderStatus(error.message || 'The render could not be prepared.', 'bad');
+    if(isCurrentProjectContext(context))setRenderStatus(error.message || 'The render could not be prepared.', 'bad');
   }
 }
 
 async function saveRenderResult(event) {
+  const context = captureProjectContext();
   const file = event.target.files?.[0];
   const chapter = chapters().find((row) => row.id === $('#render-chapter').value);
-  if (!file || !chapter) return setRenderStatus('Choose a Design Book chapter before saving the result.', 'bad');
+  const activeJob = state.activeRenderJob;
+  const sourceRevision = state.cloudState?.revision || null;
+  if (!context.projectId || !file || !chapter || !isCurrentProjectContext(context)) return setRenderStatus('Choose a Design Book chapter before saving the result.', 'bad');
   try {
     setRenderStatus('Saving the generated result into the Design Book…', 'busy');
     const formed = mergedChapter(chapter);
-    const images = await Store.uploadChapterImage(state.projectId, chapter.id, 'renders', file, formed.renders || []);
+    const images = await Store.uploadChapterImage(context.projectId, chapter.id, 'renders', file, formed.renders || []);
+    if (!isCurrentProjectContext(context)) return;
+    const result = images[images.length - 1];
+    if (activeJob?.id) {
+      await Store.updateRenderJob(context.projectId, activeJob.id, { status: 'saved', resultUrl: result?.url || null, resultName: file.name, chapterId: chapter.id });
+      if (!isCurrentProjectContext(context)) return;
+      try { await Store.appendHistory(context.projectId, { sourceRevision, kind: 'render', operation: 'save-result', label: `Render saved · ${chapter.title}`, before: null, after: { renderJobId: activeJob.id, resultUrl: result?.url || null, resultName: file.name, chapterId: chapter.id }, relatedId: activeJob.id }); } catch (historyError) { console.warn('[REVEX] Render result history', historyError); }
+      if (!isCurrentProjectContext(context)) return;
+    }
     state.chapterEdits.set(chapter.id, { ...(state.chapterEdits.get(chapter.id) || {}), renders: images });
     state.activeChapter = chapter.id;
-    if (state.activeRenderJob) {
-      const result = images[images.length - 1];
-      await Store.updateRenderJob(state.projectId, state.activeRenderJob.id, { status: 'saved', resultUrl: result?.url || null, resultName: file.name, chapterId: chapter.id });
-      state.activeRenderJob = { ...state.activeRenderJob, status: 'saved', resultUrl: result?.url || null, resultName: file.name };
-      state.renderJobs = state.renderJobs.map((row) => row.id === state.activeRenderJob.id ? state.activeRenderJob : row);
-      try { await Store.appendHistory(state.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'render', operation: 'save-result', label: `Render saved · ${chapter.title}`, before: null, after: { renderJobId: state.activeRenderJob.id, resultUrl: result?.url || null, resultName: file.name, chapterId: chapter.id }, relatedId: state.activeRenderJob.id }); } catch (historyError) { console.warn('[REVEX] Render result history', historyError); }
+    if (activeJob?.id) {
+      state.activeRenderJob = { ...activeJob, status: 'saved', resultUrl: result?.url || null, resultName: file.name };
+      state.renderJobs = state.renderJobs.map((row) => row.id === activeJob.id ? state.activeRenderJob : row);
     }
     renderDesign(); renderRenderHistory();
     setRenderStatus(`Saved to ${chapter.title} · Renderings.`, 'good');
     toast('Render saved into the Design Book.');
-  } catch (error) { setRenderStatus(error.message || 'Could not save the render.', 'bad'); }
+  } catch (error) { if(isCurrentProjectContext(context))setRenderStatus(error.message || 'Could not save the render.', 'bad'); }
   finally { event.target.value = ''; }
 }
 
 async function handleNativeRenderStatus(data) {
   if (!data || data.type !== 'liber:revex-render-status') return;
-  setRenderStatus(data.message || (data.ok ? 'Render bridge ready.' : 'Render bridge failed.'), data.ok ? 'good' : 'bad');
-  const jobId = data.renderJobId || state.activeRenderJob?.id;
-  if (!jobId) return;
+  const context = captureProjectContext();
+  const activeJob = state.activeRenderJob;
+  if (!context.projectId || !activeJob?.id || !isCurrentProjectContext(context)) return;
+  // Native messages can be queued across a WebView reload.  Legacy status
+  // payloads without both correlations are therefore unsafe: never let an
+  // old render alter the current project's job or UI.
+  if (data.projectId !== context.projectId || data.renderJobId !== activeJob.id) return;
+  const jobId = activeJob.id;
   const status = data.ok ? 'ready-in-ai' : 'bridge-error';
-  try { await Store.updateRenderJob(state.projectId, jobId, { status, bridgeMessage: data.message || '' }); } catch (_) {}
+  try { await Store.updateRenderJob(context.projectId, jobId, { status, bridgeMessage: data.message || '' }); } catch (_) {}
+  if (!isCurrentProjectContext(context)) return;
+  setRenderStatus(data.message || (data.ok ? 'Render bridge ready.' : 'Render bridge failed.'), data.ok ? 'good' : 'bad');
   state.renderJobs = state.renderJobs.map((row) => row.id === jobId ? { ...row, status } : row);
   if (state.activeRenderJob?.id === jobId) state.activeRenderJob = { ...state.activeRenderJob, status };
   renderRenderHistory();
+}
+
+function docsSetDisplayName(fileOrName) {
+  const raw = typeof fileOrName === 'string' ? fileOrName : (fileOrName?.printingSetName || fileOrName?.name || 'Printing Set');
+  return String(raw || 'Printing Set').replace(/\.[^.]+$/, '').trim() || 'Printing Set';
+}
+
+function docsSetNameKey(fileOrName) {
+  return docsSetDisplayName(fileOrName).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function docsSetFallbackKey(fileOrName) {
+  return docsSetNameKey(fileOrName)
+    .replace(/\b(?:rev(?:ision)?|issue|issued|set|r)\s*[a-z0-9._-]+\s*$/i, '')
+    .replace(/\b20\d{2}[ ._-]?\d{1,2}[ ._-]?\d{1,2}\s*$/i, '')
+    .trim();
+}
+
+function docsSetStableKey(file) {
+  return String(file?.printingSetStableKey || '').trim()
+    || (docsSetNameKey(file) ? `name:${docsSetNameKey(file)}` : '')
+    || (String(file?.printingSetId || '').trim() ? `id:${String(file.printingSetId).trim()}` : '')
+    || (docsSetFallbackKey(file) ? `fallback:${docsSetFallbackKey(file)}` : '')
+    || `file:${String(file?.id || file?.name || 'set')}`;
+}
+
+function docsPrintingGroups(rows = state.library) {
+  const files = (rows || []).filter((row)=>row?.revexDocKind === 'printing-set');
+  const groups = [];
+  const byExplicit = new Map();
+  const byId = new Map();
+  const byName = new Map();
+  for (const file of files) {
+    const explicit = String(file.printingSetStableKey || '').trim();
+    const setId = String(file.printingSetId || '').trim();
+    const nameKey = docsSetNameKey(file);
+    let group = explicit ? byExplicit.get(explicit) : null;
+    if (!group && setId) group = byId.get(setId) || null;
+    if (!group && nameKey) group = byName.get(nameKey) || null;
+    if (!group) {
+      group = { key: explicit || (setId ? `id:${setId}` : (nameKey ? `name:${nameKey}` : docsSetStableKey(file))), rows: [], nameKeys: new Set(), fallbackKeys: new Set(), setIds: new Set() };
+      groups.push(group);
+    }
+    group.rows.push(file);
+    if (explicit) byExplicit.set(explicit, group);
+    if (setId) { group.setIds.add(setId); byId.set(setId, group); }
+    if (nameKey) { group.nameKeys.add(nameKey); byName.set(nameKey, group); }
+    const fallback = docsSetFallbackKey(file); if (fallback) group.fallbackKeys.add(fallback);
+  }
+  // Fallback names are aliases only when they identify exactly one existing set.
+  // Ambiguous fallback keys never cause an automatic replacement or merge.
+  const fallbackOwners = new Map();
+  for (const group of groups) for (const key of group.fallbackKeys) {
+    const owners = fallbackOwners.get(key) || []; owners.push(group); fallbackOwners.set(key, owners);
+  }
+  for (const group of groups) {
+    group.uniqueFallbackKeys = new Set([...group.fallbackKeys].filter((key)=>(fallbackOwners.get(key)||[]).length === 1));
+    group.rows.sort((a,b)=>String(b.createdAt||b.updatedAt||'').localeCompare(String(a.createdAt||a.updatedAt||'')));
+  }
+  return groups;
+}
+
+function inferDocsRevision(fileName) {
+  const base = docsSetDisplayName(fileName);
+  const m = base.match(/(?:^|[ _.-])(?:rev(?:ision)?|r|issue)[ _.-]*([a-z0-9._-]+)$/i);
+  if (m?.[1]) return m[1];
+  return `Manual ${new Date().toISOString().slice(0,16).replace('T',' ')}`;
+}
+
+const pendingDocsUploadChoices = new Set();
+
+function chooseDocsUploadTarget(file, groups) {
+  return new Promise((resolve)=>{
+    const existing = groups.filter(g=>g.rows.length).sort((a,b)=>docsSetDisplayName(a.rows[0]).localeCompare(docsSetDisplayName(b.rows[0])));
+    const dialog = document.createElement('dialog');
+    dialog.className='docs-upload-choice';
+    const options = existing.map((g,i)=>`<option value="${i}">${escapeHtml(docsSetDisplayName(g.rows[0]))}</option>`).join('');
+    dialog.innerHTML = `<form method="dialog" class="docs-upload-choice-card"><h3>How should REVEX file this PDF?</h3><p><strong>${escapeHtml(file.name)}</strong> does not match an existing printing-set name.</p><label><input type="radio" name="mode" value="new-set" checked> Create a new printing set</label>${existing.length?`<label><input type="radio" name="mode" value="replace-set"> Replace the current revision of <select data-target>${options}</select></label>`:''}<label><input type="radio" name="mode" value="manual"> Keep it as a normal Record In/Out document</label><div class="docs-upload-choice-actions"><button value="cancel" type="submit" class="button ghost">Cancel</button><button value="apply" type="submit" class="button">Continue</button></div><small>Replacing keeps the same set identity and revision history. The uploaded file name becomes the current set name; the prior revision remains available in History.</small></form>`;
+    document.body.appendChild(dialog);
+    let done=false;
+    let cancelChoice=null;
+    const finish=(value)=>{if(done)return;done=true;pendingDocsUploadChoices.delete(cancelChoice);try{dialog.close()}catch(_){};dialog.remove();resolve(value)};
+    cancelChoice=()=>finish(null);
+    pendingDocsUploadChoices.add(cancelChoice);
+    dialog.addEventListener('cancel',(e)=>{e.preventDefault();finish(null)},{once:true});
+    dialog.addEventListener('close',()=>{if(dialog.isConnected)finish(null)},{once:true});
+    dialog.querySelector('form').addEventListener('submit',(e)=>{
+      e.preventDefault();
+      const submitter=e.submitter?.value||'apply'; if(submitter==='cancel')return finish(null);
+      const mode=dialog.querySelector('input[name="mode"]:checked')?.value||'new-set';
+      const index=Number(dialog.querySelector('[data-target]')?.value||0);
+      finish({mode,target:mode==='replace-set'?existing[index]||null:null});
+    });
+    try{dialog.showModal()}catch(_){finish(null)};
+  });
 }
 
 function docsMatches(text) {
@@ -794,24 +1171,30 @@ function docsRecordLabel(file) {
 }
 
 async function selectDocument(file, page = null, sheet = null) {
-  state.docSelection = { file, page: page || null, sheet: sheet || null };
+  const selectionCurrent=window.__revexDocumentViewer.beginSelection();
+  const context = captureProjectContext();
+  if (!context.projectId) return;
   const frame = $('#docs-frame'), empty = $('#docs-empty');
-  $('#docs-preview-title').textContent = sheet ? `${sheet.sheetNumber || `Page ${page}`} · ${sheet.sheetName || ''}` : (file.printingSetName || file.name || 'Document');
-  $('#docs-preview-meta').textContent = [file.revision ? `REVEX ${file.revision}` : null, sheet?.currentRevision ? `Sheet revision ${sheet.currentRevision}` : null, page ? `page ${page}` : null, file.source === 'manual' ? 'manual file' : null].filter(Boolean).join(' · ') || 'Project document';
-  $('#docs-copy-ref').disabled = false; $('#docs-open-external').disabled = false;
   try {
     const base = file.localUrl || await Store.fileUrl(file.storagePath);
     if (!base) throw new Error('Document URL is unavailable.');
-    state.docSelection.url = base;
+    if (!isCurrentProjectContext(context) || !selectionCurrent()) return;
+    state.docSelection = { file, page: page || null, sheet: sheet || null, url: base };
+    $('#docs-preview-title').textContent = sheet ? `${sheet.sheetNumber || `Page ${page}`} · ${sheet.sheetName || ''}` : (file.printingSetName || file.name || 'Document');
+    $('#docs-preview-meta').textContent = [file.revision ? `REVEX ${file.revision}` : null, sheet?.currentRevision ? `Sheet revision ${sheet.currentRevision}` : null, page ? `page ${page}` : null, file.source === 'manual' ? 'manual file' : null].filter(Boolean).join(' · ') || 'Project document';
+    $('#docs-copy-ref').disabled = false; $('#docs-open-external').disabled = false;
     const url = page ? `${base}#page=${page}` : base;
-    frame.src = url; frame.hidden = false; empty.hidden = true;
+    window.__revexDocumentViewer.show(frame,state.docSelection);empty.hidden = true;
   } catch (error) {
+    if (!isCurrentProjectContext(context)) return;
     frame.removeAttribute('src'); frame.hidden = true; empty.hidden = false; empty.textContent = error.message || 'Could not open document.';
   }
+  if (!isCurrentProjectContext(context)) return;
   renderLibrary();
 }
 
 function renderLibrary() {
+  if (window.__revexDocsPagesR115?.renderTree) { window.__revexDocsPagesR115.renderTree(); return; }
   const host = $('#docs-tree');
   if (!host) return;
   const rows = [...state.library];
@@ -853,18 +1236,62 @@ function renderLibrary() {
 
 async function uploadDocsFiles(files, lane) {
   if (!files?.length) return;
+  const projectId=state.projectId;
+  const activationToken=state.activationToken;
+  const uid=Store.user?.uid || null;
+  const sourceRevision=state.cloudState?.revision || null;
+  const stillCurrent=()=>state.projectId===projectId&&state.activationToken===activationToken&&(Store.user?.uid||null)===uid;
+  if (!projectId) return toast('Choose a project before uploading documents.', true);
   if (!Store.isCloud()) return toast('Sign in to upload project documents.', true);
   try {
     setSync(`Uploading ${files.length} project document${files.length===1?'':'s'}…`, 'busy');
     for (const file of [...files]) {
       const ext = String(file.name || '').split('.').pop().toLowerCase();
-      const folder = `${lane === 'out' ? 'record_out' : 'record_in'}/${/^(png|jpg|jpeg|gif|webp)$/i.test(ext)?'images':'docs'}`;
-      const record = await Store.uploadLibraryFile(state.projectId, file, folder, { manualInRevex: true });
+      let metadata = { manualInRevex: true };
+      let folder = `${lane === 'out' ? 'record_out' : 'record_in'}/${/^(png|jpg|jpeg|gif|webp)$/i.test(ext)?'images':'docs'}`;
+      if (ext === 'pdf') {
+        const groups = docsPrintingGroups();
+        const exactName = docsSetNameKey(file.name);
+        const fallback = docsSetFallbackKey(file.name);
+        let target = groups.find((g)=>g.nameKeys.has(exactName)) || null;
+        // Fallback mapping is intentionally secondary so two genuinely different
+        // sets with similar revision suffixes are not merged silently.
+        if (!target && fallback) {
+          const fallbackMatches = groups.filter((g)=>g.uniqueFallbackKeys?.has(fallback));
+          if (fallbackMatches.length === 1) target = fallbackMatches[0];
+        }
+        let choice = target ? { mode:'replace-set', target, automatic:true } : await chooseDocsUploadTarget(file, groups);
+        if (!choice) continue;
+        if (!stillCurrent()) return;
+        if (choice.mode !== 'manual') {
+          const latest = choice.target?.rows?.[0] || null;
+          const stableKey = latest ? docsSetStableKey(latest) : `manual:${docsSetNameKey(file.name)||Date.now().toString(36)}`;
+          metadata = {
+            manualInRevex: true,
+            revexDocKind: 'printing-set',
+            printingSetStableKey: stableKey,
+            printingSetId: latest?.printingSetId || null,
+            printingSetName: docsSetDisplayName(file.name),
+            revision: inferDocsRevision(file.name),
+            sheetIndex: [],
+            setHidden: latest?.setHidden === true,
+            replacedLibraryId: latest?.id || null,
+            replacementMode: latest ? (choice.automatic ? 'name-match' : 'operator-selected') : 'new-set'
+          };
+          folder = `${lane === 'out' ? 'record_out' : 'record_in'}/printing_sets`;
+        }
+      }
+      if (!stillCurrent()) return;
+      const record = await Store.uploadLibraryFile(projectId, file, folder, metadata);
+      // The upload belongs to the captured project even if the user navigates
+      // elsewhere while it finishes; never redirect its history into another one.
+      if ((Store.user?.uid||null)===uid) try { await Store.appendHistory(projectId, { sourceRevision, kind: 'document', operation: record.revexDocKind==='printing-set'?'printing-set-revision':'upload', label: record.revexDocKind==='printing-set'?`Printing set revision · ${record.printingSetName}`:`Document uploaded · ${file.name}`, before: record.replacedLibraryId ? { libraryId: record.replacedLibraryId } : null, after: { libraryId: record.id, name: record.name, printingSetName: record.printingSetName||null, printingSetStableKey: record.printingSetStableKey||null, revision: record.revision||null, folderPath: record.folderPath, size: record.size }, relatedId: record.id }); } catch (historyError) { console.warn('[REVEX] Docs history', historyError); }
+      if (!stillCurrent()) return;
       state.library.unshift(record);
-      try { await Store.appendHistory(state.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'document', operation: 'upload', label: `Document uploaded · ${file.name}`, before: null, after: { libraryId: record.id, name: record.name, folderPath: record.folderPath, size: record.size }, relatedId: record.id }); } catch (historyError) { console.warn('[REVEX] Docs history', historyError); }
     }
-    renderLibrary(); setSync('Docs updated', 'good'); toast('Project document uploaded.');
-  } catch (error) { setSync('Docs upload failed', 'bad'); toast(error.message || 'Document upload failed.', true); }
+    if (!stillCurrent()) return;
+    renderLibrary(); setSync('Docs updated', 'good'); toast('Project document upload complete.');
+  } catch (error) { if(!stillCurrent())return;setSync('Docs upload failed', 'bad'); toast(error.message || 'Document upload failed.', true); }
 }
 
 function copyDocumentReference() {
@@ -891,6 +1318,96 @@ function renderChatContext() {
 
 function renderAll() {
   renderModelTree(); renderPins(); renderDesign(); renderDesignInspector(); renderLibrary(); renderChatContext();
+}
+
+function clearProjectUrlBinding() {
+  const safe = new URLSearchParams();
+  if (currentParams().get('inShell')) safe.set('inShell', '1');
+  const query = safe.toString();
+  history.replaceState(null, '', `${location.pathname}${query ? `?${query}` : ''}${location.hash || ''}`);
+}
+
+function restartAtProjectBoundary(projectId, view) {
+  if (hardBoundaryNavigating) return true;
+  const target = new URL(location.href);
+  const next = new URLSearchParams();
+  if (currentParams().get('inShell')) next.set('inShell', '1');
+  if (projectId) next.set('projectId', projectId);
+  if (view) next.set('view', view);
+  target.search = next.toString();
+  hardBoundaryNavigating = true;
+  location.replace(target.href);
+  return true;
+}
+
+function beginHardProjectBoundary(projectId, view) {
+  if (hardBoundaryNavigating) return true;
+  // Invalidate every in-flight callback before any old identity can be
+  // observed by an older helper.  The replacement navigation gives each
+  // project/account transition a clean JavaScript realm.
+  state.activationToken += 1;
+  state.unsubscribe?.(); state.unsubscribe = null;
+  stopLiveProjectSubscriptions();
+  state.projectId = ''; state.project = null;
+  clearProjectBoundState();
+  $('#project-select').value = '';
+  renderAll(); showView(view || 'bim');
+  return restartAtProjectBoundary(projectId, view || 'bim');
+}
+
+function clearProjectBoundState() {
+  revisionHydrationToken++;
+  state.cloudState=null;state.viewerData=null;state.designData=null;
+  state.designEdits=new Map();state.chapterEdits=new Map();state.issues=[];state.library=[];
+  state.historyEvents=[];state.bimOverlays=new Map();state.bimAppearances=new Map();state.derivedPlans=[];
+  state.renderJobs=[];state.activeRenderJob=null;state.selectedElement=null;state.selectedDesign=null;
+  state.selectedContext='';state.docSelection=null;state.chatConnId='';state.chatLoaded=false;state.activeChapter='';
+  state.loadingRevision='';state.loadingProjectId='';state.viewerMode='';state.showHiddenOnly=false;
+  state.preferredSpecId='';
+  window.__revexCloudState=null;
+  // Some extension modules historically fall back to the URL when state is
+  // momentarily blank. Remove the former identity before emitting any reset.
+  clearProjectUrlBinding();
+  try{sessionStorage.removeItem('liber_revex_chat_draft')}catch(_){}
+  for(const cancelChoice of [...pendingDocsUploadChoices])cancelChoice();
+  const frame=$('#chat-frame');if(frame)frame.removeAttribute('src');
+  const placeholder=$('#chat-placeholder');if(placeholder){placeholder.hidden=false;placeholder.textContent='Choose a project to load Project Chat.';}
+  const docsFrame=$('#docs-frame');if(docsFrame){docsFrame.removeAttribute('src');docsFrame.hidden=true;}
+  const docsEmpty=$('#docs-empty');if(docsEmpty){docsEmpty.hidden=false;docsEmpty.textContent='Select a document to preview it here.';}
+  const docsTitle=$('#docs-preview-title');if(docsTitle)docsTitle.textContent='Select a document';
+  const docsMeta=$('#docs-preview-meta');if(docsMeta)docsMeta.textContent='Full documents and exact sheet/page references open here.';
+  const docsCopy=$('#docs-copy-ref');if(docsCopy)docsCopy.disabled=true;
+  const docsExternal=$('#docs-open-external');if(docsExternal)docsExternal.disabled=true;
+  const docsShare=$('#docs-share-sheet');if(docsShare)docsShare.hidden=true;
+  const specFrame=$('#spec-frame');if(specFrame)specFrame.removeAttribute('src');
+  $('.spec-frame-wrap')?.classList.remove('ready');
+  pendingNativeRender=null;renderReturnFocus=null;
+  const renderFrame=$('#render-frame');if(renderFrame){renderFrame.removeAttribute('src');renderFrame.hidden=true;delete renderFrame.dataset.loaded;}
+  const renderDialog=$('#render-dialog');if(renderDialog)renderDialog.hidden=true;
+  $('.render-workspace')?.classList.remove('ready');
+  const issueDrawer=$('#issue-drawer');if(issueDrawer)issueDrawer.hidden=true;
+  issueAnchor=null;issueReturnFocus=null;
+  const lightbox=$('#design-image-lightbox');try{lightbox?.close?.()}catch(_){}
+  const lightboxImage=$('#design-image-lightbox-image');if(lightboxImage)lightboxImage.removeAttribute('src');
+  const lightboxCaption=$('#design-image-lightbox-caption');if(lightboxCaption)lightboxCaption.textContent='';
+  const elementSearch=$('#element-search');if(elementSearch)elementSearch.value='';
+  const inspector=$('#bim-inspector');if(inspector)inspector.innerHTML='<div class="eyebrow">BIM INSPECTOR</div><h2>Select an element</h2><p class="muted">Choose an element in the synced model to inspect it.</p>';
+  const renderSource=$('#render-source');if(renderSource)renderSource.innerHTML='<span>Choose a synced BIM view before preparing a render.</span>';
+  renderRenderHistory();
+  const archive=$('#design-archive');if(archive){archive.hidden=true;archive.innerHTML='';}
+  const energyConsent=$('#energy-consent-dialog');try{energyConsent?.close?.()}catch(_){}
+  for(const id of ['energy-consent-project','energy-consent-revision','energy-consent-endpoint']){const node=$('#'+id);if(node)node.textContent='';}
+  const energyFailure=$('#energy-exact-failure');if(energyFailure){energyFailure.hidden=true;energyFailure.innerHTML='';}
+  const energyRun=$('#energy-run-status');if(energyRun){energyRun.textContent='Waiting for active-document Engineering evidence.';energyRun.dataset.tone='quiet';}
+  const bim=activeBimViewer();
+  if(bim){
+    bim.loadToken=(Number(bim.loadToken)||0)+1;
+    bim.clear?.();bim.data=null;bim.sourceState=null;bim.bounds=null;
+    bim.byId?.clear?.();bim.byUid?.clear?.();bim.setOverlays?.([]);bim.setAppearances?.([]);
+    bim.detailLoaded=false;bim.detailLoading=false;bim.proxyReady=false;bim.requestRender?.();
+  }
+  window.dispatchEvent(new CustomEvent('revex:project-boundary',{detail:{projectId:null}}));
+  window.dispatchEvent(new CustomEvent('revex:history-data',{detail:{historyEvents:[],bimOverlays:[],derivedPlans:[]}}));
 }
 
 function stopLiveProjectSubscriptions(){
@@ -938,14 +1455,30 @@ async function hydrateRevisionOverlays(cloudState,localPackage,revision,projectI
   if(!$('#view-spec')?.hidden)renderSpec();
 }
 
+async function fetchRevisionJson(url, timeoutMs = 15000) {
+  if (!url) return null;
+  const controller = window.AbortController ? new window.AbortController() : null;
+  const timeout = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    const response = await fetch(url, { cache: 'no-store', ...(controller ? { signal: controller.signal } : {}) });
+    if (!response.ok) throw new Error(`Could not load synced data (${response.status})`);
+    return await response.json();
+  } catch (error) {
+    if (controller?.signal.aborted) throw new Error(`Timed out loading the synced revision after ${Math.ceil(timeoutMs / 1000)} seconds`);
+    throw error;
+  } finally {
+    if (timeout) window.clearTimeout(timeout);
+  }
+}
+
 async function loadCloudState(cloudState,localPackage=null,projectId=state.projectId,activationToken=state.activationToken){
   if(state.activationToken!==activationToken||state.projectId!==projectId)return;
-  if(!cloudState&&!localPackage){revisionHydrationToken++;state.cloudState=null;state.loadingRevision='';state.loadingProjectId=projectId;state.viewerData=null;state.designData=null;state.designEdits=new Map();state.chapterEdits=new Map();state.issues=[];state.library=[];state.historyEvents=[];state.bimOverlays=new Map();state.derivedPlans=[];renderAll();setSync('No Revit sync yet','quiet');return;}
+  if(!cloudState&&!localPackage){revisionHydrationToken++;state.cloudState=null;window.__revexCloudState=null;state.loadingRevision='';state.loadingProjectId=projectId;state.viewerData=null;state.designData=null;state.designEdits=new Map();state.chapterEdits=new Map();state.issues=[];state.library=[];state.historyEvents=[];state.bimOverlays=new Map();state.derivedPlans=[];renderAll();setSync('No Revit sync yet','quiet');return;}
   const revision=localPackage?.revision||cloudState?.revision||'unknown';
   if(state.loadingProjectId===projectId&&state.loadingRevision===revision&&!localPackage&&state.viewerData&&state.designData)return;
   const previousLoadingRevision=state.loadingRevision,previousLoadingProjectId=state.loadingProjectId;state.loadingProjectId=projectId;state.loadingRevision=revision;setSync('Loading project revision…','busy');
-  const viewerPromise=localPackage?.viewer?Promise.resolve(localPackage.viewer):(cloudState?.viewerUrl?Store.fetchJson(cloudState.viewerUrl):Promise.resolve(null));
-  const designPromise=localPackage?.design?Promise.resolve(localPackage.design):(cloudState?.designUrl?Store.fetchJson(cloudState.designUrl):Promise.resolve(null));
+  const viewerPromise=localPackage?.viewer?Promise.resolve(localPackage.viewer):(cloudState?.viewerUrl?fetchRevisionJson(cloudState.viewerUrl):Promise.resolve(null));
+  const designPromise=localPackage?.design?Promise.resolve(localPackage.design):(cloudState?.designUrl?fetchRevisionJson(cloudState.designUrl):Promise.resolve(null));
   const [viewerResult,designResult]=await Promise.allSettled([viewerPromise,designPromise]);
   if(state.activationToken!==activationToken||state.projectId!==projectId||state.loadingProjectId!==projectId||state.loadingRevision!==revision)return;
   const viewerData=settledValue(viewerResult,null);
@@ -957,6 +1490,7 @@ async function loadCloudState(cloudState,localPackage=null,projectId=state.proje
   // Shadow-page commit: keep the prior complete revision on screen while all
   // new source pointers resolve, then swap BIM + Design atomically.
   state.cloudState=cloudState||null;
+  window.__revexCloudState=state.cloudState;
   state.viewerData=viewerData;
   state.designData=nextDesign;
   renderDesign();renderDesignInspector();
@@ -971,21 +1505,36 @@ async function loadCloudState(cloudState,localPackage=null,projectId=state.proje
   setTimeout(()=>hydrateRevisionOverlays(cloudState,localPackage,revision,projectId,activationToken),0);
 }
 
-async function activateProject(projectId,{explicitUserSelection=false,view=null}={}){
+async function activateProject(projectId,{explicitUserSelection=false,view=null,force=false}={}){
   projectId=String(projectId||'').trim();
-  if(projectId&&projectId===state.projectId&&state.project&&!explicitUserSelection){if(view)showView(view);notifyNativeProject(false);return;}
+  if(projectId&&projectId===state.projectId&&state.project&&!explicitUserSelection&&!force){if(view)showView(view);notifyNativeProject(false);return;}
+  const previousProjectId=state.projectId;
+  const changingProject=projectId!==previousProjectId;
+  const liveParams=currentParams();
+  const targetView=view||$('.main-nav [data-view].active')?.dataset.view||liveParams.get('view')||'bim';
   const activationToken=++state.activationToken;
-  state.unsubscribe?.();state.unsubscribe=null;stopLiveProjectSubscriptions();revisionHydrationToken++;state.projectId=projectId;state.project=null;
-  const project=state.projects.find(r=>r.id===projectId)||(projectId?await Store.getProject(projectId):null);
-  if(state.activationToken!==activationToken||state.projectId!==projectId)return;
-  state.project=project;
-  state.preferredSpecId=((params.get('projectId')===projectId&&params.get('specProjectId'))||state.project?.revexSpecProjectId||'');
-  $('#project-select').value=state.projectId;notifyNativeProject(explicitUserSelection);
-  if(!projectId){state.preferredSpecId='';showView('bim');return;}
-  showView(view||params.get('view')||'bim');setSync('Loading project…','busy');
+  state.unsubscribe?.();state.unsubscribe=null;stopLiveProjectSubscriptions();
+  if(changingProject){
+    // A project boundary is also an account boundary. Blank the old project before
+    // exposing a different project, rather than relying on later async hydration.
+    state.projectId='';state.project=null;clearProjectBoundState();$('#project-select').value='';renderAll();showView(targetView);
+    // Each project/account transition gets a fresh JavaScript realm.  Several
+    // historical UI helpers run asynchronous work, and a clean navigation is
+    // the only reliable boundary that prevents an old callback reaching B.
+    if(previousProjectId&&restartAtProjectBoundary(projectId,targetView))return true;
+  }
+  state.projectId=projectId;state.project=null;
   try{
-    const cloudState=await Store.getState(projectId);if(state.activationToken!==activationToken||state.projectId!==projectId)return;await loadCloudState(cloudState,null,projectId,activationToken);if(state.activationToken!==activationToken||state.projectId!==projectId)return;notifyNativeProject(explicitUserSelection);window.dispatchEvent(new CustomEvent('revex:authoritative-project-bound',{detail:{projectId,source:explicitUserSelection?'explicit-user-selection':'atomic-project-activation'}}));
-    state.unsubscribe=Store.subscribeState(projectId,next=>{if(state.activationToken!==activationToken||state.projectId!==projectId)return;if(next?.revision&&next.revision!==state.cloudState?.revision)loadCloudState(next,null,projectId,activationToken);else if(next){state.cloudState=next;if(!$('#view-spec')?.hidden)renderSpec();}});
+    const project=state.projects.find(r=>r.id===projectId)||(projectId?await Store.getProject(projectId):null);
+    if(state.activationToken!==activationToken||state.projectId!==projectId)return;
+    if(projectId&&!project)throw new Error('Project is unavailable or you no longer have access.');
+    state.project=project;
+    state.preferredSpecId=((liveParams.get('projectId')===projectId&&liveParams.get('specProjectId'))||state.project?.revexSpecProjectId||'');
+    $('#project-select').value=state.projectId;notifyNativeProject(explicitUserSelection);
+    if(!projectId){state.preferredSpecId='';showView(targetView);return;}
+    if(!changingProject)showView(targetView);setSync('Loading project…','busy');
+    const cloudState=await Store.getState(projectId);if(state.activationToken!==activationToken||state.projectId!==projectId)return;await loadCloudState(cloudState,null,projectId,activationToken);if(state.activationToken!==activationToken||state.projectId!==projectId)return;if(changingProject)showView(targetView);notifyNativeProject(explicitUserSelection);window.dispatchEvent(new CustomEvent('revex:authoritative-project-bound',{detail:{projectId,source:explicitUserSelection?'explicit-user-selection':'atomic-project-activation'}}));
+    state.unsubscribe=Store.subscribeState(projectId,next=>{if(state.activationToken!==activationToken||state.projectId!==projectId)return;window.__revexCloudState=next||null;if(next?.revision&&next.revision!==state.cloudState?.revision)loadCloudState(next,null,projectId,activationToken);else if(next){state.cloudState=next;if(!$('#view-spec')?.hidden)renderSpec();}});
     startLiveProjectSubscriptions(projectId);
     Promise.allSettled([Store.ensureSpecProject(projectId,state.preferredSpecId||state.project?.revexSpecProjectId,state.project),Store.listRenderJobs(projectId)]).then(([specResult,renderResult])=>{
       if(state.activationToken!==activationToken||state.projectId!==projectId)return;
@@ -994,35 +1543,83 @@ async function activateProject(projectId,{explicitUserSelection=false,view=null}
       if(state.project&&state.preferredSpecId)state.project.revexSpecProjectId=state.preferredSpecId;
       renderRenderHistory();notifyNativeProject();if(!$('#view-spec')?.hidden)renderSpec();
     });
-    if(params.get('render')==='1')openRenderDialog();
-  }catch(error){if(state.activationToken!==activationToken||state.projectId!==projectId)return;setSync('Project unavailable','bad');toast(error.message,true);}
+    if(currentParams().get('render')==='1')openRenderDialog();
+  }catch(error){if(state.activationToken!==activationToken||state.projectId!==projectId)return;if(changingProject||!state.project){state.projectId='';state.project=null;clearProjectBoundState();$('#project-select').value='';renderAll();showView(targetView);}setSync('Project unavailable','bad');toast(error.message,true);}
 }
 
 async function handleSyncFiles(files) {
   if (!files?.length) return;
+  if(window.__liberRevexPublicationBusy)return;
+  window.__liberRevexPublicationBusy=true;
+  const syncStartToken=state.activationToken;
+  const syncStartUid=Store.user?.uid || null;
+  let appliedToken=syncStartToken;
+  let packageProjectId='',packageRevision='',packageSha256='',publicationAcknowledged=false,cloudPublished=false;
+  const acknowledge=(ok,cloud,error=null,receiptId=null)=>{
+    try{window.chrome?.webview?.postMessage({type:'liber:revex-sync-result',ok,cloud,projectId:packageProjectId,revision:packageRevision,packageSha256,publisherUid:syncStartUid,publicationReceiptId:receiptId,error});}catch(_){}
+  };
   try {
     setSync('Validating Revit package…', 'busy');
     const projectFile=[...files].find(file=>String(file.name||'').toLowerCase()==='project.json');
     if(!projectFile)throw new Error('The active Revit package is missing project.json.');
     const projectManifest=JSON.parse(await projectFile.text());
-    const packageProjectId=String(projectManifest?.central?.projectId||'').trim();
+    packageProjectId=String(projectManifest?.central?.projectId||'').trim();
     if(!packageProjectId)throw new Error('The active Revit package has no exact evidence-bound project ID.');
+    const integrityFile=[...files].find(file=>String(file.name||'').toLowerCase()==='integrity.json');
+    if(!integrityFile)throw new Error('The active Revit package is missing integrity.json.');
+    const integrityBytes=await integrityFile.arrayBuffer();
+    packageRevision=String(JSON.parse(new TextDecoder().decode(integrityBytes)).revision||'');
+    packageSha256=[...new Uint8Array(await crypto.subtle.digest('SHA-256',integrityBytes))].map(value=>value.toString(16).padStart(2,'0')).join('');
+    if((Store.user?.uid||null)!==syncStartUid)throw new Error('The LIBER account changed before publication.');
     const packageSpecId=`spec_${packageProjectId.replace(/[^a-zA-Z0-9._-]+/g,'_').slice(0,120).replace(/\./g,'_')}`;
     const result = await Store.syncPackage(files, packageProjectId, packageSpecId);
+    // The cloud receipt acknowledges publication, not expensive viewer hydration.
+    // A renderer failure or project navigation must not cause another full upload.
+    cloudPublished=Boolean(result.cloud);
+    acknowledge(true,cloudPublished,null,result.publicationReceipt?.id||null);
+    publicationAcknowledged=true;
+    if(state.activationToken!==syncStartToken||(Store.user?.uid||null)!==syncStartUid)return;
+    if(result.reusedPublication||result.resumedRevision){
+      toast(result.reusedPublication?'This Revit revision is already published; no files were uploaded again.':'Revit revision publication completed.');
+      // Open the authoritative current revision, never replay an older package
+      // over a newer model that is already visible in this project.
+      if(!result.reusedPublication||result.projectId!==state.projectId||!state.cloudState||!state.viewerData)
+        await activateProject(result.projectId,{view:'bim',force:true});
+      else{setSync('Revision already published','good');showView('bim');}
+      return;
+    }
+    if(result.projectId!==state.projectId&&state.projectId){
+      if(await activateProject(result.projectId,{view:'bim',force:true}))return;
+    }
+    const changingProject=result.projectId!==state.projectId;
+    appliedToken=++state.activationToken;
+    state.unsubscribe?.();state.unsubscribe=null;stopLiveProjectSubscriptions();
+    if(changingProject){state.projectId='';state.project=null;clearProjectBoundState();$('#project-select').value='';renderAll();showView('bim');}
     state.projectId = result.projectId;
     state.project = state.projects.find((row) => row.id === result.projectId) || await Store.getProject(result.projectId);
+    if(state.activationToken!==appliedToken||(Store.user?.uid||null)!==syncStartUid)return;
+    if(state.project&&!state.projects.some((row)=>row.id===state.project.id)){state.projects.unshift(state.project);renderProjects();}
     state.preferredSpecId=result.specProjectId||packageSpecId;
     $('#project-select').value = state.projectId;
-    await loadCloudState(result, result);
-    if(result.cloud){state.unsubscribe?.();state.unsubscribe=Store.subscribeState(result.projectId,next=>{if(next?.revision&&next.revision!==state.cloudState?.revision)loadCloudState(next);});startLiveProjectSubscriptions(result.projectId);}
+    await loadCloudState(result, result, result.projectId, appliedToken);
+    if(state.activationToken!==appliedToken||state.projectId!==result.projectId||(Store.user?.uid||null)!==syncStartUid)return;
+    if(result.cloud){state.unsubscribe=Store.subscribeState(result.projectId,next=>{if(state.activationToken!==appliedToken||state.projectId!==result.projectId)return;window.__revexCloudState=next||null;if(next?.revision&&next.revision!==state.cloudState?.revision)loadCloudState(next,null,result.projectId,appliedToken);else if(next){state.cloudState=next;if(!$('#view-spec')?.hidden)renderSpec();}});startLiveProjectSubscriptions(result.projectId);}
     showView('bim');
     toast(result.cloud ? 'Revit revision published to the live Companion.' : 'Local preview loaded. Sign in to publish it across devices.');
-    try { window.chrome?.webview?.postMessage({ type: 'liber:revex-sync-result', ok: true, projectId: result.projectId, revision: result.revision, cloud: result.cloud }); } catch (_) {}
   } catch (error) {
-    setSync('Sync failed', 'bad'); toast(error.message || 'REVEX sync failed.', true);
-    try { window.chrome?.webview?.postMessage({ type: 'liber:revex-sync-result', ok: false, error: error.message }); } catch (_) {}
-  } finally { $('#revex-sync-upload').value = ''; }
+    if(!publicationAcknowledged)acknowledge(false,false,error.message||'REVEX sync failed.');
+    if(state.activationToken!==appliedToken||(Store.user?.uid||null)!==syncStartUid)return;
+    setSync(publicationAcknowledged?(cloudPublished?'Published · viewer could not load':'Local preview could not load'):'Sync failed', 'bad'); toast(error.message || 'REVEX sync failed.', true);
+  } finally { window.__liberRevexPublicationBusy=false;$('#revex-sync-upload').value = ''; }
 }
+
+function announcePublicationReady(){
+  window.__liberRevexPublicationReady=Boolean(appInitialized&&Store.isCloud()&&navigator.onLine!==false);
+  if(window.__liberRevexPublicationReady){try{window.chrome?.webview?.postMessage({type:'liber:revex-publication-ready',projectId:state.projectId||null});}catch(_){}}
+}
+window.addEventListener('online',announcePublicationReady);
+window.addEventListener('offline',()=>{window.__liberRevexPublicationReady=false;});
+window.addEventListener('revex:authoritative-project-bound',announcePublicationReady);
 
 let issueAnchor = null;
 let issueReturnFocus = null;
@@ -1045,25 +1642,31 @@ function closeIssue() {
 
 $('#issue-form').addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (!issueAnchor || !state.projectId) return;
+  const context = captureProjectContext();
+  const anchor = issueAnchor;
+  if (!context.projectId || !anchor || !isCurrentProjectContext(context)) return;
+  const sourceRevision = state.cloudState?.revision || null;
+  const selectedLevel = state.selectedElement?.level || null;
   const issue = {
     title: $('#issue-title').value.trim(), body: $('#issue-body').value.trim(), status: $('#issue-status').value,
-    anchorKind: issueAnchor.kind,
-    anchorElementId: issueAnchor.element?.id || null,
-    anchorUniqueId: issueAnchor.element?.uniqueId || null,
-    anchorDesignItemId: issueAnchor.item?.id || null,
-    anchorLabel: issueAnchor.element?.name || issueAnchor.item?.label || null,
-    revision: state.cloudState?.revision || null
+    anchorKind: anchor.kind,
+    anchorElementId: anchor.element?.id || null,
+    anchorUniqueId: anchor.element?.uniqueId || null,
+    anchorDesignItemId: anchor.item?.id || null,
+    anchorLabel: anchor.element?.name || anchor.item?.label || null,
+    revision: sourceRevision
   };
   try {
     setSync('Saving issue…', 'busy');
-    const saved = await Store.addIssue(state.projectId, issue);
+    const saved = await Store.addIssue(context.projectId, issue);
+    if (!isCurrentProjectContext(context)) return;
+    try { await Store.appendHistory(context.projectId, { sourceRevision, kind: 'issue', operation: 'create', label: `Issue · ${saved.title}`, affectedElementIds: saved.anchorElementId ? [saved.anchorElementId] : [], affectedUniqueIds: saved.anchorUniqueId ? [saved.anchorUniqueId] : [], affectedLevels: selectedLevel ? [selectedLevel] : [], before: null, after: saved, relatedId: saved.id }); } catch (historyError) { console.warn('[REVEX] Issue history', historyError); }
+    if (!isCurrentProjectContext(context)) return;
     state.issues.unshift(saved);
-    try { await Store.appendHistory(state.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'issue', operation: 'create', label: `Issue · ${saved.title}`, affectedElementIds: saved.anchorElementId ? [saved.anchorElementId] : [], affectedUniqueIds: saved.anchorUniqueId ? [saved.anchorUniqueId] : [], affectedLevels: state.selectedElement?.level ? [state.selectedElement.level] : [], before: null, after: saved, relatedId: saved.id }); } catch (historyError) { console.warn('[REVEX] Issue history', historyError); }
     closeIssue(); renderPins();
     if (state.selectedElement) selectElement(state.selectedElement, false);
     setSync('Issue saved', Store.isCloud() ? 'good' : 'quiet'); toast('Issue saved outside the RVT.');
-  } catch (error) { setSync('Issue save failed', 'bad'); toast(error.message, true); }
+  } catch (error) { if(isCurrentProjectContext(context)){setSync('Issue save failed', 'bad'); toast(error.message, true);} }
 });
 
 $$('.main-nav [data-view]').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
@@ -1086,8 +1689,27 @@ window.addEventListener('revex:viewer-mode', (event) => {
   renderModelTree();
 });
 
-$('#project-select').addEventListener('change', () => activateProject($('#project-select').value,{explicitUserSelection:true}));
+const projectSelect = $('#project-select');
+// This runs before historical bubble listeners.  A selector change is a hard
+// trust boundary, not a same-document state swap: stop older handlers from
+// starting work for A after the user has selected B.
+projectSelect.addEventListener('change', (event) => {
+  const nextProjectId = String(event.currentTarget?.value || '').trim();
+  if (!state.projectId || nextProjectId === state.projectId || hardBoundaryNavigating) return;
+  event.stopImmediatePropagation();
+  beginHardProjectBoundary(nextProjectId, $('.main-nav [data-view].active')?.dataset.view || 'bim');
+}, true);
+projectSelect.addEventListener('change', () => activateProject(projectSelect.value,{explicitUserSelection:true}));
 
+window.addEventListener('revex:native-project-binding',(event)=>{
+  const detail=event.detail||{};
+  const projectId=String(detail.projectId||'').trim();
+  if(!projectId || !state.projectId || projectId===state.projectId || hardBoundaryNavigating)return;
+  // Capture phase prevents legacy listeners from beginning a stale, in-page
+  // activation before the fresh project realm replaces this one.
+  event.stopImmediatePropagation();
+  beginHardProjectBoundary(projectId,String(detail.view||'bim'));
+},true);
 window.addEventListener('revex:native-project-binding',(event)=>{
   const detail=event.detail||{};
   const projectId=String(detail.projectId||'').trim();
@@ -1120,15 +1742,28 @@ window.addEventListener('revex:bim-overlays-changed', (event) => {
   state.bimOverlays = new Map(rows.map(row => [String(row.uniqueId || row.elementId || row.id), row]));
   renderModelTree();
 });
+let designGallery = [], designGalleryIndex = 0;
+function showDesignGalleryImage() {
+  const image=designGallery[designGalleryIndex];if(!image)return;
+  $('#design-image-lightbox-image').src=image.url;
+  $('#design-image-lightbox-image').alt=image.name;
+  $('#design-image-lightbox-caption').textContent=`${image.name} · ${designGalleryIndex+1} of ${designGallery.length}`;
+  $('#design-image-previous').hidden=designGallery.length<2;$('#design-image-next').hidden=designGallery.length<2;
+}
+function moveDesignGallery(delta) {if(!designGallery.length)return;designGalleryIndex=(designGalleryIndex+delta+designGallery.length)%designGallery.length;showDesignGalleryImage();}
 document.addEventListener('click', (event) => {
-  const image = event.target.closest?.('.design-image img, .lane-images img, .image-strip img');
+  const image = event.target.closest?.('.design-image img, .lane-images img, .image-strip img, .design-book-image');
   if (!image) return;
   event.preventDefault();event.stopPropagation();
   const dialog = $('#design-image-lightbox');
-  $('#design-image-lightbox-image').src = image.currentSrc || image.src;
-  $('#design-image-lightbox-caption').textContent = image.alt || 'Design Book visual';
+  const owner=image.closest('.lane-images,.image-strip,#design-grid,#design-book-rows');
+  const images=owner?[...owner.querySelectorAll('img')]:[image];
+  designGallery=images.map(row=>({url:row.currentSrc||row.src,name:row.alt||'Design Book visual'}));designGalleryIndex=Math.max(0,images.indexOf(image));showDesignGalleryImage();
   dialog?.showModal?.();
 });
+$('#design-image-previous')?.addEventListener('click',()=>moveDesignGallery(-1));$('#design-image-next')?.addEventListener('click',()=>moveDesignGallery(1));
+document.addEventListener('keydown',event=>{if($('#design-image-lightbox')?.open&&['ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();moveDesignGallery(event.key==='ArrowLeft'?-1:1);}else if(['Enter',' '].includes(event.key)&&event.target.matches?.('img[role="button"]')){event.preventDefault();event.target.click();}});
+window.addEventListener('revex:project-boundary',()=>{designGallery=[];designGalleryIndex=0;});
 $('#design-image-lightbox-close')?.addEventListener('click', () => $('#design-image-lightbox')?.close());
 $('#design-image-lightbox')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) event.currentTarget.close(); });
 for (const id of ['fit-model','fit-model-rail']) $('#'+id)?.addEventListener('click', () => { viewer?.fit(); $('#walk-toggle')?.classList.remove('active'); });
@@ -1176,25 +1811,135 @@ window.addEventListener('message', (event) => {
   const data = event.data || {};
   if (data.type === 'liber:revex-render-status') return handleNativeRenderStatus(data);
   if (data.type === 'liber:app-params') {
-    if (data.params?.specProjectId) state.preferredSpecId = data.params.specProjectId;
-    if (data.params?.projectId && data.params.projectId !== state.projectId) activateProject(data.params.projectId);
+    // Only the same-origin Liber shell may change app routing.  Do not accept
+    // a detached iframe/window message that can smuggle A's spec identity
+    // into B while a transition is underway.
+    if (event.origin !== location.origin || event.source !== window.parent) return;
+    const requestedProjectId = String(data.params?.projectId || '').trim();
+    if (data.params?.specProjectId && requestedProjectId && requestedProjectId === state.projectId) {
+      state.preferredSpecId = String(data.params.specProjectId);
+    }
+    if (requestedProjectId && requestedProjectId !== state.projectId) activateProject(requestedProjectId);
     if (data.params?.view) showView(data.params.view);
     if (data.params?.render === '1') openRenderDialog();
   }
 });
 try { window.chrome?.webview?.addEventListener('message', (event) => handleNativeRenderStatus(event.data || {})); } catch (_) {}
 
+function runPendingAuthReconcile() {
+  if (!appInitialized || !pendingAuthReconcile || authReconcileQueued) return;
+  const generation = authReconcileGeneration;
+  authReconcileQueued = true;
+  Promise.resolve().then(async () => {
+    authReconcileQueued = false;
+    if (generation !== authReconcileGeneration) return runPendingAuthReconcile();
+    pendingAuthReconcile = false;
+    const activeProjectId = state.projectId;
+    const activeView = $('.main-nav [data-view].active')?.dataset.view || 'bim';
+    const cloud = Store.isCloud();
+    const uid = Store.user?.uid || null;
+    const identityChanged = uid !== reconciledAuthUid;
+    // Never keep an old account's state on screen while we discover the new
+    // account's accessible projects. This also cancels stale model hydration.
+    if (identityChanged) {
+      if(await activateProject('', { force: true, view: activeView }))return;
+      state.projects=[];renderProjects();
+    }
+    if (generation !== authReconcileGeneration || cloud !== Store.isCloud() || uid !== (Store.user?.uid || null)) {
+      pendingAuthReconcile = true;
+      return runPendingAuthReconcile();
+    }
+    if (!cloud) {
+      reconciledAuthUid=null;
+      setSync('Sign in for live project sync', 'quiet');
+      return;
+    }
+    let projects;
+    try { projects=await Store.listProjects(); }
+    catch (error) {
+      if (generation !== authReconcileGeneration) return;
+      setSync('Live projects could not be refreshed. Reload to retry.', 'bad');
+      console.warn('[REVEX] auth project refresh', error);
+      return;
+    }
+    if (generation !== authReconcileGeneration || !Store.isCloud() || uid !== (Store.user?.uid || null)) {
+      pendingAuthReconcile = true;
+      return runPendingAuthReconcile();
+    }
+    // Do not clobber a project selection made while the auth refresh was running.
+    if (state.projectId) { reconciledAuthUid=uid; return; }
+    state.projects=projects;
+    if (!identityChanged && activeProjectId && !projects.some((project) => project.id === activeProjectId) && state.project) {
+      state.projects=[state.project,...projects];
+    }
+    renderProjects();
+    reconciledAuthUid=uid;
+    if (activeProjectId && projects.some((project) => project.id === activeProjectId)) {
+      await activateProject(activeProjectId, { force: true, view: activeView });
+      return;
+    }
+    if (projects.length === 1) { await activateProject(projects[0].id, { force: true, view: activeView }); return; }
+    setSync(projects.length ? 'Choose a project to start' : 'No accessible REVEX projects found', 'quiet');
+  }).catch((error) => {
+    console.warn('[REVEX] auth reconciliation', error);
+  }).finally(announcePublicationReady);
+}
+
+window.addEventListener('revex:auth-mode-changed', (event) => {
+  // Initial sign-in confirmation belongs to this page's requested project.
+  // Only a later identity change invalidates that route and its loaded data.
+  if (event.detail?.initialAuthState) return;
+  if (!state.projectId || hardBoundaryNavigating) return;
+  // Auth identity changes must blank the old project before any legacy
+  // listener can reconcile data into the new account.
+  event.stopImmediatePropagation();
+  beginHardProjectBoundary('', $('.main-nav [data-view].active')?.dataset.view || 'bim');
+}, true);
+
+window.addEventListener('revex:auth-mode-changed', () => {
+  pendingAuthReconcile = true;
+  authReconcileGeneration += 1;
+  runPendingAuthReconcile();
+});
+
 async function init() {
   setSync('Connecting to LIBER…', 'busy');
   await Store.init();
+  const initialCloud = Store.isCloud();
+  const initialUid = Store.user?.uid || null;
   state.projects = await Store.listProjects();
   renderProjects();
-  if (!Store.isCloud()) setSync('Sign in for live project sync', 'quiet');
+  if (!initialCloud) setSync('Sign in for live project sync', 'quiet');
+  else if (!state.projectId && state.projects.length !== 1) {
+    setSync(state.projects.length ? 'Choose a project to start' : 'Create or connect a project to start', 'quiet');
+  }
   if (state.projectId) await activateProject(state.projectId);
   else {
     showView('bim');
     if (state.projects.length === 1) await activateProject(state.projects[0].id);
   }
+  appInitialized = true;
+  announcePublicationReady();
+  const finalUid=Store.user?.uid || null;
+  if (Store.isCloud() !== initialCloud || finalUid !== initialUid) {
+    reconciledAuthUid=initialUid;
+    pendingAuthReconcile=true;
+    runPendingAuthReconcile();
+  } else {
+    reconciledAuthUid=finalUid;
+    pendingAuthReconcile=false;
+  }
 }
 
-init().catch((error) => { console.error(error); setSync('REVEX could not start', 'bad'); toast(error.message, true); });
+const appStartup = init();
+appStartup.catch((error) => {
+  console.error(error);
+  state.activationToken += 1;
+  state.unsubscribe?.(); state.unsubscribe = null; stopLiveProjectSubscriptions();
+  state.projectId = ''; state.project = null; clearProjectBoundState(); renderAll(); showView('bim');
+  setSync('REVEX could not start', 'bad'); toast(error.message, true);
+  // Set retry eligibility only after the existing failure cleanup completes.
+  appStartupFailed = true;
+  const connect = $('#empty-connect-button');
+  if (connect) connect.textContent = 'Retry connection';
+});

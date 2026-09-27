@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-const BUILD='20260816r68-viewer-polish1';
+const BUILD='20260909r190-mobile-controls1';
 const $=(selector,root=document)=>root.querySelector(selector);
 
 if(!window.__revexViewerPolishR68){
@@ -128,7 +128,7 @@ if(!window.__revexViewerPolishR68){
       this.camera.position.set(target.x-horizontal.x*span,Number(this.floor||0)+Number(this.eye||5.5),target.z-horizontal.z*span);
       this.look?.();
       this.requestRender?.();
-      if(!this.embedded){try{canvas?.requestPointerLock?.();}catch(_){}}
+      if(!this.embedded&&!this.walkUsesTouch?.()){try{canvas?.requestPointerLock?.();}catch(_){}}
       diagnostic('INFO','WALK_START',this.embedded?'Walk started in WebView drag-look mode; WASD moves, Q/E changes eye height.':'Walk started; WASD moves, Shift accelerates, Esc exits.');
     };
 
@@ -204,3 +204,4 @@ if(!window.__revexViewerPolishR68){
     if(patch(window.__revexViewerR26Instance)||attempts>300)clearInterval(timer);
   },50);
 }
+

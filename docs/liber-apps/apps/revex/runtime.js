@@ -10,8 +10,41 @@ function fv(v){if(v==null)return{nullValue:null};if(typeof v==='string')return{s
 function fields(data){const out={};Object.entries(data||{}).forEach(([k,v])=>out[k]=fv(v));return out}
 async function rest(path,data,mask=[]){const fs=root.firebaseService?.isInitialized?root.firebaseService:Store.fs;const user=fs?.auth?.currentUser||Store.user;if(!user?.getIdToken)throw new Error('Sign in before creating a REVEX project.');const token=await user.getIdToken();const pid=fs?.app?.options?.projectId||'liber-apps-cca20';const doc=String(path).split('/').filter(Boolean).map(encodeURIComponent).join('/');let url=`https://firestore.googleapis.com/v1/projects/${encodeURIComponent(pid)}/databases/(default)/documents/${doc}`;if(mask.length)url+='?'+mask.map(x=>`updateMask.fieldPaths=${encodeURIComponent(x)}`).join('&');const res=await fetch(url,{method:'PATCH',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({fields:fields(data)})});const json=await res.json().catch(()=>({}));if(!res.ok)throw new Error(json?.error?.message||`Firestore REST ${res.status}`);return json}
 async function remove(path){try{const fs=root.firebaseService?.isInitialized?root.firebaseService:Store.fs;const user=fs?.auth?.currentUser||Store.user;if(!user?.getIdToken)return;const token=await user.getIdToken();const pid=fs?.app?.options?.projectId||'liber-apps-cca20';const doc=String(path).split('/').filter(Boolean).map(encodeURIComponent).join('/');await fetch(`https://firestore.googleapis.com/v1/projects/${encodeURIComponent(pid)}/databases/(default)/documents/${doc}`,{method:'DELETE',headers:{Authorization:`Bearer ${token}`}})}catch(_){}}
-Store.init=async function(){const local=root.firebaseService||null;if(local){for(let i=0;i<80;i++){const api=local.firebase||root.firebase||null;if(local.isInitialized&&local.db&&api?.collection&&api?.getDocs){this.fs=local;this.api=api;this.db=local.db;this.user=local.auth?.currentUser||null;if(!this.user&&api.onAuthStateChanged&&local.auth){await new Promise(resolve=>{let done=false;const t=setTimeout(()=>{if(!done){done=true;resolve()}},2500);try{api.onAuthStateChanged(local.auth,user=>{this.user=user||null;if(!done){done=true;clearTimeout(t);resolve()}})}catch(_){clearTimeout(t);resolve()}})}this.mode=this.user?'cloud':'local';console.log('[REVEX] runtime',BUILD,{cloud:this.mode==='cloud',projectWrites:'rest',chatLayer:true});return this.mode}await wait(150)}}return originalInit()}
-Store.createProject=async function(args){if(!this.isCloud())return originalCreate(args);const title=String(args.name||'').trim();if(!title)throw new Error('Enter a project name.');const fs=root.firebaseService?.isInitialized?root.firebaseService:this.fs;this.fs=fs;this.api=fs?.firebase||this.api||root.firebase;this.db=fs?.db||this.db;this.user=fs?.auth?.currentUser||this.user;if(!this.user?.uid)throw new Error('Sign in before creating a REVEX project.');const at=iso(),uid=String(this.user.uid),suffix=(root.crypto?.randomUUID?.()||Math.random().toString(36).slice(2)).replace(/[^a-zA-Z0-9]/g,'').slice(0,12),projectId=`revex_${Date.now().toString(36)}_${suffix}`,specId=`spec_${projectId}`;const project={name:title,code:String(args.code||'').trim(),description:String(args.description||'').trim(),status:'in_progress',statusColor:'#FF9800',ownerId:uid,memberIds:[uid],createdAt:at,updatedAt:at,requestData:null,revexProject:true,revexSpecProjectId:specId};const spec={id:specId,name:`${title} — Spec Book`,code:project.code,linkedProjectId:projectId,linkedProjectName:title,ownerId:uid,memberIds:[uid],settings:{divisionPerSchedule:true,showEmptyArticles:false},createdAt:at,updatedAt:at,managedByRevex:true};await rest(`projects/${projectId}`,project);try{await rest(`specProjects/${specId}`,spec)}catch(e){await remove(`projects/${projectId}`);throw e}try{const chat=await this.ensureProjectChat(projectId);if(chat?.connId){project.chatConnId=String(chat.connId);await rest(`projects/${projectId}`,{chatConnId:project.chatConnId,updatedAt:iso()},['chatConnId','updatedAt'])}}catch(e){console.warn('[REVEX] chat deferred',e)}return{id:projectId,...project,specProjectId:specId}}
+Store.init=async function(){
+  const local=root.firebaseService||null;
+  if(local){
+    for(let i=0;i<80;i++){
+      const api=local.firebase||root.firebase||null;
+      if(local.isInitialized&&local.db&&api?.collection&&api?.getDocs){
+        this.fs=local;this.api=api;this.db=local.db;
+        const apply=(user,source)=>typeof this._applyAuthState==='function'
+          ?this._applyAuthState(user||null,source)
+          :(this.user=user||null,this.mode=this.user?'cloud':'local',this.mode);
+        const settleAuth=async()=>{
+          // A timeout is not evidence that this browser is signed out.  The
+          // Firebase service owns the first-auth-state barrier, so do not let
+          // cached local project data become visible until it resolves.
+          if(typeof local.waitForAuthState!=='function')throw new Error('Firebase Auth readiness is unavailable. REVEX will not open project data until sign-in state is confirmed.');
+          const initialUser=await local.waitForAuthState(15000);
+          apply(initialUser,'runtime-auth-ready');
+          if(!api.onAuthStateChanged||!local.auth)return;
+          try{
+            this._runtimeAuthUnsubscribe?.();
+            this._runtimeAuthUnsubscribe=api.onAuthStateChanged(local.auth,user=>apply(user,'runtime-auth-listener'));
+          }catch(error){
+            console.warn('[REVEX] live auth listener unavailable after initial auth confirmation',error);
+          }
+        };
+        await settleAuth();
+        console.log('[REVEX] runtime',BUILD,{cloud:this.mode==='cloud',projectWrites:'rest',chatLayer:true});
+        return this.mode;
+      }
+      await wait(150);
+    }
+  }
+  return originalInit();
+}
+Store.createProject=async function(args){if(!this.isCloud())return originalCreate(args);const title=String(args.name||'').trim();if(!title)throw new Error('Enter a project name.');const fs=root.firebaseService?.isInitialized?root.firebaseService:this.fs;this.fs=fs;this.api=fs?.firebase||this.api||root.firebase;this.db=fs?.db||this.db;this.user=fs?.auth?.currentUser||this.user;if(!this.user?.uid)throw new Error('Sign in before creating a REVEX project.');const at=iso(),uid=String(this.user.uid),currentUid=()=>String(fs?.auth?.currentUser?.uid||this.user?.uid||''),requireSameUser=()=>{if(currentUid()!==uid)throw new Error('Sign-in changed while creating this REVEX project. The previous account owns any completed step; reload before continuing.');},suffix=(root.crypto?.randomUUID?.()||Math.random().toString(36).slice(2)).replace(/[^a-zA-Z0-9]/g,'').slice(0,12),projectId=`revex_${Date.now().toString(36)}_${suffix}`,specId=`spec_${projectId}`;const project={name:title,code:String(args.code||'').trim(),description:String(args.description||'').trim(),status:'in_progress',statusColor:'#FF9800',ownerId:uid,memberIds:[uid],createdAt:at,updatedAt:at,requestData:null,revexProject:true,revexSpecProjectId:specId};const spec={id:specId,name:`${title} — Spec Book`,code:project.code,linkedProjectId:projectId,linkedProjectName:title,ownerId:uid,memberIds:[uid],settings:{divisionPerSchedule:true,showEmptyArticles:false},createdAt:at,updatedAt:at,managedByRevex:true};requireSameUser();await rest(`projects/${projectId}`,project);requireSameUser();try{await rest(`specProjects/${specId}`,spec);requireSameUser()}catch(e){if(currentUid()===uid)await remove(`projects/${projectId}`);throw e}try{requireSameUser();const chat=await this.ensureProjectChat(projectId);requireSameUser();if(chat?.connId){project.chatConnId=String(chat.connId);await rest(`projects/${projectId}`,{chatConnId:project.chatConnId,updatedAt:iso()},['chatConnId','updatedAt']);requireSameUser()}}catch(e){if(currentUid()!==uid)throw e;console.warn('[REVEX] chat deferred',e)}requireSameUser();return{id:projectId,...project,specProjectId:specId}}
 const projectId=()=>String(document.getElementById('project-select')?.value||'').trim();
 const projectName=()=>document.getElementById('project-select')?.selectedOptions?.[0]?.textContent?.trim()||'this REVEX project';
 function notify(message,type='success'){if(root.parent?.dashboardManager?.showNotification)root.parent.dashboardManager.showNotification(message,type);else if(root.dashboardManager?.showNotification)root.dashboardManager.showNotification(message,type);else(type==='error'?console.error:console.log)(message)}
@@ -27,5 +60,8 @@ function bind(){labels();const sel=document.getElementById('project-select');if(
 // REVEX r20: Project Chat is embedded persistently in the Chat tab; no capture-layer interception.
 document.addEventListener('keydown',ev=>{if(ev.key!=='Escape')return;const i=document.getElementById('invite-dialog');if(i&&!i.hidden){ev.preventDefault();ev.stopImmediatePropagation();closeInvite()}},true);
 root.addEventListener('message',ev=>{const f=document.getElementById('revex-chat-layer-frame');if(ev.source===f?.contentWindow&&ev.data?.type==='liber:close-app-shell')closeChat()});
+// Programmatic project activation does not emit a selector change. Refresh
+// after the app has committed or cleared its authoritative project binding.
+for(const type of ['revex:authoritative-project-bound','revex:project-boundary'])root.addEventListener(type,()=>queueMicrotask(labels));
 bind();
 })(window);

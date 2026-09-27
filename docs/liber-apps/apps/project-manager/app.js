@@ -69,6 +69,8 @@
     if (!sel) return;
     const memberIds = getProjectMemberIds();
     const isNewProject = !byId('project-id')?.value?.trim();
+    sel.disabled = !isNewProject;
+    sel.title = isNewProject ? '' : 'Ownership is preserved when editing project members.';
     const ids = isNewProject && memberIds.length === 0 ? state.users.map((u) => u.id) : memberIds;
     sel.innerHTML = '<option value="">-- Choose owner --</option>' +
       ids.map((uid) => {
@@ -206,7 +208,7 @@
     renderAddUserSelect(getProjectMemberIds());
   }
 
-  async function loadProjects() {
+  async function loadProjects(saveOwner = null) {
     const fs = getFirebaseService();
     if (!fs || !fs.isInitialized) return;
     const me = fs.auth?.currentUser;
@@ -218,8 +220,10 @@
         fb().limit(100)
       );
       const snap = await fb().getDocs(q);
+      if (saveOwner && !saveOwner.isCurrent()) return false;
       state.projects = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     } catch (e) {
+      if (saveOwner && !saveOwner.isCurrent()) return false;
       console.error('[Project Manager] loadProjects failed', e);
       state.projects = [];
     }
@@ -301,7 +305,14 @@
     const mainPanel = byId('manager-main');
     const libPanel = byId('library-panel');
     if (!formPanel || !mainPanel) return;
+    const formRevision = state.projectFormRevision = (state.projectFormRevision || 0) + 1;
+    const submit = byId('project-form')?.querySelector('[type="submit"]');
+    if (submit) submit.disabled = false;
     state.selectedProjectId = project ? project.id : null;
+    state.projectMemberDraftBaseline = project ? {
+      projectId:project.id, ownerId:project.ownerId,
+      memberIds:[...new Set([project.ownerId,...(project.memberIds || [])].filter(Boolean))]
+    } : null;
     state.projectFormFiles = [];
     formPanel.style.display = '';
     mainPanel.style.display = 'none';
@@ -323,6 +334,7 @@
     const attWrap = byId('project-attachments-wrap');
     if (attWrap) attWrap.style.display = project ? 'none' : '';
     if (!state.users.length) await loadUsers();
+    if (state.projectFormRevision !== formRevision) return;
     const memberIds = project?.memberIds ? [...project.memberIds] : (project?.ownerId ? [project.ownerId] : []);
     const ownerId = project ? project.ownerId : '';
     renderProjectMembers(memberIds.length ? memberIds : [], ownerId || undefined);
@@ -421,6 +433,8 @@
   }
 
   function hideProjectForm() {
+    state.projectFormRevision = (state.projectFormRevision || 0) + 1;
+    state.projectMemberDraftBaseline = null;
     byId('project-form-panel').style.display = 'none';
     byId('manager-main').style.display = '';
     state.projectFormFiles = [];
@@ -611,6 +625,57 @@
     });
   }
 
+  function captureProjectSaveOwner(fs, me, projectId) {
+    const baseline=state.projectMemberDraftBaseline;
+    const formRevision=state.projectFormRevision || 0;
+    const authRevision=fs._authStateRevision;
+    const owner={baseline,
+      matchesDraft:()=>getFirebaseService()===fs && fs.auth?.currentUser===me
+        && (authRevision===undefined || fs._authStateRevision===authRevision)
+        && state.projectFormRevision===formRevision && state.projectMemberDraftBaseline===baseline
+        && byId('project-id')?.value?.trim()===projectId,
+      isCurrent:()=>state.projectSaveRun===owner && owner.matchesDraft(),
+      assertCurrent:()=>{if(!owner.isCurrent())throw new Error('The account or project draft changed. Reopen the project before saving.');}
+    };
+    return owner;
+  }
+
+  async function saveProjectMemberChanges(fs, me, projectId, desiredIds, baseline, saveOwner) {
+    const assertSession = () => saveOwner.assertCurrent();
+    assertSession();
+    if (!baseline || baseline.projectId !== projectId) throw new Error('Reopen the project before editing members.');
+    const snapshot=await fb().getDoc(fb().doc(fs.db,'projects',projectId));
+    assertSession();
+    if (!snapshot.exists()) throw new Error('Project not found.');
+    if (snapshot.data()?.ownerId !== baseline.ownerId) throw new Error('Project ownership changed. Reopen the project before saving.');
+    const desired=[...new Set(desiredIds)];
+    if (!desired.includes(baseline.ownerId)) throw new Error('The project owner cannot be removed.');
+    // Apply only deliberate changes from this draft; preserve concurrent members
+    // added elsewhere. Never write a stale whole ACL from the browser.
+    const removals=baseline.memberIds.filter(uid=>!desired.includes(uid));
+    const additions=desired.filter(uid=>!baseline.memberIds.includes(uid)).map(uid=>{
+      const user=getUserById(uid),email=String(user?.email || '').trim();
+      if (!email) throw new Error('A selected member has no email. Reopen the member list.');
+      return {uid,email};
+    });
+    for (const uid of removals) {
+      assertSession();
+      const result=await fs.callFunction('removeProjectMember',{projectId,userId:uid});
+      assertSession();
+      if (!result?.ok) throw new Error('Member removal was not confirmed. Your draft is retained; retry to finish.');
+    }
+    for (const {uid,email} of additions) {
+      assertSession();
+      const result=await fs.callFunction('addProjectMember',{projectId,email,userId:uid});
+      assertSession();
+      if (!result?.ok) throw new Error('Member addition was not confirmed. Your draft is retained; retry to finish.');
+    }
+    assertSession();
+    const chat=await fs.callFunction('ensureProjectChat',{projectId});
+    assertSession();
+    if (!chat?.connId) throw new Error('Project Chat alignment was not confirmed. Your draft is retained.');
+  }
+
   async function onSaveProject(e) {
     e.preventDefault();
     const fs = getFirebaseService();
@@ -619,6 +684,7 @@
       notify('Please log in', 'error');
       return;
     }
+    if (state.projectSaveRun?.isCurrent()) return;
     const id = byId('project-id').value.trim();
     const name = byId('project-name').value.trim();
     const description = byId('project-description').value.trim();
@@ -637,12 +703,18 @@
       notify('Please add members and select an owner', 'error');
       return;
     }
+    const saveOwner=captureProjectSaveOwner(fs,me,id);
+    state.projectSaveRun=saveOwner;
+    const saveButton=e.submitter || byId('project-form')?.querySelector('[type="submit"]');
+    if (saveButton) saveButton.disabled=true;
     const now = new Date().toISOString();
     try {
+      saveOwner.assertCurrent();
       if (id) {
         const proj = state.projects.find((p) => p.id === id);
         if (status === 'on_hold' || proj?.status === 'on_hold') {
           const userDoc = await fb().getDoc(fb().doc(fs.db, 'users', me.uid));
+          saveOwner.assertCurrent();
           const role = (userDoc?.data?.()?.role || '').toLowerCase();
           if (role !== 'admin') {
             notify('Only admins can set or change On hold status.', 'error');
@@ -650,13 +722,10 @@
           }
         }
         const ref = fb().doc(fs.db, 'projects', id);
-        await fb().updateDoc(ref, { name: displayName, description, status, statusColor: statusColor || null, memberIds, updatedAt: now });
-        try {
-          await fs.callFunction('ensureProjectChat', { projectId: id });
-        } catch (chatError) {
-          console.error('[Project Manager] Chat membership synchronization failed', chatError);
-          notify('Project saved; Chat membership will repair when reopened.', 'warning');
-        }
+        await saveProjectMemberChanges(fs, me, id, memberIds, saveOwner.baseline, saveOwner);
+        saveOwner.assertCurrent();
+        await fb().updateDoc(ref, { name: displayName, description, status, statusColor: statusColor || null, updatedAt: now });
+        saveOwner.assertCurrent();
         notify('Project updated');
       } else {
         const finalOwnerId = ownerId || me.uid;
@@ -673,15 +742,19 @@
           requestData: null
         }));
         const projectRef = await fb().addDoc(fb().collection(fs.db, 'projects'), projectData);
+        saveOwner.assertCurrent();
         const projectId = projectRef.id;
         try {
           const chat = await fs.callFunction('ensureProjectChat', { projectId });
+          saveOwner.assertCurrent();
           if (chat?.connId) projectData.chatConnId = chat.connId;
         } catch (chatError) {
+          if (!saveOwner.isCurrent()) throw chatError;
           console.error('[Project Manager] Project Chat creation deferred', chatError);
           notify('Project created; Chat will initialize when first opened.', 'warning');
         }
         for (let i = 0; i < Math.min(state.projectFormFiles.length, MAX_FORM_FILES); i++) {
+          saveOwner.assertCurrent();
           const file = state.projectFormFiles[i];
           try {
             const folder = getRecordInFolderByFile(file);
@@ -689,6 +762,7 @@
             const storagePath = `projects/${projectId}/library/${folder}/${Date.now()}_${fname}`;
             const ref = fb().ref(fs.storage, storagePath);
             await fb().uploadBytes(ref, file, { contentType: file.type || 'application/octet-stream' });
+            saveOwner.assertCurrent();
             const libData = JSON.parse(JSON.stringify({
               folderPath: folder,
               name: fname,
@@ -698,18 +772,27 @@
               createdBy: me.uid
             }));
             await fb().addDoc(fb().collection(fs.db, 'projects', projectId, 'library'), libData);
+            saveOwner.assertCurrent();
           } catch (upErr) {
+            if (!saveOwner.isCurrent()) throw upErr;
             console.warn('[Project Manager] attachment upload failed', file.name, upErr);
           }
         }
         state.projectFormFiles = [];
         notify('Project created');
       }
-      hideProjectForm();
-      await loadProjects();
+      await loadProjects(saveOwner);
+      saveOwner.assertCurrent();
       renderProjects();
+      hideProjectForm();
     } catch (err) {
-      notify(err?.message || 'Failed to save', 'error');
+      if (saveOwner.isCurrent()) notify(err?.message || 'Failed to save', 'error');
+    } finally {
+      if (state.projectSaveRun===saveOwner) {
+        const sameDraft=saveOwner.matchesDraft();
+        state.projectSaveRun=null;
+        if (sameDraft && saveButton) saveButton.disabled=false;
+      }
     }
   }
 

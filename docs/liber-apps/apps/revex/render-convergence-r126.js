@@ -1,8 +1,8 @@
 (function(root){
 'use strict';
-const BUILD='20260818r129-freeze-guard1';
+const BUILD='20260904r182-google-account-only1';
 if(root.__revexRenderConvergenceR126)return;
-root.__revexRenderConvergenceR126={build:BUILD,providerOwner:'render-agent.js',browserInference:false,localModelCache:false,legacyIframe:false,selfHostedEnhancementOptional:true,interactionGuard:'idempotent-frame-src-only'};
+root.__revexRenderConvergenceR126={build:BUILD,providerOwner:'render-agent.js?v=20260914r192-morning1',provider:'google',userAccountRequired:true,browserInference:false,localModelCache:false,legacyIframe:false,selfHostedEnhancementOptional:false,interactionGuard:'idempotent-frame-src-only'};
 function diag(level,stage,message,detail={}){try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'render convergence current',...detail})}catch(_){}}
 function suppressLegacyFrame(){
   const frame=document.getElementById('render-frame');
@@ -47,7 +47,7 @@ function preserveGoogleOwner(){
 function converge(){
   suppressLegacyFrame();
   const ready=preserveGoogleOwner();
-  if(ready)diag('INFO','RENDER_CLIENT_CURRENT','Render converged on render-agent.js Google image path without a broad DOM observer; self-hosted Qwen remains a non-owning enhancement.',{providerOwner:'render-agent.js',browserInference:false,localModelCache:false,legacyIframe:false,interactionGuard:'idempotent-frame-src-only'});
+  if(ready)diag('INFO','RENDER_CLIENT_CURRENT','Nano Banana rendering uses the user Google account exclusively.',{providerOwner:'render-agent.js?v=20260914r192-morning1',provider:'google',userAccountRequired:true,browserInference:false,localModelCache:false,legacyIframe:false,interactionGuard:'idempotent-frame-src-only'});
   return ready;
 }
 let tries=0;

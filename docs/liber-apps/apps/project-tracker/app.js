@@ -20,23 +20,37 @@
 
   const MAX_FORM_FILES = 10;
   const MAX_FILE_SIZE = 5 * 1024 * 1024;
-  const state = { projects: [], selectedProject: null, library: [], members: [], isAdmin: false, trackerAddCommentFiles: [] };
+  const state = { projects: [], selectedProject: null, viewRevision: 0, library: [], members: [], isAdmin: false, trackerAddCommentFiles: [] };
+
+  function captureProjectView(projectId) {
+    return { projectId, revision: state.viewRevision, uid: getFirebaseService()?.auth?.currentUser?.uid };
+  }
+
+  function isCurrentProjectView(view) {
+    return !!view.uid && view.revision === state.viewRevision &&
+      view.projectId === state.selectedProject?.id &&
+      view.uid === getFirebaseService()?.auth?.currentUser?.uid;
+  }
+
+  async function refreshProjectAfterAction(view) {
+    if (!isCurrentProjectView(view)) return null;
+    const fs = getFirebaseService(), fb = getFirebaseApi();
+    const snapshot = await fb.getDoc(fb.doc(fs.db, 'projects', view.projectId));
+    if (!isCurrentProjectView(view) || !snapshot.exists()) return null;
+    const project = { ...snapshot.data(), id: view.projectId };
+    state.projects = state.projects.map(row => row.id === view.projectId ? project : row);
+    const pending = openProject(view.projectId);
+    const refreshedView = captureProjectView(view.projectId);
+    await pending;
+    return isCurrentProjectView(refreshedView) ? refreshedView : null;
+  }
 
   function byId(id) {
     return document.getElementById(id);
   }
 
   function getFirebaseService() {
-    try {
-      if (window.self !== window.top) {
-        for (const w of [window.parent, window.top].filter(Boolean)) {
-          if (w !== window && w.firebaseService && w.firebaseService.isInitialized)
-            return w.firebaseService;
-        }
-      }
-      if (window.firebaseService && window.firebaseService.isInitialized)
-        return window.firebaseService;
-    } catch (_) {}
+    // Each document owns its SDK/service; Firebase persistence shares sign-in.
     return window.firebaseService;
   }
 
@@ -45,7 +59,6 @@
     fs = fs || getFirebaseService();
     if (fs?.firebase && typeof fs.firebase.collection === 'function') return fs.firebase;
     try {
-      if (window.self !== window.top && window.parent?.firebaseService === fs && window.parent?.firebase?.collection) return window.parent.firebase;
       if (window.firebaseService === fs && window.firebase?.collection) return window.firebase;
     } catch (_) {}
     return null;
@@ -156,11 +169,37 @@
     const project = state.projects.find((p) => p.id === projectId);
     if (!project) return;
 
+    state.viewRevision++;
     state.selectedProject = project;
+    const view = captureProjectView(projectId);
+    state.members = [];
+    state.library = [];
+    state.trackerAddCommentFiles = [];
+    byId('members-list').replaceChildren();
+    byId('library-content').replaceChildren();
+    byId('library-empty').classList.add('hidden');
+    byId('library-upload-wrap').classList.add('hidden');
+    byId('tracker-responses-list').replaceChildren();
+    byId('tracker-responses-list').classList.add('hidden');
+    byId('tracker-add-comment-message').value = '';
+    const reviewInput = byId('tracker-review-input'); if (reviewInput) reviewInput.value = '';
+    byId('member-email').value = '';
+    const addMemberButton = byId('add-member-btn');
+    if (addMemberButton) { addMemberButton.disabled = true; addMemberButton.onclick = null; }
+    for (const id of ['tracker-approve-review-btn', 'tracker-add-comment-btn', 'tracker-review-submit']) {
+      const button = byId(id); if (button) button.disabled = false;
+    }
+    renderTrackerAddCommentFileList();
     showDetail();
 
     byId('detail-title').textContent = project.name || 'Project';
-    byId('detail-status').outerHTML = renderStatusBadge(project.status, project.statusColor);
+    // Preserve the stable detail target across project visits.
+    const statusTarget = byId('detail-status');
+    const statusTemplate = document.createElement('template');
+    statusTemplate.innerHTML = renderStatusBadge(project.status, project.statusColor);
+    const statusBadge = statusTemplate.content.firstElementChild;
+    statusBadge.id = 'detail-status';
+    statusTarget.replaceWith(statusBadge);
     byId('detail-updated').textContent = project.updatedAt
       ? 'Updated ' + new Date(project.updatedAt).toLocaleDateString()
       : '';
@@ -169,12 +208,18 @@
     const chatLink = byId('detail-chat-link');
     chatLink.style.display = '';
     chatLink.href = '#';
+    chatLink.removeAttribute('aria-disabled');
+    let chatPending = false;
     chatLink.onclick = async (e) => {
       e.preventDefault();
+      if (!isCurrentProjectView(view) || chatPending) return;
       const fs = getFirebaseService();
       if (!fs) return;
+      chatPending = true;
+      chatLink.setAttribute('aria-disabled', 'true');
       try {
         const res = await fs.callFunction('ensureProjectChat', { projectId });
+        if (!isCurrentProjectView(view)) return;
         const connId = res?.connId;
         if (!connId) { notify('Could not open project chat', 'error'); return; }
         const chatUrl = getChatUrl(connId);
@@ -184,10 +229,11 @@
         } else {
           window.open(chatUrl, '_blank');
         }
-        if (res?.repaired) state.projects.find((p) => p.id === projectId).chatConnId = connId;
+        const currentProject = state.projects.find((p) => p.id === projectId);
+        if (res?.repaired && currentProject) currentProject.chatConnId = connId;
       } catch (err) {
-        notify(err?.message || 'Failed to open chat', 'error');
-      }
+        if (isCurrentProjectView(view)) notify(err?.message || 'Failed to open chat', 'error');
+      } finally { chatPending = false; if (isCurrentProjectView(view)) chatLink.removeAttribute('aria-disabled'); }
     };
 
     const respondSec = byId('tracker-respond-section');
@@ -208,7 +254,7 @@
     if (membersSection) {
       if (isOwner) {
         membersSection.classList.remove('hidden');
-        await loadMembers(projectId);
+        if (!await loadMembers(projectId) || !isCurrentProjectView(view)) return;
         renderMembers();
         bindMemberActions(projectId);
       } else {
@@ -216,7 +262,7 @@
       }
     }
 
-    await loadLibrary(projectId);
+    if (!await loadLibrary(projectId) || !isCurrentProjectView(view)) return;
     const activeFolder = byId('library-tabs')?.querySelector('.lib-tab.active')?.dataset?.folder || 'record_in';
     renderLibrary(activeFolder);
     const uploadWrap = byId('library-upload-wrap');
@@ -336,18 +382,23 @@
   }
 
   async function loadMembers(projectId) {
+    const view = captureProjectView(projectId);
+    if (!isCurrentProjectView(view)) return false;
     const fs = getFirebaseService();
     if (!fs?.callFunction) {
       state.members = [];
-      return;
+      return true;
     }
     try {
       const res = await fs.callFunction('getProjectMembers', { projectId });
+      if (!isCurrentProjectView(view)) return false;
       state.members = res?.members || [];
     } catch (e) {
+      if (!isCurrentProjectView(view)) return false;
       console.warn('[Project Tracker] loadMembers failed', e);
       state.members = [];
     }
+    return true;
   }
 
   function renderMembers() {
@@ -372,19 +423,25 @@
   }
 
   function bindMemberActions(projectId) {
+    const view = captureProjectView(projectId);
+    if (!isCurrentProjectView(view)) return;
     const addBtn = byId('add-member-btn');
     const emailInput = byId('member-email');
     if (addBtn && emailInput) {
+      addBtn.disabled = false;
       addBtn.onclick = async () => {
+        if (!isCurrentProjectView(view)) return;
         const email = (emailInput.value || '').trim();
         if (!email) return;
         addBtn.disabled = true;
         try {
           const fs = getFirebaseService();
           const res = await fs.callFunction('inviteProjectMemberByEmail', { projectId, email });
+          if (!isCurrentProjectView(view)) return;
           if (res?.ok) {
-            await loadMembers(projectId);
+            if (!await loadMembers(projectId) || !isCurrentProjectView(view)) return;
             renderMembers();
+            bindMemberActions(projectId);
             emailInput.value = '';
             if (res.invited) {
               notify('Invitation sent. They will receive an email to join the project.');
@@ -393,14 +450,15 @@
             }
           }
         } catch (e) {
-          notify(e?.message || 'Failed to add member', 'error');
+          if (isCurrentProjectView(view)) notify(e?.message || 'Failed to add member', 'error');
         } finally {
-          addBtn.disabled = false;
+          if (isCurrentProjectView(view)) addBtn.disabled = false;
         }
       };
     }
     byId('members-list')?.querySelectorAll('.member-remove').forEach((btn) => {
       btn.onclick = async () => {
+        if (!isCurrentProjectView(view)) return;
         const uid = btn.getAttribute('data-uid');
         if (!uid) return;
         if (!confirm('Remove this member from the project?')) return;
@@ -408,27 +466,30 @@
         try {
           const fs = getFirebaseService();
           const res = await fs.callFunction('removeProjectMember', { projectId, userId: uid });
+          if (!isCurrentProjectView(view)) return;
           if (res?.ok) {
-            await loadMembers(projectId);
+            if (!await loadMembers(projectId) || !isCurrentProjectView(view)) return;
             renderMembers();
             bindMemberActions(projectId);
             notify('Member removed.');
           }
         } catch (e) {
-          notify(e?.message || 'Failed to remove member', 'error');
+          if (isCurrentProjectView(view)) notify(e?.message || 'Failed to remove member', 'error');
         } finally {
-          btn.disabled = false;
+          if (isCurrentProjectView(view)) btn.disabled = false;
         }
       };
     });
   }
 
   async function loadLibrary(projectId) {
+    const view = captureProjectView(projectId);
+    if (!isCurrentProjectView(view)) return false;
     const fs = getFirebaseService();
     const fb = getFirebaseApi();
     if (!fs || !fs.db || !fb?.collection) {
       state.library = [];
-      return;
+      return true;
     }
 
     try {
@@ -442,15 +503,18 @@
         snap = await fb.getDocs(libRef);
       }
       const raw = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      if (!isCurrentProjectView(view)) return false;
       state.library = raw.sort((a, b) => {
         const ta = a?.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt ? new Date(a.createdAt).getTime() : 0);
         const tb = b?.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
         return tb - ta;
       });
     } catch (e) {
+      if (!isCurrentProjectView(view)) return false;
       console.warn('[Project Tracker] loadLibrary failed', e);
       state.library = [];
     }
+    return true;
   }
 
   function renderLibrary(folderPrefix) {
@@ -529,7 +593,7 @@
     return false;
   }
 
-  async function uploadToRecordIn(projectId, file) {
+  async function uploadToRecordIn(projectId, file, view) {
     const fs = getFirebaseService();
     const fb = getFirebaseApi();
     if (!fs?.storage || !fs?.db || !fb?.collection || !projectId || !file) return;
@@ -538,13 +602,14 @@
     const storagePath = `projects/${projectId}/library/${folder}/${Date.now()}_${fname}`;
     const r = fb.ref(fs.storage, storagePath);
     await fb.uploadBytes(r, file, { contentType: file.type || 'application/octet-stream' });
+    if (view && fs.auth?.currentUser?.uid !== view.uid) throw new Error('Account changed during upload.');
     const libData = JSON.parse(JSON.stringify({
       folderPath: folder,
       name: fname,
       storagePath,
       type: 'file',
       createdAt: new Date().toISOString(),
-      createdBy: fs.auth?.currentUser?.uid
+      createdBy: view?.uid || fs.auth?.currentUser?.uid
     }));
     await fb.addDoc(fb.collection(fs.db, 'projects', projectId, 'library'), libData);
   }
@@ -566,8 +631,11 @@
       return;
     }
 
-    state.isAdmin = await checkIsAdmin();
     const user = fs.auth?.currentUser;
+    const isAdmin = await checkIsAdmin();
+    if (loadSeq !== _loadProjectsSeq) return;
+    if (fs.auth?.currentUser?.uid !== user?.uid) return loadProjects(0);
+    state.isAdmin = isAdmin;
     if (!user) {
       const base = (window.location.pathname || '').replace(/\/apps\/project-tracker\/.*$/, '').replace(/\/$/, '') || '';
       let loginUrl = window.location.origin + (base ? base + '/' : '/') + 'index.html';
@@ -627,7 +695,9 @@
       } catch (e2) {
         console.warn('[Project Tracker] memberIds query failed', e2?.message || e2);
       }
-      if (loadSeq !== _loadProjectsSeq) return;
+      if (loadSeq !== _loadProjectsSeq || fs.auth?.currentUser?.uid !== user.uid) return;
+      state.viewRevision++;
+      state.selectedProject = null;
       state.projects = Array.from(projectsById.values()).sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
       showMain();
       renderProjects();
@@ -642,7 +712,10 @@
       if (projectToOpen) {
         const hasProject = state.projects.some((p) => p.id === projectToOpen);
         if (hasProject) {
-          setTimeout(() => openProject(projectToOpen), 300);
+          const revision = state.viewRevision;
+          setTimeout(() => {
+            if (loadSeq === _loadProjectsSeq && revision === state.viewRevision && !state.selectedProject && fs.auth?.currentUser?.uid === user.uid) openProject(projectToOpen);
+          }, 300);
         }
       }
     } catch (e) {
@@ -671,6 +744,7 @@
     if (backBtn) {
       backBtn.addEventListener('click', () => {
         if (state.selectedProject) {
+          state.viewRevision++;
           state.selectedProject = null;
           showMain();
         } else {
@@ -708,32 +782,38 @@
         libUploadZone.classList.remove('dragover');
         const projectId = state.selectedProject?.id;
         if (!projectId || state.isAdmin) return;
+        const view = captureProjectView(projectId);
+        if (!isCurrentProjectView(view)) return;
         const flist = Array.from(e.dataTransfer?.files || []);
         for (const f of flist.slice(0, 10)) {
+          if (!isCurrentProjectView(view)) return;
           try {
-            await uploadToRecordIn(projectId, f);
-            notify('Added ' + f.name);
+            await uploadToRecordIn(projectId, f, view);
+            if (isCurrentProjectView(view)) notify('Added ' + f.name);
           } catch (err) {
-            notify('Failed: ' + f.name, 'error');
+            if (isCurrentProjectView(view)) notify('Failed: ' + f.name, 'error');
           }
         }
-        await loadLibrary(projectId);
+        if (!isCurrentProjectView(view) || !await loadLibrary(projectId) || !isCurrentProjectView(view)) return;
         renderLibrary(byId('library-tabs')?.querySelector('.lib-tab.active')?.dataset?.folder || 'record_in');
       });
       libUploadInput.addEventListener('change', async (e) => {
         const projectId = state.selectedProject?.id;
         if (!projectId || state.isAdmin) return;
+        const view = captureProjectView(projectId);
+        if (!isCurrentProjectView(view)) return;
         const flist = Array.from(e.target.files || []);
         e.target.value = '';
         for (const f of flist.slice(0, 10)) {
+          if (!isCurrentProjectView(view)) return;
           try {
-            await uploadToRecordIn(projectId, f);
-            notify('Added ' + f.name);
+            await uploadToRecordIn(projectId, f, view);
+            if (isCurrentProjectView(view)) notify('Added ' + f.name);
           } catch (err) {
-            notify('Failed: ' + f.name, 'error');
+            if (isCurrentProjectView(view)) notify('Failed: ' + f.name, 'error');
           }
         }
-        await loadLibrary(projectId);
+        if (!isCurrentProjectView(view) || !await loadLibrary(projectId) || !isCurrentProjectView(view)) return;
         renderLibrary(byId('library-tabs')?.querySelector('.lib-tab.active')?.dataset?.folder || 'record_in');
       });
     }
@@ -747,7 +827,9 @@
         if (icon) icon.className = 'fas fa-chevron-down';
         const projectId = state.selectedProject?.id;
         if (projectId) {
+          const view = captureProjectView(projectId);
           const responses = await loadTrackerResponses(projectId);
+          if (!isCurrentProjectView(view)) return;
           renderTrackerResponses(responses);
         }
       }
@@ -755,15 +837,21 @@
     byId('tracker-approve-review-btn')?.addEventListener('click', async () => {
       const projectId = state.selectedProject?.id;
       if (!projectId) return;
+      const view = captureProjectView(projectId);
+      if (!isCurrentProjectView(view)) return;
       const fs = getFirebaseService();
       if (!fs) return;
+      const button = byId('tracker-approve-review-btn');
+      if (button.disabled) return;
+      button.disabled = true;
       try {
         const res = await fs.callFunction('approveProject', { projectId });
+        if (!isCurrentProjectView(view)) return;
         if (res === null || (res && res.ok !== true)) throw new Error('Approval failed');
         notify('Project completed.');
-        await loadProjects();
-        openProject(projectId);
-      } catch (err) { notify(err?.message || 'Failed', 'error'); }
+        await refreshProjectAfterAction(view);
+      } catch (err) { if (isCurrentProjectView(view)) notify(err?.message || 'Failed', 'error'); }
+      finally { if (isCurrentProjectView(view)) button.disabled = false; }
     });
     const addCommentUpload = byId('tracker-add-comment-upload');
     const addCommentFileInput = byId('tracker-add-comment-files');
@@ -783,41 +871,55 @@
     byId('tracker-add-comment-btn')?.addEventListener('click', async () => {
       const projectId = state.selectedProject?.id;
       if (!projectId) return;
+      const view = captureProjectView(projectId);
+      if (!isCurrentProjectView(view)) return;
       const fs = getFirebaseService();
       const me = fs?.auth?.currentUser?.uid;
       if (!me) return;
+      const button = byId('tracker-add-comment-btn');
+      if (button.disabled) return;
+      button.disabled = true;
       const message = (byId('tracker-add-comment-message')?.value || '').trim();
       const base64Files = [];
-      for (let i = 0; i < Math.min(state.trackerAddCommentFiles.length, MAX_FORM_FILES); i++) {
-        const f = state.trackerAddCommentFiles[i];
+      const files = state.trackerAddCommentFiles.slice(0, MAX_FORM_FILES);
+      try {
+      for (const f of files) {
         const b64 = await fileToBase64(f);
+        if (!isCurrentProjectView(view)) return;
         base64Files.push({ name: f.name, data: b64, type: f.type });
       }
       if (!message && base64Files.length === 0) {
         notify('Enter a message or attach files', 'error');
         return;
       }
-      try {
         const res = await fs.callFunction('sendProjectRespondEmail', { projectId, message, base64Files });
+        if (!isCurrentProjectView(view)) return;
         if (res === null) throw new Error('Failed to add comment (401 or network error). Are you logged in?');
         if (res && res.ok !== true) throw new Error(res?.message || 'Add comment failed');
         notify('Comment added. Admin will respond.');
         state.trackerAddCommentFiles = [];
         renderTrackerAddCommentFileList();
         byId('tracker-add-comment-message').value = '';
-        await loadProjects();
-        openProject(projectId);
+        const refreshedView = await refreshProjectAfterAction(view);
+        if (!refreshedView) return;
         const responses = await loadTrackerResponses(projectId);
+        if (!isCurrentProjectView(refreshedView)) return;
         renderTrackerResponses(responses);
-      } catch (err) { notify(err?.message || 'Failed', 'error'); }
+      } catch (err) { if (isCurrentProjectView(view)) notify(err?.message || 'Failed', 'error'); }
+      finally { if (isCurrentProjectView(view)) button.disabled = false; }
     });
     byId('tracker-review-submit')?.addEventListener('click', async () => {
       const projectId = state.selectedProject?.id;
       if (!projectId) return;
+      const view = captureProjectView(projectId);
+      if (!isCurrentProjectView(view)) return;
       const fs = getFirebaseService();
       const me = fs?.auth?.currentUser?.uid;
       const text = (byId('tracker-review-input')?.value || '').trim();
       if (!me || !text) return;
+      const button = byId('tracker-review-submit');
+      if (button.disabled) return;
+      button.disabled = true;
       try {
         let userName = 'User';
         if (fs.getUserData) {
@@ -826,6 +928,7 @@
             userName = String(ud?.username || ud?.email || '').trim() || 'User';
           } catch (_) {}
         }
+        if (!isCurrentProjectView(view)) return;
         if (typeof fs.callFunction === 'function') {
           await fs.callFunction('submitProjectReview', { projectId, text, userName });
         } else {
@@ -835,12 +938,15 @@
           const reviewsCol = fb.collection(fs.db, 'projects', projectId, 'reviews');
           const projectReviewsCol = fb.collection(fs.db, 'projectReviews');
           await fb.addDoc(reviewsCol, reviewData);
+          if (!isCurrentProjectView(view)) return;
           await fb.addDoc(projectReviewsCol, reviewData);
         }
+        if (!isCurrentProjectView(view)) return;
         notify('Thank you for your review! Refresh the main page to see it.');
         const inp = byId('tracker-review-input');
         if (inp) inp.value = '';
-      } catch (err) { notify(err?.message || 'Failed to submit', 'error'); }
+      } catch (err) { if (isCurrentProjectView(view)) notify(err?.message || 'Failed to submit', 'error'); }
+      finally { if (isCurrentProjectView(view)) button.disabled = false; }
     });
 
     const TRYLOAD_MAX = 100;

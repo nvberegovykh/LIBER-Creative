@@ -1,7 +1,7 @@
 (function (root) {
   'use strict';
 
-  const BUILD = '20260815r49-design-property-overlays1';
+  const BUILD = '20260914r192-design-conflicts2';
   const SCHEMA = 'liber.revex.design-property-versions.v1';
   const BOOK_ID = '__design_book__';
   const DRAFT_ID = '__working_draft__';
@@ -12,7 +12,21 @@
   const iso = () => new Date().toISOString();
   const activeByPosition = new Map();
   const draftByPosition = new Map();
+  const unsavedByPosition = new Map();
+  // A live subscription may update the record while an older draft is open.
+  // Keep the versions that actually produced that draft as its write baseline.
+  const editBases = new Map();
+  const conflictsByPosition = new Set();
+  const removedImages = new Map();
   let busy = false;
+  function beginOperation() {
+    busy = true;
+    $('#design-inspector')?.setAttribute('aria-busy', 'true');
+    $('#design-inspector')?.querySelectorAll('input,textarea,select,button').forEach(control => { control.disabled = true; });
+  }
+  function context() { return { projectId: state.projectId, token: state.activationToken, uid: Store.user?.uid || null, itemId: state.selectedDesign?.id }; }
+  function current(c) { return c.projectId === state.projectId && c.token === state.activationToken && c.uid === (Store.user?.uid || null) && c.itemId === state.selectedDesign?.id; }
+  function requireCurrent(c) { if (!current(c)) { const error = new Error('The active position changed. The earlier operation has stopped.'); error.code = 'design-context-changed'; throw error; } }
 
   if (!Store || !state || root.__revexDesignPropertyVersionsR52) return;
 
@@ -38,7 +52,7 @@
   }
 
   function itemKey(item = state.selectedDesign) {
-    return item && state.projectId ? `${state.projectId}::${item.id}` : '';
+    return item && state.projectId ? `${Store.user?.uid || 'local'}::${state.projectId}::${item.id}` : '';
   }
 
   function cleanImage(image) {
@@ -53,7 +67,7 @@
       status: String(value.status || 'Not Selected'),
       description: String(value.description || ''),
       source: String(value.source || ''),
-      images: (Array.isArray(value.images) ? value.images : []).map(cleanImage).filter(Boolean).slice(-12)
+      images: (Array.isArray(value.images) ? value.images : []).map(cleanImage).filter(Boolean)
     };
   }
 
@@ -73,6 +87,7 @@
     return raw
       .filter((row) => row && row.id && row.patch)
       .map((row) => ({
+        ...row,
         id: String(row.id),
         name: String(row.name || 'Version'),
         patch: snapshot(row.patch),
@@ -81,8 +96,7 @@
         createdBy: row.createdBy || null,
         updatedBy: row.updatedBy || null,
         syncedAt: row.syncedAt || null
-      }))
-      .slice(-40);
+      }));
   }
 
   function selectedId(item = state.selectedDesign) {
@@ -90,8 +104,9 @@
     if (!key) return BOOK_ID;
     const current = activeByPosition.get(key);
     const rows = versions(item);
-    if (current === BOOK_ID || current === DRAFT_ID || rows.some((row) => row.id === current)) return current;
-    if (rows.length) return rows[rows.length - 1].id;
+    if (current === BOOK_ID || current === DRAFT_ID || rows.some((row) => row.id === current && !row.archivedAt)) return current;
+    const visible = rows.filter(row => !row.archivedAt);
+    if (visible.length) return visible[visible.length - 1].id;
     return DRAFT_ID;
   }
 
@@ -105,6 +120,8 @@
   function activeSnapshot(item = state.selectedDesign) {
     const id = selectedId(item);
     if (id === BOOK_ID) return canonicalSnapshot(item);
+    const unsaved = unsavedByPosition.get(`${itemKey(item)}::${id}`);
+    if (unsaved) return snapshot(unsaved);
     if (id === DRAFT_ID) return draftSnapshot(item);
     return snapshot(versions(item).find((row) => row.id === id)?.patch || canonicalSnapshot(item));
   }
@@ -127,13 +144,17 @@
     state.designEdits?.set?.(itemId, { ...current, ...patch, id: itemId });
   }
 
-  async function persistVersions(item, rows, extra = {}) {
+  async function persistVersions(item, rows, extra = {}, owner = context(), expectedVersions) {
+    requireCurrent(owner);
     const payload = {
       propertyVersionsSchema: SCHEMA,
       propertyVersions: rows,
+      sourceSnapshot: { id: item.id, label: item.label, chapterTitle: item.chapterTitle, revit: item.revit || null },
       ...extra
     };
-    const saved = await Store.saveDesignEdit(state.projectId, item.id, payload);
+    const expected = expectedVersions || sourceItemRecord(item)?.propertyVersions || [];
+    const saved = await Store.saveDesignVersionEdit(owner.projectId, item.id, payload, expected);
+    requireCurrent(owner);
     updateLocalRecord(item.id, saved);
     return saved;
   }
@@ -147,8 +168,17 @@
     });
   }
 
+  function draftKey(item = state.selectedDesign) { return `${itemKey(item)}::${selectedId(item)}`; }
+  function copyVersions(item = state.selectedDesign) { return JSON.parse(JSON.stringify(sourceItemRecord(item)?.propertyVersions || [])); }
+  function writeError(error, fallback) {
+    if (error?.code === 'design-version-conflict') {
+      conflictsByPosition.add(draftKey());
+      toast('Another session changed this position. Your draft is still here; save it as a new version to keep both.', true);
+    } else toast(error?.message || fallback, true);
+  }
+
   function imageStripHtml(images) {
-    return (images || []).map((image) => `<img src="${esc(image.url)}" alt="${esc(image.name || '')}" />`).join('');
+    return (images || []).map((image, index) => `<figure class="design-image-item"><img src="${esc(image.url)}" alt="${esc(image.name || 'Design image')}" tabindex="0" role="button" aria-label="View ${esc(image.name || 'design image')}" />${selectedId() !== BOOK_ID ? `<button type="button" data-remove-design-image="${index}" aria-label="Remove ${esc(image.name || 'image')} from this version">×</button>` : ''}</figure>`).join('');
   }
 
   function applySnapshotToProperties(value, readOnly = false) {
@@ -156,20 +186,29 @@
     const description = $('#design-description');
     const source = $('#design-source');
     const upload = $('#design-image-upload');
-    if (status) { status.value = value.status || 'Not Selected'; status.disabled = readOnly; }
-    if (description) { description.value = value.description || ''; description.disabled = readOnly; }
-    if (source) { source.value = value.source || ''; source.disabled = readOnly; }
-    if (upload) upload.disabled = readOnly;
+    if (status) { status.value = value.status || 'Not Selected'; status.disabled = readOnly || busy; }
+    if (description) { description.value = value.description || ''; description.disabled = readOnly || busy; }
+    if (source) { source.value = value.source || ''; source.disabled = readOnly || busy; }
+    if (upload) upload.disabled = readOnly || busy;
     const strip = $('#design-edit-form .image-strip');
-    if (strip) strip.innerHTML = imageStripHtml(value.images);
+    if (strip) {
+      const key = `${itemKey()}::${selectedId()}`;
+      strip.innerHTML = imageStripHtml(value.images) + (removedImages.has(key) && !readOnly ? '<button type="button" class="button ghost" data-undo-design-image>Undo removal</button>' : '');
+      strip.querySelectorAll('[data-remove-design-image]').forEach(button => {button.disabled=busy;button.addEventListener('click', () => { if(busy)return;const next=readForm();removedImages.set(key,next.images);next.images=next.images.filter((_,i)=>i!==Number(button.dataset.removeDesignImage));unsavedByPosition.set(key,next);renderSwitcher();toast('Image removed from this draft. Save the version to keep the change.');});});
+      strip.querySelector('[data-undo-design-image]')?.addEventListener('click',()=>{if(busy)return;const next=readForm();next.images=removedImages.get(key)||next.images;removedImages.delete(key);unsavedByPosition.set(key,next);renderSwitcher();});
+    }
     const submit = $('#design-edit-form button[type="submit"]');
     if (submit) {
-      submit.textContent = readOnly ? 'Design Book release' : 'Save version';
-      submit.disabled = readOnly;
+      submit.textContent = 'Save version';
+      submit.hidden = readOnly;
+      submit.disabled = readOnly || busy;
       submit.title = readOnly ? 'The current Design Book card is released. Select or create a version to edit Properties.' : 'Save these Properties into the selected lightweight version.';
     }
     const syncButton = $('#design-sync-to-book');
-    if (syncButton) syncButton.disabled = readOnly || busy;
+    if (syncButton) { syncButton.disabled = readOnly || busy; syncButton.hidden = readOnly; }
+    const copyButton = $('#design-edit-copy');
+    if (copyButton) { copyButton.hidden = !readOnly; copyButton.disabled = busy; }
+    $('#design-inspector')?.querySelectorAll('[data-design-version],.design-version-new').forEach(button => { button.disabled = busy; });
   }
 
   function cardImage(value) {
@@ -192,6 +231,15 @@
       .design-property-versions{margin:10px 0 14px;padding:10px;border:1px solid var(--line);border-radius:10px;background:color-mix(in srgb,var(--panel-2) 82%,transparent)}
       .design-version-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}.design-version-head>div{min-width:0}.design-version-head strong{display:block;font:10px var(--mono);letter-spacing:.11em}.design-version-head span{display:block;margin-top:2px;color:var(--tx-3);font-size:10px;line-height:1.3}.design-version-new{min-height:28px;padding:4px 8px;border:1px solid var(--line);border-radius:7px;background:transparent;color:var(--tx-1);font:10px var(--mono);cursor:pointer}.design-version-cards{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(150px,190px);gap:7px;overflow-x:auto;padding:1px 1px 5px;scrollbar-width:thin}.design-version-card{min-width:0;padding:0;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--tx-1);text-align:left;overflow:hidden;cursor:pointer}.design-version-card.active{border-color:var(--accent);box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 55%,transparent)}.design-version-image{height:58px;display:grid;place-items:center;background:#10110f;color:var(--tx-3);font:8px var(--mono);overflow:hidden}.design-version-image img{width:100%;height:100%;object-fit:cover}.design-version-copy{padding:7px}.design-version-copy strong{display:block;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.design-version-copy>span{display:inline-block;margin-top:4px;padding:2px 5px;border:1px solid var(--line);border-radius:999px;color:var(--tx-2);font:8px var(--mono)}.design-version-copy p{margin:5px 0 0;color:var(--tx-2);font-size:9px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.design-version-copy small{display:block;margin-top:5px;color:var(--tx-3);font:8px var(--mono)}.design-version-release-note{margin:7px 0 0;color:var(--tx-3);font-size:9px;line-height:1.35}.design-version-actions{display:grid;grid-template-columns:1fr;gap:6px;margin-top:6px}.design-version-actions #design-sync-to-book{width:100%}.design-property-versions[data-book-active="1"]+.design-source-summary{opacity:.9}
     `;
+    style.textContent += `
+      .design-version-cards{grid-auto-flow:row;grid-auto-columns:auto;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));max-height:340px;overflow-y:auto;overflow-x:hidden}
+      .design-version-image{height:auto;aspect-ratio:4/3;min-height:86px}.design-version-copy p{font-size:11px;line-height:1.4}.design-version-copy>span{font-size:10px}
+      .design-version-head strong{font:600 12px system-ui;letter-spacing:0}.design-version-head span{font-size:11px}.design-version-new{min-height:36px;font:600 11px system-ui}
+      .design-version-archive,.design-version-archived button{border:1px solid var(--line);border-radius:7px;background:transparent;color:var(--tx-2);min-height:32px;padding:5px 8px;margin-top:8px;font-size:11px;cursor:pointer}
+      .design-version-archived{margin-top:8px;color:var(--tx-2);font-size:12px}.design-version-archived summary{cursor:pointer;padding:6px 0}
+      .design-image-item{position:relative;margin:0;min-width:0}.design-image-item img{display:block;cursor:zoom-in}.design-image-item>button{position:absolute;right:3px;top:3px;width:30px;height:30px;border:1px solid var(--line);border-radius:50%;background:#111b;color:white;font-size:20px;cursor:pointer}
+      .design-version-actions [hidden],#design-edit-form button[hidden]{display:none!important}
+    `;
     document.head.appendChild(style);
   }
 
@@ -200,10 +248,13 @@
     const inspector = $('#design-inspector');
     const form = $('#design-edit-form');
     if (!item || !inspector || !form) return;
+    inspector.setAttribute('aria-busy', String(busy));
     ensureStyle();
     const key = itemKey(item);
     const rows = versions(item);
     const active = selectedId(item);
+    const editorKey = `${key}::${active}`;
+    if (!editBases.has(editorKey) || (!busy && !unsavedByPosition.has(editorKey))) editBases.set(editorKey, copyVersions(item));
     if (!activeByPosition.has(key)) activeByPosition.set(key, active);
     const book = canonicalSnapshot(item);
     const draft = draftSnapshot(item);
@@ -218,11 +269,15 @@
     host.dataset.bookActive = active === BOOK_ID ? '1' : '0';
     const cards = [cardHtml(BOOK_ID, 'Design Book', book, active === BOOK_ID, 'released card')];
     if (!rows.length || active === DRAFT_ID) cards.push(cardHtml(DRAFT_ID, 'Working version', draft, active === DRAFT_ID, 'not released'));
-    for (const row of rows) cards.push(cardHtml(row.id, row.name, row.patch, active === row.id, row.syncedAt ? 'synced · retained' : 'overlay'));
-    host.innerHTML = `<div class="design-version-head"><div><strong>VERSIONS</strong><span>Lightweight Property overlays. The Design Book card changes only on Sync.</span></div><button class="design-version-new" type="button">+ New version</button></div><div class="design-version-cards">${cards.join('')}</div><p class="design-version-release-note">Switch versions here, edit the normal Properties below, then sync the chosen version when it should become the Design Book card. Sync never deletes the version.</p>`;
+    for (const row of rows.filter(row=>!row.archivedAt)) cards.push(cardHtml(row.id, row.name, row.patch, active === row.id, row.syncedAt ? 'Published to book' : 'Option'));
+    const archived = rows.filter(row=>row.archivedAt);
+    host.innerHTML = `<div class="design-version-head"><div><strong>Design options</strong><span>Save an option, then publish it to the book.</span></div><button class="design-version-new" type="button">+ New version</button></div><div class="design-version-cards">${cards.join('')}</div>${active!==BOOK_ID&&active!==DRAFT_ID?'<button type="button" class="design-version-archive">Archive selected version</button>':''}${archived.length?`<details class="design-version-archived"><summary>Archived versions (${archived.length})</summary>${archived.map(row=>`<button type="button" data-restore-design-version="${esc(row.id)}">Restore ${esc(row.name)}</button>`).join('')}</details>`:''}`;
 
     $('.design-version-new', host)?.addEventListener('click', createVersion);
+    $('.design-version-archive', host)?.addEventListener('click',()=>void setArchived(active,true));
+    host.querySelectorAll('[data-restore-design-version]').forEach(button=>button.addEventListener('click',()=>void setArchived(button.dataset.restoreDesignVersion,false)));
     host.querySelectorAll('[data-design-version]').forEach((button) => button.addEventListener('click', () => {
+      if (busy) return;
       const id = button.dataset.designVersion;
       activeByPosition.set(key, id);
       renderSwitcher();
@@ -236,15 +291,32 @@
       if (submit) submit.insertAdjacentElement('afterend', actions);
       else form.appendChild(actions);
     }
-    actions.innerHTML = '<button class="button" id="design-sync-to-book" type="button">Sync to Design Book</button>';
+    actions.innerHTML = (conflictsByPosition.has(editorKey) ? '<div class="design-version-conflict" role="status"><p>Another session changed this position. Your draft is preserved.</p><button class="button ghost" id="design-save-conflict-copy" type="button">Save my draft as a new version</button></div>' : '') + '<button class="button" id="design-sync-to-book" type="button">Publish to Design Book</button><button class="button" id="design-edit-copy" type="button" hidden>Edit a new version</button>';
+    $('#design-save-conflict-copy')?.addEventListener('click', createVersion);
     $('#design-sync-to-book')?.addEventListener('click', syncToDesignBook);
+    $('#design-edit-copy')?.addEventListener('click', createVersion);
 
     applySnapshotToProperties(activeSnapshot(item), active === BOOK_ID);
+  }
+
+  async function setArchived(id, archive) {
+    if (busy || !state.selectedDesign) return;
+    const item=state.selectedDesign, owner=context(), rows=versions(item), row=rows.find(row=>row.id===id);
+    if(!row)return;
+    beginOperation();
+    try {
+      await persistVersions(item,rows.map(value=>value.id===id?{...value,archivedAt:archive?iso():null,archivedBy:archive?owner.uid:null}:value),{},owner);
+      activeByPosition.set(itemKey(item), archive ? BOOK_ID : id);
+      try {await Store.appendHistory?.(owner.projectId,{kind:'design-version',operation:archive?'archive':'restore',label:`${archive?'Archived':'Restored'} ${row.name}`,relatedId:item.id,before:{versionId:id,archived:!archive},after:{versionId:id,archived:archive}});}catch(_){}
+      if(current(owner))toast(archive?'Version archived. You can restore it below.':'Version restored.');
+    } catch(error) {if(current(owner))toast(error.message||'Could not update this version.',true);}
+    finally {busy=false;renderSwitcher();}
   }
 
   async function createVersion() {
     if (busy || !state.selectedDesign) return;
     const item = state.selectedDesign;
+    const owner = context();
     const key = itemKey(item);
     const rows = versions(item);
     const base = activeSnapshot(item);
@@ -258,34 +330,41 @@
       updatedBy: Store.user?.uid || 'local',
       syncedAt: null
     };
-    busy = true;
+    beginOperation();
     setSync('Creating Design Book version…', 'busy');
     try {
-      await persistVersions(item, [...rows, row]);
+      await persistVersions(item, [...rows, row], {}, owner);
       activeByPosition.set(key, row.id);
       draftByPosition.delete(key);
-      try { await Store.appendHistory?.(state.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'design-version', operation: 'create', label: `${item.chapterTitle || 'Design Book'} · ${item.label} · ${row.name}`, relatedId: item.id, before: null, after: { versionId: row.id, name: row.name, patch: row.patch }, note: 'Lightweight Design Book Property overlay created; released card unchanged.' }); } catch (_) {}
+      try { await Store.appendHistory?.(owner.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'design-version', operation: 'create', label: `${item.chapterTitle || 'Design Book'} · ${item.label} · ${row.name}`, relatedId: item.id, before: null, after: { versionId: row.id, name: row.name, patch: row.patch }, note: 'Design option created; published book unchanged.' }); } catch (_) {}
+      requireCurrent(owner);
       setSync('Version created · Design Book unchanged', Store.isCloud?.() ? 'good' : 'quiet');
       toast(`${row.name} created. Design Book unchanged.`);
     } catch (error) {
-      setSync('Version creation failed', 'bad'); toast(error.message || 'Could not create the version.', true);
+      if (current(owner)) { setSync('Version creation failed', 'bad'); toast(error.message || 'Could not create the version.', true); }
     } finally {
       busy = false;
       renderSwitcher();
     }
   }
 
-  async function ensureSavedVersion(item, value) {
+  async function ensureSavedVersion(item, value, owner = context()) {
+    requireCurrent(owner);
     const key = itemKey(item);
     const rows = versions(item);
     const active = selectedId(item);
+    const editorKey = `${key}::${active}`;
+    const expected = editBases.get(editorKey) || copyVersions(item);
     if (active === BOOK_ID) throw new Error('Select or create a version before editing the released Design Book card.');
     if (active === DRAFT_ID) {
       const row = {
         id: newVersionId(), name: nextVersionName(rows), patch: snapshot(value),
         createdAt: iso(), updatedAt: iso(), createdBy: Store.user?.uid || 'local', updatedBy: Store.user?.uid || 'local', syncedAt: null
       };
-      await persistVersions(item, [...rows, row]);
+      await persistVersions(item, [...rows, row], {}, owner, expected);
+      unsavedByPosition.delete(`${key}::${active}`);
+      conflictsByPosition.delete(editorKey);
+      editBases.delete(editorKey);
       activeByPosition.set(key, row.id);
       draftByPosition.delete(key);
       return row;
@@ -293,7 +372,10 @@
     const current = rows.find((row) => row.id === active);
     if (!current) throw new Error('The selected Design Book version is no longer available.');
     const updated = { ...current, patch: snapshot(value), updatedAt: iso(), updatedBy: Store.user?.uid || 'local' };
-    await persistVersions(item, rows.map((row) => row.id === active ? updated : row));
+    await persistVersions(item, rows.map((row) => row.id === active ? updated : row), {}, owner, expected);
+    unsavedByPosition.delete(`${key}::${active}`);
+    conflictsByPosition.delete(editorKey);
+    editBases.set(editorKey, copyVersions(item));
     return updated;
   }
 
@@ -302,17 +384,19 @@
     event?.stopImmediatePropagation?.();
     if (busy || !state.selectedDesign) return;
     const item = state.selectedDesign;
-    const before = activeSnapshot(item);
+    const owner = context();
+    const before = snapshot(versions(item).find(row=>row.id===selectedId(item))?.patch || canonicalSnapshot(item));
     const after = readForm();
-    busy = true;
+    beginOperation();
     setSync('Saving version Properties…', 'busy');
     try {
-      const saved = await ensureSavedVersion(item, after);
-      try { await Store.appendHistory?.(state.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'design-version', operation: 'edit', label: `${item.chapterTitle || 'Design Book'} · ${item.label} · ${saved.name}`, relatedId: item.id, before, after: saved.patch, note: 'Property overlay saved; Design Book released card unchanged.' }); } catch (_) {}
+      const saved = await ensureSavedVersion(item, after, owner);
+      try { await Store.appendHistory?.(owner.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'design-version', operation: 'edit', label: `${item.chapterTitle || 'Design Book'} · ${item.label} · ${saved.name}`, relatedId: item.id, before, after: saved.patch, note: 'Design option saved; published book unchanged.' }); } catch (_) {}
+      requireCurrent(owner);
       setSync('Version saved · Design Book unchanged', Store.isCloud?.() ? 'good' : 'quiet');
-      toast(`${saved.name} saved. Use Sync to Design Book when ready.`);
+      toast(`${saved.name} saved. Publish to Design Book when ready.`);
     } catch (error) {
-      setSync('Version save failed', 'bad'); toast(error.message || 'Could not save this version.', true);
+      if (current(owner)) { setSync('Version save failed', 'bad'); writeError(error, 'Could not save this version.'); }
     } finally {
       busy = false;
       renderSwitcher();
@@ -324,34 +408,38 @@
     event?.stopImmediatePropagation?.();
     if (busy || !state.selectedDesign) return;
     const item = state.selectedDesign;
+    const owner = context();
     if (selectedId(item) === BOOK_ID) return toast('The Design Book release is already selected.', true);
     const before = canonicalSnapshot(item);
     const working = readForm();
-    busy = true;
+    beginOperation();
     setSync('Syncing selected version to Design Book…', 'busy');
     try {
-      let savedVersion = await ensureSavedVersion(item, working);
+      let savedVersion = await ensureSavedVersion(item, working, owner);
       let rows = versions(item);
       const syncedAt = iso();
       rows = rows.map((row) => row.id === savedVersion.id ? { ...row, syncedAt } : row);
       savedVersion = { ...savedVersion, syncedAt };
       const released = snapshot(savedVersion.patch);
-      const saved = await Store.saveDesignEdit(state.projectId, item.id, {
+      requireCurrent(owner);
+      const saved = await Store.saveDesignVersionEdit(owner.projectId, item.id, {
         ...released,
         propertyVersionsSchema: SCHEMA,
         propertyVersions: rows,
         syncedPropertyVersionId: savedVersion.id,
         syncedPropertyVersionAt: savedVersion.syncedAt
-      });
+      }, sourceItemRecord(item)?.propertyVersions || []);
+      requireCurrent(owner);
       updateLocalRecord(item.id, saved);
       state.selectedDesign = { ...item, ...released, propertyVersions: rows, syncedPropertyVersionId: savedVersion.id, syncedPropertyVersionAt: savedVersion.syncedAt };
-      try { await Store.appendHistory?.(state.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'design', operation: 'sync-version', label: `Sync to Design Book · ${item.chapterTitle || ''} / ${item.label}`, relatedId: item.id, affectedElementIds: item.revit?.elementIds || [], affectedLevels: item.revit?.levels || [], before, after: released, note: `${savedVersion.name} merged into the Design Book card; the version remains available.` }); } catch (_) {}
+      try { await Store.appendHistory?.(owner.projectId, { sourceRevision: state.cloudState?.revision || null, kind: 'design', operation: 'sync-version', label: `Sync to Design Book · ${item.chapterTitle || ''} / ${item.label}`, relatedId: item.id, affectedElementIds: item.revit?.elementIds || [], affectedLevels: item.revit?.levels || [], before, after: released, note: `${savedVersion.name} published to Design Book; the version remains available.` }); } catch (_) {}
+      requireCurrent(owner);
       setSync('Design Book synced', Store.isCloud?.() ? 'good' : 'quiet');
       toast(`${savedVersion.name} synced to Design Book. Version retained.`);
       diagnostic('INFO', 'DESIGN_VERSION_SYNC', 'Lightweight Property version merged into Design Book without deleting the version.', { projectId: state.projectId, itemId: item.id, versionId: savedVersion.id });
       refreshApplicationCard(item.id);
     } catch (error) {
-      setSync('Design Book sync failed', 'bad'); toast(error.message || 'Could not sync this version to Design Book.', true);
+      if (current(owner)) { setSync('Design Book sync failed', 'bad'); writeError(error, 'Could not sync this version to Design Book.'); }
     } finally {
       busy = false;
       setTimeout(renderSwitcher, 0);
@@ -386,36 +474,41 @@
     const input = event.target;
     if (input?.id !== 'design-image-upload' || !state.selectedDesign) return;
     event.stopImmediatePropagation();
+    if (busy) { input.value = ''; return; }
     const file = input.files?.[0];
     if (!file) return;
     const item = state.selectedDesign;
+    const owner = context();
+    if (activeSnapshot(item).images.length >= 12) { toast('This version has 12 images. Remove an image before adding another.', true); input.value = ''; return; }
     if (selectedId(item) === BOOK_ID) {
       toast('Create or select a version before adding an image. The released Design Book card is read-only.', true);
       input.value = '';
       return;
     }
-    busy = true;
+    beginOperation();
     setSync('Uploading image to version…', 'busy');
     try {
       let selected = selectedId(item);
       if (selected === DRAFT_ID) {
-        const seeded = await ensureSavedVersion(item, activeSnapshot(item));
+        const seeded = await ensureSavedVersion(item, activeSnapshot(item), owner);
         selected = seeded.id;
       }
       let image;
       if (Store.isCloud?.() && Store.fs?.storage && Store.uploadFile) {
-        const uploaded = await Store.uploadFile(`projects/${state.projectId}/revex/design/${encodeURIComponent(String(item.id))}/versions/${encodeURIComponent(selected)}/${Date.now()}_${safeName(file.name)}`, file);
+        requireCurrent(owner);
+        const uploaded = await Store.uploadFile(`projects/${owner.projectId}/revex/design/${encodeURIComponent(String(item.id))}/versions/${encodeURIComponent(selected)}/${Date.now()}_${safeName(file.name)}`, file);
         image = { url: uploaded.url, path: uploaded.path, name: file.name || safeName(file.name) };
       } else {
         image = { url: await readAsDataUrl(file), path: null, name: file.name || safeName(file.name) };
       }
-      const current = activeSnapshot(item);
-      const next = { ...current, images: [...(current.images || []), image].slice(-12) };
-      const saved = await ensureSavedVersion(item, next);
+      requireCurrent(owner);
+      const value = activeSnapshot(item);
+      const next = { ...value, images: [...(value.images || []), image] };
+      const saved = await ensureSavedVersion(item, next, owner);
       setSync('Version image saved · Design Book unchanged', Store.isCloud?.() ? 'good' : 'quiet');
       toast(`Image added to ${saved.name}.`);
     } catch (error) {
-      setSync('Version image upload failed', 'bad'); toast(error.message || 'Could not upload the image.', true);
+      if (current(owner)) { setSync('Version image upload failed', 'bad'); writeError(error, 'Could not upload the image.'); }
     } finally {
       busy = false;
       input.value = '';
@@ -428,6 +521,11 @@
     if (!state.selectedDesign || !$('#design-edit-form') || !inspector || $('.design-property-versions', inspector)) return;
     renderSwitcher();
   }
+
+  document.addEventListener('input', event => {
+    if (!['design-status','design-description','design-source'].includes(event.target?.id) || !state.selectedDesign || selectedId() === BOOK_ID || busy) return;
+    unsavedByPosition.set(`${itemKey()}::${selectedId()}`, readForm());
+  }, true);
 
   document.addEventListener('submit', (event) => {
     if (event.target?.id !== 'design-edit-form') return;
