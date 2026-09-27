@@ -1,0 +1,14 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync('docs/liber-apps/apps/revex/viewer-r26.js','utf8');
+const select={options:[],selectedIndex:0,get selectedOptions(){return this.options[this.selectedIndex]?[this.options[this.selectedIndex]]:[];},set innerHTML(html){this.options=[...html.matchAll(/<option value="([^"]*)">([^<]*)<\/option>/g)].map(m=>({value:m[1],textContent:m[2]}));this.selectedIndex=0;}};
+const methods=source.slice(source.indexOf('  cameraState(){'),source.indexOf('  snapshot(){'))+source.slice(source.indexOf('  floors(){'),source.indexOf('  walkOn(on){'));
+const ctx=vm.createContext({$:(id)=>id==='#walk-floor'?select:null});const Viewer=vm.runInContext('class Viewer{'+methods+'}\nViewer',ctx),v=new Viewer();
+v.data={levels:[{name:'CELLAR',elevation:52},{name:'BASEPLANE',elevation:62},{name:'1ST FLOOR',elevation:62},{name:'2ND FLOOR',elevation:73}]};v.floors();assert.equal(select.selectedOptions[0].textContent,'1ST FLOOR');assert.equal(select.selectedIndex,3);
+select.selectedIndex=4;v.floors();assert.equal(select.selectedOptions[0].textContent,'2ND FLOOR','Detailed geometry must not reset a chosen level');
+v.data={levels:[{name:'Level 10',elevation:100},{name:'Level 1',elevation:0}]};v.floors();assert.equal(select.selectedOptions[0].textContent,'Level 1','Level 10 must not match Level 1');
+v.data={levels:[{name:'BASEPLANE',elevation:62},{name:'1ST FLOOR',elevation:62}]};v.floors();
+const vector=()=>({toArray:()=>[1,2,3],fromArray(){return this;},normalize(){return this;}});v.camera={position:vector(),quaternion:{...vector(),toArray:()=>[0,0,0,1]},fov:55,updateProjectionMatrix(){},updateMatrixWorld(){}};v.controls={target:vector()};v.walk=false;v.floor=0;v.eye=5.5;v.requestRender=()=>{};
+const saved=v.cameraState();assert.equal(saved.levelName,'1ST FLOOR');select.selectedIndex=1;assert(v.restoreCameraState(saved));assert.equal(select.selectedOptions[0].textContent,'1ST FLOOR');assert.equal(v.floor,0,'World-space floor must not be replaced with the raw datum');
+const legacy={...saved};delete legacy.levelName;legacy.floor=62;assert(v.restoreCameraState(legacy));assert.equal(select.selectedOptions[0].textContent,'1ST FLOOR','An ambiguous legacy elevation must not select the reference plane');
+v.data={levels:[]};v.floors();assert.equal(v.floor,0);
+console.log('PASS: duplicate elevations, selected-level retention, Level 1 vs Level 10, named camera restore, legacy ambiguity and empty levels');

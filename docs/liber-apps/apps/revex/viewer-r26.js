@@ -249,7 +249,7 @@ class Viewer{
     this.requestRender();
   }
   setReferenceVisible(visible){this.showReferences=!!visible;this.applyReferenceVisibility();}
-  cameraState(){return{position:this.camera.position.toArray(),quaternion:this.camera.quaternion.toArray(),fov:this.camera.fov,target:this.controls?.target?.toArray?.()||null,walk:this.walk,floor:this.floor,eye:this.eye}}
+  cameraState(){return{position:this.camera.position.toArray(),quaternion:this.camera.quaternion.toArray(),fov:this.camera.fov,target:this.controls?.target?.toArray?.()||null,walk:this.walk,floor:this.floor,eye:this.eye,levelName:$('#walk-floor')?.selectedOptions?.[0]?.textContent||''}}
   restoreCameraState(saved){
     const vector=(value,size)=>Array.isArray(value)&&value.length===size&&value.every(Number.isFinite);
     if(!saved||!vector(saved.position,3)||!vector(saved.quaternion,4)||!Number.isFinite(saved.fov)||saved.fov<10||saved.fov>150)return false;
@@ -260,7 +260,7 @@ class Viewer{
     if(saved.target&&this.controls)this.controls.target.fromArray(saved.target);
     if(this.walk){const direction=new THREE.Vector3();this.camera.getWorldDirection(direction);this.yaw=Math.atan2(-direction.x,-direction.z);this.pitch=Math.asin(Math.max(-1,Math.min(1,direction.y)));}
     $('#walk-toggle')?.classList.toggle('active',this.walk);if($('#walk-controls'))$('#walk-controls').hidden=!this.walk;
-    if($('#walk-floor'))$('#walk-floor').value=String(this.floor);if($('#walk-height'))$('#walk-height').value=String(this.eye);
+    const floorSelect=$('#walk-floor');if(floorSelect){const options=Array.from(floorSelect.options),named=typeof saved.levelName==='string'?options.findIndex(o=>o.textContent===saved.levelName):-1;const legacy=options.filter(o=>o.value!==''&&Number(o.value)===saved.floor);if(named>0)floorSelect.selectedIndex=named;else if(legacy.length===1)floorSelect.selectedIndex=options.indexOf(legacy[0]);this.__r85WalkLevelName=floorSelect.selectedOptions?.[0]?.textContent||'';}if($('#walk-height'))$('#walk-height').value=String(this.eye);
     if($('#walk-fov'))$('#walk-fov').value=String(saved.fov);if($('#walk-fov-value'))$('#walk-fov-value').textContent=`${Math.round(saved.fov)}°`;
     this.camera.updateProjectionMatrix();this.camera.updateMatrixWorld();this.requestRender();return true;
   }
@@ -278,7 +278,17 @@ class Viewer{
   select(r){if(this.helper)this.scene.remove(this.helper);const g=this.editGroups.get(this.stableKey(r));const b=g?new THREE.Box3().setFromObject(g):this.box(r);if(!b||b.isEmpty())return;this.helper=new THREE.Box3Helper(b,0xff2f6e);this.scene.add(this.helper);this.requestRender()}
   pick(e){if(!this.model)return;const rect=this.renderer.domElement.getBoundingClientRect();this.pointer.set((e.clientX-rect.left)/rect.width*2-1,-((e.clientY-rect.top)/rect.height*2-1));this.ray.setFromCamera(this.pointer,this.camera);const h=this.ray.intersectObject(this.model,true).find(x=>x.object.visible!==false);if(!h)return;let node=h.object,best=null;while(node&&!best){const id=String(node.userData?.revexElementId||'');if(id)best=this.byId.get(id)||null;node=node.parent}if(!best)best=this.nearestRow(h.point);if(best)this.selectAndRoute(best)}
   selectAndRoute(r){this.select(r);let btn=$(`.tree-item[data-element-id="${CSS.escape(String(r.id))}"]`);if(!btn){const q=$('#element-search');if(q){q.value=String(r.id);q.dispatchEvent(new Event('input',{bubbles:true}));btn=$(`.tree-item[data-element-id="${CSS.escape(String(r.id))}"]`)}}btn?.click()}
-  floors(){const s=$('#walk-floor'),ls=this.data?.levels||[];if(!s)return;s.innerHTML='<option value="">Floor</option>'+ls.map(l=>`<option value="${+l.elevation||0}">${String(l.name||'Level').replace(/[&<>]/g,'')}</option>`).join('');if(ls.length){const f=ls.find(l=>/1st|first|ground|level 1/i.test(l.name||''))||ls[0];s.value=String(+f.elevation||0);this.floor=+f.elevation||0}}
+  floors(){
+    const s=$('#walk-floor'),ls=this.data?.levels||[];if(!s)return;
+    const previous=this._walkFloorData===this.data?s.selectedOptions?.[0]?.textContent:'';
+    s.innerHTML='<option value="">Floor</option>'+ls.map(l=>`<option value="${+l.elevation||0}">${String(l.name||'Level').replace(/[&<>]/g,'')}</option>`).join('');
+    this._walkFloorData=this.data;
+    if(ls.length){let index=ls.findIndex(l=>String(l.name||'Level').replace(/[&<>]/g,'')===previous);if(index<0)index=ls.findIndex(l=>/\b(?:1st|first|ground)\b|\blevel\s*0?1\b/i.test(l.name||''));if(index<0)index=0;
+      // Elevations are not unique: a reference plane can share a floor's value.
+      // Select the intended option itself so world-space resolution uses its name.
+      s.selectedIndex=index+1;this.floor=+ls[index].elevation||0;
+    }else this.floor=0;
+  }
   walkOn(on){if(!this.bounds)return;this.walk=on;this.controls.enabled=!on;this.keys.clear();if(on){const target=this.controls.target.clone(),dir=new THREE.Vector3();this.camera.getWorldDirection(dir);this.camera.position.set(target.x,this.floor+this.eye,target.z);this.yaw=Math.atan2(-dir.x,-dir.z);this.pitch=Math.asin(Math.max(-1,Math.min(1,dir.y)));this.look()}else{this.controls.target.copy(this.camera.position.clone().add(new THREE.Vector3(-Math.sin(this.yaw)*12,0,-Math.cos(this.yaw)*12)));this.controls.update()}this.requestRender()}
   look(){const d=new THREE.Vector3(-Math.sin(this.yaw)*Math.cos(this.pitch),Math.sin(this.pitch),-Math.cos(this.yaw)*Math.cos(this.pitch));this.camera.lookAt(this.camera.position.clone().add(d))}
   startWalkFrames(){if(this.walkFrame||!this.walk)return;this.lastStep=performance.now();const tick=now=>{this.walkFrame=0;if(!this.walk||!this.keys.size){this.requestRender();return}const dt=Math.min((now-this.lastStep)/1000,.05);this.lastStep=now;this.step(dt);this.renderer.render(this.scene,this.camera);this.updatePins();this.walkFrame=requestAnimationFrame(tick)};this.walkFrame=requestAnimationFrame(tick)}
