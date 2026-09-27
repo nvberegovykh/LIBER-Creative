@@ -121,6 +121,17 @@ class LiberAppsControlPanel {
         
         if (window.__devLog) window.__devLog('✅ Firebase is available and initialized');
 
+        let initialFirebaseUser = null;
+        try {
+            initialFirebaseUser = (typeof window.firebaseService.waitForAuthState === 'function')
+                ? await window.firebaseService.waitForAuthState(15000)
+                : await window.firebaseService.getCurrentUser();
+            if (window.__devLog) window.__devLog('✅ Firebase initial auth state resolved:', !!initialFirebaseUser);
+        } catch (error) {
+            console.error('❌ Firebase auth-state prerequisite failed:', error?.message || error);
+            return;
+        }
+
         // Initialize modules in order
         if (window.cryptoManager) {
             if (window.__devLog) window.__devLog('Crypto module initialized');
@@ -146,7 +157,7 @@ class LiberAppsControlPanel {
 
         // Listen for admin force reload broadcast
         try{
-            if (window.firebaseService && window.firebaseService.db && typeof firebase.onSnapshot === 'function'){
+            if (initialFirebaseUser && initialFirebaseUser.uid && window.firebaseService && window.firebaseService.db && typeof firebase.onSnapshot === 'function'){
                 const bRef = firebase.doc(window.firebaseService.db, 'admin', 'broadcast');
                 firebase.onSnapshot(bRef, (snap)=>{
                     try{

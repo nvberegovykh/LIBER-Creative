@@ -1302,3 +1302,6 @@ button.call-status-badge:hover{
 }
 
 
+
+/* R178 passive Secure Chat device-alignment status */
+.chat-identity-banner{margin:8px 10px 0;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid rgba(245,158,11,.45);border-radius:10px;background:rgba(120,74,0,.22);color:#f8fafc;font-size:12px}.chat-identity-banner.hidden{display:none!important}.chat-identity-banner .btn{flex:0 0 auto;white-space:nowrap}@media(max-width:650px){.chat-identity-banner{align-items:stretch;flex-direction:column}.chat-identity-banner .btn{width:100%}}

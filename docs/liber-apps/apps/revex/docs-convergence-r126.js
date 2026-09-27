@@ -9,7 +9,7 @@ function diag(level,stage,message,detail={}){try{root.__revexBrowserDiagnostics?
 function r115Ready(){return root.__revexDocsPagesR115?.fullSetAuthority===true}
 function legacyOwnsTree(host){
  if(!host)return false;
- if(host.querySelector('.docs-group.printing-set details'))return true;
+ if(host.querySelector('.docs-group.printing-set:not([data-r115-set]) details'))return true;
  if(host.querySelector('[data-printing-set]:not([data-r115-set])'))return true;
  const sets=[...host.querySelectorAll('.docs-group.printing-set')];
  return sets.length>0&&sets.some(set=>!set.hasAttribute('data-r115-set'));

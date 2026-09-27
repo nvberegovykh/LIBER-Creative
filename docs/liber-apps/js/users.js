@@ -16,11 +16,11 @@ class UsersManager {
                 if (window.firebaseService && window.firebaseService.isInitialized && window.authManager) {
                     const cu = window.firebaseService.auth.currentUser;
                     if (cu) {
-                        // Check admin role
+                        // Admin authority is a verified Auth custom claim, never a
+                        // mutable users/{uid}.role display field.
                         try {
-                            const docRef = window.firebase.doc(window.firebaseService.db, 'users', cu.uid);
-                            const snap = await window.firebase.getDoc(docRef);
-                            if (snap.exists() && (snap.data().role === 'admin')) {
+                            const token = await cu.getIdTokenResult();
+                            if (token?.claims?.liber_admin === true) {
                                 await this.loadUsers();
                                 return;
                             }
@@ -288,12 +288,19 @@ class UsersManager {
     async updateUserRole(uid, role) {
         try {
             if (window.firebaseService && window.firebaseService.isFirebaseAvailable()) {
-                const docRef = window.firebase.doc(window.firebaseService.db, 'users', uid);
-                await window.firebase.updateDoc(docRef, {
-                    role,
-                    updatedAt: new Date().toISOString()
+                const enabled = role === 'admin';
+                const result = await window.firebaseService.callFunction('adminSetLiberAdmin', {
+                    schema: 'liber.admin.set-liber-admin-request.v1',
+                    targetUid: uid,
+                    enabled
                 });
-                this.showSuccess('Role updated');
+                if (!result?.ok) throw new Error('Admin role update was not confirmed.');
+                // The server owns the claim. Refresh when changing the current
+                // account so subsequent rule checks see the new authority.
+                if (uid === window.firebaseService.auth?.currentUser?.uid && result.requiresTokenRefresh) {
+                    await window.firebaseService.auth.currentUser.getIdToken(true);
+                }
+                this.showSuccess('Admin access updated');
                 await this.loadUsers();
             } else {
                 this.showError('Firebase service not available');
@@ -354,22 +361,11 @@ class UsersManager {
             await this.loadUsers();
             return;
         }
-
-        try {
-            if (window.firebaseService && window.firebaseService.isFirebaseAvailable()) {
-                const searchResults = await window.firebaseService.searchUsers(searchTerm);
-                this.users = searchResults;
-                this.renderUsers();
-                this.updateUserCount();
-            } else {
-                // Fallback to client-side filtering
-                this.filterUsersClientSide(searchTerm);
-            }
-        } catch (error) {
-            console.error('Error searching users:', error);
-            // Fallback to client-side filtering
-            this.filterUsersClientSide(searchTerm);
-        }
+        // The shared searchUsers API is intentionally public-profile-only for
+        // peer discovery. Admin user management filters its already-authorized
+        // full list locally, so it never leaks email search into the browser's
+        // public discovery path.
+        this.filterUsersClientSide(searchTerm);
     }
 
     filterUsersClientSide(searchTerm) {

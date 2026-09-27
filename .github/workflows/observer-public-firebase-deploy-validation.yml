@@ -9,6 +9,8 @@ on:
       - 'RUN_OBSERVER_PUBLIC_FIREBASE_CURRENT.cmd'
       - 'docs/ai/public-manifest.json'
       - '.github/workflows/observer-public-firebase-deploy-validation.yml'
+      - '.github/scripts/hosting-preservation.ps1'
+      - '.github/scripts/test-hosting-preservation.ps1'
   push:
     branches: [main]
     paths:
@@ -17,6 +19,8 @@ on:
       - 'RUN_OBSERVER_PUBLIC_FIREBASE_CURRENT.cmd'
       - 'docs/ai/public-manifest.json'
       - '.github/workflows/observer-public-firebase-deploy-validation.yml'
+      - '.github/scripts/hosting-preservation.ps1'
+      - '.github/scripts/test-hosting-preservation.ps1'
   workflow_dispatch:
 
 permissions:
@@ -27,6 +31,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Reject missing files, stale assets and concurrent releases
+        shell: pwsh
+        run: .github/scripts/test-hosting-preservation.ps1
       - name: PowerShell syntax
         shell: pwsh
         run: |

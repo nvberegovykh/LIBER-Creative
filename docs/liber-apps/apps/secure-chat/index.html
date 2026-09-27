@@ -13,9 +13,9 @@
     <title>Secure Chat</title>
     <link rel="icon" type="image/svg+xml" href="../../images/LIBER LOGO.svg" />
     <link rel="icon" type="image/png" href="../../images/LIBER LOGO.png" />
-    <link rel="stylesheet" href="../../css/style.css?v=20260212r12c" />
-    <link rel="stylesheet" href="../../css/chatgpt-widget.css?v=20250818c" />
-    <link rel="stylesheet" href="styles.css?v=20260228r20a" />
+    <link rel="stylesheet" href="../../css/style.css?v=20260914r192-morning1" />
+    <link rel="stylesheet" href="../../css/chatgpt-widget.css?v=20260914r192-morning1" />
+    <link rel="stylesheet" href="styles.css?v=20260914r192-morning1" />
     <link rel="stylesheet" href="../../../components/media-fullscreen-viewer.css" />
     <link rel="stylesheet" href="../../../components/media-video-player.css" />
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
@@ -101,6 +101,9 @@
                 <button id="voice-top-close" class="icon-btn" title="Close"><i class="fas fa-xmark"></i></button>
             </div>
             <div id="typing-indicator" class="typing-indicator" aria-live="polite"></div>
+            <div id="chat-identity-banner" class="chat-identity-banner hidden" role="status" aria-live="polite">
+                <span id="chat-identity-banner-text">Securing this browser for new chats…</span>
+            </div>
             <div id="app-error" class="app-error" style="display:none;color:#ef4444;font-size:12px;margin:4px 8px;padding:8px;background:rgba(239,68,68,0.15);border-radius:8px;word-break:break-word"></div>
             <div id="error-toast" class="error-toast hidden" role="alert" aria-live="assertive">
                 <span id="error-toast-text"></span>
@@ -229,13 +232,13 @@
 
     <!-- Always load our own Firebase - self-contained in iframe avoids cross-context "custom Object" setDoc error -->
     <script>
-      window.LIBER_CHAT_VERSION = '20260820v54-identity-vault';
+      window.LIBER_CHAT_VERSION = '20260905r183-late-device-delivery1';
     </script>
     <!-- Scripts (single-source cache version) -->
     <script>
       (function loadChatScripts() {
         const v = encodeURIComponent(window.LIBER_CHAT_VERSION || 'dev');
-        const scripts = ['../../js/secure-keys.js','../../js/firebase-loader.js','../../js/firebase-service.js','../../js/crypto.js','../../../components/media-fullscreen-viewer.js','../../../components/media-video-player.js','chat-crypto.js'];
+        const scripts = ['../../js/secure-keys.js?v=20260914r192-morning1','../../js/firebase-loader.js?v=20260914r192-morning1','../../js/firebase-service.js?v=20260914r192-morning1','../../js/crypto.js?v=20260914r192-morning1','../../../components/media-fullscreen-viewer.js','../../../components/media-video-player.js','chat-crypto.js?v=20260914r192-morning1','chat-read-compat-r178.js?v=20260914r192-morning1'];
         document.write(scripts.map((s)=>'<script src="'+s+'?v='+v+'"><\/script>').join(''));
       })();
     </script>

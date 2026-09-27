@@ -26,8 +26,19 @@
       this.currentUser = null;
       this.activeConnection = null;
       this.connections = [];
+      // Keep the full, membership-authorized result separately from the
+      // sidebar projection.  Older clients created more than one document for
+      // the same people; hiding those copies must never hide their messages.
+      this._allConnections = [];
       this.sharedKeyCache = {}; // connId -> CryptoKey
       this._cryptoMetaByConn = new Map();
+      // Account-wide v2 keys are legacy-only.  A browser that does not retain the
+      // published private key must never replace that root key; it receives its
+      // own immutable v4 device identity instead.
+      this._publishedLocalIdentity = null;
+      this._localDeviceIdentity = null;
+      this._identityAlignment = null;
+      this._identityEnrollmentError = '';
       this.me = null; // cached profile
       this.usernameCache = new Map(); // uid -> {username, avatarUrl}
       this.userUnsubs = new Map(); // uid -> unsubscribe
@@ -345,6 +356,29 @@
       try{ return (uids||[]).slice().sort().join('|'); }catch(_){ return ''; }
     }
 
+    async ensureConversationForParticipants(uids){
+      const participantIds = Array.from(new Set((uids || []).map(uid => String(uid || '').trim()).filter(Boolean))).sort();
+      const key = this.computeConnKey(participantIds);
+      const existing = await this.findConnectionByKey(key);
+      if (existing) return existing;
+      const modular = window.firebaseModular;
+      const app = window.firebaseService?.app;
+      const functions = window.firebaseService?.functionsByRegion?.['us-central1']
+        || (modular?.getFunctions && app ? modular.getFunctions(app, 'us-central1') : null);
+      if (!modular?.httpsCallable || !functions) {
+        throw this._identityError('liber/chat-creation-service-unavailable', 'The conversation service is temporarily unavailable. Please retry.');
+      }
+      const callable = modular.httpsCallable(functions, 'ensureSecureChatConversation', { timeout:60000 });
+      const response = await callable({ schema:'liber.secure-chat.ensure-conversation-request.v1', participantIds });
+      const data = response?.data;
+      if (!data?.ok || data.schema !== 'liber.secure-chat.ensure-conversation-response.v1'
+          || data.connId !== key || JSON.stringify(data.participantIds) !== JSON.stringify(participantIds)) {
+        throw this._identityError('liber/chat-creation-response-invalid', 'The conversation service returned an invalid response.');
+      }
+      if (data.created || data.alignmentPending) await this.waitForNewRoomCryptoAlignment(data.connId);
+      return data.connId;
+    }
+
     _isIOSDevice(){
       try{
         const ua = String(navigator.userAgent || '');
@@ -535,7 +569,7 @@
 
     _displayName(userLike, fallbackUid = ''){
       const u = userLike || {};
-      const raw = this._safeUsername(u.username || '', '');
+      const raw = this._safeUsername(u.username || u.displayName || '', '');
       if (raw) return raw;
       return 'User';
     }
@@ -1054,6 +1088,16 @@
       }catch(_){ return false; }
     }
 
+    isRenderableMessageSnapshot(snapshot){
+      const message = snapshot?.data?.() || {};
+      // A new v4 parent is visible in Firestore's local cache before its atomic
+      // envelope batch is authorized. Do not render that pending cipher as
+      // "Sent" (or missing-key history) while the server can still reject it.
+      return !(snapshot?.metadata?.hasPendingWrites === true
+        && message.cryptoVersion === 'liber.secure-chat.message-envelope.v4'
+        && message.createdAtTS == null);
+    }
+
     getDeliveryLabel(msg){
       try{
         if (!msg || msg.sender !== this.currentUser?.uid) return '';
@@ -1136,15 +1180,21 @@
         if (!id || this.activeConnection !== id) return;
         const box = document.getElementById('messages');
         let maxPeerTs = 0;
+        let firstUnreadableTs = Infinity;
         if (box){
           box.querySelectorAll('.message.other').forEach((el)=>{
             const ts = Number(el.dataset.msgTs || 0) || 0;
-            if (ts > maxPeerTs) maxPeerTs = ts;
+            if (el.dataset.decryptionFailed === '1') {
+              firstUnreadableTs = Math.min(firstUnreadableTs,ts > 0 ? ts : 0);
+            } else if (ts > maxPeerTs) maxPeerTs = ts;
           });
         }
+        if (!maxPeerTs) return;
         const conn = (this.connections || []).find((c)=> c && c.id === id);
-        const connUpdatedMs = Number(new Date(conn?.updatedAt || 0).getTime() || 0) || 0;
-        const markerMs = Math.max(Date.now(), maxPeerTs, connUpdatedMs, this.getEffectiveReadMarkerForConn(id, conn));
+        // A scalar watermark cannot skip an unreadable message. Never advance
+        // it through an encrypted gap merely because a later message is visible.
+        const markerMs = Math.min(maxPeerTs,firstUnreadableTs - 1);
+        if (markerMs <= this.getEffectiveReadMarkerForConn(id,conn)) return;
         this.setReadMarkerForConn(id, markerMs);
         this.markVisibleMessagesReadInDom(id, markerMs);
         const stampIso = new Date(markerMs).toISOString();
@@ -1536,7 +1586,7 @@
 
     isGroupChat(connId){
       const conn = (this.connections||[]).find(c=> c && c.id === connId);
-      const parts = conn ? (Array.isArray(conn.participants)? conn.participants : []) : [];
+      const parts = conn ? this.getConnParticipants(conn) : [];
       return parts.length > 2;
     }
 
@@ -2127,7 +2177,7 @@
     }
     async editMessage(connId, msgId, text){
       try{
-        const key = await this.getEncryptionKeyForConn(connId);
+        const key = await this.getEncryptionKeyForConn(connId, { forWrite:true });
         const cryptoMeta = this.getEncryptionMetadataForConn(connId);
         const cipher = await chatCrypto.encryptWithKey(text, key);
         await firebase.updateDoc(firebase.doc(this.db,'chatMessages',connId,'messages',msgId),{
@@ -2151,7 +2201,7 @@
       p.onchange = async ()=>{
         try{
           const f = p.files[0]; if (!f) return;
-          const aesKey2 = await this.getEncryptionKeyForConn(connId);
+          const aesKey2 = await this.getEncryptionKeyForConn(connId, { forWrite:true });
           const cryptoMeta = this.getEncryptionMetadataForConn(connId);
           const base64 = await new Promise((r,e)=>{ const fr = new FileReader(); fr.onload=()=>r(String(fr.result||'').split(',')[1]); fr.onerror=e; fr.readAsDataURL(f); });
           const cipherF = await chatCrypto.encryptWithKey(base64, aesKey2);
@@ -2904,6 +2954,12 @@
     }
 
     getConnParticipants(data){
+      // Once migrated, participantIds is the sole authorization/membership
+      // source. Legacy fields remain read-only compatibility for rooms that have
+      // not yet been materialized by the server migration.
+      if (Array.isArray(data?.participantIds)) {
+        return Array.from(new Set(data.participantIds.map((uid)=>String(uid || '').trim()).filter(Boolean)));
+      }
       const parts = Array.isArray(data?.participants)
         ? data.participants
         : (Array.isArray(data?.users) ? data.users : (Array.isArray(data?.memberIds) ? data.memberIds : []));
@@ -2917,62 +2973,93 @@
       return [];
     }
 
+    _isProjectConnection(data){
+      return !!(data && (data.projectId || data.type === 'project' || String(data.key || '').startsWith('project:')));
+    }
+
+    _threadKeyForConnection(data){
+      // A thread key is derived exclusively from canonical participantIds (or
+      // their read-only compatibility equivalent), never from a collection
+      // scan or a caller-supplied legacy key. Project rooms remain isolated.
+      if (this._isProjectConnection(data)) return '';
+      const participants = this.getConnParticipants(data || {});
+      return participants.length >= 2 ? this.computeConnKey(participants) : '';
+    }
+
+    _allConnectionRows(){
+      return Array.isArray(this._allConnections) && this._allConnections.length
+        ? this._allConnections
+        : (Array.isArray(this.connections) ? this.connections : []);
+    }
+
+    _displayConnectionRows(rows){
+      const selected = new Map();
+      for (const row of (Array.isArray(rows) ? rows : [])){
+        if (!row || !row.id) continue;
+        const threadKey = this._threadKeyForConnection(row);
+        // Do not collapse project rooms or malformed historical records.
+        const bucket = threadKey || `room:${String(row.id)}`;
+        const current = selected.get(bucket);
+        if (!current){
+          selected.set(bucket, row);
+          continue;
+        }
+        // Always prefer the deterministic room document when it exists. This
+        // makes every current browser write to the same direct/group thread;
+        // legacy copies stay available through getRelatedConnIds for history.
+        const rowIsCanonical = !!threadKey && String(row.id) === threadKey;
+        const currentIsCanonical = !!threadKey && String(current.id) === threadKey;
+        if (rowIsCanonical || (!currentIsCanonical && String(row.updatedAt || '') > String(current.updatedAt || ''))){
+          selected.set(bucket, row);
+        }
+      }
+      return Array.from(selected.values()).sort((a,b)=> new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
+    }
+
+    _connectionRowById(connId){
+      const id = String(connId || '').trim();
+      if (!id) return null;
+      return this._allConnectionRows().find((row)=> row && String(row.id || '') === id)
+        || (this.connections || []).find((row)=> row && String(row.id || '') === id)
+        || null;
+    }
+
     async findConnectionByKey(key){
       try{
-        const q = firebase.query(firebase.collection(this.db,'chatConnections'), firebase.where('key','==', key));
-        const s = await firebase.getDocs(q);
-        const rows = [];
-        s.forEach(d=> rows.push({ id:d.id, ...d.data() }));
-        if (!rows.length) return null;
-        const withMsgTs = [];
-        for (const r of rows){
-          let ts = 0;
-          try{
-            let qMsg;
-            try{
-              qMsg = firebase.query(
-                firebase.collection(this.db,'chatMessages',r.id,'messages'),
-                firebase.orderBy('createdAtTS','desc'),
-                firebase.limit(1)
-              );
-            }catch(_){
-              qMsg = firebase.query(
-                firebase.collection(this.db,'chatMessages',r.id,'messages'),
-                firebase.orderBy('createdAt','desc'),
-                firebase.limit(1)
-              );
-            }
-            const sm = await firebase.getDocs(qMsg);
-            const d = sm.docs && sm.docs[0] ? sm.docs[0].data() : null;
-            ts = (d?.createdAtTS?.toMillis?.() || new Date(d?.createdAt || 0).getTime() || 0);
-          }catch(_){ ts = 0; }
-          withMsgTs.push({ row: r, msgTs: ts });
+        const normalizedKey = String(key || '').trim();
+        if (!normalizedKey) return null;
+        // R178 rules intentionally reject key-only collection queries. The
+        // deterministic document id is canonical; only use a legacy-key row
+        // after checking that document does not exist.
+        const loadedCanonical = this._allConnectionRows().find((row)=> row
+          && String(row.id || '') === normalizedKey);
+        if (loadedCanonical?.id) return loadedCanonical.id;
+        try {
+          const snapshot = await firebase.getDoc(firebase.doc(this.db, 'chatConnections', normalizedKey));
+          if (snapshot.exists()) return snapshot.id;
+        } catch (error) {
+          // Participant-only rules deny reads of absent documents. A failed
+          // canonical probe must not discard an already-authorized legacy row.
+          if (error?.code !== 'permission-denied' && error?.code !== 'not-found') throw error;
         }
-        withMsgTs.sort((a,b)=>{
-          const am = a.msgTs || 0; const bm = b.msgTs || 0;
-          if (am !== bm) return bm - am;
-          const aa = !!a.row.archived; const bb = !!b.row.archived;
-          if (aa !== bb) return aa ? 1 : -1;
-          return new Date(b.row.updatedAt||0) - new Date(a.row.updatedAt||0);
-        });
-        return withMsgTs[0]?.row?.id || rows[0]?.id || null;
+        const loadedLegacy = this._allConnectionRows().find((row)=> row
+          && String(row.key || '') === normalizedKey);
+        return loadedLegacy?.id || null;
       }catch(_){ return null; }
     }
 
     async resolveCanonicalConnectionId(connId){
       try{
-        if (!connId) return connId;
-        let key = '';
-        // If deep link passes a key directly, use it as-is.
-        if (String(connId).includes('|')) key = String(connId);
-        if (!key){
-          const snap = await firebase.getDoc(firebase.doc(this.db,'chatConnections', connId));
-          if (snap.exists()){
-            const data = snap.data() || {};
-            key = String(data.key || this.computeConnKey(this.getConnParticipants(data)) || '');
-          }
+        const originalId = String(connId || '').trim();
+        if (!originalId) return connId;
+        let source = this._connectionRowById(originalId);
+        if (!source){
+          const snap = await firebase.getDoc(firebase.doc(this.db,'chatConnections', originalId));
+          if (snap.exists()) source = { id:snap.id, ...(snap.data() || {}) };
         }
-        if (!key) return connId;
+        if (!source || this._isProjectConnection(source)) return originalId;
+        const key = this._threadKeyForConnection(source);
+        if (!key) return originalId;
         const canonical = await this.findConnectionByKey(key);
         return canonical || connId;
       }catch(_){
@@ -3072,6 +3159,18 @@
       return !!this._sfuRoom && (st === 'connected');
     }
 
+    _stopRoomPresenceListeners(){
+      // These listeners belong to an entered call room, not the conversation's
+      // separate incoming-call notification subscription. Invalidate callbacks
+      // already queued before unsubscribe as well as future snapshots.
+      this._roomPresenceGeneration = (this._roomPresenceGeneration || 0) + 1;
+      for (const field of ['_roomUnsub', '_peersUnsub']){
+        const unsubscribe = this[field]; this[field] = null;
+        try{ if (typeof unsubscribe === 'function') unsubscribe(); }catch(_){}
+      }
+      this._peersPresence = {};
+    }
+
     _showCallError(msg){
       const el = document.getElementById('call-error');
       if (el){ el.textContent = msg ? String(msg).slice(0, 600) : ''; el.style.display = msg ? 'block' : 'none'; }
@@ -3166,16 +3265,21 @@
       try{
         const videosCont = this._ensureCallVideosContainer();
         if (!videosCont || !el) return;
+        // Keep local track bookkeeping local, but identify this publication the
+        // same way on every participant's annotation canvas.
+        const cardKey = String(key || '').startsWith('local:')
+          ? `${this._sfuRoom?.localParticipant?.identity || this.currentUser?.uid || 'local'}:${String(key).slice(6)}`
+          : key;
         const tile = document.createElement('div');
         tile.className = `call-tile${isScreen ? ' screen' : ''}`;
         tile.classList.add('call-tile-enter');
         tile.setAttribute('data-sfu-track-key', key);
-        tile.setAttribute('data-card-key', key);
+        tile.setAttribute('data-card-key', cardKey);
         const drawLayer = document.createElement('div');
         drawLayer.className = 'call-draw-layer';
         const drawCanvas = document.createElement('canvas');
         drawCanvas.className = 'call-tile-draw-canvas';
-        drawCanvas.setAttribute('data-card-key', key);
+        drawCanvas.setAttribute('data-card-key', cardKey);
         drawLayer.appendChild(drawCanvas);
         const expandBtn = document.createElement('button');
         expandBtn.className = 'call-tile-expand';
@@ -3490,14 +3594,53 @@
       }catch(_){ }
     }
 
-    async _sendDrawEvent(connId, evt){
+    _captureDrawOwner(connId){
+      const id = String(connId || this.getCallConnId() || '').trim();
+      const service = window.firebaseService;
+      const auth = service?.auth;
+      const user = auth?.currentUser;
+      const controllerUser = this.currentUser;
+      const db = this.db;
+      const generation = this._drawSyncGeneration || 0;
+      const presenceGeneration = this._roomPresenceGeneration || 0;
+      const room = this._sfuRoom;
+      const revision = service?._authStateRevision;
+      if (!id || !db || !user || user.uid !== controllerUser?.uid || this._authSessionRetired || this._cleanupInProgress) return null;
+      return { id, uid:user.uid, db, current:()=> !this._authSessionRetired && !this._cleanupInProgress
+        && this.currentUser === controllerUser && this.db === db
+        && window.firebaseService === service && service.auth === auth && auth.currentUser === user
+        && service._authStateRevision === revision && this.getCallConnId() === id
+        && (this._drawSyncGeneration || 0) === generation
+        && (this._roomPresenceGeneration || 0) === presenceGeneration && this._sfuRoom === room };
+    }
+
+    _stopDrawSync(){
+      this._drawSyncGeneration = (this._drawSyncGeneration || 0) + 1;
+      this._cancelDrawQueue?.();
+      for (const key of ['_drawSyncUnsub','_drawEventsUnsub']) {
+        try{ this[key]?.(); }catch(_){} this[key] = null;
+      }
+      this._drawSyncBoundConnId = null;
+      this._drawSyncOwner = null;
+      this._drawEventsSeen = new Set();
+      this._lastDrawClearAtMs = 0;
+      this._drawSyncErrorShown = false;
+      this._clearAllDrawCanvases();
+    }
+
+    _showDrawSyncError(owner){
+      if (!owner?.current() || this._drawSyncErrorShown) return;
+      this._drawSyncErrorShown = true;
+      this._showCallError('Drawing could not be shared. Check your connection before drawing again.');
+    }
+
+    async _sendDrawEvent(connId, evt, owner = this._captureDrawOwner(connId)){
       try{
-        const id = String(connId || this.getCallConnId() || this.activeConnection || '').trim();
-        if (!id || !this.db || !evt) return;
-        const collRef = firebase.collection(this.db,'callRooms', id, 'drawEvents');
+        if (!owner?.current() || owner.id !== connId || !evt) return false;
+        const collRef = firebase.collection(owner.db,'callRooms', owner.id, 'drawEvents');
         const payload = {
           type: String(evt.type || ''),
-          from: String(this.currentUser?.uid || ''),
+          from: owner.uid,
           ts: firebase.serverTimestamp(),
           createdAt: new Date().toISOString()
         };
@@ -3514,36 +3657,31 @@
           payload.cardKey = String(evt.cardKey || '');
         }
         await firebase.addDoc(collRef, payload);
-      }catch(_){ }
+        return true;
+      }catch(_){ this._showDrawSyncError(owner); return false; }
     }
 
     _bindDrawSyncForRoom(connId){
       try{
         const id = String(connId || this.getCallConnId() || this.activeConnection || '').trim();
         if (!id || !this.db) return;
-        if (this._drawSyncBoundConnId === id) return;
+        if (this._drawSyncBoundConnId === id && this._drawSyncOwner?.current()) return;
+        this._stopDrawSync();
+        const owner = this._captureDrawOwner(id);
+        if (!owner?.current()) return;
+        this._drawSyncOwner = owner;
         this._drawSyncBoundConnId = id;
-        this._drawSegments = [];
-        this._clearAllDrawCanvases({ keepHistory: false });
-        if (this._drawSyncUnsub){
-          try{ this._drawSyncUnsub(); }catch(_){ }
-          this._drawSyncUnsub = null;
-        }
-        if (this._drawEventsUnsub){
-          try{ this._drawEventsUnsub(); }catch(_){ }
-          this._drawEventsUnsub = null;
-        }
-        this._drawEventsSeen = new Set();
         const roomRef = firebase.doc(this.db,'callRooms', id);
         this._drawSyncUnsub = firebase.onSnapshot(roomRef, (snap)=>{
           try{
+            if (!owner.current()) return;
             const data = snap?.data?.() || {};
             const clearAt = Number(new Date(data.drawClearAt || 0).getTime() || 0);
             if (!clearAt || clearAt <= this._lastDrawClearAtMs) return;
             this._lastDrawClearAtMs = clearAt;
             this._clearDrawCanvasesForCard(data.drawClearCardKey || '');
           }catch(_){ }
-        }, ()=>{});
+        }, ()=>this._showDrawSyncError(owner));
         const eventsQ = firebase.query(
           firebase.collection(this.db,'callRooms', id, 'drawEvents'),
           firebase.orderBy('ts','desc'),
@@ -3551,7 +3689,14 @@
         );
         this._drawEventsUnsub = firebase.onSnapshot(eventsQ, (snap)=>{
           try{
-            (snap?.docChanges?.() || []).forEach((chg)=>{
+            if (!owner.current()) return;
+            // The query keeps the newest bounded window; replay it oldest
+            // first so an earlier clear cannot erase a later stroke on entry.
+            (snap?.docChanges?.() || []).slice().sort((a,b)=> {
+              const av = a.doc?.data?.() || {}, bv = b.doc?.data?.() || {};
+              return (av.ts?.toMillis?.() || Date.parse(av.createdAt) || 0)
+                - (bv.ts?.toMillis?.() || Date.parse(bv.createdAt) || 0);
+            }).forEach((chg)=>{
               if (!chg || chg.type !== 'added') return;
               const docId = String(chg.doc?.id || '');
               if (!docId || this._drawEventsSeen.has(docId)) return;
@@ -3567,7 +3712,7 @@
               }
             });
           }catch(_){ }
-        }, ()=>{});
+        }, ()=>this._showDrawSyncError(owner));
       }catch(_){ }
     }
 
@@ -3601,28 +3746,34 @@
       };
       const _drawSendQueue = [];
       let _drawSendTimer = null;
+      let gestureOwner = null;
+      this._cancelDrawQueue = ()=>{
+        if (_drawSendTimer) clearTimeout(_drawSendTimer);
+        _drawSendTimer = null;
+        _drawSendQueue.length = 0;
+        gestureOwner = null;
+        this._drawActive = false;
+        this._drawLastPoint = null;
+      };
       const flushDrawQueue = ()=>{
-        const connId = String(this.getCallConnId() || this.activeConnection || '').trim();
-        while (_drawSendQueue.length && connId){
-          const seg = _drawSendQueue.shift();
-          if (seg) this._sendDrawEvent(connId, seg);
+        while (_drawSendQueue.length){
+          const item = _drawSendQueue.shift();
+          if (item?.owner.current()) this._sendDrawEvent(item.owner.id, item.seg, item.owner);
         }
       };
       const pumpDrawQueue = ()=>{
         if (!_drawSendQueue.length){ _drawSendTimer = null; return; }
-        const connId = String(this.getCallConnId() || this.activeConnection || '').trim();
-        if (connId && _drawSendQueue.length){
-          const seg = _drawSendQueue.shift();
-          if (seg) this._sendDrawEvent(connId, seg);
-        }
+        const item = _drawSendQueue.shift();
+        if (item?.owner.current()) this._sendDrawEvent(item.owner.id, item.seg, item.owner);
         _drawSendTimer = setTimeout(pumpDrawQueue, 25);
       };
       const scheduleSend = (seg)=>{
-        _drawSendQueue.push(seg);
+        if (!gestureOwner?.current()) return;
+        _drawSendQueue.push({seg, owner:gestureOwner});
         if (!_drawSendTimer) _drawSendTimer = setTimeout(pumpDrawQueue, 0);
       };
       const drawLine = (a, b)=>{
-        if (!ctx || !a || !b) return;
+        if (!ctx || !a || !b || !gestureOwner?.current()) return;
         const r = canvas.getBoundingClientRect();
         const w = Math.max(1, r.width || 1);
         const h = Math.max(1, r.height || 1);
@@ -3641,6 +3792,8 @@
       };
       const startDraw = (e)=>{
         if (fs.classList.contains('hidden')) return;
+        gestureOwner = this._captureDrawOwner(this.getCallConnId());
+        if (!gestureOwner?.current()) return;
         this._drawActive = true;
         this._drawLastPoint = pointFromEvt(e);
       };
@@ -3656,6 +3809,7 @@
         flushDrawQueue();
         this._drawActive = false;
         this._drawLastPoint = null;
+        gestureOwner = null;
       };
       window.addEventListener('resize', resizeCanvas);
       canvas.addEventListener('mousedown', startDraw);
@@ -3681,18 +3835,21 @@
       }
       if (clearBtn && ctx){
         clearBtn.addEventListener('click', async ()=>{
-          try{ this._clearDrawCanvasesForCard(this._drawActiveCardKey); }catch(_){ }
+          const owner = this._captureDrawOwner(this.getCallConnId());
+          if (!owner?.current()) return;
+          const cardKey = this._drawActiveCardKey || '';
+          stopDraw();
+          try{ this._clearDrawCanvasesForCard(cardKey); }catch(_){ }
           try{
-            const connId = String(this.getCallConnId() || this.activeConnection || '').trim();
-            if (!connId) return;
-            await this._sendDrawEvent(connId, { type: 'clear', cardKey: this._drawActiveCardKey || '' });
-            const roomRef = firebase.doc(this.db,'callRooms', connId);
+            await this._sendDrawEvent(owner.id, { type: 'clear', cardKey }, owner);
+            if (!owner.current()) return;
+            const roomRef = firebase.doc(owner.db,'callRooms', owner.id);
             await firebase.updateDoc(roomRef, {
               drawClearAt: new Date().toISOString(),
-              drawClearedBy: this.currentUser?.uid || '',
-              drawClearCardKey: this._drawActiveCardKey || ''
+              drawClearedBy: owner.uid,
+              drawClearCardKey: cardKey
             });
-          }catch(_){ }
+          }catch(_){ this._showDrawSyncError(owner); }
         });
       }
       if (closeBtn){
@@ -3866,21 +4023,27 @@
       }catch(_){ }
     }
 
-    _bindSfuRoom(room, callConnId){
+    _bindSfuRoom(room, callConnId, run){
+      const ownsRoom = () => this._sfuConnectRun === run && run?.room === room
+        && !this._authSessionRetired && this.getCallConnId() === callConnId;
       room.on('connected', async ()=>{
+        if (!ownsRoom()) return;
         try{
           const cs = document.getElementById('call-status');
           if (cs) cs.textContent = 'In call';
           this._inRoom = true;
           this._syncCallFab();
           await this.updatePresence('connected', this._videoEnabled);
+          if (!ownsRoom()) return;
           await this.updateRoomUI();
+          if (!ownsRoom()) return;
           this._attachSfuLocalPreview();
           this._bindDrawSyncForRoom(callConnId);
           this._updateMediaSessionState('active', this.currentUser?.uid || null);
         }catch(_){ }
       });
       room.on('disconnected', async ()=>{
+        if (!ownsRoom()) return;
         try{
           if (this._sfuRoom === room) this._sfuRoom = null;
           const cs = document.getElementById('call-status');
@@ -3891,16 +4054,20 @@
           }
           if (cs) cs.textContent = 'Room open. Ready for call.';
           await this.updatePresence('idle', false);
+          if (!ownsRoom()) return;
           this._updateMediaSessionState('idle', null);
         }catch(_){ }
       });
       room.on('trackSubscribed', (track, publication, participant)=>{
+        if (!ownsRoom()) return;
         this._attachSfuTrack(track, publication, participant);
       });
       room.on('trackUnsubscribed', (track, publication, participant)=>{
+        if (!ownsRoom()) return;
         this._detachSfuTrack(track, publication, participant);
       });
       room.on('localTrackUnpublished', (publication, participant)=>{
+        if (!ownsRoom()) return;
         try{
           const tid = String(publication?.trackSid || publication?.track?.sid || '');
           const key = `local:${tid}`;
@@ -3916,9 +4083,11 @@
         }catch(_){}
       });
       room.on('participantConnected', ()=>{
+        if (!ownsRoom()) return;
         this.updateRoomUI();
       });
       room.on('participantDisconnected', (participant)=>{
+        if (!ownsRoom()) return;
         try{
           const pid = String(participant?.identity || participant?.sid || '');
           document.querySelectorAll('[data-sfu-track-key]').forEach((n)=>{
@@ -3929,20 +4098,43 @@
         this.updateRoomUI();
       });
       room.on('activeSpeakersChanged', (speakers)=>{
+        if (!ownsRoom()) return;
         this._updateSfuSpeakingIndicators(speakers);
       });
     }
 
     async _startOrJoinSfuCall(video = false){
+      // A fresh room snapshot and the explicit Join action can arrive together.
+      // Both must await one connection; two sessions with the same identity kick
+      // each other out at the SFU and race media capture/cleanup.
+      const connId = this.getCallConnId() || this.activeConnection;
+      if (this._isSfuConnected() && this._sfuRoomConnectionId === connId) return true;
+      const generation = this._roomPresenceGeneration || 0;
+      if (this._sfuConnectPromise && this._sfuConnectRun?.connId === connId
+          && this._sfuConnectRun?.generation === generation) return this._sfuConnectPromise;
+      const run = { connId, generation };
+      this._sfuConnectRun = run;
+      const pending = this._connectSfuCall(video, run);
+      this._sfuConnectPromise = pending;
+      try{ return await pending; }
+      finally{ if (this._sfuConnectPromise === pending) this._sfuConnectPromise = null; }
+    }
+
+    async _connectSfuCall(video = false, run = this._sfuConnectRun){
       if (!this._useSfuCalls) return false;
       const callConnId = this.getCallConnId() || this.activeConnection;
       if (!callConnId) return false;
       this._sfuConnectAborted = false;
+      const isAborted = () => this._sfuConnectAborted || this._authSessionRetired
+        || this._sfuConnectRun !== run || (this._roomPresenceGeneration || 0) !== run?.generation
+        || (this.getCallConnId() || this.activeConnection) !== callConnId;
+      let room = null;
       try{
-        if (this._isSfuConnected()) return true;
+        if (this._isSfuConnected() && this._sfuRoomConnectionId === callConnId) return true;
         const cs = document.getElementById('call-status');
         if (cs) cs.textContent = 'Connecting SFU...';
         await this.updatePresence('connecting', !!video);
+        if (isAborted()) return false;
         const TOKEN_TIMEOUT_MS = 20000;
         const tz = typeof Intl !== 'undefined' && Intl.DateTimeFormat ? Intl.DateTimeFormat().resolvedOptions?.()?.timeZone || '' : '';
         const lang = (navigator.language || navigator.userLanguage || '').toLowerCase();
@@ -3952,19 +4144,17 @@
           setTimeout(() => reject(new Error('Token request timed out')), TOKEN_TIMEOUT_MS);
         });
         const tokenResp = await Promise.race([tokenPromise, tokenTimeoutPromise]);
+        if (isAborted()) return false;
         const wsUrl = String(tokenResp?.wsUrl || '').trim();
         const token = String(tokenResp?.token || '').trim();
         if (!wsUrl || !token){
-          if (cs) cs.textContent = 'SFU unavailable. Configure getSfuToken.';
-          this._showCallError('SFU unavailable. Configure getSfuToken.');
-          return false;
+          throw new Error('The call service did not provide a connection. Please retry.');
         }
         const mod = await this._ensureSfuClient();
+        if (isAborted()) return false;
         const Room = mod?.Room;
         if (!Room){
-          if (cs) cs.textContent = 'SFU client load failed.';
-          this._showCallError('SFU client load failed.');
-          return false;
+          throw new Error('The call client could not load. Please retry.');
         }
         if (this._sfuRoom){
           try{ this._sfuRoom.disconnect(); }catch(_){}
@@ -4015,13 +4205,13 @@
         const urlsToTry = [wsUrl].concat(tokenResp?.wsUrlFallbacks || []).filter(Boolean);
         const hasFallbacks = (tokenResp?.wsUrlFallbacks || []).length > 0;
         console.log('[SFU] Connecting to', wsUrl ? 'primary + ' + urlsToTry.length + ' URL(s)' : 'no primary', hasFallbacks ? '(fallbacks configured)' : '(no fallbacks - add LIVEKIT_WS_URL_FALLBACKS in Secret Manager for EU/Asia)');
-        let room = null;
         let lastErr = null;
         for (let i = 0; i < urlsToTry.length; i++){
           const url = urlsToTry[i];
-          if (this._sfuConnectAborted) return false;
+          if (isAborted()) return false;
           room = new Room(roomOpts);
-          this._bindSfuRoom(room, callConnId);
+          run.room = room;
+          this._bindSfuRoom(room, callConnId, run);
           try{
             const connectPromise = room.connect(url, token, connectOpts);
             const timeoutPromise = new Promise((_, reject) => {
@@ -4032,10 +4222,12 @@
             if (i > 0) console.log('[SFU] Connected via fallback region', i + 1);
             break;
           }catch(e){
+            if (isAborted()) return false;
             lastErr = e;
             console.warn('[SFU] Region', i + 1, 'failed:', e?.message || e, 'URL:', url?.slice(0, 60) + '...');
             if (cs) cs.textContent = i < urlsToTry.length - 1 ? 'Retrying via alternate region...' : '';
             try{
+              run.room = null;
               const dc = room.disconnect();
               if (dc && typeof dc.then === 'function') await dc;
             }catch(_){}
@@ -4047,16 +4239,17 @@
           console.error('[SFU] No connection after', urlsToTry.length, 'region(s). Last error:', lastErr?.message || lastErr);
           throw (lastErr || new Error('Connection failed'));
         }
-        if (this._sfuConnectAborted) {
+        if (isAborted()) {
           try{ const dc = room.disconnect(); if (dc && typeof dc.then === 'function') await dc; }catch(_){}
           return false;
         }
         this._sfuRoom = room;
+        this._sfuRoomConnectionId = callConnId;
         this._micEnabled = true;
         this._videoEnabled = !!video;
-        if (this._sfuConnectAborted) return false;
+        if (isAborted()) return false;
         await new Promise((r) => setTimeout(r, 600));
-        if (this._sfuConnectAborted || this._sfuRoom !== room) return false;
+        if (isAborted() || this._sfuRoom !== room) return false;
         try{
           await room.localParticipant.setMicrophoneEnabled(this._micEnabled, {
             echoCancellation: true,
@@ -4066,10 +4259,14 @@
           }, { dtx: false });
         }catch(e){
           console.warn('[SFU] setMicrophoneEnabled failed on connect', e?.message || e);
-          this._showCallError('Microphone failed: ' + (e?.message || 'unknown'));
+          throw new Error('Microphone failed: ' + (e?.message || 'Allow microphone access and retry.'));
         }
-        if (this._sfuConnectAborted || this._sfuRoom !== room) return false;
-        try{ await room.localParticipant.setCameraEnabled(this._videoEnabled); }catch(_){}
+        if (isAborted() || this._sfuRoom !== room) return false;
+        try{ await room.localParticipant.setCameraEnabled(this._videoEnabled); }
+        catch(e){
+          if (this._videoEnabled) throw new Error('Camera failed: ' + (e?.message || 'Allow camera access or start a voice call.'));
+        }
+        if (isAborted() || this._sfuRoom !== room) return false;
         try{
           room.remoteParticipants.forEach((rp)=>{
             try{
@@ -4090,6 +4287,14 @@
         this._showCallError('');
         return true;
       }catch(e){
+        if (room){
+          if (this._sfuRoom === room) this._sfuRoom = null;
+          try{ await room.disconnect(); }catch(_){ }
+        }
+        if (isAborted()) return false;
+        try{ await this.updatePresence('idle', false); }catch(_){ }
+        const startBtn = document.getElementById('start-call-btn');
+        if (startBtn) startBtn.style.display = '';
         const errMsg = e?.message || String(e);
         const cs = document.getElementById('call-status');
         const lower = (errMsg || '').toLowerCase();
@@ -4100,6 +4305,11 @@
         this._showCallError(display);
         console.warn('SFU connect failed', e?.message || e);
         return false;
+      }finally{
+        if (isAborted() && room){
+          if (this._sfuRoom === room){ this._sfuRoom = null; this._sfuRoomConnectionId = null; }
+          try{ await room.disconnect(); }catch(_){}
+        }
       }
     }
 
@@ -4140,8 +4350,71 @@
       }
     }
 
+    _bindAuthSessionLifecycle(){
+      if (this._authSessionHandler) return;
+      const service = window.firebaseService;
+      const initialUser = service?.auth?.currentUser;
+      if (!initialUser || initialUser.uid !== this.currentUser?.uid) return;
+      this._authSessionHandler = () => {
+        const next = service.auth?.currentUser;
+        if (!this._authSessionRetired && next === initialUser) return;
+        this._retireAuthSessionLocally();
+        if (next?.uid && !this._authSessionReloading) {
+          this._authSessionReloading = true;
+          // Reload only this app realm, never the parent dashboard. Rebuilding
+          // the controller in-place would duplicate its existing UI handlers.
+          window.location.reload();
+        }
+      };
+      window.addEventListener('firebase-auth-state', this._authSessionHandler);
+    }
+
+    _retireAuthSessionLocally(){
+      if (this._authSessionRetired) return;
+      this._stopDrawSync();
+      this.r183StopDeliveryRecovery?.();
+      this._authSessionRetired = true;
+      this.currentUser = null;
+      this.activeConnection = null;
+      this._sfuConnectAborted = true;
+      for (const key of ['_msgLoadSeq','_connLoadSeq','_setActiveSeq','_voiceHydrateSession']) this[key] = (this[key] || 0) + 1;
+      // This cleanup must never write old-account presence or end a shared
+      // room using the replacement account's Firebase credentials.
+      for (const key of Object.keys(this)) {
+        if (/^_.*Unsub$|^_unsubMessages$/.test(key) && typeof this[key] === 'function') {
+          try{ this[key](); }catch(_){} this[key] = null;
+        }
+        if (/Timer$|Ticker$|Interval$/.test(key) || ['_msgPoll','_callConnectTimeout'].includes(key)) {
+          try{ clearTimeout(this[key]); clearInterval(this[key]); }catch(_){} this[key] = null;
+        }
+      }
+      try{ this.userUnsubs?.forEach(unsubscribe => unsubscribe()); this.userUnsubs?.clear(); }catch(_){}
+      try{ this._sfuRoom?.disconnect(); }catch(_){} this._sfuRoom = null;
+      const stopStream = stream => { try{ stream?.getTracks().forEach(track => track.stop()); }catch(_){} };
+      try{ this._activePCs?.forEach(peer => { peer.unsubs?.forEach(unsubscribe => unsubscribe()); peer.pc?.close(); stopStream(peer.stream); }); this._activePCs?.clear(); }catch(_){}
+      try{ this._activeCall?.unsubs?.forEach(unsubscribe => unsubscribe()); this._activeCall?.pc?.close(); }catch(_){} this._activeCall = null;
+      try{ this._pcWatchdogs?.forEach(value => { clearTimeout(value.t1); clearTimeout(value.t2); }); this._pcWatchdogs?.clear(); }catch(_){}
+      try{ this._speakingDetectorStops?.forEach(stop => stop()); this._speakingDetectorStops?.clear(); }catch(_){}
+      try{ if (this._activeRecorder) { this._activeRecorder.onstop = null; this._activeRecorder.ondataavailable = null; if (this._activeRecorder.state !== 'inactive') this._activeRecorder.stop(); } }catch(_){}
+      for (const key of ['_localCallStream','_monitorStream','_callStatusStream','_activeStream','_screenStream']) { stopStream(this[key]); this[key] = null; }
+      try{ this._proximityCleanup?.(); }catch(_){} this._proximityCleanup = null;
+      try{ this._stopRecordingWaveform?.(); }catch(_){}
+      try{ cancelAnimationFrame(this._voiceProgressRaf); }catch(_){}
+      document.querySelectorAll('audio,video').forEach(media => { try{ media.pause(); stopStream(media.srcObject); media.srcObject = null; media.removeAttribute('src'); media.load(); }catch(_){} });
+      try{ this._attachmentBlobUrlByKey?.forEach(url => URL.revokeObjectURL(url)); this._attachmentBlobUrlByKey?.clear(); }catch(_){}
+      this.sharedKeyCache = {}; this._localDeviceIdentity = null; this._publishedLocalIdentity = null;
+      this._r178MessageKeyCache?.clear(); this._cryptoMetaByConn?.clear();
+      this.connections = []; this._allConnections = []; this._pendingRecording = null;
+      this._pendingAttachments = []; this._pendingRemoteShares = []; this._pendingReusedAttachments = [];
+      this.pendingReply = null; this.pendingEdit = null; this._inRoom = false;
+      const notice = document.createElement('p');
+      notice.textContent = 'Chat is signed out. It will reopen automatically when you sign in.';
+      notice.setAttribute('role', 'status');
+      document.body.replaceChildren(notice);
+    }
+
     async init() {
-      // Wait for firebase (parent's when in iframe, or our own)
+      // Each app owns its Firebase objects; wait for this realm's service.
       let attempts = 0; while((!window.firebaseService || !window.firebaseService.isInitialized) && attempts < 150){ await new Promise(r=>setTimeout(r,100)); attempts++; }
       if (!window.firebaseService || !window.firebaseService.isInitialized) return;
       this.db = window.firebaseService.db;
@@ -4151,21 +4424,23 @@
       }
       this.storage = window.firebaseService.app ? firebase.getStorage(window.firebaseService.app) : null;
       
-      // Enhanced auth readiness with token refresh
-      attempts = 0;
-      while (attempts < 50) {
-        try {
-          await window.firebaseService.auth.currentUser?.getIdToken(true); // Force refresh token
-          this.currentUser = await window.firebaseService.getCurrentUser();
-          if (this.currentUser) break;
-        } catch (err) {
-          console.warn('Auth retry attempt', attempts, err.message);
+      // R158: a signed-out decision is valid only after Firebase Auth's initial
+      // state has resolved.  Service initialization alone is not auth readiness.
+      try {
+        this.currentUser = (typeof window.firebaseService.waitForAuthState === 'function')
+          ? await window.firebaseService.waitForAuthState(15000)
+          : await window.firebaseService.getCurrentUser();
+        if (this.currentUser) {
+          this._bindAuthSessionLifecycle();
+          try { await this.currentUser.getIdToken(); } catch (_) { }
         }
-        await new Promise(r => setTimeout(r, 100));
-        attempts++;
+      } catch (error) {
+        console.error('Firebase auth-state prerequisite failed in Secure Chat:', error?.message || error);
+        return;
       }
+      if (this._authSessionRetired) return;
       if (!this.currentUser) {
-        console.warn('Firebase auth not ready - redirecting to login');
+        console.warn('Firebase auth state resolved signed-out - redirecting to login');
         try {
           const params = new URLSearchParams(location.search);
           const connId = params.get('connId') || '';
@@ -4182,16 +4457,21 @@
         return;
       }
 
-      // Publish only this device's public identity. Group administrators can
-      // then build per-participant envelopes without ever receiving a private key.
-      try { await this.ensurePublishedChatIdentity(); } catch (error) {
-        console.warn('Secure Chat identity enrollment is incomplete:', error?.message || 'unknown error');
+      // R178 identity alignment intentionally examines the published legacy key
+      // before creating anything locally.  When this browser does not have the
+      // legacy private key it registers a separate immutable device key; it never
+      // replaces the account-wide root identity.
+      try { await this.initializeChatIdentityAtEntry(); } catch (error) {
+        console.warn('Secure Chat identity alignment is incomplete:', error?.message || 'unknown error');
       }
+      if (this._authSessionRetired) return;
 
       this.loadChatCategories();
       this.loadConnCategories();
       await this.syncCategoriesFromCloud();
+      if (this._authSessionRetired) return;
       try { this.me = await window.firebaseService.getUserData(this.currentUser.uid); } catch { this.me = null; }
+      if (this._authSessionRetired) return;
       this.loadPinnedState();
       const uiLang = String(this.me?.language || localStorage.getItem('liber_preferred_language') || 'en').trim().toLowerCase();
       this.applyChatLanguage(uiLang);
@@ -4266,6 +4546,7 @@
         this._deepLinkConnId = params.get('connId') || null;
       }catch(_){ this._deepLinkConnId = null; }
       await this.loadConnections();
+      if (this._authSessionRetired) return;
       // If deep link provided, activate it after list is ready (supports key or doc id)
       if (this._deepLinkConnId){
         try{
@@ -4297,6 +4578,7 @@
       }
 
       // Ensure self is cached
+      if (this._authSessionRetired) return;
       const meAvatar = this.me?.avatarUrl || this.me?.photoURL || this.me?.photoUrl || this.me?.profileImage || this.me?.profilePhoto || this.me?.avatar || '../../images/default-bird.png';
       this.usernameCache.set(this.currentUser.uid, {
         username: String(this.me?.username || 'You'),
@@ -4462,8 +4744,13 @@
             const users = await window.firebaseService.searchUsers(term.toLowerCase());
             // simple dedupe and top-10 ranking by prefix/contains
             const rank = (u)=>{
-              const n=(u.username||'').toLowerCase(); const em=(u.email||'').toLowerCase(); const t=term.toLowerCase();
-              let s=0; if (n.startsWith(t)||em.startsWith(t)) s+=3; if (n.includes(t)||em.includes(t)) s+=2; return s;
+              const username=(u.username||'').toLowerCase();
+              const displayName=(u.displayName||'').toLowerCase();
+              const t=term.toLowerCase();
+              let s=0;
+              if (username.startsWith(t)||displayName.startsWith(t)) s+=3;
+              if (username.includes(t)||displayName.includes(t)) s+=2;
+              return s;
             };
             const opts = (users||[])
               .sort((a,b)=> rank(b)-rank(a))
@@ -4492,7 +4779,7 @@
 
       // Register service worker once (best-effort)
       if ('serviceWorker' in navigator){
-        const swPath = (location.pathname || '').includes('/liber-apps/') ? '/liber-apps/sw.js' : '/sw.js';
+        const swPath = (location.pathname || '').includes('/liber-apps/') ? '/liber-apps/sw.js?v=20260914r192-morning1' : '/sw.js';
         navigator.serviceWorker.register(swPath).catch(()=>{});
       }
       this._bindServiceWorkerCallActions();
@@ -4599,7 +4886,7 @@
               return;
             }
             e.preventDefault();
-            this.sendCurrent();
+            void this.sendCurrent().catch((e)=>this._showError(e?.message || 'Message could not be sent.'));
           }
         });
       }
@@ -4832,70 +5119,11 @@
     }
 
     async fixDuplicateConnections(){
-      try{
-        const byId = new Map();
-        const fields = ['participants', 'users', 'memberIds'];
-        for (const field of fields){
-          try{
-            const q = firebase.query(
-              firebase.collection(this.db,'chatConnections'),
-              firebase.where(field,'array-contains', this.currentUser.uid)
-            );
-            const s = await firebase.getDocs(q);
-            s.forEach(d=> byId.set(d.id, { id:d.id, ...d.data() }));
-          }catch(_){ }
-        }
-        // Include key-only docs that may not have participant arrays.
-        try{
-          const qAll = firebase.query(firebase.collection(this.db,'chatConnections'), firebase.orderBy('updatedAt','desc'), firebase.limit(400));
-          const sAll = await firebase.getDocs(qAll);
-          sAll.forEach(d=> byId.set(d.id, { id:d.id, ...d.data() }));
-        }catch(_){
-          try{
-            const sAll2 = await firebase.getDocs(firebase.collection(this.db,'chatConnections'));
-            sAll2.forEach(d=> byId.set(d.id, { id:d.id, ...d.data() }));
-          }catch(__){ }
-        }
-        const all = Array.from(byId.values())
-          .map(c=> ({ ...c, participants: this.getConnParticipants(c) }))
-          .filter(c=> Array.isArray(c.participants) && c.participants.includes(this.currentUser.uid));
-        // Group by stable key of participants
-        const groups = new Map();
-        for (const c of all){
-          const key = c.key || this.computeConnKey(c.participants||[]);
-          if (!groups.has(key)) groups.set(key, []);
-          groups.get(key).push(c);
-        }
-        let archived = 0;
-        for (const [key, conns] of groups.entries()){
-          if (conns.length <= 1) continue;
-          // Keep the newest; mark others archived → no message copying to respect rules
-          conns.sort((a,b)=> new Date(b.updatedAt||0) - new Date(a.updatedAt||0));
-          const keep = conns[0];
-          const rest = conns.slice(1);
-          for (const r of rest){
-            try{
-              await firebase.updateDoc(firebase.doc(this.db,'chatConnections', r.id),{
-                archived: true,
-                mergedInto: keep.id,
-                key: key,
-                updatedAt: new Date().toISOString()
-              });
-              archived++;
-            }catch(err){ console.warn('Archive duplicate failed', r.id, err); }
-          }
-          // Normalize keep doc fields and ensure key present
-          try{
-            await firebase.updateDoc(firebase.doc(this.db,'chatConnections', keep.id),{
-              key,
-              participants: keep.participants || [],
-              updatedAt: new Date().toISOString()
-            });
-          }catch(_){ }
-        }
-        alert(archived>0 ? `Archived ${archived} duplicate chats.` : 'No duplicates found.');
-        await this.loadConnections();
-      }catch(e){ console.error('Fix duplicates failed:', e); /* no alert */ }
+      // Room identity/membership repair is server-owned in R178. Browser-side
+      // key/merged/participant rewrites are intentionally denied by the clean
+      // rules, so do not issue doomed legacy queries or writes here.
+      await this.loadConnections();
+      alert('Secure Chat now keeps room identity synchronized automatically.');
     }
 
     refreshActionButton(){
@@ -5217,7 +5445,7 @@
         if (sendBtn){ sendBtn.click(); return; }
       }
       if ((input && input.value.trim().length) || hasQueuedAttachments){
-        this.sendCurrent();
+        void this.sendCurrent().catch((e)=>this._showError(e?.message || 'Message could not be sent.'));
       } else {
         // Toggle stable recording mode (audio <-> video)
         this._recordMode = this._recordMode === 'video' ? 'audio' : 'video';
@@ -5358,7 +5586,7 @@
     async promptNewConnection(){
       // Enter group selection mode
       this.isGroupMode = true;
-      this.groupSelection = new Map(); // uid -> {uid, username, email}
+      this.groupSelection = new Map(); // uid -> minimal public profile
       const panel = document.getElementById('group-builder');
       const chips = document.getElementById('group-selected');
       const createBtn = document.getElementById('create-group-btn');
@@ -5376,28 +5604,7 @@
           nameMap.set(this.currentUser.uid, myName);
           members.forEach(m=> nameMap.set(m.uid||m.id, this._displayName(m, m.uid||m.id||'')));
           const participantNames = participantUids.map(uid=> nameMap.get(uid) || uid);
-          const key = this.computeConnKey(participantUids);
-          let connId = await this.findConnectionByKey(key);
-          if (!connId){
-            try{
-              const stableRef = firebase.doc(this.db,'chatConnections', key);
-              await firebase.setDoc(stableRef,{
-                id: key,
-                key,
-                participants: participantUids,
-                participantUsernames: participantNames,
-                admins: [this.currentUser.uid],
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-                lastMessage:''
-              }, { merge:true });
-              connId = key;
-            }catch(errStable){
-              // If key already exists or race happened, resolve canonical id by key.
-              connId = await this.findConnectionByKey(key);
-              if (!connId) throw errStable;
-            }
-          }
+          const connId = await this.ensureConversationForParticipants(participantUids);
           this.isGroupMode = false;
           if (panel) panel.style.display='none';
           await this.loadConnections();
@@ -5432,7 +5639,8 @@
               if (peer) this._peerUidByConn.set(c.id, peer);
             }
           });
-          this.connections = temp;
+          this._allConnections = temp;
+          this.connections = this._displayConnectionRows(temp);
           if (this.activeConnection){
             const active = temp.find((c)=> c && c.id === this.activeConnection);
             if (active && typeof active.readBy === 'object'){
@@ -5443,67 +5651,24 @@
         } catch (_) {}
       }
       if (!usedPrefetchCache) try{
-        const fields = ['participants', 'users', 'memberIds'];
-        const byId = new Map();
-        for (const field of fields){
-          try{
-            const q = firebase.query(
-              firebase.collection(this.db,'chatConnections'),
-              firebase.where(field,'array-contains', this.currentUser.uid),
-              firebase.orderBy('updatedAt','desc')
-            );
-            const s = await firebase.getDocs(q);
-            s.forEach(d=> byId.set(d.id, { id: d.id, ...d.data() }));
-          }catch(_){
-            try{
-              const q2 = firebase.query(
-                firebase.collection(this.db,'chatConnections'),
-                firebase.where(field,'array-contains', this.currentUser.uid)
-              );
-              const s2 = await firebase.getDocs(q2);
-              s2.forEach(d=> byId.set(d.id, { id: d.id, ...d.data() }));
-            }catch(e2){
-              if (e2 && e2.code === 'permission-denied') permissionDenied = true;
-            }
-          }
-        }
-        // Key-only legacy docs fallback (no participants/users/memberIds arrays).
+        // R178 rules permit only canonical membership queries.  Do not fall
+        // back to legacy participant/key/global scans: those are intentionally
+        // denied and can never be used as an authorization source.
+        let snapshot;
         try{
-          let allSnap;
-          try{
-            const qAll = firebase.query(
-              firebase.collection(this.db,'chatConnections'),
-              firebase.orderBy('updatedAt','desc'),
-              firebase.limit(600)
-            );
-            allSnap = await firebase.getDocs(qAll);
-          }catch(_){
-            allSnap = await firebase.getDocs(firebase.collection(this.db,'chatConnections'));
-          }
-          allSnap.forEach(d=>{
-            const row = { id: d.id, ...d.data() };
-            const key = String(row.key || '');
-            if (!key) return;
-            const keyParts = key.split('|').filter(Boolean);
-            if (keyParts.includes(this.currentUser.uid)) byId.set(d.id, row);
-          });
-        }catch(_){ }
-        // Last-resort scan (handles transient index/network glitches on reopen).
-        if (byId.size === 0 && !permissionDenied){
-          try{
-            const anySnap = await firebase.getDocs(firebase.collection(this.db,'chatConnections'));
-            anySnap.forEach(d=>{
-              const row = { id: d.id, ...d.data() };
-              const parts = this.getConnParticipants(row || {});
-              const key = String(row.key || '');
-              if (parts.includes(this.currentUser.uid) || key.split('|').includes(this.currentUser.uid)){
-                byId.set(d.id, row);
-              }
-            });
-          }catch(_){ }
+          snapshot = await firebase.getDocs(firebase.query(
+            firebase.collection(this.db,'chatConnections'),
+            firebase.where('participantIds','array-contains', this.currentUser.uid),
+            firebase.orderBy('updatedAt','desc')
+          ));
+        }catch(_){
+          snapshot = await firebase.getDocs(firebase.query(
+            firebase.collection(this.db,'chatConnections'),
+            firebase.where('participantIds','array-contains', this.currentUser.uid)
+          ));
         }
         if (connSeq !== this._connLoadSeq) return;
-        const temp = Array.from(byId.values());
+        const temp = (snapshot.docs || []).map((d)=>({ id:d.id, ...(d.data() || {}) }));
         temp.forEach((c)=>{
           const fallbackParts = this.getConnParticipants(c);
           if (!Array.isArray(c.participants) && fallbackParts.length) c.participants = fallbackParts;
@@ -5513,7 +5678,8 @@
           }
         });
         temp.sort((a,b)=> new Date(b.updatedAt||0) - new Date(a.updatedAt||0));
-        this.connections = temp;
+        this._allConnections = temp;
+        this.connections = this._displayConnectionRows(temp);
         if (this.activeConnection){
           const active = temp.find((c)=> c && c.id === this.activeConnection);
           if (active && typeof active.readBy === 'object'){
@@ -5522,6 +5688,7 @@
         }
       } catch (e) {
         if (e && e.code === 'permission-denied') permissionDenied = true;
+        this._allConnections = [];
         this.connections = [];
       }
       if (connSeq !== this._connLoadSeq) return;
@@ -5705,19 +5872,22 @@
         try{
           if (connSeq !== this._connLoadSeq) return;
           const uidSet = new Set();
-        this.connections.forEach(c => (Array.isArray(c.participants)?c.participants:[]).forEach(u=>uidSet.add(u)));
+        this.connections.forEach(c => this.getConnParticipants(c).forEach(u=>uidSet.add(u)));
         const uids = Array.from(uidSet);
         // Create listeners
         uids.forEach(uid => {
           if (this.userUnsubs && this.userUnsubs.has(uid)) return;
           try{
-            const ref = firebase.doc(this.db, 'users', uid);
+            // Own account data remains private in users/{uid}; every peer label
+            // comes from the deliberately minimal public profile projection.
+            const collection = uid === this.currentUser?.uid ? 'users' : 'publicProfiles';
+            const ref = firebase.doc(this.db, collection, uid);
             const unsub = firebase.onSnapshot(ref, (snap)=>{
               if (!snap.exists()) return;
               const d = snap.data() || {};
               const existing = this.usernameCache.get(uid);
               const existingName = (existing && typeof existing === 'object') ? String(existing.username || '').trim() : String(existing || '').trim();
-              const nextName = String(d.username || '').trim();
+              const nextName = String(d.username || d.displayName || '').trim();
               // Do not overwrite stable labels with placeholders.
               const name = nextName || existingName || '';
               if (!name) return;
@@ -5737,7 +5907,7 @@
                       const id = li.getAttribute('data-id');
                       const c = this.connections.find(x => x.id === id);
                       if (!c) return;
-                      const parts = Array.isArray(c.participants)?c.participants:[];
+                      const parts = this.getConnParticipants(c);
                       const stored = Array.isArray(c.participantUsernames)?c.participantUsernames:[];
                       const names = parts.map((p,i)=> getCachedName(p, stored[i] || 'User'));
                       const others = names.filter(n => String(n ?? '').toLowerCase() !== myNameLower);
@@ -5771,12 +5941,14 @@
     async setActive(connId, displayName){
       const setSeq = (this._setActiveSeq || 0) + 1;
       this._setActiveSeq = setSeq;
+      // Invalidate pending decrypt/paint work before resolving another room.
+      this._msgLoadSeq = (this._msgLoadSeq || 0) + 1;
       this._voiceHydrateSession = (this._voiceHydrateSession || 0) + 1;
       this._voiceHydrateQueue = [];
-      // Always resolve to one canonical chat doc for this participant key, so
-      // chat search / sidebar / personal-space popup all open the same thread.
-      const shouldResolve = String(connId || '').includes('|');
-      const resolvedConnId = shouldResolve ? await this.resolveCanonicalConnectionId(connId) : connId;
+      // Resolve every non-project room, not only deep links that already use
+      // a pipe-delimited id. Legacy random ids were the source of split,
+      // seemingly one-way conversations.
+      const resolvedConnId = connId ? await this.resolveCanonicalConnectionId(connId) : connId;
       if (setSeq !== this._setActiveSeq) return;
       const prevConn = this.activeConnection;
       if (prevConn && prevConn !== (resolvedConnId || connId)){
@@ -5813,6 +5985,7 @@
       if (topTitle) topTitle.textContent = displayName;
       try{
         const peerUid = await this.getPeerUidForConn(this.activeConnection);
+        if (setSeq !== this._setActiveSeq || this.activeConnection !== (resolvedConnId || connId)) return;
         const isPersonal = !!peerUid;
         const titleEl = document.getElementById('active-connection-name');
         const topTitleEl = document.getElementById('chat-top-title');
@@ -5845,7 +6018,7 @@
         if (box){
           box.dataset.renderedConnId = '';
           this._lastDayByConn?.delete(resolvedConnId || connId);
-          box.innerHTML = '<div style="opacity:.75;padding:10px 2px">Loading messages…</div>';
+          box.innerHTML = '<div data-chat-loading="true" role="status" style="opacity:.75;padding:10px 2px">Loading messages…</div>';
         }
       }catch(_){ }
       this.loadMessages().catch(()=>{});
@@ -5890,9 +6063,7 @@
           if (seqNow !== this._setActiveSeq || connNow !== this.activeConnection) return;
           if (snap.exists()){
             const data = snap.data();
-            const parts = Array.isArray(data.participants)
-              ? data.participants
-              : (Array.isArray(data.users) ? data.users : (Array.isArray(data.memberIds) ? data.memberIds : []));
+            const parts = this.getConnParticipants(data || {});
             const header = document.querySelector('.chat-header');
             const existing = document.getElementById('chat-access-banner');
             if (!parts.includes(this.currentUser.uid)){
@@ -5906,13 +6077,7 @@
                   try{
                     const participants = parts.slice(); const names = (data.participantUsernames||[]).slice();
                     if (!participants.includes(this.currentUser.uid)){ participants.push(this.currentUser.uid); names.push(this._displayName(this.me || {}, this.currentUser.uid)); }
-                    const newKey = this.computeConnKey(participants);
-                    let newId = await this.findConnectionByKey(newKey);
-                    if (!newId){
-                      const ref = firebase.doc(this.db,'chatConnections', newKey);
-                      await firebase.setDoc(ref,{ id:newKey, key:newKey, participants, participantUsernames:names, admins:[this.currentUser.uid], createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(), lastMessage:'' });
-                      newId = newKey;
-                    }
+                    const newId = await this.ensureConversationForParticipants(participants);
                     await this.loadConnections(); this.setActive(newId);
                   }catch(_){ }
                 };
@@ -5982,6 +6147,9 @@
       const readMarkerMs = this.getEffectiveReadMarkerForConn(activeConnId, activeConnData);
       this._msgLoadSeq = (this._msgLoadSeq || 0) + 1;
       const loadSeq = this._msgLoadSeq;
+      const loadUid = this.currentUser?.uid;
+      const isCurrentLoad = ()=> loadSeq === this._msgLoadSeq && this.activeConnection === activeConnId && this.currentUser?.uid === loadUid;
+      const clearLoading = ()=> { if (isCurrentLoad()) box.querySelectorAll('[data-chat-loading]').forEach(el=>el.remove()); };
       this._attachmentPreviewQueue = [];
       let loadFinished = false;
       let loadWatchdog = null;
@@ -6174,7 +6342,7 @@
               );
             }
             const s2 = await firebase.getDocs(q2);
-            return (s2.docs || []).map((d)=> ({ id: d.id, data: d.data() || {}, sourceConnId: cid }));
+            return (s2.docs || []).filter((d)=>this.isRenderableMessageSnapshot(d)).map((d)=> ({ id: d.id, data: d.data() || {}, sourceConnId: cid }));
           }catch(e){
             if (e?.code === 'permission-denied') return [];
             return [];
@@ -6185,19 +6353,20 @@
         let currentRenderOneForLoadMore = null;
         const handleSnap = async (snap, fromLive = false)=>{
           try{
-            if (loadSeq !== this._msgLoadSeq || this.activeConnection !== activeConnId) return;
+            if (!isCurrentLoad()) return;
             const suppressUntil = Number(this._suppressLivePatchUntilByConn.get(activeConnId) || 0);
             if (fromLive && Date.now() < suppressUntil){
               return;
             }
             const renderedConnId = String(box.dataset.renderedConnId || '');
-            const docsPrimary = (snap.docs || []).map((d)=> ({ id: d.id, data: d.data() || {}, sourceConnId: activeConnId }));
+            const docsPrimary = (snap.docs || []).filter((d)=>this.isRenderableMessageSnapshot(d)).map((d)=> ({ id: d.id, data: d.data() || {}, sourceConnId: activeConnId }));
+            this.r183QueueDeliveryRecovery?.(docsPrimary, activeConnId);
             const extraIds = (relatedConnIds || []).filter((cid)=> cid && cid !== activeConnId);
             if (renderedConnId === activeConnId && extraIds.length === 0){
               const haveIds = new Set([...box.querySelectorAll('[data-msg-id]')].map(el=> String(el.getAttribute('data-msg-id') || '')));
               const newDocs = docsPrimary.filter((d)=> !haveIds.has(getDocKey(d, activeConnId)) && !haveIds.has(String(d.id || '')));
               if (newDocs.length === 0){
-                loadFinished = true;
+                clearLoading(); loadFinished = true;
                 if (loadWatchdog){ clearTimeout(loadWatchdog); loadWatchdog = null; }
                 if (hardGuardTimer){ clearTimeout(hardGuardTimer); hardGuardTimer = null; }
                 updateBottomUi();
@@ -6205,28 +6374,33 @@
               }
               let lastRenderedDay = this._lastDayByConn.get(activeConnId) || '';
               const renderOneAppend = async (d, sourceConnId = activeConnId, opts = {})=>{
-                if (loadSeq !== this._msgLoadSeq || this.activeConnection !== activeConnId) return;
+                if (!isCurrentLoad()) return;
                 const m=(typeof d.data === 'function' ? d.data() : d.data) || {};
-                const aesKey = await getKeyForConn(sourceConnId);
                 let text='';
-                if (typeof m.text === 'string' && !m.cipher){ text = m.text; } else {
+                m._r183DecryptionFailed = false;
+                if (this.isMalformedV4Message(m)){ m._r183DecryptionFailed = true; text = this.getSecureMessageFailureText(); }
+                else if (typeof m.text === 'string' && !m.cipher){ text = m.text; } else {
                   const secureVersion = m.cryptoVersion === 'liber.secure-chat.ecdh-p256.v2'
-                    || m.cryptoVersion === 'liber.secure-chat.group-aes-gcm.v1';
+                    || m.cryptoVersion === 'liber.secure-chat.group-aes-gcm.v1'
+                    || this.isDeviceEnvelopeMessage(m);
                   if (secureVersion){
-                    try { const secureKey = await this.getMessageDecryptionKeyForConn(m, sourceConnId); text = await chatCrypto.decryptWithKey(m.cipher, secureKey); }
-                    catch(_){ text='[unable to decrypt]'; }
-                  } else try{ text = await chatCrypto.decryptWithKey(m.cipher, aesKey); }catch(_){
-                    let ok = false;
-                    try{ const candidates = await this.getFallbackKeyCandidatesForConn(sourceConnId);
-                      for (const k of candidates){ try{ text = await chatCrypto.decryptWithKey(m.cipher, k); ok = true; break; }catch(_){ } }
-                    }catch(_){ }
-                    if (!ok){ try { const secureKey = await this.getMessageDecryptionKeyForConn(m, sourceConnId); text = await chatCrypto.decryptWithKey(m.cipher, secureKey);} catch(_){ text='[unable to decrypt]'; } }
+                    try { text = await this.decryptSecureMessageText(m, sourceConnId); }
+                    catch(error){
+                      m._r183DecryptionFailed = true;
+                      if (error?.code === 'liber/chat-device-not-in-envelope') this.r183WatchMissingEnvelope?.(m,sourceConnId).catch(()=>{});
+                      text=this.getSecureMessageFailureText(error);
+                    }
+                  } else {
+                    try{ text = await this.decryptLegacyCompatibleMessageText(m, sourceConnId); }
+                    catch(error){ m._r183DecryptionFailed = true; text=this.getSecureMessageFailureText(error); }
                   }
                 }
+                if (!isCurrentLoad()) return;
                 const el = document.createElement('div');
                 el.className='message '+(this.isSelfMessage(m)?'self':'other');
                 const domMsgId = this.buildMsgDomId(sourceConnId, d.id || m.id || '');
                 el.dataset.msgId = domMsgId;
+                el.dataset.decryptionFailed = m._r183DecryptionFailed ? '1' : '0';
                 const msgTs = this.getMessageTimestampMs(m);
                 el.dataset.msgTs = String(msgTs || 0);
                 if (!this.isSelfMessage(m) && msgTs > readMarkerMs) el.dataset.unread = '1';
@@ -6323,7 +6497,7 @@
               }
               updateBottomUi();
               this.applyNewMessagesSeparator(box);
-              loadFinished = true;
+              clearLoading(); loadFinished = true;
               if (loadWatchdog){ clearTimeout(loadWatchdog); loadWatchdog = null; }
               if (hardGuardTimer){ clearTimeout(hardGuardTimer); hardGuardTimer = null; }
               return;
@@ -6359,7 +6533,7 @@
             const sigBase = [...docs].sort((a,b)=> String(a.sourceConnId+':'+a.id).localeCompare(String(b.sourceConnId+':'+b.id))).map(d=> `${d.sourceConnId}:${d.id}`).join('|');
             const sig = `${activeConnId}::${sigBase}`;
             if (this._lastRenderSigByConn.get(activeConnId) === sig && renderedConnId === activeConnId){
-              loadFinished = true;
+              clearLoading(); loadFinished = true;
               if (loadWatchdog){ clearTimeout(loadWatchdog); loadWatchdog = null; }
               if (hardGuardTimer){ clearTimeout(hardGuardTimer); hardGuardTimer = null; }
               updateBottomUi();
@@ -6382,37 +6556,40 @@
               lastRenderedDay = '';
             }
             const decryptMessageText = async (m, cid)=>{
+              m._r183DecryptionFailed = false;
+              if (this.isMalformedV4Message(m)) { m._r183DecryptionFailed = true; return this.getSecureMessageFailureText(); }
               if (typeof m.text === 'string' && !m.cipher) return m.text;
               const secureVersion = m.cryptoVersion === 'liber.secure-chat.ecdh-p256.v2'
-                || m.cryptoVersion === 'liber.secure-chat.group-aes-gcm.v1';
+                || m.cryptoVersion === 'liber.secure-chat.group-aes-gcm.v1'
+                || this.isDeviceEnvelopeMessage(m);
               if (secureVersion){
-                try{ const secureKey = await this.getMessageDecryptionKeyForConn(m, cid); return await chatCrypto.decryptWithKey(m.cipher, secureKey); }
-                catch(_){ return '[unable to decrypt]'; }
+                try{ return await this.decryptSecureMessageText(m, cid); }
+                catch(error){
+                  m._r183DecryptionFailed = true;
+                  if (error?.code === 'liber/chat-device-not-in-envelope') this.r183WatchMissingEnvelope?.(m,cid).catch(()=>{});
+                  return this.getSecureMessageFailureText(error);
+                }
               }
-              const aesKey = await getKeyForConn(cid);
-              try{ return await chatCrypto.decryptWithKey(m.cipher, aesKey); }catch(_){}
-              try{
-                const candidates = await this.getFallbackKeyCandidatesForConn(cid);
-                for (const k of candidates){ try{ return await chatCrypto.decryptWithKey(m.cipher, k); }catch(_){ } }
-              }catch(_){}
-              try{ const secureKey = await this.getMessageDecryptionKeyForConn(m, cid); return await chatCrypto.decryptWithKey(m.cipher, secureKey); }catch(_){}
-              return '[unable to decrypt]';
+              try{ return await this.decryptLegacyCompatibleMessageText(m, cid); }
+              catch(error){ m._r183DecryptionFailed = true; return this.getSecureMessageFailureText(error); }
             };
             const renderOne = async (d, sourceConnId = activeConnId, opts = {})=>{
               const forceInsertBefore = !!opts.forceInsertBefore;
               const forceAppend = !!opts.forceAppend;
               const replaceEl = opts.replaceEl || null;
               const preDecryptedText = opts.preDecryptedText;
-              if (loadSeq !== this._msgLoadSeq || this.activeConnection !== activeConnId) return;
+              if (!isCurrentLoad()) return;
               const m=(typeof d.data === 'function' ? d.data() : d.data) || {};
               let text = preDecryptedText;
               if (text === undefined){
                 text = await decryptMessageText(m, sourceConnId);
               }
+              if (!isCurrentLoad()) return;
               const el = document.createElement('div');
               el.className='message '+(this.isSelfMessage(m)?'self':'other');
               const domMsgId = this.buildMsgDomId(sourceConnId, d.id || m.id || '');
               el.dataset.msgId = domMsgId;
+              el.dataset.decryptionFailed = m._r183DecryptionFailed ? '1' : '0';
               const msgTs = this.getMessageTimestampMs(m);
               el.dataset.msgTs = String(msgTs || 0);
               if (!this.isSelfMessage(m) && msgTs > readMarkerMs) el.dataset.unread = '1';
@@ -6600,7 +6777,7 @@
               this._lastDayByConn.set(activeConnId, newestDayNow || lastDayFromChanges);
             }
             if (!didMutate){
-              loadFinished = true;
+              clearLoading(); loadFinished = true;
               if (loadWatchdog){ clearTimeout(loadWatchdog); loadWatchdog = null; }
               if (hardGuardTimer){ clearTimeout(hardGuardTimer); hardGuardTimer = null; }
               return;
@@ -6608,7 +6785,7 @@
             this._lastDocIdsByConn.set(activeConnId, docs.map((x)=> getDocKey(x, activeConnId)));
             updateBottomUi();
             this.applyNewMessagesSeparator(box);
-            loadFinished = true;
+            clearLoading(); loadFinished = true;
             if (loadWatchdog){ clearTimeout(loadWatchdog); loadWatchdog = null; }
             if (hardGuardTimer){ clearTimeout(hardGuardTimer); hardGuardTimer = null; }
             return;
@@ -6639,6 +6816,7 @@
             topSep.textContent = lastRenderedDay;
             renderTarget.appendChild(topSep);
           }
+          if (!isCurrentLoad()) return;
           if (!appendOnly && renderTarget !== box){
             box.innerHTML = '';
             while (renderTarget.firstChild){
@@ -6667,11 +6845,12 @@
           box.dataset.renderedConnId = activeConnId;
           updateBottomUi();
           this.applyNewMessagesSeparator(box);
-          loadFinished = true;
+          clearLoading(); loadFinished = true;
           if (loadWatchdog){ clearTimeout(loadWatchdog); loadWatchdog = null; }
           if (hardGuardTimer){ clearTimeout(hardGuardTimer); hardGuardTimer = null; }
-          }catch(_){
-            loadFinished = true;
+          }catch(error){
+            if (!isCurrentLoad()) return;
+            console.error('[CHAT] Message rendering failed', error?.code || error?.name || 'render-error');
           }
         };
         let liveRenderInFlight = false;
@@ -6741,9 +6920,9 @@
         loadWatchdog = setTimeout(async ()=>{
           try{
             if (loadFinished) return;
-            if (loadSeq !== this._msgLoadSeq || this.activeConnection !== activeConnId) return;
+            if (!isCurrentLoad()) return;
             // Skip if messages already rendered – avoids redundant reload when decrypt is slow.
-            if (box.querySelector('.message')){ loadFinished = true; if (loadWatchdog){ clearTimeout(loadWatchdog); loadWatchdog = null; } return; }
+            if (box.querySelector('.message')){ clearLoading(); loadFinished = true; if (loadWatchdog){ clearTimeout(loadWatchdog); loadWatchdog = null; } return; }
             const sKick = await fetchLatestSnapWithTimeout(8000);
             await handleSnap(sKick, false);
           }catch(_){ }
@@ -6752,7 +6931,7 @@
         hardGuardTimer = setTimeout(async ()=>{
           try{
             if (loadFinished) return;
-            if (loadSeq !== this._msgLoadSeq || this.activeConnection !== activeConnId) return;
+            if (!isCurrentLoad()) return;
             if (!/Loading messages/i.test(String(box.textContent || ''))) return;
             const sHard = await fetchLatestSnapWithTimeout(8000);
             await handleSnap(sHard, false);
@@ -6762,7 +6941,7 @@
               box.dataset.renderedConnId = activeConnId;
               updateBottomUi();
               this.applyNewMessagesSeparator(box);
-              loadFinished = true;
+              clearLoading(); loadFinished = true;
             } else if (!loadFinished && /Loading messages/i.test(String(box.textContent || ''))){
               box.innerHTML = '<button id="chat-load-retry-btn" class="btn secondary" style="margin:10px 2px">Still loading... Tap to retry</button>';
               box.dataset.renderedConnId = '';
@@ -6783,42 +6962,30 @@
             firebase.limit(500)
           );
           const snap = await firebase.getDocs(q);
-          if (loadSeq !== this._msgLoadSeq || this.activeConnection !== activeConnId) return;
+          if (!isCurrentLoad()) return;
           box.innerHTML='';
           let lastRenderedDay2 = '';
           let aesKey = await this.getFallbackKey();
-          const fallbackDocs = (snap.docs || []).slice().reverse();
+          const fallbackDocs = (snap.docs || []).filter((d)=>this.isRenderableMessageSnapshot(d)).slice().reverse();
           for (let i = 0; i < fallbackDocs.length; i++){
             const d = fallbackDocs[i];
-            if (loadSeq !== this._msgLoadSeq || this.activeConnection !== activeConnId) return;
+            if (!isCurrentLoad()) return;
             const m=d.data();
             let text='';
-            if (typeof m.text === 'string' && !m.cipher){
+            if (this.isMalformedV4Message(m)){
+              text = this.getSecureMessageFailureText();
+            } else if (typeof m.text === 'string' && !m.cipher){
               text = m.text;
             } else {
               const secureVersion = m.cryptoVersion === 'liber.secure-chat.ecdh-p256.v2'
-                || m.cryptoVersion === 'liber.secure-chat.group-aes-gcm.v1';
+                || m.cryptoVersion === 'liber.secure-chat.group-aes-gcm.v1'
+                || this.isDeviceEnvelopeMessage(m);
               if (secureVersion){
-                try { const secureKey = await this.getMessageDecryptionKeyForConn(m, activeConnId); text = await chatCrypto.decryptWithKey(m.cipher, secureKey); }
-                catch(_){ text='[unable to decrypt]'; }
-              } else try{
-                text = await chatCrypto.decryptWithKey(m.cipher, aesKey);
-              }catch(_){
-                let ok = false;
-                try{
-                  const candidates = await this.getFallbackKeyCandidatesForConn(activeConnId);
-                  for (const k of candidates){
-                    try{
-                      text = await chatCrypto.decryptWithKey(m.cipher, k);
-                      ok = true;
-                      break;
-                    }catch(_){ }
-                  }
-                }catch(_){ }
-                if (!ok){
-                  try { const secureKey = await this.getMessageDecryptionKeyForConn(m, activeConnId); text = await chatCrypto.decryptWithKey(m.cipher, secureKey);}
-                  catch(_){ text='[unable to decrypt]'; }
-                }
+                try { text = await this.decryptSecureMessageText(m, activeConnId); }
+                catch(error){ text=this.getSecureMessageFailureText(error); }
+              } else {
+                try{ text = await this.decryptLegacyCompatibleMessageText(m, activeConnId); }
+                catch(error){ text=this.getSecureMessageFailureText(error); }
               }
             }
             const el = document.createElement('div');
@@ -6957,32 +7124,34 @@
         }
       }
     }
-    // Legacy helper kept for compatibility
+    // R178 does not expose legacy merged-room indexes to clients.
     async getArchivedConnIds(connId){
-      const q = firebase.query(firebase.collection(this.db,'chatConnections'), firebase.where('mergedInto','==', connId));
-      const s = await firebase.getDocs(q);
-      return s.docs.map(d=> d.id);
+      return [];
     }
 
     async getRelatedConnIds(connId){
-      const out = new Set([connId]);
-      try{
-        // merged chains into current
-        const qM = firebase.query(firebase.collection(this.db,'chatConnections'), firebase.where('mergedInto','==', connId));
-        const sM = await firebase.getDocs(qM);
-        sM.forEach(d=> out.add(d.id));
-      }catch(_){ }
-      try{
-        // same user set by key (covers duplicate docs not yet archived)
-        const cur = await firebase.getDoc(firebase.doc(this.db,'chatConnections', connId));
-        const key = cur.exists() ? (cur.data().key || this.computeConnKey(this.getConnParticipants(cur.data()))) : '';
-        if (key){
-          const qK = firebase.query(firebase.collection(this.db,'chatConnections'), firebase.where('key','==', key));
-          const sK = await firebase.getDocs(qK);
-          sK.forEach(d=> out.add(d.id));
-        }
-      }catch(_){ }
-      return Array.from(out);
+      const activeId = String(connId || '').trim();
+      if (!activeId) return [];
+      let active = this._connectionRowById(activeId);
+      if (!active){
+        try{
+          const snap = await firebase.getDoc(firebase.doc(this.db, 'chatConnections', activeId));
+          if (snap.exists()) active = { id:snap.id, ...(snap.data() || {}) };
+        }catch(_){ }
+      }
+      const threadKey = this._threadKeyForConnection(active);
+      if (!threadKey) return [activeId];
+      // The raw rows were loaded through the R178 participantIds query, so
+      // every row below is already authorized for this user. We link only an
+      // exact canonical participant set and keep the original source id for
+      // decryption; this restores history from old duplicate docs without any
+      // legacy global/key query or cross-room data exposure.
+      const related = this._allConnectionRows()
+        .filter((row)=> row && row.id && this._threadKeyForConnection(row) === threadKey)
+        .map((row)=> String(row.id))
+        .filter((id, index, ids)=> id && ids.indexOf(id) === index)
+        .sort((a,b)=> a === threadKey ? -1 : (b === threadKey ? 1 : a.localeCompare(b)));
+      return [activeId, ...related.filter((id)=> id !== activeId)];
     }
 
     renderText(t){ return t.replace(/</g,'&lt;'); }
@@ -7668,6 +7837,49 @@
       return { ok: false, reason: `${peerName} disallowed messages with unconnected users` };
     }
 
+    async sendConnectionRequestIntro(connId, text){
+      let commitStarted = false;
+      try{
+      const cid = String(connId || '').trim();
+      const intro = typeof text === 'string' ? text.trim() : '';
+      const service = window.firebaseService;
+      const auth = service?.auth;
+      const authUser = auth?.currentUser;
+      const uid = String(this.currentUser?.uid || '');
+      const revision = service?._authStateRevision;
+      const assertCurrentAuth = () => {
+        if (!uid || !this.db || !auth || !authUser
+            || window.firebaseService !== service || service.auth !== auth
+            || (typeof revision === 'number' && service._authStateRevision !== revision)
+            || auth.currentUser !== authUser
+            || auth.currentUser?.uid !== uid || this.currentUser?.uid !== uid) {
+          throw this._identityError('liber/chat-intro-account-changed', 'The signed-in account changed. Retry the introduction from your current profile.');
+        }
+      };
+      assertCurrentAuth();
+      if (!cid || !intro) throw this._identityError('liber/chat-intro-empty', 'Write an introduction before sending.');
+      const conn = await this._getLiveConnectionForCrypto(cid);
+      assertCurrentAuth();
+      if (!Array.isArray(conn?.participantIds) || conn.participantIds.length !== 2
+          || !conn.participantIds.includes(uid) || conn.projectId || conn.type === 'project') {
+        throw this._identityError('liber/chat-intro-room-invalid', 'Choose your direct conversation before sending an introduction.');
+      }
+      const can = await this.canSendToConnection(cid);
+      assertCurrentAuth();
+      if (!can.ok) throw this._identityError('liber/chat-intro-send-denied', can.reason || 'This introduction cannot be sent.');
+      if (this.activeConnection !== cid) await this.setActive(cid);
+      assertCurrentAuth();
+      const saved = await this._saveV4TextMessage(cid, {text:intro,systemType:'connection_request_intro'}, {
+        allowPendingLegacyBridge:true, assertCurrentAuth, onCommitStart:() => { commitStarted = true; }
+      });
+      return {ok:true,connId:cid,messageId:saved.id,cryptoVersion:saved.cryptoVersion};
+      }catch(error){
+        const failure = error instanceof Error ? error : new Error(String(error || 'Introduction failed.'));
+        failure.introSendMayHaveCommitted = commitStarted;
+        throw failure;
+      }
+    }
+
     async sendCurrent(){
       const input = document.getElementById('message-input');
       const text = input.value.trim();
@@ -7694,6 +7906,17 @@
       this.clearPendingAttachments();
       this.publishTypingState(false, { force: true }).catch(()=>{});
       try{
+        const liveConnection = await this._getLiveConnectionForCrypto(this.activeConnection);
+        if (this._isV4RequiredRoom(liveConnection) || this._isPendingDirectBridgeRoom(liveConnection)) {
+          const attachments = queuedFiles.map(file => ({ blob:file, fileName:file.name }));
+          for (const reused of queuedReused) attachments.push({
+            fileUrl:reused.fileUrl, fileName:reused.fileName, sourceMessage:reused.message,
+            attachmentSourceConnId:this.resolveAttachmentSourceConnId(reused.message || {}, this.activeConnection)
+          });
+          if (text || attachments.length) await this._saveV4TextMessage(this.activeConnection, { text, attachments, replyTo:replyToSend }, { allowPendingLegacyBridge:true });
+          for (const sharedAsset of queuedShared) await this._saveV4TextMessage(this.activeConnection, { text:'[shared]', sharedAsset, replyTo:replyToSend }, { allowPendingLegacyBridge:true });
+          return true;
+        }
         const mediaRank = (it)=> (this.isImageFilename(it.fileName) ? 0 : (this.isVideoFilename(it.fileName) ? 1 : (this.isAudioFilename(it.fileName) ? 2 : 3)));
         const shouldCombine = (queuedFiles.length + queuedReused.length) > 1 || ((queuedFiles.length + queuedReused.length) >= 1 && !!text.trim());
         if (shouldCombine && (queuedFiles.length || queuedReused.length)){
@@ -7758,8 +7981,13 @@
         if (queuedShared.length) this.queueRemoteSharedAssets(queuedShared.map((a)=> ({ sharedAsset: a })));
         if (queuedReused.length) this._pendingReusedAttachments = (this._pendingReusedAttachments || []).concat(queuedReused);
         this.publishTypingState(!!text, { force: true }).catch(()=>{});
-        throw e;
+        this._showError(e?.message || 'Message could not be sent.');
+        if (/alignment|room-device|secure membership/i.test(String(e?.code || '') + ' ' + String(e?.message || ''))) {
+          this.setIdentityEnrollmentBanner('Secure Chat is securing this browser for new conversations. Existing chats remain available.');
+        }
+        return false;
       }
+      return true;
     }
 
     buildSharePayload(rawText, fileUrl, fileName, sourceConnId = this.activeConnection, attachmentKeySalt = '', sourceMessage = null, sourceSenderName = ''){
@@ -7870,8 +8098,16 @@
       try { return JSON.parse(JSON.stringify(val)); } catch(_){ return null; }
     }
 
-    async saveMessageToConnection(connId, { text, fileUrl, fileName, sharedAsset, media, attachmentSourceConnId, attachmentKeySalt, attachmentCryptoVersion, attachmentCryptoEpoch, isVideoRecording, isVoiceRecording, isShared, sharedFromConnId, sharedFromMessageId, sharedOriginalAuthorUid, sharedOriginalAuthorName }){
-      const aesKey = await this.getEncryptionKeyForConn(connId);
+    async saveMessageToConnection(connId, { text, fileUrl, fileName, sharedAsset, media, attachments, sourceMessage, attachmentSourceConnId, attachmentKeySalt, attachmentCryptoVersion, attachmentCryptoEpoch, isVideoRecording, isVoiceRecording, isShared, sharedFromConnId, sharedFromMessageId, sharedOriginalAuthorUid, sharedOriginalAuthorName }){
+      const payload = { text, fileUrl, fileName, sharedAsset, media, attachments, sourceMessage, attachmentSourceConnId, attachmentKeySalt, attachmentCryptoVersion, attachmentCryptoEpoch, isVideoRecording, isVoiceRecording, isShared, sharedFromConnId, sharedFromMessageId, sharedOriginalAuthorUid, sharedOriginalAuthorName };
+      const liveConnection = await this._getLiveConnectionForCrypto(connId);
+      if (this._isV4RequiredRoom(liveConnection)) {
+        return this._saveV4TextMessage(connId, payload);
+      }
+      if (this._isPendingDirectBridgeRoom(liveConnection) && this._isV4MessagePayload(payload)) {
+        return this._saveV4TextMessage(connId, payload, { allowPendingLegacyBridge:true });
+      }
+      const aesKey = await this.getEncryptionKeyForConn(connId, { forWrite:true });
       const cryptoMeta = this.getEncryptionMetadataForConn(connId);
       const cipher = await chatCrypto.encryptWithKey(text, aesKey);
       const mediaArr = Array.isArray(media) && media.length ? this.toPlainObject(media) : null;
@@ -7964,39 +8200,8 @@
             const s = await firebase.getDocs(q);
             s.forEach((d)=> pushTarget({ id: d.id, ...(d.data() || {}) }));
           };
-          await pull(firebase.query(firebase.collection(this.db,'chatConnections'), firebase.where('participants','array-contains', meUid), firebase.limit(220)));
-          try{ await pull(firebase.query(firebase.collection(this.db,'chatConnections'), firebase.where('users','array-contains', meUid), firebase.limit(220))); }catch(_){ }
-          try{ await pull(firebase.query(firebase.collection(this.db,'chatConnections'), firebase.where('memberIds','array-contains', meUid), firebase.limit(220))); }catch(_){ }
-          // Legacy/key-only docs fallback for chats missing participant arrays.
-          try{
-            let allSnap;
-            try{
-              allSnap = await firebase.getDocs(firebase.query(
-                firebase.collection(this.db,'chatConnections'),
-                firebase.orderBy('updatedAt','desc'),
-                firebase.limit(700)
-              ));
-            }catch(_){
-              allSnap = await firebase.getDocs(firebase.collection(this.db,'chatConnections'));
-            }
-            allSnap.forEach((d)=>{
-              const row = { id: d.id, ...(d.data() || {}) };
-              const keyParts = String(row.key || '').split('|').filter(Boolean);
-              if (keyParts.includes(meUid)) pushTarget(row);
-            });
-          }catch(_){ }
-          // Last resort scan to catch transient query/index misses.
-          if (!rawTargets.length){
-            try{
-              const any = await firebase.getDocs(firebase.collection(this.db,'chatConnections'));
-              any.forEach((d)=>{
-                const row = { id: d.id, ...(d.data() || {}) };
-                const parts = this.getConnParticipants(row || {});
-                const keyParts = String(row.key || '').split('|').filter(Boolean);
-                if (parts.includes(meUid) || keyParts.includes(meUid)) pushTarget(row);
-              });
-            }catch(_){ }
-          }
+          // Only the canonical membership index is permitted by R178 rules.
+          await pull(firebase.query(firebase.collection(this.db,'chatConnections'), firebase.where('participantIds','array-contains', meUid), firebase.limit(220)));
         }
       }catch(_){ }
       const targetMap = new Map();
@@ -8179,6 +8384,7 @@
         const ref = firebase.doc(this.db,'chatConnections', connId);
         this._typingUnsub = firebase.onSnapshot(ref, (snap)=>{
           const data = snap.exists() ? (snap.data() || {}) : {};
+          this.r183ObserveDeliveryRoom?.(connId,data);
           this._typingByUid = (data && data.typing && typeof data.typing === 'object') ? data.typing : {};
           this.renderTypingIndicator();
         }, ()=>{});
@@ -8187,6 +8393,7 @@
     }
 
     stopTypingListener(){
+      this.r183StopDeliveryRecovery?.();
       try{ if (this._typingUnsub){ this._typingUnsub(); this._typingUnsub = null; } }catch(_){ }
       if (this._typingTicker){ clearInterval(this._typingTicker); this._typingTicker = null; }
       this._typingByUid = {};
@@ -8203,7 +8410,7 @@
       if (!files || !files.length || !targetConnId || !this.storage) return result;
       try{
         const salts = await this.getConnSaltForConn(targetConnId);
-        const aesKey = await this.getEncryptionKeyForConn(targetConnId);
+        const aesKey = await this.getEncryptionKeyForConn(targetConnId, { forWrite:true });
         const cryptoMeta = this.getEncryptionMetadataForConn(targetConnId);
         const salt = String(salts?.stableSalt || targetConnId || '');
         for (const f of files){
@@ -8253,13 +8460,7 @@
       try{
         const cRef = firebase.doc(this.db, 'chatConnections', targetConnId);
         const cSnap = await firebase.getDoc(cRef);
-        const participants = cSnap.exists()
-          ? (Array.isArray(cSnap.data().participants)
-              ? cSnap.data().participants
-              : (Array.isArray(cSnap.data().users)
-                  ? cSnap.data().users
-                  : (Array.isArray(cSnap.data().memberIds) ? cSnap.data().memberIds : [])))
-          : [];
+        const participants = cSnap.exists() ? this.getConnParticipants(cSnap.data() || {}) : [];
         if (!participants.includes(this.currentUser.uid)) {
           if (!silent) alert('You are not a participant of this chat. Please reopen the chat and try again.');
           return result;
@@ -8277,8 +8478,18 @@
       for (const f of files){
         try {
           console.log('Sending file:', f.name);
+          const liveConnection = await this._getLiveConnectionForCrypto(targetConnId);
+          if (this._isV4RequiredRoom(liveConnection) || this._isPendingDirectBridgeRoom(liveConnection)) {
+            const saved = await this._saveV4TextMessage(targetConnId, {
+              text:`[file] ${f.name}`, attachments:[{blob:f,fileName:f.name}],
+              replyTo:(replyTo && result.sentCount === 0) ? replyTo : undefined
+            }, { allowPendingLegacyBridge:true });
+            for (const item of saved.attachments || []) this.pushRecentAttachment({ fileUrl:item.fileUrl,fileName:item.fileName,sentAt:new Date().toISOString() });
+            result.sentCount++;
+            continue;
+          }
           const salts = await this.getConnSaltForConn(targetConnId);
-          const aesKey = await this.getEncryptionKeyForConn(targetConnId);
+          const aesKey = await this.getEncryptionKeyForConn(targetConnId, { forWrite:true });
           // Read file as base64 via FileReader to avoid large argument spreads
           const base64 = await new Promise((resolve, reject)=>{
             try{
@@ -8392,6 +8603,9 @@
       }catch(_){ return { packs: [] }; }
     }
     async getStickerDecryptionKey(item){
+      if (item?.cryptoVersion === 'liber.secure-chat.message-envelope.v4') {
+        throw this._identityError('liber/chat-v4-attachment-unsupported', 'Device-aligned Secure Chat attachments are not supported by this build.');
+      }
       if (item?.cryptoVersion === 'liber.secure-chat.ecdh-p256.v2'
         || item?.cryptoVersion === 'liber.secure-chat.group-aes-gcm.v1') {
         return this.getMessageDecryptionKeyForConn(item, item.encryptionConnectionId || this.activeConnection);
@@ -8412,7 +8626,7 @@
         if (!/^image\//i.test(f.type || '')) continue;
         const safeName = (f.name || 'sticker.png').replace(/[^a-zA-Z0-9._-]/g,'_');
         try{
-          const aesKey = await this.getEncryptionKeyForConn(this.activeConnection);
+          const aesKey = await this.getEncryptionKeyForConn(this.activeConnection, { forWrite:true });
           const cryptoMeta = this.getEncryptionMetadataForConn(this.activeConnection);
           const base64 = await new Promise((resolve,reject)=>{ const r=new FileReader(); r.onload=()=>{ const s=String(r.result||''); resolve(s.includes(',')?s.split(',')[1]:''); }; r.onerror=reject; r.readAsDataURL(f); });
           const cipher = await chatCrypto.encryptWithKey(base64, aesKey);
@@ -8589,7 +8803,7 @@
             if (!/^image\//i.test(f.type || '')) continue;
             const safeName = (f.name || 'sticker.png').replace(/[^a-zA-Z0-9._-]/g,'_');
             try{
-              const aesKey = await this.getEncryptionKeyForConn(this.activeConnection);
+              const aesKey = await this.getEncryptionKeyForConn(this.activeConnection, { forWrite:true });
               const cryptoMeta = this.getEncryptionMetadataForConn(this.activeConnection);
               const base64 = await new Promise((resolve,reject)=>{ const r=new FileReader(); r.onload=()=>{ const s=String(r.result||''); resolve(s.includes(',')?s.split(',')[1]:''); }; r.onerror=reject; r.readAsDataURL(f); });
               const cipher = await chatCrypto.encryptWithKey(base64, aesKey);
@@ -8655,7 +8869,14 @@
         if (item.local && item.dataUrl){
           await this.saveMessage({ text: `[sticker-data]${item.dataUrl}` });
         } else {
-          await this.saveMessage({ text: '[sticker]', fileUrl: item.url, fileName: item.name });
+          const liveConnection = await this._getLiveConnectionForCrypto(this.activeConnection);
+          if (this._isV4RequiredRoom(liveConnection) || this._isPendingDirectBridgeRoom(liveConnection)) {
+            const cipher = await this.fetchEncryptedAttachmentPayload(item.url);
+            const base64 = await chatCrypto.decryptWithKey(cipher, await this.getStickerDecryptionKey(item));
+            await this._saveV4TextMessage(this.activeConnection, {
+              text:'[sticker]', attachments:[{blob:this.base64ToBlob(base64,'image/png'),fileName:item.name || 'sticker.png'}]
+            }, {allowPendingLegacyBridge:true});
+          } else await this.saveMessage({ text: '[sticker]', fileUrl: item.url, fileName: item.name });
         }
         // update recents
         try{
@@ -8668,10 +8889,18 @@
       }catch(_){ alert('Failed to send sticker'); }
     }
 
-    async saveMessage({text,fileUrl,fileName, sharedAsset, media, connId, attachmentSourceConnId, attachmentKeySalt, attachmentCryptoVersion, attachmentCryptoEpoch, isVideoRecording, isVoiceRecording, replyTo}){
+    async saveMessage({text,fileUrl,fileName, sharedAsset, media, attachments, sourceMessage, connId, attachmentSourceConnId, attachmentKeySalt, attachmentCryptoVersion, attachmentCryptoEpoch, isVideoRecording, isVoiceRecording, replyTo}){
       const targetConnId = connId || this.activeConnection;
       if (!targetConnId) return;
-      const aesKey = await this.getEncryptionKeyForConn(targetConnId);
+      const payload = { text, fileUrl, fileName, sharedAsset, media, attachments, sourceMessage, attachmentSourceConnId, attachmentKeySalt, attachmentCryptoVersion, attachmentCryptoEpoch, isVideoRecording, isVoiceRecording, replyTo };
+      const liveConnection = await this._getLiveConnectionForCrypto(targetConnId);
+      if (this._isV4RequiredRoom(liveConnection)) {
+        return this._saveV4TextMessage(targetConnId, payload);
+      }
+      if (this._isPendingDirectBridgeRoom(liveConnection) && this._isV4MessagePayload(payload)) {
+        return this._saveV4TextMessage(targetConnId, payload, { allowPendingLegacyBridge:true });
+      }
+      const aesKey = await this.getEncryptionKeyForConn(targetConnId, { forWrite:true });
       const cryptoMeta = this.getEncryptionMetadataForConn(targetConnId);
       const cipher = await chatCrypto.encryptWithKey(text, aesKey);
       const mediaArr = Array.isArray(media) && media.length ? this.toPlainObject(media) : null;
@@ -8764,24 +8993,20 @@
         <input id="group-name-input" class="input" type="text" maxlength="80" placeholder="Group name">
         <input id="group-cover-input" class="input" type="url" placeholder="Group cover image URL">
         <button class="btn secondary" id="save-group-meta-btn">Save group settings</button>
-        <button class="btn secondary" id="rotate-group-key-btn">Initialize / rotate encryption key</button>
+        <button class="btn secondary" id="rotate-group-key-btn" disabled>Legacy key rotation unavailable</button>
       </div>
       <ul id="group-list" class="group-list"></ul><div class="group-actions"><button class="btn secondary" id="add-member-btn">Add member</button><button class="btn secondary" id="close-group-btn">Close</button></div>`;
       document.querySelector('.main').appendChild(panel);
       document.getElementById('close-group-btn').onclick = ()=> panel.remove();
       document.getElementById('save-group-meta-btn').onclick = async ()=>{ await this.saveGroupMeta(); };
-      document.getElementById('rotate-group-key-btn').onclick = async ()=>{
-        try{
-          await this.rotateGroupKeyForConn(this.activeConnection);
-          alert('Group encryption key rotated for the current participant set.');
-          await this.renderGroupPanel();
-        }catch(error){ alert(error?.message || 'Failed to rotate the group encryption key.'); }
-      };
+      // R178 rules reserve all legacy group-key writes for a server migration.
+      // Keep the control visible as an explanation, but never bind a browser
+      // action that could attempt a denied mutation.
       document.getElementById('add-member-btn').onclick = async ()=>{
         const s=document.getElementById('user-search');
         try{
           const snap = await firebase.getDoc(firebase.doc(this.db,'chatConnections', this.activeConnection));
-          if (snap.exists()) this.groupBaseParticipants = (snap.data().participants||[]);
+          if (snap.exists()) this.groupBaseParticipants = this.getConnParticipants(snap.data() || {});
         }catch(_){ this.groupBaseParticipants = null; }
         if(s){ this.isGroupMode=true; this.groupSelection=this.groupSelection||new Map(); s.focus(); }
       };
@@ -8796,14 +9021,14 @@
         const doc = await firebase.getDoc(firebase.doc(this.db,'chatConnections', this.activeConnection));
         if (!doc.exists()) return;
         const conn = doc.data();
-        const participants = Array.isArray(conn.participants)? conn.participants:[];
+        const participants = this.getConnParticipants(conn || {});
         const usernames = Array.isArray(conn.participantUsernames)? conn.participantUsernames:[];
         const admins = Array.isArray(conn.admins)? conn.admins : [participants[0]].filter(Boolean);
-        if (!Array.isArray(conn.admins)){
-          await firebase.updateDoc(firebase.doc(this.db,'chatConnections', this.activeConnection),{ admins });
-        }
+        // Canonical membership and admin ACL fields are server-managed in R178.
+        // Never try to backfill them from a browser, including legacy rooms.
+        const membershipLocked = true;
         const amAdmin = admins.includes(this.currentUser.uid);
-        if (summary){ summary.innerHTML = `Members: ${participants.length} · Admins: ${admins.length}${amAdmin? ' · You are admin':''}`; }
+        if (summary){ summary.innerHTML = `Members: ${participants.length} · Admins: ${admins.length}${amAdmin? ' · You are admin':''}${membershipLocked ? ' · Membership managed securely' : ''}`; }
         const nameInput = document.getElementById('group-name-input');
         const coverInput = document.getElementById('group-cover-input');
         const saveMetaBtn = document.getElementById('save-group-meta-btn');
@@ -8813,7 +9038,15 @@
         if (nameInput) nameInput.disabled = !amAdmin;
         if (coverInput) coverInput.disabled = !amAdmin;
         if (saveMetaBtn) saveMetaBtn.disabled = !amAdmin;
-        if (rotateKeyBtn) rotateKeyBtn.disabled = !amAdmin;
+        if (rotateKeyBtn) {
+          rotateKeyBtn.disabled = true;
+          rotateKeyBtn.title = 'Legacy group-key rotation is managed outside the browser during the R178 migration.';
+        }
+        const addMemberBtn = document.getElementById('add-member-btn');
+        if (addMemberBtn) {
+          addMemberBtn.disabled = membershipLocked;
+          addMemberBtn.title = membershipLocked ? 'Start a new chat to change membership. Existing room membership is server-managed.' : '';
+        }
         if (summary && conn.groupKeyEpoch){
           summary.innerHTML += ` · Encryption epoch ${String(conn.groupKeyEpoch)}`;
         }
@@ -8822,7 +9055,7 @@
           const li = document.createElement('li');
           const left = document.createElement('span'); left.textContent = name + (admins.includes(uid)? ' (admin)':'');
           const right = document.createElement('span');
-          if (amAdmin && uid !== this.currentUser.uid){
+          if (amAdmin && !membershipLocked && uid !== this.currentUser.uid){
             const rm = document.createElement('button'); rm.className='btn secondary'; rm.textContent='Remove'; rm.onclick = ()=> this.removeMember(uid);
             right.appendChild(rm);
             const isAdmin = admins.includes(uid);
@@ -8841,7 +9074,7 @@
         const snap = await firebase.getDoc(ref);
         if (!snap.exists()) return;
         const conn = snap.data() || {};
-        const participants = Array.isArray(conn.participants) ? conn.participants : [];
+        const participants = this.getConnParticipants(conn || {});
         const admins = Array.isArray(conn.admins) ? conn.admins : [participants[0]].filter(Boolean);
         if (!admins.includes(this.currentUser.uid)){
           alert('Only admins can edit group settings.');
@@ -8865,44 +9098,11 @@
     }
 
     async removeMember(uid){
-      try{
-        const ref = firebase.doc(this.db,'chatConnections', this.activeConnection);
-        const doc = await firebase.getDoc(ref); if (!doc.exists()) return;
-        const conn = doc.data();
-        const parts = (conn.participants||[]).filter(x=> x!==uid);
-        const names = (conn.participantUsernames||[]).filter((_,i)=> (conn.participants||[])[i]!==uid);
-        let admins = Array.isArray(conn.admins)? conn.admins: [];
-        admins = admins.filter(x=> x!==uid);
-        const key = this.computeConnKey(parts);
-        const rotation = await this.buildGroupKeyRotation(this.activeConnection, conn, parts);
-        await firebase.updateDoc(ref, {
-          participants: parts,
-          participantUsernames: names,
-          admins,
-          key,
-          ...rotation.fields,
-          [`groupKeyHistory.${rotation.state.epoch}`]: rotation.state,
-          updatedAt: new Date().toISOString()
-        });
-        this.sharedKeyCache[`${this.activeConnection}:group:${rotation.state.epoch}`] = rotation.groupKey;
-        this._cryptoMetaByConn.set(this.activeConnection, {
-          cryptoVersion: 'liber.secure-chat.group-aes-gcm.v1',
-          cryptoEpoch: rotation.state.epoch
-        });
-        await this.renderGroupPanel(); await this.loadConnections();
-      }catch(_){ alert('Failed to remove member'); }
+      alert('Start a new chat to change membership. Existing room membership is managed securely.');
     }
 
     async toggleAdmin(uid, make){
-      try{
-        const ref = firebase.doc(this.db,'chatConnections', this.activeConnection);
-        const doc = await firebase.getDoc(ref); if (!doc.exists()) return;
-        let admins = Array.isArray(doc.data().admins)? doc.data().admins: [];
-        if (make){ if (!admins.includes(uid)) admins.push(uid); }
-        else { admins = admins.filter(x=> x!==uid); }
-        await firebase.updateDoc(ref, { admins, updatedAt: new Date().toISOString() });
-        await this.renderGroupPanel();
-      }catch(_){ alert('Failed to update admin'); }
+      alert('Room administrators are managed securely and cannot be changed in this browser.');
     }
 
     async notifyParticipants(plaintext){
@@ -8927,31 +9127,213 @@
 
     async getOrCreateSharedAesKey(){
       if (!this.activeConnection) throw new Error('No active connection');
-      return this.getEncryptionKeyForConn(this.activeConnection);
+      return this.getEncryptionKeyForConn(this.activeConnection, { forWrite:true });
+    }
+
+    setIdentityEnrollmentBanner(message = ''){
+      const banner = document.getElementById('chat-identity-banner');
+      const text = document.getElementById('chat-identity-banner-text');
+      if (!banner || !text) return;
+      if (message){ text.textContent = String(message); banner.classList.remove('hidden'); }
+      else { text.textContent = ''; banner.classList.add('hidden'); }
+    }
+
+    _legacyIdentityRef(uid){
+      return firebase.doc(this.db, 'userPublicKeys', String(uid || '').trim());
+    }
+
+    _identityError(code, message){
+      const error = new Error(message);
+      error.code = code;
+      return error;
+    }
+
+    async _createLegacyRootOnlyIfMissing(uid, identity, fingerprint){
+      if (typeof firebase.runTransaction !== 'function') {
+        throw this._identityError('liber/chat-legacy-root-transaction-unavailable', 'Secure Chat could not safely initialize its legacy identity.');
+      }
+      const ref = this._legacyIdentityRef(uid);
+      const root = {
+        uid,
+        publicJwk: identity.publicJwk,
+        fingerprint,
+        cryptoVersion: 'liber.secure-chat.identity-p256.v2',
+        createdAt: new Date().toISOString()
+      };
+      // This transaction intentionally writes only an absent root document.  If a
+      // concurrent browser publishes first, its root wins and this browser moves to
+      // the immutable per-device path rather than overwriting it.
+      return firebase.runTransaction(this.db, async(tx)=>{
+        const existing = await tx.get(ref);
+        if (existing.exists()) return { created:false, data:existing.data() || {} };
+        tx.set(ref, root);
+        return { created:true, data:root };
+      });
+    }
+
+    async _resolvePublishedLocalIdentity(){
+      const myUid = String(this.currentUser?.uid || '').trim();
+      if (!myUid) throw this._identityError('unauthenticated', 'Sign in before opening encrypted chat.');
+      if (this._publishedLocalIdentity?.uid === myUid) return this._publishedLocalIdentity;
+
+      const ref = this._legacyIdentityRef(myUid);
+      let published = await firebase.getDoc(ref);
+      if (!published.exists()){
+        // There is no account-wide root yet, so this is the one allowed place to
+        // create it. Prefer an already-retained identity before generating a new
+        // one, and make the root creation transactional/create-only.
+        let localIdentity = await chatCrypto.loadExistingLegacyIdentity(myUid);
+        if (!localIdentity) localIdentity = await chatCrypto.loadOrCreateIdentity(myUid);
+        const localFingerprint = await chatCrypto.fingerprintPublicJwk(localIdentity.publicJwk);
+        const outcome = await this._createLegacyRootOnlyIfMissing(myUid, localIdentity, localFingerprint);
+        const root = outcome?.data || {};
+        let rootFingerprint = '';
+        try { rootFingerprint = await chatCrypto.fingerprintPublicJwk(root.publicJwk); } catch (_) {}
+        if (rootFingerprint === localFingerprint){
+          this._publishedLocalIdentity = { ...localIdentity, uid:myUid, fingerprint:localFingerprint };
+          return this._publishedLocalIdentity;
+        }
+        // A concurrent browser won the create. Do not create a second v2 key or
+        // mutate the published root; the caller will align this browser as v4.
+        published = await firebase.getDoc(ref);
+      }
+
+      const publishedJwk = published.data()?.publicJwk;
+      let publishedFingerprint = '';
+      try { publishedFingerprint = await chatCrypto.fingerprintPublicJwk(publishedJwk); } catch (_) {}
+      if (!publishedFingerprint){
+        throw this._identityError('liber/chat-legacy-root-invalid', 'The published legacy chat identity is invalid. No key was replaced.');
+      }
+      // Critical ordering rule: never call loadOrCreateIdentity when a published
+      // root exists. A missing local private key is a normal new-browser case, not
+      // authority to rotate another device’s account-wide identity.
+      let localIdentity = null;
+      try { localIdentity = await chatCrypto.loadExistingLegacyIdentity(myUid); } catch (_) { localIdentity = null; }
+      if (localIdentity){
+        try {
+          const localFingerprint = await chatCrypto.fingerprintPublicJwk(localIdentity.publicJwk);
+          if (localFingerprint === publishedFingerprint){
+            this._publishedLocalIdentity = { ...localIdentity, uid:myUid, fingerprint:localFingerprint };
+            return this._publishedLocalIdentity;
+          }
+        } catch (_) {}
+      }
+      throw this._identityError(
+        'liber/chat-legacy-private-key-missing',
+        'This browser does not retain the private key for the legacy chat identity. A separate device identity will be used for new secure chats; no account-wide key was changed.'
+      );
+    }
+
+    async _getCurrentV4DeviceIdentity(){
+      const uid = String(this.currentUser?.uid || '').trim();
+      if (!uid) throw this._identityError('unauthenticated', 'Sign in before creating a secure chat device.');
+      if (this._localDeviceIdentity?.uid === uid) return this._localDeviceIdentity;
+      if (!window.chatCrypto || typeof chatCrypto.loadOrCreateDeviceIdentity !== 'function') {
+        throw this._identityError('liber/chat-device-api-unavailable', 'This Secure Chat build cannot create a per-device identity. Reload after the secure identity update is available.');
+      }
+      const identity = await chatCrypto.loadOrCreateDeviceIdentity(uid);
+      const deviceId = String(identity?.deviceId || '').trim();
+      if (!identity?.privateKey || !identity?.publicJwk || !/^[a-z0-9_-]{16,96}$/i.test(deviceId)) {
+        throw this._identityError('liber/chat-device-identity-invalid', 'The local Secure Chat device identity is incomplete.');
+      }
+      const fingerprint = String(identity.fingerprint || await chatCrypto.fingerprintPublicJwk(identity.publicJwk)).trim();
+      if (!fingerprint) throw this._identityError('liber/chat-device-fingerprint-missing', 'The local Secure Chat device fingerprint is unavailable.');
+      this._localDeviceIdentity = {
+        uid,
+        deviceId,
+        publicJwk:identity.publicJwk,
+        privateKey:identity.privateKey,
+        fingerprint,
+        cryptoVersion:String(identity.cryptoVersion || 'liber.secure-chat.device-identity.v4'),
+        createdAt:identity.createdAt || new Date().toISOString()
+      };
+      return this._localDeviceIdentity;
+    }
+
+    async _alignCurrentV4DeviceWithWorker(identity){
+      const modular = window.firebaseModular;
+      const app = window.firebaseService?.app;
+      const functions = window.firebaseService?.functionsByRegion?.['us-central1']
+        || (modular?.getFunctions && app ? modular.getFunctions(app, 'us-central1') : null);
+      if (!modular?.httpsCallable || !functions) {
+        throw this._identityError('liber/chat-alignment-worker-unavailable', 'Secure Chat is waiting for its device-alignment service.');
+      }
+      const callable = modular.httpsCallable(functions, 'alignSecureChatDevice', { timeout:30000 });
+      const response = await callable({
+        schema:'liber.secure-chat.device-alignment-request.v1',
+        deviceId:identity.deviceId,
+        publicJwk:identity.publicJwk,
+        fingerprint:identity.fingerprint
+      });
+      const data = response?.data || null;
+      if (!data?.ok || data.schema !== 'liber.secure-chat.device-alignment-response.v1') {
+        throw this._identityError('liber/chat-alignment-worker-invalid', 'Secure Chat device alignment returned an invalid response.');
+      }
+      const aligned = data.device || {};
+      if (String(aligned.uid || '') !== identity.uid
+        || String(aligned.deviceId || '') !== identity.deviceId
+        || String(aligned.fingerprint || '') !== identity.fingerprint) {
+        throw this._identityError('liber/chat-alignment-worker-mismatch', 'Secure Chat device alignment did not confirm this browser identity.');
+      }
+      this._identityAlignment = data;
+      this._identityEnrollmentError = '';
+      this.setIdentityEnrollmentBanner('');
+      return data;
+    }
+
+    async ensureCurrentV4DeviceIdentity(){
+      let identity = await this._getCurrentV4DeviceIdentity();
+      if (!this._identityAlignment
+        || String(this._identityAlignment?.device?.deviceId || '') !== identity.deviceId
+        || String(this._identityAlignment?.device?.fingerprint || '') !== identity.fingerprint) {
+        try {
+          await this._alignCurrentV4DeviceWithWorker(identity);
+        } catch (error) {
+          const code = String(error?.code || '').toLowerCase();
+          // A 409 means the server already owns this immutable device id with a
+          // different public key. That can only be a stale/corrupt local record;
+          // do not ask the person to replace the account root. Forget this one
+          // local device record and create one fresh per-browser identity once.
+          if ((code === 'already-exists' || code === 'functions/already-exists')
+            && typeof chatCrypto.discardConflictingDeviceIdentity === 'function') {
+            await chatCrypto.discardConflictingDeviceIdentity(identity.uid, identity.deviceId);
+            this._localDeviceIdentity = null;
+            this._identityAlignment = null;
+            identity = await this._getCurrentV4DeviceIdentity();
+            await this._alignCurrentV4DeviceWithWorker(identity);
+          } else {
+            throw error;
+          }
+        }
+      }
+      return identity;
+    }
+
+    async initializeChatIdentityAtEntry(){
+      let legacyIdentity = null;
+      let legacyError = null;
+      try { legacyIdentity = await this._resolvePublishedLocalIdentity(); }
+      catch (error) { legacyError = error; }
+
+      try {
+        const deviceIdentity = await this.ensureCurrentV4DeviceIdentity();
+        this._identityEnrollmentError = '';
+        this.setIdentityEnrollmentBanner('');
+        return { legacyIdentity, legacyError, deviceIdentity, alignment:this._identityAlignment };
+      } catch (error) {
+        const message = 'Secure Chat is securing this browser for new conversations. Existing chats remain available.';
+        this._identityEnrollmentError = message;
+        this.setIdentityEnrollmentBanner(message);
+        // Preserve the original legacy error in logs for diagnosis, but never
+        // surface it as a key-replacement action.
+        if (legacyError) console.warn('Secure Chat legacy identity is unavailable:', legacyError?.code || legacyError?.message || legacyError);
+        throw error;
+      }
     }
 
     async ensurePublishedChatIdentity(){
-      const myUid = String(this.currentUser?.uid || '').trim();
-      if (!myUid) throw new Error('Sign in before initializing encrypted chat.');
-      const identity = await chatCrypto.loadOrCreateIdentity(myUid);
-      const fingerprint = await chatCrypto.fingerprintPublicJwk(identity.publicJwk);
-      const ref = firebase.doc(this.db, 'userPublicKeys', myUid);
-      const published = await firebase.getDoc(ref);
-      if (!published.exists()){
-        await firebase.setDoc(ref, {
-          uid: myUid,
-          publicJwk: identity.publicJwk,
-          fingerprint,
-          cryptoVersion: 'liber.secure-chat.identity-p256.v2',
-          createdAt: new Date().toISOString()
-        });
-      } else {
-        const publishedFingerprint = await chatCrypto.fingerprintPublicJwk(published.data()?.publicJwk);
-        if (publishedFingerprint !== fingerprint) {
-          throw new Error('This device does not match your published chat identity. Re-enroll it before sending.');
-        }
-      }
-      return { identity, fingerprint };
+      const identity = await this._resolvePublishedLocalIdentity();
+      return { identity, fingerprint:identity.fingerprint };
     }
 
     pinChatIdentity(uid, fingerprint){
@@ -8978,82 +9360,447 @@
       };
     }
 
-    async buildGroupKeyRotation(connId, conn, nextParticipants){
+    _isV4RequiredRoom(conn){
+      return String(conn?.cryptoMode || '').trim() === 'v4-required';
+    }
+
+    _isPendingDirectBridgeRoom(conn){
+      const participants = this.getConnParticipants(conn || {});
+      return String(conn?.cryptoMode || '').trim() === 'legacy-pending'
+        && participants.length === 2
+        && !this._isProjectConnection(conn || {})
+        && !String(conn?.groupName || '').trim();
+    }
+
+    async waitForNewRoomCryptoAlignment(connId, timeoutMs = 7000){
+      // Room creation is intentionally legacy-pending until the trusted worker
+      // has inspected its canonical membership and registered devices.  Give
+      // that worker a bounded opportunity to promote before exposing the new
+      // room; never write the mode or digest from a browser.
       const cid = String(connId || '').trim();
-      const myUid = String(this.currentUser?.uid || '').trim();
-      const participants = Array.from(new Set((nextParticipants || []).map(String).filter(Boolean))).sort();
-      const admins = Array.isArray(conn?.admins) ? conn.admins.map(String) : [];
-      if (!cid || !participants.includes(myUid) || !admins.includes(myUid)) {
-        throw new Error('Only a current chat admin can initialize or rotate the group encryption key.');
+      if (!cid) return null;
+      const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
+      let latest = null;
+      do {
+        try {
+          const snapshot = await firebase.getDoc(firebase.doc(this.db, 'chatConnections', cid));
+          if (!snapshot.exists()) return null;
+          latest = { id:snapshot.id, ...(snapshot.data() || {}) };
+          if (String(latest.cryptoMode || '').trim() !== 'legacy-pending') return latest;
+        } catch (_) {
+          return latest;
+        }
+        if (Date.now() >= deadline) break;
+        await new Promise((resolve)=>setTimeout(resolve, Math.min(350, Math.max(1, deadline - Date.now()))));
+      } while (Date.now() < deadline);
+      return latest;
+    }
+
+    async _getLiveConnectionForCrypto(connId){
+      const cid = String(connId || '').trim();
+      const uid = String(this.currentUser?.uid || '').trim();
+      if (!cid || !uid) throw this._identityError('unauthenticated', 'Sign in and select a chat before sending.');
+      const snapshot = await firebase.getDoc(firebase.doc(this.db, 'chatConnections', cid));
+      if (!snapshot.exists()) throw this._identityError('not-found', 'Chat connection not found.');
+      let conn = { id:snapshot.id, ...(snapshot.data() || {}) };
+      if (!this.getConnParticipants(conn).includes(uid)) throw this._identityError('permission-denied', 'You are not a participant in this encrypted conversation.');
+      // Membership changes briefly return the room to server-owned device
+      // alignment. A new send must await that transition, not choose a legacy
+      // group key because its first read landed between the two server writes.
+      if (String(conn.cryptoMode || '') === 'legacy-pending' && !this._isPendingDirectBridgeRoom(conn)) {
+        // Re-submit this same immutable public device identity to the existing
+        // trusted reconciler. It reads current membership transactionally;
+        // resolving the project again would race unrelated room read receipts.
+        const identity=await this._getCurrentV4DeviceIdentity();
+        await this._alignCurrentV4DeviceWithWorker(identity);
+        const aligned = await this.waitForNewRoomCryptoAlignment(cid, 10000);
+        if (aligned) conn = aligned;
+        if (String(conn.cryptoMode || '') === 'legacy-pending') {
+          throw this._identityError('liber/chat-membership-aligning', 'Secure Chat is still preparing devices after the membership change. Your message is kept here; retry in a moment.');
+        }
       }
-      const { fingerprint: issuerFingerprint } = await this.ensurePublishedChatIdentity();
-      const issuerPrivateKey = await chatCrypto.getPrivateKey(myUid);
-      const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte)=> byte.toString(16).padStart(2, '0')).join('');
-      const epoch = `${Date.now().toString(36)}-${nonce}`;
-      const participantDigest = await this.groupParticipantDigest(participants);
-      const groupKey = await chatCrypto.generateGroupAesKey();
-      const envelopes = {};
-      for (const participantUid of participants){
-        const keySnap = await firebase.getDoc(firebase.doc(this.db, 'userPublicKeys', participantUid));
-        if (!keySnap.exists()) throw new Error(`Group key rotation is blocked until ${participantUid} opens Secure Chat and publishes an encryption identity.`);
-        const participantJwk = keySnap.data()?.publicJwk;
-        const recipientFingerprint = await chatCrypto.fingerprintPublicJwk(participantJwk);
-        this.pinChatIdentity(participantUid, recipientFingerprint);
-        const wrappingKey = await chatCrypto.deriveSharedAesKey(
-          issuerPrivateKey,
-          participantJwk,
-          `liber-secure-chat-group-wrap:${cid}:${epoch}:${participantUid}`
-        );
-        envelopes[participantUid] = {
-          recipientFingerprint,
-          wrappedKey: await chatCrypto.wrapGroupAesKey(groupKey, wrappingKey)
+      const participants = this.getConnParticipants(conn);
+      if (String(this.currentUser?.uid || '') !== uid) throw this._identityError('unauthenticated', 'Sign-in changed while preparing this conversation. Reopen Chat before sending.');
+      if (!participants.includes(uid)) throw this._identityError('permission-denied', 'You are not a participant in this encrypted conversation.');
+      return conn;
+    }
+
+    async _requireV4RoomForWrite(connId){
+      const conn = await this._getLiveConnectionForCrypto(connId);
+      if (!this._isV4RequiredRoom(conn)) {
+        throw this._identityError('liber/chat-v4-room-not-required', 'This chat has not completed device alignment yet.');
+      }
+      if (!Array.isArray(conn.participantIds) || !conn.participantIds.length) {
+        throw this._identityError('liber/chat-v4-membership-missing', 'This chat is missing its canonical secure membership.');
+      }
+      if (!/^[a-f0-9]{64}$/i.test(String(conn.cryptoMembershipDigest || '').trim())) {
+        throw this._identityError('liber/chat-v4-membership-digest-missing', 'This chat is still completing its secure membership alignment.');
+      }
+      return conn;
+    }
+
+    async _registeredV4DevicesForParticipants(conn){
+      const me = String(this.currentUser?.uid || '').trim();
+      // v4 rooms authenticate only the migration's canonical participantIds.
+      const participants = Array.from(new Set((Array.isArray(conn?.participantIds) ? conn.participantIds : [])
+        .map((uid)=>String(uid || '').trim()).filter(Boolean)));
+      const maxParticipants = 40;
+      const maxDevicesPerParticipant = 8;
+      if (!participants.length || !participants.includes(me) || participants.length > maxParticipants) {
+        throw this._identityError('liber/chat-envelope-participant-limit', 'This chat cannot create a bounded secure device envelope.');
+      }
+      // Device publication is deliberately server-mediated. A browser must not
+      // enumerate userPublicKeys/{uid}/devices: the callable verifies the
+      // caller belongs to this room's immutable participantIds before returning
+      // its current device set.
+      const modular = window.firebaseModular;
+      const app = window.firebaseService?.app;
+      const functions = window.firebaseService?.functionsByRegion?.['us-central1']
+        || (modular?.getFunctions && app ? modular.getFunctions(app, 'us-central1') : null);
+      if (!modular?.httpsCallable || !functions) {
+        throw this._identityError('liber/chat-room-devices-unavailable', 'Secure Chat is waiting for its verified room-device service.');
+      }
+      const callable = modular.httpsCallable(functions, 'getSecureChatRoomDevices', { timeout:30000 });
+      const response = await callable({
+        schema:'liber.secure-chat.room-devices-request.v1',
+        connId:String(conn?.id || '').trim()
+      });
+      const data = response?.data || {};
+      const expectedDigest = String(conn.cryptoMembershipDigest || '').trim();
+      if (!data.ok
+        || data.schema !== 'liber.secure-chat.room-devices-response.v1'
+        || String(data.connId || '').trim() !== String(conn?.id || '').trim()
+        || String(data.cryptoMembershipDigest || '').trim() !== expectedDigest
+        || !Array.isArray(data.devices)) {
+        throw this._identityError('liber/chat-room-devices-invalid', 'Secure Chat could not verify the room device directory.');
+      }
+      const devices = [];
+      const deviceKeys = new Set();
+      const countByParticipant = new Map(participants.map((uid)=>[uid, 0]));
+      for (const record of data.devices){
+        const uid = String(record?.uid || '').trim();
+        const deviceId = String(record?.deviceId || '').trim();
+        const advertisedFingerprint = String(record?.fingerprint || '').trim();
+        if (!participants.includes(uid) || !deviceId || !record?.publicJwk) {
+          throw this._identityError('liber/chat-room-devices-invalid', 'Secure Chat received an invalid room device registration.');
+        }
+        const deviceKey = `${uid}|${deviceId}`;
+        if (deviceKeys.has(deviceKey)) {
+          throw this._identityError('liber/chat-room-devices-duplicate', 'Secure Chat received a duplicate room device registration.');
+        }
+        let fingerprint = '';
+        try { fingerprint = await chatCrypto.fingerprintPublicJwk(record.publicJwk); } catch (_) { }
+        if (!fingerprint || fingerprint !== advertisedFingerprint) {
+          throw this._identityError('liber/chat-room-devices-invalid', 'Secure Chat found an invalid participant device registration.');
+        }
+        const nextCount = Number(countByParticipant.get(uid) || 0) + 1;
+        if (nextCount > maxDevicesPerParticipant) {
+          throw this._identityError('liber/chat-envelope-device-limit', 'A chat participant has too many registered devices for one secure message.');
+        }
+        countByParticipant.set(uid, nextCount);
+        deviceKeys.add(deviceKey);
+        if (uid !== me) this.pinV4ChatDeviceIdentity(uid, deviceId, fingerprint);
+        devices.push({ uid, deviceId, publicJwk:record.publicJwk, fingerprint });
+      }
+      if (!devices.length || devices.length > (maxParticipants * maxDevicesPerParticipant)
+        || Array.from(countByParticipant.values()).some((count)=>count < 1)) {
+        throw this._identityError('liber/chat-device-not-registered', 'Secure Chat is still aligning participant devices.');
+      }
+      return devices;
+    }
+
+    async _pendingBridgeRecipientsForDirectConn(conn){
+      const me = String(this.currentUser?.uid || '').trim();
+      const cid = String(conn?.id || '').trim();
+      const participants = Array.from(new Set((Array.isArray(conn?.participantIds) ? conn.participantIds : [])
+        .map((uid)=>String(uid || '').trim()).filter(Boolean)));
+      if (!me || !cid || participants.length !== 2 || !participants.includes(me) || !this._isPendingDirectBridgeRoom(conn)) {
+        throw this._identityError('liber/chat-pending-bridge-invalid-room', 'Secure Chat can bridge only a pending direct conversation.');
+      }
+      const modular = window.firebaseModular;
+      const app = window.firebaseService?.app;
+      const functions = window.firebaseService?.functionsByRegion?.['us-central1']
+        || (modular?.getFunctions && app ? modular.getFunctions(app, 'us-central1') : null);
+      if (!modular?.httpsCallable || !functions) {
+        throw this._identityError('liber/chat-pending-bridge-unavailable', 'Secure Chat is waiting for its encrypted device bridge.');
+      }
+      const callable = modular.httpsCallable(functions, 'getSecureChatPendingRoomRecipients', { timeout:30000 });
+      const response = await callable({
+        schema:'liber.secure-chat.pending-recipients-request.v1',
+        connId:cid
+      });
+      const data = response?.data || {};
+      if (!data.ok
+        || data.schema !== 'liber.secure-chat.pending-recipients-response.v1'
+        || String(data.connId || '').trim() !== cid
+        || !Array.isArray(data.recipients)) {
+        throw this._identityError('liber/chat-pending-bridge-invalid', 'Secure Chat could not verify the encrypted bridge recipients.');
+      }
+      const recipients = [];
+      const seen = new Set();
+      const countByParticipant = new Map(participants.map((uid)=>[uid, 0]));
+      for (const record of data.recipients){
+        const uid = String(record?.uid || '').trim();
+        const kind = String(record?.kind || '').trim();
+        const deviceId = String(record?.deviceId || '').trim();
+        const advertisedFingerprint = String(record?.fingerprint || '').trim();
+        if (!participants.includes(uid) || !record?.publicJwk || !/^[a-f0-9]{64}$/i.test(advertisedFingerprint)) {
+          throw this._identityError('liber/chat-pending-bridge-invalid', 'Secure Chat received an invalid bridge recipient.');
+        }
+        const isDevice = kind === 'v4-device' && /^[A-Za-z0-9_-]{22,64}$/.test(deviceId);
+        const isLegacyRoot = kind === 'legacy-root' && deviceId === 'legacy-v2';
+        if (!isDevice && !isLegacyRoot) {
+          throw this._identityError('liber/chat-pending-bridge-invalid', 'Secure Chat received an unsupported bridge recipient.');
+        }
+        const recipientKey = `${uid}|${deviceId}`;
+        if (seen.has(recipientKey)) {
+          throw this._identityError('liber/chat-pending-bridge-duplicate', 'Secure Chat received duplicate bridge recipients.');
+        }
+        let fingerprint = '';
+        try { fingerprint = await chatCrypto.fingerprintPublicJwk(record.publicJwk); } catch (_) { }
+        if (!fingerprint || fingerprint !== advertisedFingerprint) {
+          throw this._identityError('liber/chat-pending-bridge-invalid', 'Secure Chat found an invalid bridge public key.');
+        }
+        const nextCount = Number(countByParticipant.get(uid) || 0) + 1;
+        if (nextCount > 8) {
+          throw this._identityError('liber/chat-envelope-device-limit', 'A Secure Chat participant has too many bridge recipients.');
+        }
+        countByParticipant.set(uid, nextCount);
+        seen.add(recipientKey);
+        if (isDevice && uid !== me) this.pinV4ChatDeviceIdentity(uid, deviceId, fingerprint);
+        recipients.push({ uid, kind, deviceId, publicJwk:record.publicJwk, fingerprint });
+      }
+      if (!recipients.length || !recipients.some((recipient)=> recipient.uid === me && recipient.kind === 'v4-device')) {
+        throw this._identityError('liber/chat-pending-bridge-self-missing', 'This browser is not enrolled in the encrypted bridge.');
+      }
+      return recipients;
+    }
+
+    pinV4ChatDeviceIdentity(uid, deviceId, fingerprint){
+      const myUid = String(this.currentUser?.uid || '').trim();
+      const peerUid = String(uid || '').trim();
+      const id = String(deviceId || '').trim();
+      const value = String(fingerprint || '').trim();
+      if (!myUid || !peerUid || !id || !value) throw this._identityError('liber/chat-device-pin-invalid', 'Invalid Secure Chat device fingerprint.');
+      const pinKey = `liber_secure_chat_peer_device_pin_v4:${myUid}:${peerUid}:${id}`;
+      const pinned = String(localStorage.getItem(pinKey) || '').trim();
+      if (pinned && pinned !== value) {
+        throw this._identityError('liber/chat-device-pin-changed', 'The encryption key for a participant device changed. Verify that device before continuing.');
+      }
+      if (!pinned) localStorage.setItem(pinKey, value);
+    }
+
+    async _v4EnvelopeDocId(uid, deviceId){
+      const source = `${String(uid || '')}|${String(deviceId || '')}`;
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(source));
+      return `env_${Array.from(new Uint8Array(digest), (byte)=>byte.toString(16).padStart(2, '0')).join('')}`;
+    }
+
+    _isV4TextOnlyMessage(payload = {}){
+      return !!String(payload.text || '').trim()
+        && !payload.fileUrl && !payload.fileName && !payload.sharedAsset
+        && !(Array.isArray(payload.media) && payload.media.length)
+        && !payload.attachmentSourceConnId && !payload.attachmentKeySalt
+        && !payload.attachmentCryptoVersion && !payload.attachmentCryptoEpoch
+        && payload.isVideoRecording !== true && payload.isVoiceRecording !== true
+        && payload.isShared !== true && !payload.sharedFromConnId
+        && !payload.sharedFromMessageId && !payload.sharedOriginalAuthorUid
+        && !payload.sharedOriginalAuthorName;
+    }
+
+    _isV4MessagePayload(payload){
+      return !!payload && (typeof payload.text === 'string' || !!payload.fileUrl
+        || Array.isArray(payload.attachments) || Array.isArray(payload.media)
+        || (payload.sharedAsset && typeof payload.sharedAsset === 'object'));
+    }
+
+    async _blobBase64(blob){
+      if (!blob || typeof blob.arrayBuffer !== 'function') throw new Error('Choose a file before sending.');
+      if (!blob.size || blob.size > 50 * 1024 * 1024) throw new Error('Each attachment must be between 1 byte and 50 MB.');
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let binary = '';
+      for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+      }
+      return btoa(binary);
+    }
+
+    async _readAttachmentForResend(item, fallback = {}){
+      const fileUrl = String(item.fileUrl || fallback.fileUrl || '');
+      let source = item.sourceMessage || fallback.sourceMessage || null;
+      const cid = String(item.attachmentSourceConnId || fallback.sharedFromConnId || fallback.attachmentSourceConnId || source?.connId || '').trim();
+      const mid = String(source?.id || fallback.sharedFromMessageId || '').trim();
+      if (!source && cid && mid){
+        const snapshot = await firebase.getDoc(firebase.doc(this.db, 'chatMessages', cid, 'messages', mid));
+        if (snapshot.exists()) source = { ...snapshot.data(), id:mid, connId:cid };
+      }
+      if (!source || !cid) throw new Error('Reopen the original attachment before sharing it.');
+      let base64;
+      if (String(source.cryptoVersion || '') === 'liber.secure-chat.message-envelope.v4') {
+        const key = await this.getMessageDecryptionKeyForConn(source, cid);
+        this.normalizeDecryptedMessageText(source, await chatCrypto.decryptWithKey(source.cipher, key));
+        const allowed = [source.fileUrl, ...(source.media || []).map(value => value.fileUrl)].filter(Boolean);
+        if (!allowed.includes(fileUrl)) throw new Error('The selected attachment does not belong to the original message.');
+        this.r178ValidateV4AttachmentContext(source, fileUrl, cid);
+        base64 = await chatCrypto.decryptWithKey(await this.fetchEncryptedAttachmentPayload(fileUrl), key);
+      } else {
+        const key = await this.getMessageDecryptionKeyForConn(source, cid);
+        base64 = await chatCrypto.decryptWithKey(await this.fetchEncryptedAttachmentPayload(fileUrl), key);
+      }
+      return { base64, fileName:String(item.fileName || source.fileName || 'attachment.bin'),
+        isVoiceRecording:item.isVoiceRecording === true || source.isVoiceRecording === true,
+        isVideoRecording:item.isVideoRecording === true || source.isVideoRecording === true };
+    }
+
+    async _saveV4TextMessage(connId, payload = {}, options = {}){
+      const assertCurrentAuth = typeof options?.assertCurrentAuth === 'function' ? options.assertCurrentAuth : () => {};
+      assertCurrentAuth();
+      const cid = String(connId || '').trim();
+      const uid = String(this.currentUser?.uid || '').trim();
+      if (!cid || !this._isV4MessagePayload(payload)) {
+        throw this._identityError('liber/chat-v4-unsupported-payload', 'Choose a message or attachment to send.');
+      }
+      // Device alignment can promote a pending room. Inspect its mode after
+      // alignment, so a first send does not ask the obsolete bridge endpoint.
+      const localDevice = await this.ensureCurrentV4DeviceIdentity();
+      assertCurrentAuth();
+      let conn = await this._getLiveConnectionForCrypto(cid);
+      const usePendingBridge = options?.allowPendingLegacyBridge === true && this._isPendingDirectBridgeRoom(conn);
+      if (!usePendingBridge) conn = await this._requireV4RoomForWrite(cid);
+      const recipients = usePendingBridge
+        ? await this._pendingBridgeRecipientsForDirectConn(conn)
+        : await this._registeredV4DevicesForParticipants(conn);
+      assertCurrentAuth();
+      const publishedSender = recipients.find((device)=>device.uid === uid && device.deviceId === localDevice.deviceId);
+      if (!publishedSender || publishedSender.fingerprint !== localDevice.fingerprint) {
+        throw this._identityError('liber/chat-device-self-envelope-missing', 'This browser is not included in its own secure device list.');
+      }
+      if (typeof firebase.writeBatch !== 'function') {
+        throw this._identityError('liber/chat-batch-api-unavailable', 'This Secure Chat build cannot atomically create a secure device-envelope message.');
+      }
+      const msgRef = firebase.doc(firebase.collection(this.db, 'chatMessages', cid, 'messages'));
+      const context = `${cid}|${msgRef.id}|liber.secure-chat.message-envelope.v4`;
+      const messageKey = await chatCrypto.generateGroupAesKey();
+      const createdAt = new Date().toISOString();
+      const securePayload = {
+        schema:'liber.secure-chat.payload.v1',
+        text:String(payload.text || '')
+      };
+      if (payload.systemType === 'connection_request_intro') securePayload.systemType = payload.systemType;
+      if (payload.sharedAsset && typeof payload.sharedAsset === 'object') securePayload.sharedAsset = payload.sharedAsset;
+      if (payload.isShared) {
+        securePayload.shareMeta = {};
+        for (const field of ['isShared','sharedFromConnId','sharedFromMessageId','sharedOriginalAuthorUid','sharedOriginalAuthorName']) {
+          if (payload[field] != null) securePayload.shareMeta[field] = payload[field];
+        }
+      }
+      const attachmentInputs = Array.isArray(payload.attachments) ? payload.attachments
+        : Array.isArray(payload.media) && payload.media.length ? payload.media
+        : payload.fileUrl ? [payload] : [];
+      if (attachmentInputs.length > 16) throw new Error('Send up to 16 attachments in one message.');
+      const attachments = [];
+      for (let index = 0; index < attachmentInputs.length; index++) {
+        if (!this.storage) throw new Error('File upload is unavailable. Reload Secure Chat and retry.');
+        const input = attachmentInputs[index];
+        const content = input.blob
+          ? { base64:await this._blobBase64(input.blob),fileName:String(input.fileName || input.blob.name || 'attachment.bin'),isVoiceRecording:input.isVoiceRecording === true,isVideoRecording:input.isVideoRecording === true }
+          : await this._readAttachmentForResend(input, payload);
+        const storagePath = `chat/${cid}/v4/${uid}/${msgRef.id}/${index}.enc.json`;
+        const cipher = await chatCrypto.encryptWithKey(content.base64, messageKey);
+        await firebase.uploadBytes(firebase.ref(this.storage, storagePath), new Blob([JSON.stringify(cipher)], {type:'application/json'}), {contentType:'application/json'});
+        attachments.push({fileUrl:`storage://${storagePath}`,fileName:content.fileName.slice(0,255),
+          attachmentSourceConnId:cid,attachmentCryptoVersion:'liber.secure-chat.message-envelope.v4',
+          isVoiceRecording:content.isVoiceRecording,isVideoRecording:content.isVideoRecording});
+      }
+      if (attachments.length === 1) Object.assign(securePayload, attachments[0]);
+      else if (attachments.length > 1) securePayload.media = attachments;
+      if (payload.replyTo && typeof payload.replyTo === 'object' && payload.replyTo.messageId){
+        // Reply metadata is content too.  Keep it inside the v4 cipher rather
+        // than exposing who/what was replied to in the message parent.
+        securePayload.replyTo = {
+          messageId:String(payload.replyTo.messageId),
+          connId:String(payload.replyTo.connId || cid),
+          textPreview:'[Encrypted reply]',
+          senderName:String(payload.replyTo.senderName || '').slice(0, 80)
         };
       }
-      const state = {
-        schema: 'liber.secure-chat.group-key-epoch.v1',
-        epoch,
-        participantDigest,
-        issuerUid: myUid,
-        issuerFingerprint,
-        envelopes,
-        createdAt: new Date().toISOString()
+      const parent = {
+        id:msgRef.id,
+        connId:cid,
+        sender:uid,
+        senderDeviceId:localDevice.deviceId,
+        senderFingerprint:localDevice.fingerprint,
+        cipher:await chatCrypto.encryptWithKey(JSON.stringify(securePayload), messageKey),
+        cryptoVersion:'liber.secure-chat.message-envelope.v4',
+        cryptoEpoch:null,
+        messageEnvelopeContext:context,
+        previewText:'[Encrypted message]',
+        createdAt,
+        createdAtTS:firebase.serverTimestamp()
       };
+      const batch = firebase.writeBatch(this.db);
+      // Keep the parent and each envelope atomic: a room never receives a v4
+      // cipher without every registered device, or the immutable legacy root
+      // of a participant still awaiting their first device.
+      batch.set(msgRef, parent);
+      for (const recipient of recipients){
+        const envelopeId = await this._v4EnvelopeDocId(recipient.uid, recipient.deviceId);
+        const envelopeRef = firebase.doc(this.db, 'chatMessages', cid, 'messages', msgRef.id, 'keyEnvelopes', envelopeId);
+        const wrappingKey = await chatCrypto.deriveSharedAesKey(
+          localDevice.privateKey,
+          recipient.publicJwk,
+          `message-envelope-v4|${context}`
+        );
+        batch.set(envelopeRef, {
+          schema:'liber.secure-chat.key-envelope.v4',
+          connId:cid,
+          messageId:msgRef.id,
+          recipientUid:recipient.uid,
+          recipientKind:recipient.kind || 'v4-device',
+          recipientDeviceId:recipient.deviceId,
+          recipientFingerprint:recipient.fingerprint,
+          wrapperUid:uid,
+          wrapperDeviceId:localDevice.deviceId,
+          wrapperFingerprint:localDevice.fingerprint,
+          // Use the verified worker publication verbatim. Local WebCrypto JWK
+          // exports contain optional ext/key_ops fields that the worker removes;
+          // those maps are not equal under the immutable sender-device rules.
+          wrapperPublicJwk:publishedSender.publicJwk,
+          wrappedKey:await chatCrypto.wrapGroupAesKey(messageKey, wrappingKey),
+          createdAt
+        });
+      }
+      batch.update(firebase.doc(this.db, 'chatConnections', cid), {
+        lastMessage:'[Encrypted message]',
+        lastMessageCryptoVersion:'liber.secure-chat.message-envelope.v4',
+        lastMessageCryptoEpoch:null,
+        lastMessageSender:uid,
+        updatedAt:createdAt
+      });
+      assertCurrentAuth();
+      if (typeof options?.onCommitStart === 'function') options.onCommitStart();
+      await batch.commit();
       return {
-        groupKey,
-        state,
-        fields: {
-          groupKeyVersion: 'liber.secure-chat.group-key-envelopes.v1',
-          groupKeyEpoch: epoch,
-          groupKeyParticipantDigest: participantDigest,
-          groupKeyIssuerUid: myUid,
-          groupKeyEnvelopes: envelopes,
-          groupKeyRotatedAt: state.createdAt,
-          keyRotationRequired: false
-        }
+        id:msgRef.id,
+        cryptoVersion:'liber.secure-chat.message-envelope.v4',
+        recipientDeviceCount:recipients.length,
+        attachments,
+        legacyRootRecipientCount:recipients.filter((recipient)=>recipient.kind === 'legacy-root').length
       };
     }
 
-    async rotateGroupKeyForConn(connId, suppliedConn = null, nextParticipants = null){
-      const cid = String(connId || '').trim();
-      let conn = suppliedConn;
-      if (!conn){
-        const snap = await firebase.getDoc(firebase.doc(this.db, 'chatConnections', cid));
-        if (!snap.exists()) throw new Error('Chat connection not found.');
-        conn = snap.data() || {};
-      }
-      const participants = nextParticipants || this.getConnParticipants(conn);
-      const rotation = await this.buildGroupKeyRotation(cid, conn, participants);
-      await firebase.updateDoc(firebase.doc(this.db, 'chatConnections', cid), {
-        ...rotation.fields,
-        [`groupKeyHistory.${rotation.state.epoch}`]: rotation.state,
-        updatedAt: new Date().toISOString()
-      });
-      this.sharedKeyCache[`${cid}:group:${rotation.state.epoch}`] = rotation.groupKey;
-      this._cryptoMetaByConn.set(cid, {
-        cryptoVersion: 'liber.secure-chat.group-aes-gcm.v1',
-        cryptoEpoch: rotation.state.epoch
-      });
-      return rotation;
+    async buildGroupKeyRotation(){
+      // The R178 rules deliberately make legacy key state immutable from a
+      // browser.  Existing epochs remain readable below for historical rooms;
+      // creating or rotating one must go through the trusted migration path.
+      throw this._identityError(
+        'liber/chat-legacy-group-key-write-disabled',
+        'This legacy group key cannot be rotated in the browser. Start a new secure chat if a current key is unavailable.'
+      );
+    }
+
+    async rotateGroupKeyForConn(){
+      return this.buildGroupKeyRotation();
     }
 
     async unwrapGroupKeyForConn(connId, conn, epoch){
@@ -9072,14 +9819,14 @@
       const myUid = String(this.currentUser?.uid || '').trim();
       const envelope = state?.envelopes?.[myUid];
       if (!state || !envelope?.wrappedKey || !state.issuerUid) throw new Error(`No group-key envelope is available for epoch ${wantedEpoch}.`);
-      await this.ensurePublishedChatIdentity();
+      const { identity: localIdentity } = await this.ensurePublishedChatIdentity();
       const issuerSnap = await firebase.getDoc(firebase.doc(this.db, 'userPublicKeys', String(state.issuerUid)));
       if (!issuerSnap.exists()) throw new Error('The group-key issuer identity is unavailable.');
       const issuerJwk = issuerSnap.data()?.publicJwk;
       const issuerFingerprint = await chatCrypto.fingerprintPublicJwk(issuerJwk);
       if (state.issuerFingerprint && state.issuerFingerprint !== issuerFingerprint) throw new Error('The group-key issuer fingerprint does not match the published epoch metadata.');
       this.pinChatIdentity(state.issuerUid, issuerFingerprint);
-      const privateKey = await chatCrypto.getPrivateKey(myUid);
+      const privateKey = localIdentity.privateKey;
       const wrappingKey = await chatCrypto.deriveSharedAesKey(
         privateKey,
         issuerJwk,
@@ -9094,21 +9841,15 @@
       const cid = String(connId || '').trim();
       const participants = this.getConnParticipants(conn || {}).map(String).filter(Boolean);
       const expectedDigest = await this.groupParticipantDigest(participants);
-      const admins = Array.isArray(conn?.admins) ? conn.admins.map(String) : [];
       let activeConn = conn || {};
       if (activeConn.keyRotationRequired === true || !activeConn.groupKeyEpoch || activeConn.groupKeyParticipantDigest !== expectedDigest){
-        if (!admins.includes(String(this.currentUser?.uid || ''))) {
-          throw new Error('Group encryption key rotation is required. Ask a chat or project admin to rotate the key.');
+        if (this._isV4RequiredRoom(activeConn)) {
+          throw this._identityError('liber/chat-v4-legacy-history-key-missing', 'A legacy group-key epoch is unavailable for this device-aligned chat.');
         }
-        const rotation = await this.rotateGroupKeyForConn(cid, activeConn, participants);
-        activeConn = {
-          ...activeConn,
-          ...rotation.fields,
-          groupKeyHistory: {
-            ...((activeConn.groupKeyHistory && typeof activeConn.groupKeyHistory === 'object') ? activeConn.groupKeyHistory : {}),
-            [String(rotation.state.epoch)]: rotation.state
-          }
-        };
+        throw this._identityError(
+          'liber/chat-legacy-group-key-unavailable',
+          'This legacy group chat has no readable current key. Start a new secure chat; this browser no longer rewrites group-key state.'
+        );
       }
       const key = await this.unwrapGroupKeyForConn(cid, activeConn, activeConn.groupKeyEpoch);
       this._cryptoMetaByConn.set(cid, {
@@ -9118,7 +9859,7 @@
       return key;
     }
 
-    async getEncryptionKeyForConn(connId){
+    async getEncryptionKeyForConn(connId, options = {}){
       const cid = String(connId || '').trim();
       const myUid = String(this.currentUser?.uid || '').trim();
       if (!cid || !myUid) throw new Error('Sign in and select a chat before sending.');
@@ -9131,6 +9872,11 @@
       if (!conn) throw new Error('Chat connection not found.');
       const participants = this.getConnParticipants(conn || {});
       if (!participants.includes(myUid)) throw new Error('You are not a participant in this encrypted conversation.');
+      // Old v2/group keys remain available for decrypting history after a room
+      // becomes v4-required. They must never be selected by a new-write path.
+      if (options?.forWrite === true && this._isV4RequiredRoom(conn)) {
+        throw this._identityError('liber/chat-v4-required', 'This chat requires per-device secure envelopes.');
+      }
       const isGroupOrProject = participants.length !== 2
         || !!String(conn?.projectId || '').trim()
         || conn?.type === 'project'
@@ -9140,7 +9886,7 @@
       const peerUid = participants.find((uid)=> uid !== myUid);
       if (!peerUid) throw new Error('The recipient identity could not be verified.');
 
-      await this.ensurePublishedChatIdentity();
+      const { identity: localIdentity } = await this.ensurePublishedChatIdentity();
 
       const peerSnap = await firebase.getDoc(firebase.doc(this.db, 'userPublicKeys', peerUid));
       if (!peerSnap.exists()) throw new Error('The recipient must open Secure Chat once before encrypted messages can be sent.');
@@ -9150,11 +9896,112 @@
 
       const cached = this.sharedKeyCache[cid];
       if (cached && cached.peerFingerprint === peerFingerprint && cached.aesKey) return cached.aesKey;
-      const myPriv = await chatCrypto.getPrivateKey(myUid);
+      const myPriv = localIdentity.privateKey;
       const aesKey = await chatCrypto.deriveSharedAesKey(myPriv, peerJwk, `liber-secure-chat:${cid}`);
       this.sharedKeyCache[cid] = { aesKey, peerFingerprint, cryptoVersion:'liber.secure-chat.ecdh-p256.v2' };
       this._cryptoMetaByConn.set(cid, { cryptoVersion:'liber.secure-chat.ecdh-p256.v2', cryptoEpoch:null });
       return aesKey;
+    }
+
+    async getLegacyDirectReadKeyCandidates(message, connId){
+      // Historical direct messages may predate immutable device envelopes. Read
+      // them only with a private legacy key that this browser already retains;
+      // this path must never create, publish, replace, or re-enroll an identity.
+      const cid = String(connId || message?.connId || '').trim();
+      const myUid = String(this.currentUser?.uid || '').trim();
+      if (!cid || !myUid) return [];
+      let conn = this._connectionRowById?.(cid) || null;
+      if (!conn){
+        const snap = await firebase.getDoc(firebase.doc(this.db, 'chatConnections', cid));
+        if (snap.exists()) conn = { id:snap.id, ...(snap.data() || {}) };
+      }
+      const participants = this.getConnParticipants(conn || {});
+      const isDirect = participants.length === 2
+        && participants.includes(myUid)
+        && !this._isProjectConnection(conn || {})
+        && !String(conn?.groupName || '').trim();
+      if (!isDirect) return [];
+      const peerUid = participants.find((uid)=> uid !== myUid);
+      if (!peerUid) return [];
+
+      const localIdentity = await chatCrypto.loadExistingLegacyIdentity(myUid);
+      if (!localIdentity?.privateKey || !localIdentity?.publicJwk) {
+        throw this._identityError(
+          'liber/chat-legacy-private-key-missing',
+          'This browser does not retain the private key needed for this encrypted history.'
+        );
+      }
+      const localFingerprint = await chatCrypto.fingerprintPublicJwk(localIdentity.publicJwk);
+      const identityFingerprints = (message?.identityFingerprints && typeof message.identityFingerprints === 'object')
+        ? message.identityFingerprints : {};
+      const selfHint = String(identityFingerprints[myUid] || '').trim();
+      if (selfHint && selfHint !== localFingerprint) {
+        throw this._identityError(
+          'liber/chat-legacy-private-key-missing',
+          'This browser does not retain the private key issued for this encrypted history.'
+        );
+      }
+
+      const peerSnap = await firebase.getDoc(firebase.doc(this.db, 'userPublicKeys', peerUid));
+      if (!peerSnap.exists()) return [];
+      const peerRecord = peerSnap.data() || {};
+      const peerHint = String(identityFingerprints[peerUid] || '').trim();
+      const peerJwks = [
+        peerRecord.publicJwk,
+        ...(Array.isArray(peerRecord.publicKeyHistory)
+          ? peerRecord.publicKeyHistory.map((entry)=> entry?.publicJwk || entry)
+          : [])
+      ].filter(Boolean);
+      const keys = [];
+      const seen = new Set();
+      for (const peerJwk of peerJwks){
+        try{
+          const peerFingerprint = await chatCrypto.fingerprintPublicJwk(peerJwk);
+          if (peerHint && peerHint !== peerFingerprint) continue;
+          const cacheKey = `${cid}:legacy-read:${localFingerprint}:${peerFingerprint}`;
+          let aesKey = this.sharedKeyCache[cacheKey]?.aesKey || null;
+          if (!aesKey){
+            aesKey = await chatCrypto.deriveSharedAesKey(
+              localIdentity.privateKey,
+              peerJwk,
+              `liber-secure-chat:${cid}`
+            );
+            this.sharedKeyCache[cacheKey] = { aesKey, localFingerprint, peerFingerprint, readOnly:true };
+          }
+          if (!seen.has(peerFingerprint)) {
+            seen.add(peerFingerprint);
+            keys.push(aesKey);
+          }
+        }catch(_){ }
+      }
+      return keys;
+    }
+
+    async decryptLegacyDirectMessageText(message, connId){
+      const keys = await this.getLegacyDirectReadKeyCandidates(message, connId);
+      let lastError = null;
+      for (const key of keys){
+        try{ return await chatCrypto.decryptWithKey(message?.cipher, key); }
+        catch(error){ lastError = error; }
+      }
+      if (lastError) throw lastError;
+      throw this._identityError(
+        'liber/chat-legacy-history-key-unavailable',
+        'No retained legacy identity can decrypt this message.'
+      );
+    }
+
+    async decryptLegacyCompatibleMessageText(message, connId){
+      let lastError = null;
+      try{
+        const fallbackKeys = await this.getFallbackKeyCandidatesForConn(connId);
+        for (const key of fallbackKeys){
+          try{ return await chatCrypto.decryptWithKey(message?.cipher, key); }
+          catch(error){ lastError = error; }
+        }
+      }catch(error){ lastError = error; }
+      try{ return await this.decryptLegacyDirectMessageText(message, connId); }
+      catch(error){ throw error || lastError || this._identityError('liber/chat-legacy-history-key-unavailable', 'No retained key can decrypt this message.'); }
     }
 
     async getMessageDecryptionKeyForConn(message, connId){
@@ -9175,18 +10022,46 @@
       return this.getFallbackKeyForConn(connId);
     }
 
+    isDeviceEnvelopeMessage(message){
+      const version = String(message?.cryptoVersion || '').trim();
+      return version === 'liber.secure-chat.message-envelope.v3'
+        || version === 'liber.secure-chat.message-envelope.v4';
+    }
+
+    isMalformedV4Message(message){
+      return String(message?.cryptoVersion || '').trim() === 'liber.secure-chat.message-envelope.v4'
+        && (!message?.cipher || (typeof message?.text === 'string' && !message?.cipher));
+    }
+
+    async decryptSecureMessageText(message, connId){
+      if (message?.cryptoVersion === 'liber.secure-chat.ecdh-p256.v2') {
+        const plaintext = await this.decryptLegacyDirectMessageText(message, connId);
+        return typeof this.normalizeDecryptedMessageText === 'function'
+          ? this.normalizeDecryptedMessageText(message, plaintext)
+          : plaintext;
+      }
+      const key = await this.getMessageDecryptionKeyForConn(message, connId);
+      const plaintext = await chatCrypto.decryptWithKey(message?.cipher, key);
+      return typeof this.normalizeDecryptedMessageText === 'function'
+        ? this.normalizeDecryptedMessageText(message, plaintext)
+        : plaintext;
+    }
+
+    getSecureMessageFailureText(error){
+      return typeof this.getDecryptionFailureText === 'function'
+        ? this.getDecryptionFailureText(error)
+        : '[unable to decrypt]';
+    }
+
     async getPeerUid(){
       const conn = (this.connections||[]).find(c=> c.id === this.activeConnection);
-      if (conn && Array.isArray(conn.participants)){
-        return conn.participants.find(u=> u !== this.currentUser.uid);
+      if (conn){
+        return this.getConnParticipants(conn).find(u=> u !== this.currentUser.uid);
       }
       try {
         const snap = await firebase.getDoc(firebase.doc(this.db,'chatConnections',this.activeConnection));
         if (snap.exists()){
-          const data = snap.data();
-          if (Array.isArray(data.participants)){
-            return data.participants.find(u=> u !== this.currentUser.uid);
-          }
+          return this.getConnParticipants(snap.data() || {}).find(u=> u !== this.currentUser.uid);
         }
       } catch {}
       const parts = (this.activeConnection||'').split('_');
@@ -9351,9 +10226,7 @@
           const s = await firebase.getDocs(q);
           s.forEach((d)=>{ const id = String(d.id || '').trim(); if (id) out.add(id); });
         };
-        await pull(firebase.query(firebase.collection(this.db,'chatConnections'), firebase.where('participants','array-contains', uid), firebase.limit(limit)));
-        try{ await pull(firebase.query(firebase.collection(this.db,'chatConnections'), firebase.where('users','array-contains', uid), firebase.limit(limit))); }catch(_){ }
-        try{ await pull(firebase.query(firebase.collection(this.db,'chatConnections'), firebase.where('memberIds','array-contains', uid), firebase.limit(limit))); }catch(_){ }
+        await pull(firebase.query(firebase.collection(this.db,'chatConnections'), firebase.where('participantIds','array-contains', uid), firebase.limit(limit)));
       }catch(_){ }
       return Array.from(out);
     }
@@ -10281,6 +11154,22 @@
     async renderEncryptedAttachment(containerEl, fileUrl, fileName, aesKey, sourceConnId = this.activeConnection, senderDisplayName = '', message = null){
       try {
         if (!containerEl?.isConnected) return;
+        const attachmentVersion = String(message?.attachmentCryptoVersion || message?.cryptoVersion || '').trim();
+        if (attachmentVersion === 'liber.secure-chat.message-envelope.v4') {
+          this.r178ValidateV4AttachmentContext(message, fileUrl, sourceConnId);
+          const key = await this.getMessageDecryptionKeyForConn(message, message.connId || sourceConnId);
+          const cipher = await this.fetchEncryptedAttachmentPayload(fileUrl);
+          const base64 = await chatCrypto.decryptWithKey(cipher, key);
+          const mime = this.isVideoFilename(fileName) ? this.inferVideoMime(fileName)
+            : this.isAudioFilename(fileName) ? this.inferAudioMime(fileName)
+            : /\.png$/i.test(fileName) ? 'image/png' : /\.webp$/i.test(fileName) ? 'image/webp'
+            : /\.gif$/i.test(fileName) ? 'image/gif' : this.isImageFilename(fileName) ? 'image/jpeg'
+            : /\.pdf$/i.test(fileName) ? 'application/pdf' : 'application/octet-stream';
+          const blob = this.base64ToBlob(base64, mime);
+          const url = this.getStableBlobUrl(`v4|${message.id}|${fileUrl}`, blob);
+          this.renderDirectAttachment(containerEl, url, fileName, message, senderDisplayName, !!containerEl?.dataset?.pickerMode);
+          return;
+        }
         const rawUrl = String(fileUrl || '').trim();
         let decodedUrl = rawUrl;
         try{ decodedUrl = decodeURIComponent(rawUrl); }catch(_){ decodedUrl = rawUrl; }
@@ -10310,7 +11199,7 @@
             cryptoEpoch: attachmentCryptoEpoch
           }, sourceConnId || cid);
         }
-        const payload = await this.fetchEncryptedAttachmentPayload(fileUrl);
+        let payload = await this.fetchEncryptedAttachmentPayload(fileUrl);
         const payloadCands = this.extractEncryptedPayloadCandidates(payload || {});
         let found = payload && typeof payload.iv === 'string' && typeof payload.data === 'string' ? payload : null;
         if (!found && payloadCands.length){
@@ -10873,6 +11762,13 @@
       } catch (e) {
         if (!containerEl?.isConnected) return;
         try{ containerEl.innerHTML = ''; }catch(_){ }
+        if (String(message?.attachmentCryptoVersion || message?.cryptoVersion || '') === 'liber.secure-chat.message-envelope.v4') {
+          const error = document.createElement('div');
+          error.className = 'file-link';
+          error.textContent = 'Unable to open encrypted attachment. Please retry.';
+          containerEl.appendChild(error);
+          return;
+        }
         const looksEncrypted = /\.enc\.json(?:$|\?)/i.test(String(fileUrl || ''));
         const isFetchFail = String(e?.message || '').includes('fetch-failed') || String(e?.message || '').includes('attachment-fetch');
         const isInvalidPayload = String(e?.message || '').includes('invalid-payload');
@@ -11091,11 +11987,16 @@
           const users = await window.firebaseService.searchUsers(term.toLowerCase());
           // Rank by fuzzy score + recency (last messaged) + frequency placeholder
           const filtered = (users||[]).filter(u=> u.uid !== (this.currentUser&&this.currentUser.uid)).map(u=>{
-            const name = (u.username||'').toLowerCase(); const mail=(u.email||'').toLowerCase(); const t=term.toLowerCase();
+            const username = (u.username||'').toLowerCase();
+            const displayName = (u.displayName||'').toLowerCase();
+            const t=term.toLowerCase();
             const contains = (s)=> s.includes(t);
             const prefix = (s)=> s.startsWith(t);
             const subseq = (s)=>{ let i=0; for (const ch of s){ if (ch===t[i]) i++; if (i===t.length) return true; } return t.length===0; };
-            let score = 0; if (prefix(name)||prefix(mail)) score+=3; if (contains(name)||contains(mail)) score+=2; if (subseq(name)||subseq(mail)) score+=1;
+            let score = 0;
+            if (prefix(username)||prefix(displayName)) score+=3;
+            if (contains(username)||contains(displayName)) score+=2;
+            if (subseq(username)||subseq(displayName)) score+=1;
             // recent conversation boost
             let recentBoost = 0;
             try{
@@ -11139,28 +12040,8 @@
                 if (search) search.value = '';
                 const myName = this._displayName(this.me || {}, this.currentUser.uid);
                 const uids = [this.currentUser.uid, u.uid||u.id];
-                const key = this.computeConnKey(uids);
                 try{
-                  let connId = await this.findConnectionByKey(key);
-                  if (!connId){
-                    try{
-                      const stableRef = firebase.doc(this.db,'chatConnections', key);
-                      await firebase.setDoc(stableRef,{
-                        id: key,
-                        key,
-                        participants: uids,
-                        participantUsernames:[myName, this._displayName(u, u.uid||u.id||'')],
-                        admins: [this.currentUser.uid],
-                        createdAt: new Date().toISOString(),
-                        updatedAt: new Date().toISOString(),
-                        lastMessage:''
-                      }, { merge:true });
-                      connId = key;
-                    }catch(errSet){
-                      connId = await this.findConnectionByKey(key);
-                      if (!connId) throw errSet;
-                    }
-                  }
+                  const connId = await this.ensureConversationForParticipants(uids);
                   await this.loadConnections();
                   this.setActive(connId, this._displayName(u, u.uid||u.id||''));
                 }catch(err){
@@ -11608,7 +12489,18 @@
     }
 
     async startVoiceCall(){ await this.enterRoom(false); }
-    async startVideoCall(){ await this.enterRoom(false); }
+    async startVideoCall(){ await this.enterRoom(true); }
+
+    _signalCollectionQuery(callId, kind, connId){
+      return firebase.query(firebase.collection(this.db,'calls',callId,kind), firebase.where('connId','==',connId));
+    }
+
+    async _readCallSignal(callId, kind, signalId, connId){
+      // An empty membership-constrained query is authorized; reading a missing
+      // signal doc cannot prove its connId under participant-only rules.
+      const snapshot = await firebase.getDocs(this._signalCollectionQuery(callId,kind,connId));
+      return snapshot.docs.find(doc => doc.id === signalId) || { exists:()=>false };
+    }
 
   async ensureRoom(){
     const callConnId = this.getCallConnId();
@@ -11640,29 +12532,44 @@
 
   async enterRoom(video = false){
     if (!this.activeConnection) return;
+    const entryConnId = this.activeConnection;
     let waited = 0;
     while (this._cleanupInProgress && waited < 2000){ await new Promise(r=>setTimeout(r, 100)); waited += 100; }
-    this._callConnectionId = this.activeConnection;
+    if (this._cleanupInProgress || this.activeConnection !== entryConnId || this._authSessionRetired) return;
+    this._callConnectionId = entryConnId;
+    this._stopRoomPresenceListeners();
+    const presenceGeneration = this._roomPresenceGeneration;
+    const entryUser = this.currentUser;
+    const ownsEntry = () => !this._authSessionRetired && this.currentUser === entryUser
+      && this._roomPresenceGeneration === presenceGeneration && this._callConnectionId === entryConnId;
+    const ownsPresence = () => this._inRoom && ownsEntry();
+    let permissionStream = null;
     try {
-      await navigator.mediaDevices.getUserMedia({ audio: true });
+      permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       console.log('Mic permission granted');
       } catch (err) {
+        if (!ownsEntry()) return;
         const msg = 'Microphone access is required for calls.';
         this._showError(msg);
         alert(msg);
         return;
+      } finally {
+        // This stream only checks permission. LiveKit (or the active peer call)
+        // owns its own capture stream once the user starts the call.
+        try{ permissionStream?.getTracks().forEach(track => track.stop()); }catch(_){ }
       }
+    if (!ownsEntry()) return;
     this._videoEnabled = !!video;
     this._disableCallFab = false;
     await this.ensureRoom();
+    if (!ownsEntry()) return;
+    this._inRoom = true;
     if (this._useSfuCalls){
       const ov = document.getElementById('call-overlay');
       if (ov) ov.classList.remove('hidden');
       const cs = document.getElementById('call-status');
       if (cs) cs.textContent = 'Room open. Click Start Call.';
       this.initCallControls(video);
-      if (this._roomUnsub) this._roomUnsub();
-      if (this._peersUnsub) this._peersUnsub();
       const callConnId = this.getCallConnId();
       const roomRef = firebase.doc(this.db,'callRooms', callConnId);
       const peersRef = firebase.collection(this.db,'callRooms', callConnId, 'peers');
@@ -11670,15 +12577,18 @@
         if (err){ this._showCallError('Call room error: ' + (err?.code || '') + ' ' + (err?.message || err)); console.warn('[SFU] callRooms/peers error', err?.code, err?.message || err); }
       };
       this._roomUnsub = firebase.onSnapshot(roomRef, (snap)=>{
+        if (!ownsPresence()) return;
         this._roomState = snap.exists() ? (snap.data() || { status: 'idle', activeCallId: null }) : { status: 'idle', activeCallId: null };
         if (!this._roomState.activeCallId) this._disableCallFab = false;
         this.updateRoomUI();
         this._syncCallFab();
       });
       this._peersUnsub = firebase.onSnapshot(peersRef, async snap => {
+        if (!ownsPresence()) return;
         this._peersPresence = {};
         snap.forEach(d => this._peersPresence[d.id] = d.data());
         await this.updateRoomUI();
+        if (!ownsPresence()) return;
         if (!this._isSfuConnected()){
           const otherConnected = Object.entries(this._peersPresence || {}).some(([uid, p]) => uid !== this.currentUser?.uid && String(p?.state || '') === 'connected');
           const throttleMs = 15000;
@@ -11694,10 +12604,12 @@
         this._syncCallFab();
       }, onSnapErr);
       this._roomState = { status: 'idle', activeCallId: null };
-      try{ const snap = await firebase.getDoc(roomRef); if (snap.exists()) this._roomState = snap.data() || this._roomState; }catch(_){}
+      try{ const snap = await firebase.getDoc(roomRef); if (!ownsPresence()) return; if (snap.exists()) this._roomState = snap.data() || this._roomState; }catch(_){}
+      if (!ownsPresence()) return;
       this._inRoom = true;
       this._syncCallFab();
       try{ await this.updatePresence('idle', false); }catch(e){
+        if (!ownsPresence()) return;
         this._showCallError('Presence error: ' + (e?.code || '') + ' ' + (e?.message || e));
         console.warn('[SFU] updatePresence failed', e?.code, e?.message || e);
       }
@@ -11708,14 +12620,13 @@
     const cs = document.getElementById('call-status');
     if (cs) cs.textContent = 'Room open. Click Start Call or wait for other to start.';
     this.initCallControls(video);
-    if (this._roomUnsub) this._roomUnsub();
-    if (this._peersUnsub) this._peersUnsub();
     const callConnId = this.getCallConnId();
     const roomRef = firebase.doc(this.db,'callRooms', callConnId);
     const onSnapErr = (err)=>{
       if (err){ this._showCallError('Call room error: ' + (err?.code || '') + ' ' + (err?.message || err)); console.warn('[call] callRooms error', err?.code, err?.message || err); }
     };
     this._roomUnsub = firebase.onSnapshot(roomRef, async snap => {
+      if (!ownsPresence()) return;
       this._roomState = snap.data() || { status: 'idle', activeCallId: null };
       const activeCid = this._roomState.activeCallId;
       if (!activeCid) this._disableCallFab = false;
@@ -11727,18 +12638,22 @@
         this._lastJoinAttemptAt = Date.now();
         await this.joinMultiCall(activeCid, video);
       }
+      if (!ownsPresence()) return;
       await this.updateRoomUI();
+      if (!ownsPresence()) return;
       this._syncCallFab();
       const status = document.getElementById('call-status');
       if (status) status.textContent = activeCid ? 'In call' : 'Room open. Click Start Call or wait for other to start.';
     }, onSnapErr);
     const peersRef = firebase.collection(this.db,'callRooms', callConnId, 'peers');
     this._peersUnsub = firebase.onSnapshot(peersRef, snap => {
+      if (!ownsPresence()) return;
       this._peersPresence = {};
       snap.forEach(d => this._peersPresence[d.id] = d.data());
       this.updateRoomUI();
     }, onSnapErr);
     await this.updatePresence('idle', false);
+    if (!ownsPresence()) return;
     // Start silence monitor if no call active
     if (this._autoResumeBySpeech && this._roomState.status === 'idle') {
       this._startAutoResumeMonitor(video);
@@ -11776,6 +12691,8 @@
       if (this._useSfuCalls){
         await this._emitJoinCallMessage(this.getCallConnId() || this.activeConnection);
         const ok = await this._startOrJoinSfuCall(this._videoEnabled);
+        startBtn.style.display = ok ? 'none' : '';
+        return;
       } else {
         await this.attemptStartRoomCall(this._videoEnabled);
       }
@@ -11804,22 +12721,26 @@
       if (sb) sb.style.display = '';
       if (showBtn) showBtn.style.display = 'none';
     };
-    if (micBtn) micBtn.onclick = () => {
+    if (micBtn) micBtn.onclick = async () => {
+      if (micBtn.disabled) return;
+      const previousMicEnabled = this._micEnabled;
       this._micEnabled = !this._micEnabled;
       if (this._emitIosCallIntent('toggle_mic', { video: this._videoEnabled })){
         micBtn.classList.toggle('muted', !this._micEnabled);
         return;
       }
       if (this._useSfuCalls && this._sfuRoom?.localParticipant?.setMicrophoneEnabled){
-        this._sfuRoom.localParticipant.setMicrophoneEnabled(this._micEnabled, {
+        micBtn.disabled = true;
+        try { await this._sfuRoom.localParticipant.setMicrophoneEnabled(this._micEnabled, {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
           channelCount: 1
-        }, { dtx: false }).catch((e)=>{
+        }, { dtx: false }); } catch(e){
+          this._micEnabled = previousMicEnabled;
           console.warn('[SFU] setMicrophoneEnabled failed (toggle)', e?.message || e);
           this._showCallError('Microphone failed: ' + (e?.message || 'unknown'));
-        });
+        } finally { micBtn.disabled = false; }
         micBtn.classList.toggle('muted', !this._micEnabled);
         return;
       }
@@ -11828,13 +12749,20 @@
       micBtn.classList.toggle('muted', !this._micEnabled);
     };
     if (camBtn) camBtn.onclick = async () => {
+      if (camBtn.disabled) return;
+      const previousVideoEnabled = this._videoEnabled;
       this._videoEnabled = !this._videoEnabled;
       if (this._emitIosCallIntent('toggle_camera', { video: this._videoEnabled })){
         camBtn.classList.toggle('muted', !this._videoEnabled);
         return;
       }
       if (this._useSfuCalls && this._sfuRoom?.localParticipant?.setCameraEnabled){
-        try{ await this._sfuRoom.localParticipant.setCameraEnabled(this._videoEnabled); }catch(_){}
+        camBtn.disabled = true;
+        try{ await this._sfuRoom.localParticipant.setCameraEnabled(this._videoEnabled); }
+        catch(e){
+          this._videoEnabled = previousVideoEnabled;
+          this._showCallError('Camera failed: ' + (e?.message || 'unknown'));
+        } finally { camBtn.disabled = false; }
         this._attachSfuLocalPreview();
         this.updateRoomUI();
         camBtn.classList.toggle('muted', !this._videoEnabled);
@@ -12312,9 +13240,11 @@
         }
       };
       const unsubs = [];
-      unsubs.push(firebase.onSnapshot(firebase.doc(this.db,'calls',callId,'answers', peerUid), async doc => {
-        if (!doc.exists()) return;
+      unsubs.push(firebase.onSnapshot(this._signalCollectionQuery(callId,'answers',callConnId), async snapshot => {
+        const doc = snapshot.docs.find(row => row.id === peerUid);
+        if (!doc) return;
         const data = doc.data();
+        if (data.fromUid !== peerUid || data.toUid !== this.currentUser.uid || data.connId !== callConnId) return;
         if ((data?.offerToken || '') !== offerToken) return;
         // Normalize to RTCSessionDescriptionInit
         const desc = { type: data.type || 'answer', sdp: data.sdp };
@@ -12345,7 +13275,7 @@
         if (cs) cs.textContent = 'Call permissions error (answers listener).';
       }));
       const seenCands = new Set();
-      unsubs.push(firebase.onSnapshot(candsRef, snap => {
+      unsubs.push(firebase.onSnapshot(this._signalCollectionQuery(callId,'candidates',callConnId), snap => {
         snap.forEach(d => {
           const v = d.data();
           if (v.type !== 'answer' || v.fromUid !== peerUid || v.toUid !== this.currentUser.uid || !v.candidate) return;
@@ -12445,11 +13375,11 @@
 
     // Find the offer addressed to me to identify the initiator
     // Find the newest offer addressed to me; if none, poll briefly waiting for initiator
-    let offerDoc = await firebase.getDoc(firebase.doc(this.db,'calls',callId,'offers', this.currentUser.uid));
+    let offerDoc = await this._readCallSignal(callId,'offers',this.currentUser.uid,callConnId);
     if (!offerDoc.exists()){
       for (let i=0;i<6;i++){
         await new Promise(r=>setTimeout(r,250));
-        offerDoc = await firebase.getDoc(firebase.doc(this.db,'calls',callId,'offers', this.currentUser.uid));
+        offerDoc = await this._readCallSignal(callId,'offers',this.currentUser.uid,callConnId);
         if (offerDoc.exists()) break;
       }
       if (!offerDoc.exists()){
@@ -12461,6 +13391,9 @@
       }
     }
     const offer = offerDoc.data();
+    if (offer.connId !== callConnId || offer.toUid !== this.currentUser.uid || !offer.fromUid) {
+      throw new Error('The call invitation does not match this conversation and participant.');
+    }
     console.log('[call] joinMultiCall', { callId, callConnId, fromUid: offer?.fromUid || null });
     const peerUid = offer.fromUid;
 
@@ -12568,6 +13501,7 @@
     };
 
     const answersRef = firebase.collection(this.db,'calls',callId,'answers');
+    const answerRef = firebase.doc(answersRef,this.currentUser.uid);
     const candsRef = firebase.collection(this.db,'calls',callId,'candidates');
     // Ensure we only process candidates for this peer
     const myUid = this.currentUser.uid;
@@ -12601,7 +13535,7 @@
     });
       const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-      await firebase.setDoc(firebase.doc(answersRef, peerUid), { sdp: answer.sdp, type: answer.type, createdAt: new Date().toISOString(), connId: callConnId, fromUid: this.currentUser.uid, toUid: peerUid, offerToken });
+      await firebase.setDoc(answerRef, { sdp: answer.sdp, type: answer.type, createdAt: new Date().toISOString(), connId: callConnId, fromUid: this.currentUser.uid, toUid: peerUid, offerToken });
       // Flush any queued ICE now that descriptions are set
       while (candidateQueue.length) {
         const c = candidateQueue.shift();
@@ -12613,7 +13547,7 @@
       candidateQueue.length = 0;
     const unsubs = [];
     const seenCands = new Set();
-    unsubs.push(firebase.onSnapshot(candsRef, snap => {
+    unsubs.push(firebase.onSnapshot(this._signalCollectionQuery(callId,'candidates',callConnId), snap => {
       snap.forEach(d => {
         const v = d.data();
         if (v.type !== 'offer' || v.fromUid !== peerUid || v.toUid !== myUid || !v.candidate) return;
@@ -12646,7 +13580,7 @@
         await pc.setRemoteDescription({ type:'offer', sdp: sdp });
         const ans2 = await pc.createAnswer();
         await pc.setLocalDescription(ans2);
-        await firebase.setDoc(firebase.doc(answersRef, peerUid), { sdp: ans2.sdp, type: ans2.type, createdAt: new Date().toISOString(), connId: callConnId, fromUid: this.currentUser.uid, toUid: peerUid, offerToken });
+        await firebase.setDoc(answerRef, { sdp: ans2.sdp, type: ans2.type, createdAt: new Date().toISOString(), connId: callConnId, fromUid: this.currentUser.uid, toUid: peerUid, offerToken });
       }catch(e){ this._showCallError('Offer update failed: ' + (e?.message || e)); console.warn('offer update handling failed', e?.message||e); }
     }, (err)=>{
       this._showCallError(`Call error (join offers): ${err?.code || ''} ${err?.message || err}`);
@@ -12662,7 +13596,7 @@
     const wdKey = callId+':'+peerUid;
     try { const old = this._pcWatchdogs.get(wdKey); if (old){ clearTimeout(old.t1); clearTimeout(old.t2); } } catch(_){ }
     const t1 = setTimeout(()=>{ try{ if (pc.connectionState!=='connected' && pc.connectionState!=='completed'){ pc.restartIce && pc.restartIce(); } }catch(e){ this._showCallError('Watchdog restartIce: ' + (e?.message || e)); console.warn('watchdog restartIce error', e?.message||e); } }, 15000);
-    const t2 = setTimeout(async()=>{ try{ if (pc.connectionState!=='connected' && pc.connectionState!=='completed' && pc.signalingState !== 'closed'){ if (pc.signalingState === 'have-remote-offer'){ const ans = await pc.createAnswer({}); if (pc.signalingState === 'closed') return; await pc.setLocalDescription(ans); await firebase.setDoc(firebase.doc(answersRef, peerUid), { sdp: ans.sdp, type: ans.type, createdAt: new Date().toISOString(), connId: callConnId, fromUid: this.currentUser.uid, toUid: peerUid, offerToken }); } } }catch(e){ const msg = String(e?.message || e || '').toLowerCase(); if (msg.includes('signalingstate') && msg.includes('closed')) return; this._showCallError('Watchdog resend answer: ' + (e?.message || e)); console.warn('watchdog resend answer error', e?.message||e); } }, 25000);
+    const t2 = setTimeout(async()=>{ try{ if (pc.connectionState!=='connected' && pc.connectionState!=='completed' && pc.signalingState !== 'closed'){ if (pc.signalingState === 'have-remote-offer'){ const ans = await pc.createAnswer({}); if (pc.signalingState === 'closed') return; await pc.setLocalDescription(ans); await firebase.setDoc(answerRef, { sdp: ans.sdp, type: ans.type, createdAt: new Date().toISOString(), connId: callConnId, fromUid: this.currentUser.uid, toUid: peerUid, offerToken }); } } }catch(e){ const msg = String(e?.message || e || '').toLowerCase(); if (msg.includes('signalingstate') && msg.includes('closed')) return; this._showCallError('Watchdog resend answer: ' + (e?.message || e)); console.warn('watchdog resend answer error', e?.message||e); } }, 25000);
     this._pcWatchdogs.set(wdKey, { t1, t2 });
 
       await this.updatePresence('connecting', video);
@@ -12749,10 +13683,15 @@
 
   async startCall({ callId, video }){
       try{
+        const callConnId = this.getCallConnId() || this.activeConnection;
+        const connection = await this._getLiveConnectionForCrypto(callConnId);
+        const participants = this.getConnParticipants(connection);
+        if (participants.length !== 2) throw new Error('Use the room call for a group conversation.');
+        const peerUid = participants.find(uid => uid !== this.currentUser.uid);
         // ensure previous listeners/pcs are cleaned up when reconnecting
         try{ this._activeCall && this._activeCall.unsubs && this._activeCall.unsubs.forEach(u=>{ try{u&&u();}catch(_){}}); }catch(_){ }
         try{ this._activeCall && this._activeCall.pc && this._activeCall.pc.close(); }catch(_){ }
-        callId = callId || `${this.activeConnection}_${Date.now()}`;
+        callId = callId || `${callConnId}_${Date.now()}`;
         const audioCfg = this.getCallAudioConstraints?.() || { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
         const videoCfg = video ? (this.getCallVideoConstraints?.() || true) : false;
         const config = { audio: audioCfg, video: videoCfg };
@@ -12802,31 +13741,33 @@
         try { await this._renderParticipants(); this._attachSpeakingDetector(stream, '.call-participants .avatar.local'); } catch(_){ }
         const offersRef = firebase.collection(this.db,'calls',callId,'offers');
         const candsRef = firebase.collection(this.db,'calls',callId,'candidates');
-        pc.onicecandidate = (e)=>{ if(e.candidate){ firebase.setDoc(firebase.doc(candsRef), { type:'offer', connId: this.activeConnection, candidate:e.candidate.toJSON() }); }};
+        pc.onicecandidate = (e)=>{ if(e.candidate){ firebase.setDoc(firebase.doc(candsRef), { type:'offer', connId:callConnId, fromUid:this.currentUser.uid, toUid:peerUid, candidate:e.candidate.toJSON() }); }};
         // Avoid duplicate starts: if an offer already exists, switch to join flow
-        const existingOffer = await firebase.getDoc(firebase.doc(offersRef,'offer'));
+        const existingOffer = await this._readCallSignal(callId,'offers','offer',callConnId);
         if (existingOffer.exists()){
           try{ stream.getTracks().forEach(t=> t.stop()); }catch(_){ }
           return await this.answerCall(callId, { video });
         }
         const offer = await pc.createOffer(); await pc.setLocalDescription(offer);
-        await firebase.setDoc(firebase.doc(offersRef,'offer'), { sdp: offer.sdp, type: offer.type, createdAt: new Date().toISOString(), connId: this.activeConnection });
+        await firebase.setDoc(firebase.doc(offersRef,'offer'), { sdp: offer.sdp, type: offer.type, createdAt: new Date().toISOString(), connId:callConnId, fromUid:this.currentUser.uid, toUid:peerUid });
         // publish one join message for room-wide latest call id
         await this.saveMessage({ text:`[call:room:${callId}]` });
         // Listen for answer
         if (firebase.onSnapshot){
           const unsubs=[];
-          const u1 = firebase.onSnapshot(firebase.doc(this.db,'calls',callId,'answers','answer'), async (doc)=>{
-            if (doc.exists()){
+          const u1 = firebase.onSnapshot(this._signalCollectionQuery(callId,'answers',callConnId), async (snapshot)=>{
+            const doc = snapshot.docs.find(row => row.id === 'answer');
+            if (doc){
               const data = doc.data();
+              if (data.fromUid !== peerUid || data.toUid !== this.currentUser.uid || data.connId !== callConnId) return;
               await pc.setRemoteDescription(new RTCSessionDescription({ type:'answer', sdp:data.sdp }));
             }
           });
           unsubs.push(u1);
-          const u2 = firebase.onSnapshot(candsRef, (snap)=>{
+          const u2 = firebase.onSnapshot(this._signalCollectionQuery(callId,'candidates',callConnId), (snap)=>{
             snap.forEach(d=>{
               const v=d.data();
-              if(v.type==='answer' && v.candidate){
+              if(v.type==='answer' && v.fromUid === peerUid && v.toUid === this.currentUser.uid && v.candidate){
                 try{
                   if (pc.signalingState==='closed') return;
                   if (!pc.remoteDescription) return;
@@ -12845,6 +13786,11 @@
 
     async answerCall(callId, { video }){
       try{
+        const callConnId = this.getCallConnId() || this.activeConnection;
+        const connection = await this._getLiveConnectionForCrypto(callConnId);
+        const participants = this.getConnParticipants(connection);
+        if (participants.length !== 2) throw new Error('Use the room call for a group conversation.');
+        const peerUid = participants.find(uid => uid !== this.currentUser.uid);
         const audioCfg = this.getCallAudioConstraints?.() || { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
         const videoCfg = video ? (this.getCallVideoConstraints?.() || true) : false;
         const config = { audio: audioCfg, video: videoCfg };
@@ -12891,24 +13837,25 @@
         try { await this._renderParticipants(); this._attachSpeakingDetector(stream, '.call-participants .avatar.local'); } catch(_){ }
         const answersRef = firebase.collection(this.db,'calls',callId,'answers');
         const candsRef = firebase.collection(this.db,'calls',callId,'candidates');
-        pc.onicecandidate = (e)=>{ if(e.candidate){ firebase.setDoc(firebase.doc(candsRef), { type:'answer', connId: this.activeConnection, candidate:e.candidate.toJSON() }); }};
-        const offerDoc = await firebase.getDoc(firebase.doc(this.db,'calls',callId,'offers','offer'));
+        pc.onicecandidate = (e)=>{ if(e.candidate){ firebase.setDoc(firebase.doc(candsRef), { type:'answer', connId:callConnId, fromUid:this.currentUser.uid, toUid:peerUid, candidate:e.candidate.toJSON() }); }};
+        const offerDoc = await this._readCallSignal(callId,'offers','offer',callConnId);
         if (!offerDoc.exists()) return;
         const offer = offerDoc.data();
+        if (offer.fromUid !== peerUid || offer.toUid !== this.currentUser.uid || offer.connId !== callConnId) throw new Error('The call invitation has no valid participant context. Start a new call.');
         await pc.setRemoteDescription(new RTCSessionDescription({ type:'offer', sdp: offer.sdp }));
         pc.addTransceiver('audio', { direction: 'sendrecv' });
         pc.addTransceiver('video', { direction: video ? 'sendrecv' : 'recvonly' });
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        await firebase.setDoc(firebase.doc(answersRef,'answer'), { sdp: answer.sdp, type: answer.type, createdAt: new Date().toISOString(), connId: this.activeConnection });
+        await firebase.setDoc(firebase.doc(answersRef,'answer'), { sdp: answer.sdp, type: answer.type, createdAt: new Date().toISOString(), connId:callConnId, fromUid:this.currentUser.uid, toUid:peerUid });
         // Listen for caller ICE candidates (type 'offer') and add to this peer connection
         if (firebase.onSnapshot){
           const added = new Set();
-          firebase.onSnapshot(candsRef, (snap)=>{
+          firebase.onSnapshot(this._signalCollectionQuery(callId,'candidates',callConnId), (snap)=>{
             snap.forEach(d=>{
               const v=d.data();
               const key=v && v.candidate && (v.candidate.sdpMid+':'+v.candidate.sdpMLineIndex+':'+v.candidate.candidate);
-              if (v.type==='offer' && v.candidate && !added.has(key)){
+              if (v.type==='offer' && v.fromUid === peerUid && v.toUid === this.currentUser.uid && v.candidate && !added.has(key)){
                 added.add(key);
                 if (pc.signalingState==='closed' || !pc.remoteDescription) return;
                 pc.addIceCandidate(new RTCIceCandidate(v.candidate)).catch(()=>{});
@@ -13298,11 +14245,15 @@
     async cleanupActiveCall(endRoom = false, reason = 'unknown'){
     if (this._cleanupInProgress) return;
     this._cleanupInProgress = true;
+    this._stopDrawSync();
     try{
     const endedConnId = String(this.getCallConnId() || this.activeConnection || '').trim();
     this._startingCall = false;
     this._joiningCall = false;
     this._sfuConnectAborted = true;
+    this._sfuConnectRun = null;
+    this._inRoom = false;
+    this._stopRoomPresenceListeners();
     this._lastJoinedCallId = null;
     if (this._screenSharing) await this._stopScreenShare();
       this._closeCallTileFullscreen();
@@ -13548,6 +14499,8 @@
     }
   }
 
+  try { window.installR178ChatReadCompatibility?.(SecureChatApp.prototype); }
+  catch (error) { console.warn('Secure Chat history compatibility bridge did not install:', error?.message || error); }
   window.secureChatApp = new SecureChatApp();
 })();
 
@@ -13736,7 +14689,15 @@ window.secureChatApp.showRecordingReview = function(blob, filename){
         return;
       }
       try {
-        const aesKey = await self.getEncryptionKeyForConn(targetConnId);
+        const liveConnection = await self._getLiveConnectionForCrypto(targetConnId);
+        if (self._isV4RequiredRoom(liveConnection) || self._isPendingDirectBridgeRoom(liveConnection)) {
+          await self._saveV4TextMessage(targetConnId, {
+            text:isVideoSend ? '[video message]' : '[voice message]',
+            attachments:[{blob,fileName:filename,isVideoRecording:isVideoSend,isVoiceRecording:!isVideoSend}]
+          }, {allowPendingLegacyBridge:true});
+          return;
+        }
+        const aesKey = await self.getEncryptionKeyForConn(targetConnId, { forWrite:true });
         const salts = await self.getConnSaltForConn(targetConnId);
         let base64;
         if (isVideoSend) {

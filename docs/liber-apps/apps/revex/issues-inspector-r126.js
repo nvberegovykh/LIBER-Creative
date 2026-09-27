@@ -14,7 +14,7 @@ function focus(issue){
  if(row){v.selectAndRoute?.(row);v.select?.(row,true)}
 }
 function render(){
- const s=S(),host=document.getElementById('bim-inspector');if(!host||s?.selectedElement)return;
+ const s=S(),host=document.getElementById('bim-inspector');if(!host||s?.selectedElement||s?.viewerSelectionKind==='section')return;
  const rows=(s?.issues||[]).filter(active).sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
  host.innerHTML=`<div class="eyebrow">PROJECT COORDINATION</div><h2>Active issues · ${rows.length}</h2><p class="muted">No BIM element selected — showing every active issue in this project.</p><div class="issue-list" data-r126-empty-issues>${rows.length?rows.map(issue=>`<button type="button" class="issue-row r126-empty-issue" data-id="${esc(issue.id||'')}"><strong>${esc(issue.title||'Issue')}</strong><small>${esc(String(issue.status||'open').replace(/_/g,' '))}${issue.anchorLabel?` · ${esc(issue.anchorLabel)}`:''}</small>${issue.body?`<p>${esc(issue.body)}</p>`:''}</button>`).join(''):'<p class="muted">No active issues.</p>'}</div>`;
  host.querySelectorAll('.r126-empty-issue').forEach(button=>button.addEventListener('click',()=>{const issue=rows.find(row=>String(row.id||'')===String(button.dataset.id||''));if(issue)focus(issue)}));

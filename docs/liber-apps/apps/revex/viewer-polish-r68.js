@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-const BUILD='20260816r68-viewer-polish1';
+const BUILD='20260909r190-mobile-controls1';
 const $=(selector,root=document)=>root.querySelector(selector);
 
 if(!window.__revexViewerPolishR68){
@@ -120,15 +120,13 @@ if(!window.__revexViewerPolishR68){
       this.camera.getWorldDirection(direction);
       if(direction.lengthSq()<1e-8)direction.set(0,0,-1);
       this.yaw=Math.atan2(-direction.x,-direction.z);
-      this.pitch=Math.asin(Math.max(-.98,Math.min(.98,direction.y)));
-      const target=this.controls?.target?.clone?.()||this.bounds.getCenter(new THREE.Vector3());
-      const horizontal=new THREE.Vector3(direction.x,0,direction.z);
-      if(horizontal.lengthSq()<1e-8)horizontal.set(0,0,-1);else horizontal.normalize();
-      const span=Math.max(4,Math.min(12,(this.bounds.getSize(new THREE.Vector3()).length()||80)/14));
-      this.camera.position.set(target.x-horizontal.x*span,Number(this.floor||0)+Number(this.eye||5.5),target.z-horizontal.z*span);
+      this.pitch=0;
+      // Keep the user's horizontal viewpoint; changing modes must not teleport
+      // into an arbitrary room or directly in front of a wall.
+      this.camera.position.y=Number(this.floor||0)+Number(this.eye||5.5);
       this.look?.();
       this.requestRender?.();
-      if(!this.embedded){try{canvas?.requestPointerLock?.();}catch(_){}}
+      if(!this.embedded&&!this.walkUsesTouch?.()){try{canvas?.requestPointerLock?.();}catch(_){}}
       diagnostic('INFO','WALK_START',this.embedded?'Walk started in WebView drag-look mode; WASD moves, Q/E changes eye height.':'Walk started; WASD moves, Shift accelerates, Esc exits.');
     };
 

@@ -136,13 +136,13 @@
     if(!box.querySelector('[data-r71-open-source]')){
       const button=document.createElement('button');
       button.type='button';button.className='button ghost compact';button.dataset.r71OpenSource='1';button.textContent='Open selected source';
-      button.addEventListener('click',()=>{const url=architexturesSourceUrl(source.value);if(url)root.open(url,'_blank','noopener');});
+      button.addEventListener('click',()=>{const url=architexturesSourceUrl(source.value);if(url)root.dispatchEvent(new CustomEvent('revex:open-embedded-asset-provider',{detail:{provider:'architextures',url}}));});
       source.insertAdjacentElement('afterend',button);
     }
     if(!box.querySelector('[data-r71-edit-source]')){
       const button=document.createElement('button');
       button.type='button';button.className='button ghost compact';button.dataset.r71EditSource='1';button.textContent='Edit in Architextures';
-      button.addEventListener('click',()=>{const url=architexturesEditUrl(source.value);if(url)root.open(url,'_blank','noopener');});
+      button.addEventListener('click',()=>{const url=architexturesEditUrl(source.value);if(url)root.dispatchEvent(new CustomEvent('revex:open-embedded-asset-provider',{detail:{provider:'architextures',url}}));});
       box.querySelector('[data-r71-open-source]')?.insertAdjacentElement('afterend',button);
     }
     if(!source.dataset.r71SourceBound){source.dataset.r71SourceBound='1';source.addEventListener('input',()=>syncSourceButtons(box));}
