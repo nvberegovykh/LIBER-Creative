@@ -60,7 +60,7 @@
     // WALLT and the superseded control/history overlays are deliberately not
     // loaded here.  Their legacy global queues can outlive a project/account
     // boundary; core REVEX owns the reviewed controls and history paths.
-    loadScript('viewer-polish-r68.js?v=20260914r192-morning1','viewer-polish-r68','module');
+    loadScript('viewer-polish-r68.js?v=20260927r198-walk-entry1','viewer-polish-r68','module');
     loadScript('appearance-state-r75.js?v=20260914r192-morning1','appearance-state-r75');
     loadScript('viewer-runtime-r75.js?v=20260914r192-morning1','viewer-runtime-r75');
     loadScript('companion-runtime-r75.js?v=20260914r192-morning1','companion-runtime-r75');
