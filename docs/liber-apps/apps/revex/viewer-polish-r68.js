@@ -92,21 +92,6 @@ if(!window.__revexViewerPolishR68){
     }
   }
 
-  function walkEntryPosition(bounds,target,position){
-    const inside=p=>p.x>=bounds.min.x&&p.x<=bounds.max.x&&p.z>=bounds.min.z&&p.z<=bounds.max.z;
-    const start={x:position.x,z:position.z};
-    // Keep an interior viewpoint. From an overview, approach the outside edge
-    // instead of teleporting into an arbitrary wall or room in the model center.
-    if(inside(position)||!inside(target))return start;
-    const dx=position.x-target.x,dz=position.z-target.z,distance=Math.hypot(dx,dz);
-    if(!Number.isFinite(distance)||distance<1e-6)return start;
-    const x=dx/distance,z=dz/distance;
-    const tx=Math.abs(x)<1e-6?Infinity:((x>0?bounds.max.x:bounds.min.x)-target.x)/x;
-    const tz=Math.abs(z)<1e-6?Infinity:((z>0?bounds.max.z:bounds.min.z)-target.z)/z;
-    const approach=Math.min(distance,Math.max(0,Math.min(tx,tz))+8);
-    return{x:target.x+x*approach,z:target.z+z*approach};
-  }
-
   function patchWalk(v){
     if(v.__revexR68Walk)return;
     v.__revexR68Walk=true;
@@ -136,9 +121,9 @@ if(!window.__revexViewerPolishR68){
       if(direction.lengthSq()<1e-8)direction.set(0,0,-1);
       this.yaw=Math.atan2(-direction.x,-direction.z);
       this.pitch=0;
-      const target=this.controls?.target?.clone?.()||this.bounds.getCenter(new THREE.Vector3());
-      const entry=walkEntryPosition(this.bounds,target,this.camera.position);
-      this.camera.position.set(entry.x,Number(this.floor||0)+Number(this.eye||5.5),entry.z);
+      // Keep the user's horizontal viewpoint; changing modes must not teleport
+      // into an arbitrary room or directly in front of a wall.
+      this.camera.position.y=Number(this.floor||0)+Number(this.eye||5.5);
       this.look?.();
       this.requestRender?.();
       if(!this.embedded&&!this.walkUsesTouch?.()){try{canvas?.requestPointerLock?.();}catch(_){}}

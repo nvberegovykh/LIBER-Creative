@@ -26,7 +26,6 @@ jobs:
       - run: node tests/revex-recovery/test-render-auth.cjs
       - run: node tests/revex-recovery/test-family-handoff.cjs
       - run: node tests/revex-recovery/test-walk-levels.cjs
-      - run: node tests/revex-recovery/test-walk-entry.cjs
       - run: node .github/scripts/verify-revex-security-boundaries.js
       - name: Hosting preserves unrelated app assets and rejects concurrent releases
         shell: pwsh
