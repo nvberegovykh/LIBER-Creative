@@ -17,6 +17,7 @@
   <link rel="stylesheet" href="../specifications/styles.css?v=20260928r201-audit3" />
   <link rel="stylesheet" href="styles.css?v=20260928r201-audit3" />
   <link rel="stylesheet" href="adaptive-audit.css?v=20260928r202-personal-google" />
+  <link rel="stylesheet" href="packages.css?v=20260928-packages1" />
   <link rel="stylesheet" href="runtime.css?v=20260914r192-morning1" />
   <link rel="stylesheet" href="render-agent.css?v=20260914r192-morning1" />
   <link rel="stylesheet" href="workspace-r51.css?v=20260914r192-morning1" />
@@ -88,6 +89,7 @@
         <button id="revex-tab-design" type="button" role="tab" aria-selected="false" aria-controls="view-design" tabindex="-1" data-view="design"><span class="revex-r110-tab-label">Design Book</span><span class="revex-r110-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5.5A3.5 3.5 0 0 1 7.5 2H11v17H7.5A3.5 3.5 0 0 0 4 22zM20 5.5A3.5 3.5 0 0 0 16.5 2H13v17h3.5A3.5 3.5 0 0 1 20 22z"/></svg></span></button>
         <button id="revex-tab-spec" type="button" role="tab" aria-selected="false" aria-controls="view-spec" tabindex="-1" data-view="spec"><span class="revex-r110-tab-label">Spec Book</span><span class="revex-r110-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3h12a2 2 0 0 1 2 2v16H4V5a2 2 0 0 1 2-2Z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span></button>
         <button id="revex-tab-docs" type="button" role="tab" aria-selected="false" aria-controls="view-docs" tabindex="-1" data-view="docs"><span class="revex-r110-tab-label">Docs</span><span class="revex-r110-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3h8l4 4v14H7z"/><path d="M15 3v5h5M4 6v15h12"/></svg></span></button>
+        <button id="revex-tab-packages" type="button" role="tab" aria-selected="false" aria-controls="view-packages" tabindex="-1" data-view="packages"><span class="revex-r110-tab-label">Packages</span><span class="revex-r110-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 7h18v14H3zM3 7l4-4h10l4 4M12 7v14M8 11h8"/></svg></span></button>
         <button id="revex-tab-energy" type="button" role="tab" aria-selected="false" aria-controls="view-energy" tabindex="-1" data-view="energy"><span class="revex-r110-tab-label">Energy</span><span class="revex-r110-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m13 2-7 12h6l-1 8 7-12h-6z"/></svg></span></button>
         <button id="revex-tab-chat" type="button" role="tab" aria-selected="false" aria-controls="view-chat" tabindex="-1" data-view="chat"><span class="revex-r110-tab-label">Chat</span><span class="revex-r110-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 4h16v12H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg></span></button>
         <button id="revex-tab-history" type="button" role="tab" aria-selected="false" aria-controls="view-history" tabindex="-1" data-view="history"><span class="revex-r110-tab-label">History</span><span class="revex-r110-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6"/><path d="M4 4v4.6h4.6M12 7v5l3 2"/></svg></span></button>
@@ -314,6 +316,7 @@
       </dialog>
 
 
+      <section id="view-packages" class="view packages-view" role="tabpanel" aria-labelledby="revex-tab-packages" hidden></section>
       <section id="view-history" class="view history-view" role="tabpanel" aria-labelledby="revex-tab-history" hidden>
         <div class="history-head">
           <div><div class="eyebrow">APPEND-ONLY PROJECT JOURNAL</div><h1>History</h1><p>Revit source revisions, BIM overlay edits, Design/Spec changes, issues, renders, documents and affected-plan exports.</p></div>
@@ -496,12 +499,15 @@
   <script src="../../js/chat-iframe-bridge.js?v=20260914r192-morning1"></script>
   <script src="diagnostics-r29.js?v=20260914r192-morning1"></script>
   <script src="../../js/wallt-agent.js?v=20260914r192-morning1"></script>
-  <script type="module" src="wallt-controller.js?v=20260928r201-audit3"></script>
+  <script type="module" src="wallt-controller.js?v=20260928-packages1"></script>
   <script src="store.js?v=20260914r192-morning1"></script>
   <script src="cache-r21.js?v=20260914r192-morning1"></script>
   <script src="runtime.js?v=20260914r192-morning1"></script>
   <script src="integrity.js?v=20260914r192-morning1"></script>
   <script src="firestore-compat.js?v=20260914r192-morning1"></script>
+  <script src="packages-core.js?v=20260928-packages1"></script>
+  <script src="packages-store.js?v=20260928-packages1"></script>
+  <script src="packages-drive.js?v=20260928-packages1"></script>
   <script src="shell-integrity.js?v=20260914r192-morning1"></script>
   <script src="ui-integrity.js?v=20260928r201-audit3"></script>
   <script src="projection-integrity.js?v=20260914r192-morning1"></script>
@@ -509,7 +515,8 @@
   <script src="document-controller.js?v=20260914r192-morning1"></script>
   <script src="sync-docs-r24.js?v=20260914r192-morning1"></script>
   <script src="viewer-host-guard-r21.js?v=20260914r192-morning1"></script>
-  <script type="module" src="app.js?v=20260928r201-audit3"></script>
+  <script type="module" src="app.js?v=20260928-packages1"></script>
+  <script type="module" src="packages.js?v=20260928-packages1"></script>
   <script type="module" src="viewer-r26.js?v=20260927r198-level-choice1"></script>
   <script type="module" src="bim-measure.js?v=20260928r201-audit3"></script>
   <script type="module" src="browser-assets.js?v=20260928r203-geometry-review"></script>
