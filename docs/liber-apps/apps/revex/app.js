@@ -156,7 +156,7 @@ async function openProjectChat(context = state.selectedContext) {
 // BIM rendering is owned exclusively by the external lightweight viewer.
 let viewer = null;
 function activeBimViewer(){ return window.__revexViewerR26Instance || window.__revexViewerR25Instance || window.__revexViewerR24Instance || window.__revexViewerR23Instance || window.__revexViewerR22Instance || window.__revexViewerR21Instance || viewer || null; }
-const REVEX_VIEWS = ['bim', 'design', 'spec', 'docs', 'energy', 'chat', 'history'];
+const REVEX_VIEWS = ['bim', 'design', 'spec', 'docs', 'packages', 'energy', 'chat', 'history'];
 
 function showView(name) {
   if (!REVEX_VIEWS.includes(name)) name = 'bim';
@@ -182,6 +182,7 @@ function showView(name) {
     if (name === 'chat') { renderChatContext(); setTimeout(() => ensureChatEmbedded(state.selectedContext), 0); }
     if (name === 'history') window.dispatchEvent(new CustomEvent('revex:history-open', { detail: { projectId: state.projectId } }));
     if (name === 'energy') window.dispatchEvent(new CustomEvent('revex:energy-open', { detail: { projectId: state.projectId } }));
+    if (name === 'packages') window.dispatchEvent(new CustomEvent('revex:packages-open', { detail: { projectId: state.projectId } }));
   }
 }
 
@@ -579,6 +580,7 @@ function designSearchTerms(item, chapter) {
 }
 function renderDesign() {
   renderDesignProgress();
+  window.dispatchEvent(new CustomEvent('revex:package-sources-changed'));
   const list = chapters(), divisions = bookChapters(), source = list.filter(chapter => !divisions.includes(chapter));
   if (!state.activeChapter || !list.some(chapter => chapter.id === state.activeChapter)) state.activeChapter = divisions[0]?.id || list[0]?.id || '';
   const chapterButton = chapter => `<button type="button" class="${chapter.id === state.activeChapter ? 'active' : ''}" data-chapter="${escapeHtml(chapter.id)}"><span>${escapeHtml(chapter.title)}</span><small>${chapter.items?.length || 0}</small></button>`;
@@ -1541,6 +1543,7 @@ async function activateProject(projectId,{explicitUserSelection=false,view=null,
       if(specResult.status==='fulfilled')state.preferredSpecId=specResult.value||state.preferredSpecId||'';else console.warn('[REVEX] Spec Book projection pending',specResult.reason);
       state.renderJobs=renderResult.status==='fulfilled'?(renderResult.value||[]):[];
       if(state.project&&state.preferredSpecId)state.project.revexSpecProjectId=state.preferredSpecId;
+      window.dispatchEvent(new CustomEvent('revex:package-sources-changed'));
       renderRenderHistory();notifyNativeProject();if(!$('#view-spec')?.hidden)renderSpec();
     });
     if(currentParams().get('render')==='1')openRenderDialog();
@@ -1913,7 +1916,7 @@ async function init() {
   else if (!state.projectId && state.projects.length !== 1) {
     setSync(state.projects.length ? 'Choose a project to start' : 'Create or connect a project to start', 'quiet');
   }
-  if (state.projectId) await activateProject(state.projectId);
+  if (state.projectId) await activateProject(state.projectId,{view:params.get('view')||'bim'});
   else {
     showView('bim');
     if (state.projects.length === 1) await activateProject(state.projects[0].id);
