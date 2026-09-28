@@ -34,7 +34,7 @@ async function loadIfc(buffer){
 }
 export async function importAsset(input){
  const files=await filesFrom(input),models=files.filter(f=>MODEL_EXTENSIONS.test(f.name));
- if(!models.length){if(files.some(f=>/\.rfa$/i.test(f.name)))throw Error('This is a Revit-only family. Choose a browser-ready model from the supplier, or open the family in your licensed Revit, select a 3D view and export OBJ or STL once. Import that export here. RFA conversion is not automatic and no paid conversion service is connected.');throw Error('Choose a GLB, glTF, IFC, FBX, OBJ or STL model, or a ZIP containing one model.');}
+ if(!models.length){if(files.some(f=>/\.rfa$/i.test(f.name)))throw Error('Automatic RFA conversion is not connected yet. This file has not been placed. IFC, GLB, glTF, FBX, OBJ and STL models can be placed directly in REVEX.');throw Error('Choose a GLB, glTF, IFC, FBX, OBJ or STL model, or a ZIP containing one model.');}
  // Prefer a self-contained GLB when an archive includes both glTF and GLB.
  const preferred=models.filter(f=>/\.glb$/i.test(f.name)),file=preferred.length===1?preferred[0]:models.length===1?models[0]:null;
  if(!file)throw Error('This package contains several models. Extract it and select one model with its texture files.');

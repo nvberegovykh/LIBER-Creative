@@ -61,7 +61,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 UUID_RE = re.compile(r"^\{[0-9a-fA-F-]{36}\}$")
 
-COMPILER_VERSION = "4.3.4"
+COMPILER_VERSION = "4.3.5-analytical-review2"
 MINIMUM_MAPPING_CONFIDENCE = 0.75
 
 # GeometryCo normalizes an authoritative Revit/gbXML shell for EnergyPlus; it
@@ -81,6 +81,7 @@ BASE_GEOMETRY_TYPES = {
     "OS:InteriorPartitionSurfaceGroup",
     "OS:InteriorPartitionSurface",
     "OS:DaylightingControl",
+    "OS:Daylighting:Control",
     "OS:IlluminanceMap",
 }
 GEOMETRY_TYPES = set(BASE_GEOMETRY_TYPES)
@@ -362,8 +363,8 @@ def geometry_vertex_start(obj_type: str) -> Optional[int]:
     return {
         "OS:Surface": 11,
         "OS:SubSurface": 10,
-        "OS:ShadingSurface": 5,
-        "OS:InteriorPartitionSurface": 5,
+        "OS:ShadingSurface": 6,
+        "OS:InteriorPartitionSurface": 7,
     }.get(obj_type)
 
 
@@ -382,7 +383,8 @@ def geometry_layout_errors(obj: OSMObject) -> List[str]:
         )
     for index, value in enumerate(coords, start):
         try:
-            float(value)
+            if not math.isfinite(float(value)):
+                raise ValueError("Non-finite coordinate")
         except (TypeError, ValueError):
             errors.append(f"{obj.obj_type} {obj.name} has nonnumeric coordinate field {index}: {value!r}")
             break
@@ -397,12 +399,15 @@ def geometry_layout_errors(obj: OSMObject) -> List[str]:
                 errors.append(f"OS:SubSurface {obj.name} has nonnumeric Multiplier {multiplier!r}")
     # Number of Vertices may be blank or an integer matching the extensible
     # coordinate count. Surface and SubSurface use different scalar indices.
-    count_index = {"OS:Surface": 10, "OS:SubSurface": 9}.get(obj.obj_type)
+    count_index = start - 1
     if count_index is not None:
         declared = obj.fields[count_index] if len(obj.fields) > count_index else ""
-        if declared:
+        if declared and declared.strip().lower() != "autocalculate":
             try:
-                declared_n = int(float(declared))
+                declared_value = float(declared)
+                if not math.isfinite(declared_value) or not declared_value.is_integer():
+                    raise ValueError("Vertex count must be a finite integer")
+                declared_n = int(declared_value)
                 actual_n = len(coords) // 3 if len(coords) % 3 == 0 else -1
                 if declared_n != actual_n:
                     errors.append(
@@ -3233,8 +3238,67 @@ def validate_construction_pairs(model: ModelData) -> List[str]:
     return errors
 
 
+def opening_collection_conflicts(model: ModelData) -> List[dict]:
+    """Validate openings together without altering authoritative source geometry.
+
+    Individual containment does not prove a valid wall: two contained openings
+    can overlap, or their multiplied areas can consume its entire opaque area.
+    Preserve conflicting source identities for correction; never assign an
+    arbitrary construction to the overlap or silently scale/delete openings.
+    """
+    from shapely.geometry import Polygon
+    groups = defaultdict(list)
+    for child in model.by_type.get("OS:SubSurface", []):
+        if len(child.fields) > 4:
+            groups[child.fields[4]].append(child)
+    conflicts = []
+    for handle, children in groups.items():
+        parent = model.by_handle.get(handle)
+        if not parent or parent.obj_type != "OS:Surface":
+            continue
+        points = vertices(parent)
+        basis = _plane_basis(points)
+        if basis is None:
+            continue
+        wall = Polygon(_project_plane(points, basis))
+        if not wall.is_valid or wall.area <= 1e-8:
+            continue
+        tolerance = max(1e-8, wall.area * 1e-8)
+        openings = []
+        for child in children:
+            child_points = vertices(child)
+            if len(child_points) < 3:
+                continue
+            poly = Polygon(_project_plane(child_points, basis))
+            if not poly.is_valid or poly.area <= 1e-8:
+                continue
+            try:
+                multiplier = float(child.fields[8] or 1)
+            except (ValueError, IndexError):
+                continue  # Scalar validation already reports this error.
+            openings.append((child, poly, multiplier))
+        total = sum(poly.area * multiplier for _, poly, multiplier in openings)
+        if total >= wall.area - tolerance:
+            conflicts.append({"code": "OPENINGS_EXCEED_PARENT_AREA", "parent": parent.name,
+                "parent_area_m2": wall.area, "opening_area_m2": total,
+                "net_opaque_area_m2": wall.area - total,
+                "openings": [child.name for child, _, _ in openings]})
+        for index, (first, a, _) in enumerate(openings):
+            for second, b, _ in openings[index + 1:]:
+                overlap = float(a.intersection(b).area)
+                if overlap > tolerance:
+                    conflicts.append({"code": "OVERLAPPING_SIBLING_OPENINGS", "parent": parent.name,
+                        "openings": [first.name, second.name], "overlap_area_m2": overlap,
+                        "constructions": [resolve_ref(model, child.fields[3]) for child in (first, second)]})
+    return conflicts
+
+
 def validate_geometry(model: ModelData, include_energyplus_limits: bool=True) -> List[str]:
     errors=[]
+    for conflict in opening_collection_conflicts(model):
+        detail = (f"overlap {conflict['overlap_area_m2']:.6g} m2" if 'overlap_area_m2' in conflict
+                  else f"openings {conflict['opening_area_m2']:.6g} m2, parent {conflict['parent_area_m2']:.6g} m2")
+        errors.append(f"{conflict['code']} on {conflict['parent']}: {detail}; sources: {', '.join(conflict['openings'])}. Correct the source opening geometry and re-export.")
     for obj_type in ("OS:Surface", "OS:SubSurface", "OS:ShadingSurface", "OS:InteriorPartitionSurface"):
         for obj in model.by_type.get(obj_type, []):
             errors.extend(geometry_layout_errors(obj))
@@ -3389,9 +3453,17 @@ def geometry_coordinate_digest(model: ModelData) -> str:
     for obj in model.objects:
         if obj.obj_type == "OS:Space":
             f = list(obj.fields)
-            while len(f) <= 8:
+            while len(f) <= 16:
                 f.append("")
-            payload.append((obj.obj_type, tuple(f[5:9]), f[-1] if f else ""))
+            # OSM permits trailing default fields to be omitted. The last
+            # serialized field is not necessarily volume/floor area: it can be
+            # a zone handle or the total-floor-area flag. Hash fixed IDD slots.
+            payload.append((obj.obj_type, tuple(f[5:9]), tuple(f[14:17])))
+        elif obj.obj_type in {"OS:ShadingSurfaceGroup", "OS:InteriorPartitionSurfaceGroup"}:
+            f = list(obj.fields)
+            while len(f) <= 6:
+                f.append("")
+            payload.append((obj.obj_type, tuple(f[3:7])))
         elif obj.obj_type in {"OS:Surface", "OS:SubSurface", "OS:ShadingSurface", "OS:InteriorPartitionSurface"}:
             start = geometry_vertex_start(obj.obj_type)
             payload.append((obj.obj_type, tuple(obj.fields[start:] if start is not None else [])))
@@ -3709,6 +3781,62 @@ def remap_retained_geometry_references(
         "subsurface_matches": sub_rows,
     }
 
+def normalize_analytical_boundary_clearance(model: ModelData) -> dict:
+    """Give edge-touching openings 1 mm numerical clearance in the run copy.
+
+    This is intentionally reported as a small area-changing analytical decision,
+    never as lossless decomposition. Never move a parent, erase an opening, or
+    accept a nonplanar/outside opening. Interior mates are committed together.
+    """
+    from shapely.geometry import Polygon
+    changes = {}
+    rows = []
+    props = additional_properties(model)
+    for child in model.by_type.get('OS:SubSurface', []):
+        parent = model.by_handle.get(child.fields[4])
+        if not parent:
+            continue
+        points = vertices(child)
+        basis = _plane_basis(vertices(parent))
+        if basis is None:
+            continue
+        origin, _u, _v, normal = basis
+        if any(abs(_dot(_vec_sub(p, origin), normal)) > 1e-5 for p in points):
+            continue
+        wall = Polygon(_project_plane(vertices(parent), basis))
+        opening = Polygon(_project_plane(points, basis))
+        if not wall.is_valid or not opening.is_valid or opening.is_empty:
+            continue
+        if opening.difference(wall).area > 1e-8 or opening.boundary.distance(wall.boundary) > 1e-6:
+            continue
+        inner = opening.buffer(-0.001, join_style=2)
+        if (inner.geom_type != 'Polygon' or inner.is_empty or inner.interiors
+                or len(inner.exterior.coords) - 1 > 4
+                or (opening.area - inner.area) / opening.area > .01
+                or opening.hausdorff_distance(inner) > .002):
+            continue  # Keep small/complex cuts exact; any native surround error remains blocking.
+        coords = _unproject_plane(list(inner.exterior.coords)[:-1], basis)
+        if _dot(newell_area_and_normal(coords)[1], newell_area_and_normal(points)[1]) < 0:
+            coords.reverse()
+        changes[child.handle] = coords
+        rows.append({'opening': child.name, 'sourceId': props.get(child.handle, {}).get('CADObjectId'),
+                     'parent': parent.name, 'beforeAreaM2': opening.area, 'afterAreaM2': inner.area,
+                     'areaReductionFraction': (opening.area - inner.area) / opening.area})
+    for handle, points in changes.items():
+        child = model.by_handle[handle]
+        mate = model.by_handle.get(child.fields[5]) if len(child.fields) > 5 else None
+        if mate:
+            other = changes.get(mate.handle, vertices(mate))
+            if sorted(tuple(round(x,7) for x in p) for p in points) != sorted(tuple(round(x,7) for x in p) for p in other):
+                raise CompileError(f'Boundary clearance would break paired opening {child.name}.')
+    for handle, points in changes.items():
+        _set_vertices(model.by_handle[handle], points)
+    return {'schema': 'liber.revex.analytical-boundary-clearance.v1', 'reviewRequired': bool(rows),
+            'lossless': False if rows else True, 'parentGeometryChanged': False,
+            'normalOffsetM': .001, 'maximumAreaReductionFraction': .01,
+            'changedOpenings': len(rows), 'changes': rows}
+
+
 def compile_template(template_path: Path, geometry_path: Path, output_path: Path, config: dict, strict: bool=True) -> dict:
     template=parse_osm(template_path); geometry=parse_osm(geometry_path)
     report={"template":str(template_path),"geometry":str(geometry_path),"output":str(output_path),"warnings":[]}
@@ -3734,13 +3862,16 @@ def compile_template(template_path: Path, geometry_path: Path, output_path: Path
     repair_energyplus_geometry(
         geometry, report, enabled=bool(config.get("smart_energyplus_geometry_repairs", True))
     )
+    if config.get('analytical_boundary_clearance'):
+        report['analytical_boundary_clearance'] = normalize_analytical_boundary_clearance(geometry)
     gerr=validate_geometry(geometry, include_energyplus_limits=True)
     if gerr: raise CompileError("Input geometry is not EnergyPlus-compatible after safe repair: "+"; ".join(gerr[:10]))
     source_geometry_coordinate_sha = geometry_coordinate_digest(geometry)
     report["source_geometry_lock"]={
         "raw_coordinate_sha256":raw_geometry_coordinate_sha,
         "compatible_coordinate_sha256":source_geometry_coordinate_sha,
-        "object_decomposition_only":raw_geometry_coordinate_sha!=source_geometry_coordinate_sha,
+        "object_decomposition_only":raw_geometry_coordinate_sha!=source_geometry_coordinate_sha and not report.get('analytical_boundary_clearance', {}).get('changedOpenings'),
+        "analytical_boundary_clearance_applied":bool(report.get('analytical_boundary_clearance', {}).get('changedOpenings')),
     }
 
     schedule_before=schedule_state(template); report["schedule_lock_before_sha256"]=schedule_digest(schedule_before)
@@ -4317,7 +4448,7 @@ def _discover_energyplus_executable(cli: str) -> Optional[str]:
     return None
 
 
-def _critical_native_lines(output: str) -> List[str]:
+def _critical_native_lines(output: str, explicit_volume_review: bool = False) -> List[str]:
     lines = [line.strip() for line in (output or "").splitlines() if line.strip()]
     benign = re.compile(
         r"FT_WARNING:.*(?:not symmetric, creating a reversed copy|creating a reversed copy|reference different constructions, choosing .* based on search distance)",
@@ -4327,12 +4458,16 @@ def _critical_native_lines(output: str) -> List[str]:
         r"^FT_ERROR:", r"^FAIL:", r"\*\*\s*Severe\s*\*\*", r"\*\*\s*Fatal\s*\*\*",
         r"EnergyPlus Terminated", r"currently unable to translate",
         r"could not resolve matched construction conflicts", r"more vertices than allowed",
+        r"\*\*\s*Warning\s*\*\*.*base surface does not surround subsurface",
+        r"\*\*\s*Warning\s*\*\*.*zone.*not fully enclosed",
         r"Traceback", r"Exception",
     )
     result = []
     for line in lines:
         if benign.search(line):
             continue
+        if explicit_volume_review and re.search(r'\*\*\s*Warning\s*\*\*\s*CalculateZoneVolume:.*not fully enclosed', line, re.I):
+            continue  # Retained separately as mandatory geometry review, never a closed-shell claim.
         if any(re.search(pattern, line, re.I) for pattern in patterns) and line not in result:
             result.append(line)
     return result
@@ -4359,7 +4494,29 @@ def native_failure_summary(result: dict, max_lines: int = 18) -> str:
     return "\n".join(critical[:max_lines])
 
 
-def run_native_openstudio_check(cli: str, ruby_script: Path, model_path: Path, timeout: int = 300, label: str = "MODEL") -> dict:
+def explicit_aggregate_zone_volumes(idf_path: Path) -> dict:
+    """Confirm native input uses positive source Space volumes, not open-shell autocalculation."""
+    model = parse_osm(idf_path)
+    zones = [o for o in model.objects if o.obj_type.lower() == 'zone']
+    spaces = [o for o in model.objects if o.obj_type.lower() == 'space']
+    rows = []
+    try:
+        for zone in zones:
+            members = [o for o in spaces if o.fields[1].casefold() == zone.fields[0].casefold()]
+            volumes = [float(o.fields[3]) for o in members]
+            value = float(zone.fields[8])
+            if len(members) < 2 or not math.isfinite(value) or value <= 0 or any(not math.isfinite(v) or v <= 0 for v in volumes):
+                return {'eligible': False, 'zones': rows}
+            if abs(value - sum(volumes)) > max(.001, value * 1e-6):
+                return {'eligible': False, 'zones': rows}
+            rows.append({'zone': zone.fields[0], 'spaceCount': len(members), 'explicitVolumeM3': value,
+                         'sumSourceSpaceVolumesM3': sum(volumes)})
+    except (ValueError, IndexError):
+        return {'eligible': False, 'zones': rows}
+    return {'eligible': bool(rows), 'zones': rows, 'closedShellVerified': False}
+
+
+def run_native_openstudio_check(cli: str, ruby_script: Path, model_path: Path, timeout: int = 300, label: str = "MODEL", allow_explicit_volume_review: bool = False) -> dict:
     label = re.sub(r"[^A-Za-z0-9_-]+", "_", label.upper())
     full_log_path = model_path.parent / f"NATIVE_CHECK_{label}.log"
     try:
@@ -4410,8 +4567,13 @@ def run_native_openstudio_check(cli: str, ruby_script: Path, model_path: Path, t
         if smoke_dir.exists():
             shutil.rmtree(smoke_dir, ignore_errors=True)
         smoke_dir.mkdir(parents=True, exist_ok=True)
+        expand_templates = bool(re.search(r"(?im)^\s*HVACTemplate:", idf_path.read_text(encoding="utf-8", errors="replace")))
+        smoke_args = [energyplus, "--design-day", "--output-directory", str(smoke_dir)]
+        if expand_templates:
+            smoke_args.append("--expandobjects")
+        smoke_args.append(str(idf_path))
         smoke = subprocess.run(
-            [energyplus, "--design-day", "--output-directory", str(smoke_dir), str(idf_path)],
+            smoke_args,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -4423,17 +4585,25 @@ def run_native_openstudio_check(cli: str, ruby_script: Path, model_path: Path, t
         err_text = err_path.read_text(encoding="utf-8", errors="ignore") if err_path.is_file() else ""
         severe = bool(re.search(r"\*\*\s*(Severe|Fatal)\s*\*\*", err_text, re.I))
         combined = smoke_output + "\n" + err_text
+        volume_evidence = explicit_aggregate_zone_volumes(idf_path) if allow_explicit_volume_review else {'eligible': False}
+        volume_review = bool(volume_evidence.get('eligible'))
+        review_lines = [line.strip() for line in combined.splitlines()
+                        if volume_review and re.search(r'\*\*\s*Warning\s*\*\*\s*CalculateZoneVolume:.*not fully enclosed', line, re.I)]
         with full_log_path.open("a", encoding="utf-8", errors="ignore") as f:
             f.write("\n--- ENERGYPLUS DESIGN-DAY GEOMETRY SMOKE TEST ---\n")
             f.write(combined)
         result.update({
             "energyplus_smoke_attempted": True,
-            "energyplus_smoke_passed": smoke.returncode == 0 and not severe,
+            "energyplus_templates_expanded": expand_templates,
+            "energyplus_smoke_passed": smoke.returncode == 0 and not severe and not _critical_native_lines(combined, volume_review),
+            "geometry_review_required": bool(review_lines),
+            "geometry_review_lines": review_lines,
+            "explicit_zone_volume_evidence": volume_evidence,
             "energyplus_returncode": smoke.returncode,
             "energyplus_error_file": str(err_path) if err_path.is_file() else None,
             "energyplus_output": combined[:12000] + ("\n... [middle omitted; see full log] ...\n" if len(combined) > 24000 else "") + combined[-12000:],
         })
-        result["critical_lines"] = _critical_native_lines(output + "\n" + combined)
+        result["critical_lines"] = _critical_native_lines(output + "\n" + combined, volume_review)
         result["passed"] = bool(result["passed"] and result["energyplus_smoke_passed"])
         return result
     except Exception as exc:
@@ -4675,7 +4845,8 @@ def compile_baseline_proposed_pair(
             if cli:
                 if progress:
                     progress("native", f"Running OpenStudio load + translation + EnergyPlus geometry smoke test for {role.title()}…")
-                native = run_native_openstudio_check(cli, ruby_script, outputs[role], label=role)
+                native = run_native_openstudio_check(cli, ruby_script, outputs[role], label=role,
+                    allow_explicit_volume_review=bool(config.get('allow_explicit_volume_review')))
                 native["cli_version"] = cli_selection.get("version")
                 native["model_version"] = model_version
                 report["reports"][role]["native_openstudio_check"] = native

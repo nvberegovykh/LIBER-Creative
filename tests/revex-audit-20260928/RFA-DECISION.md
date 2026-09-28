@@ -1,18 +1,16 @@
-# RFA assets without a separate conversion service
+# RFA conversion: automatic browser workflow
 
-Use supplier-provided GLB/glTF, IFC, FBX, OBJ or STL when available. REVEX imports those locally in the browser and stores a self-contained GLB with a project-owned placement record. Saved assets can be placed again without downloading or converting the original family again.
+The required workflow is browser-only for designers. Manual Revit export is not the proposed product solution. Supported GLB/glTF, IFC, FBX, OBJ, STL and ZIP assets already import in the browser and persist as project-owned GLB placements.
 
-For RFA-only content, the practical route using an existing Revit license is a one-time export of each required family type from a 3D view, followed by the same browser import. Autodesk documents OBJ/STL export from the family workflow. Confirm units and size in the REVEX preview. Include companion material/texture files with OBJ, or package one model and its resources in a ZIP. STL carries geometry only.
+RFA conversion remains unavailable until an Autodesk developer application is connected. The UI must state this plainly and must not claim that downloading an RFA has placed it.
 
-An RVX family should ultimately be a reusable asset record around that geometry, with the original family/type identity, source product URL, units, material references and placement anchor. It should not be a renamed RFA or promise native Revit behavior. The current placed-asset record provides normalized geometry, integrity hash, provider, floor, pose and source model revision; a full cross-project family catalogue and automated native converter are future work.
+The proposed implementation is Autodesk Automation for Revit running an app bundle that opens the family, evaluates the chosen type and exports tessellated geometry/materials to GLB. An RVX family record wraps that geometry with the original file hash, type, source product URL, units, materials and floor anchor. Cache privately by tenant, content hash, type and converter version. Place the result through the existing browser placement path. This is an implementation recommendation, not a deployed feature.
 
-Browser placement is visual geometry. It does not reproduce Revit formulas, editable type parameters, host relationships or wall cuts. Those still belong to the original RFA/Revit workflow.
+Autodesk Developer Support says Model Derivative does not directly translate RFA; Automation is the supported cloud route. Autodesk's current Free tier has monthly Automation limits and suspends usage at the cap unless the account opts into a paid offering. Check the actual developer hub entitlement after sign-in. Do not enroll in paid usage, assume a desktop subscription grants unlimited conversion, or promise unrestricted free conversion. No paid Autodesk service was enabled during this audit.
 
-No paid APS or ODA service was connected. APS has a capped free tier, which is not an unlimited production conversion entitlement; ODA BimRv requires a paid membership/module. Existing application storage and hosting costs still apply. Do not repurpose a named-user desktop Revit installation as a shared public conversion service without confirming the applicable Autodesk terms.
+Visual placement does not reproduce Revit formulas, host relationships or parametric editing. Preserve original RFA provenance for future reconciliation; do not rename an RFA to GLB/RVX.
 
 Primary references checked September 28, 2026:
 
-- [Autodesk: converting an RFA through a 3D export](https://www.autodesk.com/support/technical/article/caas/sfdcarticles/sfdcarticles/How-do-I-convert-an-RFA-file-to-a-STEP-file-without-using-Revit-software.html)
-- [Autodesk: export an OBJ file](https://help.autodesk.com/cloudhelp/2023/ENU/RevitLT-DocumentPresent/files/GUID-47381321-3EB4-4E41-B7CC-41AC915EE16D.htm)
-- [APS free and paid tiers](https://www.autodesk.com/products/autodesk-platform-services/overview)
-- [ODA BimRv licensing](https://www.opendesign.com/faq/bimrv)
+- [Autodesk Developer Support: RFA requires Automation rather than direct Model Derivative translation](https://forums.autodesk.com/t5/revit-api-forum/how-to-translate-rfa-file-to-svf-format/m-p/13414911/highlight/true)
+- [Autodesk: APS Free tier, monthly caps and paid opt-in](https://aps.autodesk.com/blog/aps-business-model-evolution)

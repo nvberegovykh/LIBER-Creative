@@ -60,6 +60,7 @@ COPY server/revex-energy-worker/revex_comcheck_evidence_r116.py /opt/revex/serve
 COPY server/revex-energy-worker/revex_structured_schedule_facts.py /opt/revex/server/revex_structured_schedule_facts.py
 COPY server/revex-energy-worker/revex_structured_schedule_projection.py /opt/revex/server/revex_structured_schedule_projection.py
 COPY server/revex-energy-worker/revex_geometryco_source_condition.py /opt/revex/server/revex_geometryco_source_condition.py
+COPY server/revex-energy-worker/revex_opening_partition.py /opt/revex/energy/revex_opening_partition.py
 COPY server/revex-energy-worker/verify_failure_evidence_r55.py /opt/revex/server/verify_failure_evidence_r55.py
 COPY server/revex-energy-worker/verify_identity_normalizer.py /opt/revex/server/verify_identity_normalizer.py
 COPY server/revex-energy-worker/verify_identity_content_agent.py /opt/revex/server/verify_identity_content_agent.py

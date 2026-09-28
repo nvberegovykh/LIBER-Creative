@@ -1,0 +1,54 @@
+{
+  "preview": "https://liber-apps-cca20--revex-review-ac62d841-5wzo520t.web.app",
+  "checks": [
+    {
+      "name": "Real authenticated REVEX project and model load without an error overlay",
+      "status": "PASS",
+      "evidence": {
+        "title": "REVEX Companion — LIBER Apps",
+        "url": "https://liberpict.com/liber-apps/apps/revex/index.html?projectId=release-evidence-95f5bfa7f67a539d&specProjectId=spec_release-evidence-95f5bfa7f67a539d&view=bim"
+      }
+    },
+    {
+      "name": "Independent Google authorization preserves LIBER identity, removes unused scope, and never automatically selects LIBER billing",
+      "status": "PASS"
+    },
+    {
+      "name": "Project access is checked without generating; image prices follow resolution; billing links go directly to Google",
+      "status": "PASS"
+    },
+    {
+      "name": "Depleted-credit failure is readable, uses selected customer project, and never retries or falls back to LIBER billing",
+      "status": "PASS"
+    },
+    {
+      "name": "Render controls fit 320–1440px widths and primary button has contrasting colors",
+      "status": "PASS"
+    },
+    {
+      "name": "Changing Google account clears the checked billing state and does not generate",
+      "status": "PASS"
+    },
+    {
+      "name": "A current run is distinguished from old failure artifacts, which stay collapsed",
+      "status": "PASS"
+    },
+    {
+      "name": "Long Energy report filenames and metadata remain contained across all six widths",
+      "status": "PASS"
+    },
+    {
+      "name": "The completed current result replaces the previous-attempt presentation",
+      "status": "PASS"
+    },
+    {
+      "name": "Geometry adjustments remain an explicit review requirement after successful calculations",
+      "status": "PASS"
+    },
+    {
+      "name": "Public OAuth landing page explains LIBER and links privacy and terms without login",
+      "status": "PASS"
+    }
+  ],
+  "errors": []
+}

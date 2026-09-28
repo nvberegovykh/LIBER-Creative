@@ -383,8 +383,15 @@ def convert_gbxml(gbxml: Path, geometry_osm: Path, cli: Path, folder: Path, log:
 
 
 def compile_models(geometry_osm: Path, cli: Path, folder: Path, log: RunLog) -> tuple[Path, Path]:
+    from revex_opening_partition import normalize
+    derived = folder / "01_ORIGINAL_MODELS" / "REVIT_GEOMETRY_ANALYTICAL.osm"
+    normalize(geometry_osm, derived, folder / "OPENING_PARTITION_REVIEW.json")
+    geometry_osm = derived
     outdir = folder / "02_COMPILED_MODELS"
     outdir.mkdir(parents=True, exist_ok=True)
+    config_path = folder / "GEOMETRY_ANALYTICAL_POLICY.json"
+    config_path.write_text(json.dumps({"analytical_boundary_clearance": True,
+                                      "allow_explicit_volume_review": True}), encoding="utf-8")
     command = [
         sys.executable, str(GEOMETRYCO),
         "--geometry", str(geometry_osm),
@@ -393,6 +400,7 @@ def compile_models(geometry_osm: Path, cli: Path, folder: Path, log: RunLog) -> 
         "--outdir", str(outdir),
         "--openstudio-cli", str(cli),
         "--require-native-check",
+        "--config", str(config_path),
     ]
     run_command(command, folder, folder / "02_GEOMETRYCO.log", log, "GEOMETRYCO_4_3_4")
     baseline = outdir / "BASELINE_UPDATED_GEOMETRY.osm"
@@ -400,6 +408,67 @@ def compile_models(geometry_osm: Path, cli: Path, folder: Path, log: RunLog) -> 
     if not baseline.is_file() or not proposed.is_file():
         raise PipelineError("GeometryCo did not atomically commit both compiled OSMs.")
     return baseline, proposed
+
+
+def geometry_review_evidence(folder: Path) -> dict:
+    partition = json.loads((folder / 'OPENING_PARTITION_REVIEW.json').read_text(encoding='utf-8'))
+    compilation = json.loads((folder / '02_COMPILED_MODELS/COMPILATION_AUDIT.json').read_text(encoding='utf-8'))
+    roles = {}
+    for role, report in compilation.get('reports', {}).items():
+        native = report.get('native_openstudio_check') or {}
+        roles[role] = {'boundaryClearance': report.get('analytical_boundary_clearance') or {},
+                       'nativeGeometryWarnings': native.get('geometry_review_lines') or [],
+                       'explicitZoneVolumes': native.get('explicit_zone_volume_evidence') or {}}
+    required = bool(partition.get('repairs')) or any(
+        item['boundaryClearance'].get('reviewRequired') or item['nativeGeometryWarnings'] for item in roles.values())
+    return {'schema': 'liber.revex.geometry-review.v1', 'required': required,
+            'sourceExportUnchanged': True, 'openingPartition': partition, 'models': roles,
+            'summary': 'Calculations completed with analytical geometry adjustments. Review opening cuts, numerical clearances and zone enclosure warnings before using these reports for filing.' if required else '',
+            'zoneVolumePolicy': 'Positive Revit-derived Space volumes are summed into each thermal zone. Enclosure warnings remain unresolved review findings; this is not proof of a watertight shell.'}
+
+
+def attach_geometry_review_package(review_zip: Path, review_dir: Path, evidence: dict) -> None:
+    """Keep the existing seven-files-plus-archive contract and include the repair disclosure inside it."""
+    from io import BytesIO
+    from pypdf import PdfReader, PdfWriter
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from xml.sax.saxutils import escape
+    audit = review_dir / 'ANALYTICAL_GEOMETRY_REVIEW.json'
+    audit.write_text(json.dumps(evidence, indent=2), encoding='utf-8')
+    pdf = review_dir / 'ANALYTICAL_GEOMETRY_REVIEW.pdf'
+    styles = getSampleStyleSheet()
+    paragraphs = [Paragraph('Analytical geometry — review required' if evidence['required'] else 'Analytical geometry review', styles['Title'])]
+    notes = [evidence.get('summary') or 'No analytical adjustments required.',
+             'The original Engineering Sync export is preserved. These calculations use a separate analytical model; adjustments are not changes to the Revit building.',
+             f"Opening overlap partitions: {len(evidence['openingPartition'].get('repairs', []))}. The combined cut area and source identities are retained; individual element cut areas can change.",
+             'Numerical clearance: edge-touching openings may be inset by 1 mm, with less than or equal to 1% area reduction per opening. Parent walls remain unchanged.',
+             evidence['zoneVolumePolicy'],
+             'A completed simulation or passing COMcheck backstop does not establish filing approval. Review these findings and the accompanying engine reports. Full per-opening area changes and source IDs are in ANALYTICAL_GEOMETRY_REVIEW.json.']
+    for role, item in evidence['models'].items():
+        notes.append(f"{role.title()}: {item['boundaryClearance'].get('changedOpenings', 0)} opening clearances; {len(item['nativeGeometryWarnings'])} zone enclosure warning entries.")
+    for note in notes:
+        paragraphs.extend([Spacer(1,12), Paragraph(escape(note), styles['BodyText'])])
+    SimpleDocTemplate(str(pdf), title='REVEX analytical geometry review').build(paragraphs)
+    # Preserve the approved nine-report archive. Add the disclosure to the
+    # Document Index and attach its machine-readable evidence to that PDF.
+    with zipfile.ZipFile(review_zip) as archive:
+        entries = [(item, archive.read(item)) for item in archive.infolist()]
+    index_names = [item.filename for item, _ in entries if item.filename.endswith(' - Document Index.pdf')]
+    if len(index_names) != 1:
+        raise PipelineError('Review package must contain exactly one Document Index for geometry disclosure.')
+    replacement = review_zip.with_suffix('.review.tmp')
+    with zipfile.ZipFile(replacement, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+        for item, data in entries:
+            if item.filename == index_names[0]:
+                writer = PdfWriter()
+                writer.append(PdfReader(BytesIO(data)))
+                writer.append(PdfReader(pdf))
+                writer.add_attachment(audit.name, audit.read_bytes())
+                result = BytesIO(); writer.write(result); data = result.getvalue()
+                (review_dir / Path(item.filename).name).write_bytes(data)
+            archive.writestr(item, data)
+    replacement.replace(review_zip)
 
 
 def simulate(role: str, model: Path, weather: Path, cli: Path, folder: Path, log: RunLog) -> dict:
@@ -1483,6 +1552,15 @@ def canonicalize_comcheck_envelope_rows(en_pages: list[dict]) -> tuple[list[dict
         filing_rows = [dict(row) for row in (thermal_rows or all_rows)]
         geometry_mode = "THERMAL_TABLE_FALLBACK" if thermal_rows else "ENVELOPE_ROWS_FALLBACK"
 
+    # Approved construction references provide thermal properties, not new physical
+    # envelope geometry. Keep them in thermal_rows for matching above, but do not
+    # invent an area-less floor when a reference has no corresponding diagram row.
+    # Current drawing rows remain present and still fail preflight if area is absent.
+    reference_only_rows = [row for row in filing_rows
+                           if row.get("referenceEnvelopeAuthority")
+                           and row.get("grossAreaFt2") in (None, "")]
+    filing_rows = [row for row in filing_rows if row not in reference_only_rows]
+
     # Recover an area only for fallback rows; diagram-owned geometry already has explicit area.
     recovered_area = 0
     for row in filing_rows:
@@ -1517,6 +1595,7 @@ def canonicalize_comcheck_envelope_rows(en_pages: list[dict]) -> tuple[list[dict
         "thermalPropertyMergeErrorCount": len(merge_errors),
         "thermalPropertyMergeErrors": merge_errors,
         "recoveredGrossAreaCount": recovered_area,
+        "referencePropertyOnlyRowsExcluded": len(reference_only_rows),
         **roof_reconciliation,
         "roofPolicy": "ONE_COMCHECK_ROOF_AREA_WHEN_ONE_CURRENT_THERMAL_SIGNATURE_IS_PROVEN",
         "narrativeRowsExcluded": True,
@@ -2105,6 +2184,7 @@ def main() -> int:
     status = "FAILED"
     error = None
     metrics = None
+    geometry_review = None
     artifacts: list[dict] = []
     deliverables: list[Path] = []
     failure_context = None
@@ -2206,6 +2286,7 @@ def main() -> int:
         geometry_osm = original_dir / "REVIT_GEOMETRY_ORIGINAL.osm"
         convert_gbxml(gbxml, geometry_osm, cli, output_root, log)
         baseline_model, proposed_model = compile_models(geometry_osm, cli, output_root, log)
+        geometry_review = geometry_review_evidence(output_root)
         stamp_compiled_project_identity(baseline_model, project_identity, "BASELINE", log)
         stamp_compiled_project_identity(proposed_model, project_identity, "PROPOSED", log)
         baseline_run = simulate("baseline", baseline_model, weather, cli, output_root, log)
@@ -2219,6 +2300,7 @@ def main() -> int:
             baseline_model_file=str(baseline_run["idf"]), proposed_model_file=str(proposed_run["idf"]),
         ))
         log.write("REVIEW_PACKAGER", "PASSED", zip=str(review_zip))
+        attach_geometry_review_package(review_zip, review_dir, geometry_review)
         filing_dir = output_root / "05_FILING"
         filing_dir.mkdir(parents=True, exist_ok=True)
         en1_xlsx, _en1_pdf_unused, metrics = prepare_en1(
@@ -2413,6 +2495,7 @@ def main() -> int:
         "dependencies": log.dependencies,
         "diagnosticLog": log.path.name,
         "metrics": metrics,
+        "geometryReview": geometry_review,
         "packageLayout": [
             {"folder":"00_SOURCE_EVIDENCE", "kind":"source-evidence", "label":"Immutable source evidence"},
             {"folder":"01_ORIGINAL_MODELS", "kind":"original-model", "label":"Original Revit-derived OSM"},

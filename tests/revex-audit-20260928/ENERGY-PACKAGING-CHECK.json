@@ -1,0 +1,20 @@
+{
+  "status": "PASS",
+  "scope": "Completion gate on real audited replay outputs with corrected report packaging; production run remains pending",
+  "checks": {
+    "compiledOsmCount": 2,
+    "simulationCount": 2,
+    "geometrySpaceIdentityLock": true,
+    "scheduleAndLoadReferenceLock": true,
+    "losslessCompatibilityRepair": true,
+    "reviewPackagePdfCount": 9,
+    "en1Workbook": "EN-1_READY_TO_INSERT.xlsx",
+    "en1PdfRequired": false,
+    "officialComcheckReport": "COMcheck_OFFICIAL_BACKSTOP_REPORT.pdf",
+    "officialDoeReport": true
+  },
+  "geometryReviewRequired": true,
+  "documentIndexPages": 2,
+  "officialComcheckPasses": true,
+  "officialComcheckIndex": 5
+}

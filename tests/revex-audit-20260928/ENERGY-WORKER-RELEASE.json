@@ -1,0 +1,19 @@
+{
+  "base": "us-central1-docker.pkg.dev/liber-apps-cca20/revex/revex-energy-worker@sha256:0bc20fe861486f324b93ac1a9e4864fec44b5d30b9429e54b4482c5cd482dc15",
+  "files": {
+    "revex_energy_pipeline.py": {
+      "repositoryPath": "src/Liber.Revex.Revit/Engineering/Energy/revex_energy_pipeline.py",
+      "sha256": "2e0a08513e04dbe1afac7f7e005ade6304463859aec792825a973d6a668288dc"
+    },
+    "OpenStudio_Energy_Model_Geometry_Compiler_core.py": {
+      "repositoryPath": "src/Liber.Revex.Revit/Engineering/Energy/GeometryCo/OpenStudio_Energy_Model_Geometry_Compiler.py",
+      "sha256": "cccaa92faaeafac4102b17e129965a3e14793048e24f4842ddb26efd6261eee6"
+    },
+    "revex_opening_partition.py": {
+      "repositoryPath": "server/revex-energy-worker/revex_opening_partition.py",
+      "sha256": "2920d0af16b17d80020a87ae9b328c8e1cc21f20d40c6e46eaa9e15fd5bdee70"
+    }
+  },
+  "sourceCandidate": "74faaedc9b84561dec3a47c50c8abe05d88c1f7ca28830c67828caa18402283b",
+  "tag": "us-central1-docker.pkg.dev/liber-apps-cca20/revex/revex-energy-worker:analytical-74faaedc9b84"
+}

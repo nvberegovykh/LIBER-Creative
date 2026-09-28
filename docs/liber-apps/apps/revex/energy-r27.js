@@ -116,8 +116,9 @@ function renderResult() {
   }
   const complete = clean(manifest.status).toUpperCase() === 'COMPLETE';
   const failedStage = clean(manifest.failureContext?.failedStage);
+  const geometryReview = complete && manifest.geometryReview?.required;
   summary.textContent = complete
-    ? `${manifest.resultRevision || resultState.revision} completed from Engineering revision ${manifest.sourceEngineeringRevision || manifest.sourceRevision || '—'}.`
+    ? geometryReview ? 'Calculations complete · geometry review required. Opening adjustments and zone enclosure warnings are documented in the report package. Review these findings before filing.' : `${manifest.resultRevision || resultState.revision} completed from Engineering revision ${manifest.sourceEngineeringRevision || manifest.sourceRevision || '—'}.`
     : `${manifest.status || 'BLOCKED'}${failedStage ? ` at ${failedStage}` : ''}: ${manifest.error || 'Failure evidence is preserved below.'}`;
   const allRows = Array.isArray(resultState.artifacts) ? resultState.artifacts : [];
   // COMPLETE results expose only the clean user-facing contract. CXL, COMcheck engine JSON,
@@ -135,7 +136,7 @@ function renderResult() {
   artifacts.innerHTML = previewRows.map((row,index) => {
     const filing = complete && rank(row) === 1;
     const failureEvidence = !complete && isFailureEvidence(row);
-    const label = failureEvidence ? 'Failure evidence' : filing ? 'Ready to insert later' : row.kind || 'Energy evidence';
+    const label = failureEvidence ? 'Failure evidence' : geometryReview && filing ? 'Review required before filing' : filing ? 'Ready to insert later' : row.kind || 'Energy evidence';
     const body = `<span class="energy-artifact-name">${esc(row.reviewName || row.name || 'Artifact')}</span><small class="energy-artifact-meta">${esc(label)}${row.bytes ? ` · ${size(row.bytes)}` : ''}</small>`;
     const url=clean(row.url),name=clean(row.reviewName||row.name||'REVEX-artifact');
     return url ? `<div class="energy-artifact-row"><a class="energy-artifact${filing?' is-filing':''}" href="${esc(url)}" data-download-url="${esc(url)}" data-download-name="${esc(name)}" download="${esc(name)}" style="cursor:pointer;touch-action:manipulation">${body}<small>Download</small></a>${/\.(pdf|png|jpe?g|webp|txt|json|csv|log|err|xml|md)$/i.test(name)?`<button class="button ghost" type="button" data-energy-preview="${index}">View</button>`:''}</div>` : `<div class="energy-artifact${filing?' is-filing':''}">${body}</div>`;
