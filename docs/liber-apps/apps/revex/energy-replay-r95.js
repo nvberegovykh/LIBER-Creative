@@ -52,6 +52,8 @@
   function setButton(running){
     const button=document.getElementById('energy-authorize-backstop');
     if(!button)return;
+    const repair=root.__revexEnergySourceRepair;
+    if(!running&&repair?.projectId===projectId()&&repair.revision===runtime.revision){button.disabled=true;button.textContent='New Engineering Sync required';delete button.dataset.revexEnergyRunning;return;}
     button.disabled=Boolean(running);
     button.textContent=running?'Energy running…':'Retry this published revision';
     if(running)button.dataset.revexEnergyRunning='1';else delete button.dataset.revexEnergyRunning;
@@ -189,6 +191,8 @@
     requireOwner(owner);
     if(!revision)throw new Error('No published Engineering revision exists for the selected REVEX project.');
     if(!sourceValid(source))throw new Error(`Published Engineering revision ${revision} is not eligible for Energy processing.`);
+    const repair=root.__revexEnergySourceRepair;
+    if(repair?.projectId===id&&repair.revision===revision)throw new Error(repair.message);
     const key=`${currentOwner()}:${id}:${revision}`;
     return own(key,async()=>{
       runtime.running=true;runtime.owner='hosted';runtime.projectId=id;runtime.revision=revision;runtime.startedAt=Date.now();setButton(true);
@@ -229,6 +233,8 @@
     const source=await readSource(Store,id),revision=clean(source?.revision||source?.manifest?.revision);if(!revision)throw new Error('No published Engineering revision exists for the selected REVEX project.');
     requireOwner(owner);
     const key=`${owner}:${id}:${revision}`;
+    const repair=root.__revexEnergySourceRepair;
+    if(repair?.projectId===id&&repair.revision===revision)throw new Error(repair.message);
     if(active.has(key))return active.get(key);
     const job=await readJob(Store,id,revision),status=clean(job?.status).toUpperCase(),worker=workerState(job);
     requireOwner(owner);

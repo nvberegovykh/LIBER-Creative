@@ -1,0 +1,188 @@
+{
+  "date": "2026-09-28",
+  "hosting": {
+    "status": "PASS",
+    "version": "sites/liber-apps-cca20/versions/4ecf430fdf652f32",
+    "baseline": "sites/liber-apps-cca20/versions/0b84fd1c0cd32e01",
+    "verifiedAt": "2026-09-28T09:01:21.495Z",
+    "preservedPaths": 576,
+    "changedPaths": [
+      {
+        "path": "/liber-apps/apps/revex/app.js",
+        "sha256": "6259efdb3d56621d98f63187808c56976a15515a482d8588cbbdb5b6b7e89c1e"
+      },
+      {
+        "path": "/liber-apps/apps/revex/assets-library-r157.js",
+        "sha256": "c185cea9fcdab848c0c42f73fb02356354c69729b6887f22a23e51afb1ca3ed4"
+      },
+      {
+        "path": "/liber-apps/apps/revex/book-spreadsheet.js",
+        "sha256": "4aa6907265af82acde3fb74627cbec170a23a6ba189b30a9eb5f5d9c6d903fc5"
+      },
+      {
+        "path": "/liber-apps/apps/revex/book-structure.js",
+        "sha256": "89934bcc708a20318185b8b1ab16616dc33794d289eddd4a98f85a9ffa80aaa1"
+      },
+      {
+        "path": "/liber-apps/apps/revex/energy-diagnostics-r68.js",
+        "sha256": "245b7414c3b08f0b649c51853997b51d0ce6c0b6a0cb69fe7930c4e33d8c0b9f"
+      },
+      {
+        "path": "/liber-apps/apps/revex/energy-replay-r95.js",
+        "sha256": "fb4cd21f5b569dd8cab1719a2060c6430dd00f6d5f53b166e5015d921aea789c"
+      },
+      {
+        "path": "/liber-apps/apps/revex/index.html",
+        "sha256": "8bee94eedd34ff4e146eff6291dfd380c6e382e59c658affda3616915beaa2e7"
+      },
+      {
+        "path": "/liber-apps/apps/revex/mobile-safe-r133.js",
+        "sha256": "42cff3ca02c1c42446dbd80c365d93651c8318d3751dbca6d14bd7082e6e694e"
+      },
+      {
+        "path": "/liber-apps/apps/revex/product-sourcing.js",
+        "sha256": "14aab36336e733ec6d67715f42cbe716694ac7626b305792ead010889d5aab34"
+      },
+      {
+        "path": "/liber-apps/apps/revex/review-integrity-r50.js",
+        "sha256": "68e4832a9e3e4acda2b50b5660314069df7f79c8bf0b24c4f2ecec21fc8655fe"
+      },
+      {
+        "path": "/liber-apps/apps/revex/spec-index.html",
+        "sha256": "3d4235b034881eb36a3144e528754f0418bd0a00ae561111580695b1174eeb77"
+      },
+      {
+        "path": "/liber-apps/apps/revex/styles.css",
+        "sha256": "b5c8eb5249f06c36735ec211d28edb08c01317b0f07fb72720f8f8a07e527cf8"
+      },
+      {
+        "path": "/liber-apps/apps/revex/ui-integrity.js",
+        "sha256": "4c9ae5de709fcbe979e8491b812897357a158e6e051cfa2f95e4ee390f03157e"
+      },
+      {
+        "path": "/liber-apps/apps/revex/wallt-controller.js",
+        "sha256": "f6ed6835062e2330682b1a9fbc4d7f0b6e270bb9f2eaf71c0273b07e255f19f0"
+      },
+      {
+        "path": "/liber-apps/apps/specifications/app.js",
+        "sha256": "4627bbab86443d7a0e796bc93bf2ae19904c1d58015b81a34b6cf7c5d80d287a"
+      },
+      {
+        "path": "/liber-apps/apps/specifications/index.html",
+        "sha256": "9089635f2bd30d4e473bc683985e6364fe2b0b31b5976c3850f1e8a034b66781"
+      },
+      {
+        "path": "/liber-apps/apps/revex/adaptive-audit.css",
+        "sha256": "c5a56264f44ac0c20fbd01347cc1675698bb82d959f0cff73eaad3b8105df23b"
+      },
+      {
+        "path": "/liber-apps/apps/revex/asset-import.js",
+        "sha256": "e648f6015d44ed253c451e88064ebcfb65dd49afca74df8e9be88c8cf933525c"
+      },
+      {
+        "path": "/liber-apps/apps/revex/bim-measure.js",
+        "sha256": "eae18d0c5965d9f5fab12ab99ee5310ec1cdc85eb4ea6b3e7f0a10741cced32d"
+      },
+      {
+        "path": "/liber-apps/apps/revex/browser-assets.js",
+        "sha256": "ff04b841e6dbd7044474fac01fad3a28792cd92e20caa4323c82f525865a4c54"
+      }
+    ]
+  },
+  "browser": {
+    "targetedBuild": "091ec00b-39e9-4a73-8ac6-2e31e12cd997",
+    "targetedChecks": 20,
+    "pageErrors": 0,
+    "viewports": [
+      [
+        320,
+        568
+      ],
+      [
+        390,
+        844
+      ],
+      [
+        768,
+        1024
+      ],
+      [
+        1024,
+        600
+      ],
+      [
+        1440,
+        900
+      ],
+      [
+        1920,
+        1080
+      ],
+      [
+        844,
+        390
+      ]
+    ],
+    "journeyBuild": "c797e388-30cf-41ed-8a30-92fe71e88e0b",
+    "journey": "All 15 journey groups passed; overall build failed only because an added audit check clicked the obsolete mobile dock. Corrected targeted build passed. Docs first timed out in an earlier run; standalone probe and later complete journey passed without a source change."
+  },
+  "backend": {
+    "unitTests": 11,
+    "configuration": [
+      {
+        "name": "runRevexEnergy",
+        "revision": "runrevexenergy-00035-jax",
+        "changedEnvironmentKeys": [
+          "REVEX_SOURCE_CANDIDATE"
+        ],
+        "serviceAccountPreserved": true
+      },
+      {
+        "name": "askRevexProject",
+        "revision": "askrevexproject-00004-rik",
+        "changedEnvironmentKeys": [
+          "REVEX_SOURCE_CANDIDATE"
+        ],
+        "serviceAccountPreserved": true
+      },
+      {
+        "name": "documentRevexRevision",
+        "revision": "documentrevexrevision-00012-kil",
+        "changedEnvironmentKeys": [
+          "REVEX_SOURCE_CANDIDATE"
+        ],
+        "serviceAccountPreserved": true
+      },
+      {
+        "name": "finalizeRevexDailyReport",
+        "revision": "finalizerevexdailyreport-00010-soj",
+        "changedEnvironmentKeys": [
+          "REVEX_SOURCE_CANDIDATE"
+        ],
+        "serviceAccountPreserved": true
+      }
+    ],
+    "report": "Customer daily report generated from verified immutable publication packages; PDF retrieved successfully.",
+    "energy": "Four 8760-hour simulations passed on explicit/template baseline/proposed fixtures; customer export remains blocked at opening-geometry preflight.",
+    "runtimeBuild": "5638743f-d0b1-41e4-8852-d6435251f466",
+    "comcheck": {
+      "status": "PASS",
+      "scope": "Official COMcheck integration test only; not customer project acceptance",
+      "summary": {
+        "engine": "PNNL Legacy COMcheck-Web clean project translator",
+        "code": "2020 NYCECC Appendix CA Modeling Envelope Backstop",
+        "passes": true,
+        "complianceIndex": 4,
+        "responseEvidence": "COMcheck_BACKSTOP_ENGINE_RESPONSE.js",
+        "transport": "FRESH_PROJECT_BROWSER_MODEL",
+        "status": "OFFICIAL_REPORT_READY",
+        "officialDoeReport": true,
+        "report": "COMcheck_OFFICIAL_BACKSTOP_REPORT.pdf",
+        "reportPages": 4,
+        "service": "legacy-comcheck.energycode.pnl.gov"
+      }
+    },
+    "render": "Permission/ownership and provider-return handling passed; a paid live image generation was not requested for this audit."
+  },
+  "cleanup": "Temporary report job, report source archive and QA credential object removed."
+}

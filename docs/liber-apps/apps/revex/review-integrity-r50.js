@@ -361,23 +361,28 @@ if (!window.__revexReviewIntegrityR50) {
   async function injectPositionVersions(item = state?.selectedDesign) {
     const inspector = $('#design-inspector');
     if (!inspector || !item?.id) return;
-    inspector.querySelector('[data-position-versions]')?.remove();
-    const panel = document.createElement('section');
+    const previous = inspector.querySelector('[data-position-versions]');
+    const wasOpen = previous?.dataset.positionId === String(item.id) && previous.open;
+    previous?.remove();
+    const projectId = state.projectId;
+    const panel = document.createElement('details');
     panel.dataset.positionVersions = '1';
+    panel.dataset.positionId = String(item.id);
+    panel.open = Boolean(wasOpen);
     panel.className = 'position-versions';
-    panel.innerHTML = '<div class="eyebrow">POSITION VERSIONS</div><p class="muted">Loading this position’s immutable edit history…</p>';
+    panel.innerHTML = '<summary>Edit history</summary><p class="muted">Loading saved edits…</p>';
     inspector.appendChild(panel);
     const versions = (await listDesignVersions(item.id)).sort((a, b) => String(b.createdAt || b.updatedAt || '').localeCompare(String(a.createdAt || a.updatedAt || ''))).slice(0, 40);
-    if (!panel.isConnected || String(state?.selectedDesign?.id || '') !== String(item.id)) return;
-    panel.innerHTML = `<div class="eyebrow">POSITION VERSIONS · ${versions.length}</div>
-      <p class="muted">Versions belong to this Design Book position, not to the whole chapter.</p>
+    if (!panel.isConnected || state.projectId !== projectId || String(state?.selectedDesign?.id || '') !== String(item.id)) return;
+    panel.innerHTML = `<summary>Edit history <span>${versions.length}${versions.length === 40 ? '+' : ''}</span></summary>
+      <p class="muted">Previous saved edits for this position.</p>
       <div class="position-version-list">${versions.map((version, index) => {
         const images = Array.isArray(version.images) ? version.images : [];
         return `<article class="position-version-row">
           <strong>${esc(version.status || `Version ${versions.length - index}`)}</strong>
           <small>${esc(new Date(version.createdAt || version.updatedAt || Date.now()).toLocaleString())}</small>
           ${version.description ? `<p>${esc(version.description)}</p>` : ''}
-          ${images.length ? `<div class="image-strip">${images.slice(-4).map((image) => `<img src="${esc(image.url)}" alt="${esc(image.name || '')}" />`).join('')}</div>` : ''}
+          ${images.length ? `<small>${images.length} image${images.length === 1 ? '' : 's'} attached</small>` : ''}
         </article>`;
       }).join('') || '<p class="muted">No saved versions yet. The first edit or image on this position creates one automatically.</p>'}</div>`;
   }

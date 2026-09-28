@@ -1,6 +1,6 @@
-import { isBookDivision, bookDivisionItems, bookFilename, printBookDocument } from './book-structure.js?v=20260914r193-books1';
+import { isVisibleDesignChapter, isBookDivision, bookDivisionItems, bookFilename, printBookDocument } from './book-structure.js?v=20260928r201-audit3';
 import { loadSpreadsheetEngine, createBookWorkbook } from './book-spreadsheet.js?v=20260914r193-books1';
-import './product-sourcing.js?v=20260914r193-books1';
+import './product-sourcing.js?v=20260928r201-audit3';
 
 const Store = window.RevexStore;
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -511,7 +511,7 @@ function chapters() {
     });
   });
   if (archived.length) current.push({ id: 'revex-archived-source', title: 'Archived / Removed from Revit', order: 999999, sourceKind: 'revex-overlay-archive', items: archived });
-  return current;
+  return current.filter(isVisibleDesignChapter);
 }
 
 function bookChapters() {

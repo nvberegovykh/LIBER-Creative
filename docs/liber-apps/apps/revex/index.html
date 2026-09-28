@@ -14,8 +14,9 @@
   <link rel="manifest" href="manifest.webmanifest?v=20260813r49" />
   <link rel="apple-touch-icon" href="/liber-apps/images/LIBER%20LOGO.png" />
   <title>REVEX Companion — LIBER Apps</title>
-  <link rel="stylesheet" href="../specifications/styles.css?v=20260914r193-books1" />
-  <link rel="stylesheet" href="styles.css?v=20260914r193-books1" />
+  <link rel="stylesheet" href="../specifications/styles.css?v=20260928r201-audit3" />
+  <link rel="stylesheet" href="styles.css?v=20260928r201-audit3" />
+  <link rel="stylesheet" href="adaptive-audit.css?v=20260928r201-audit3" />
   <link rel="stylesheet" href="runtime.css?v=20260914r192-morning1" />
   <link rel="stylesheet" href="render-agent.css?v=20260914r192-morning1" />
   <link rel="stylesheet" href="workspace-r51.css?v=20260914r192-morning1" />
@@ -133,6 +134,7 @@
             <button id="reference-toggle" type="button" class="tool" data-r109-icon="◇" data-revex-icon="◇" aria-pressed="false" aria-label="Show or hide reference volume" title="Show or hide the enclosing height/setback reference volume; source geometry is preserved" hidden>References off</button>
             <button id="section-toggle" type="button" class="tool" aria-expanded="false">Section</button>
             <button id="walk-toggle" type="button" class="tool">Walk</button>
+            <button id="measure-toggle" type="button" class="tool" aria-pressed="false" title="Measure between two points on the model">Measure</button>
             <button id="camera-tools-toggle" type="button" class="tool" aria-expanded="false" aria-controls="detail-toggle walk-floor walk-height walk-fov" title="Show camera and model options">Tools</button>
             <select id="walk-floor" class="tool-select" aria-label="Walkthrough floor"><option value="">Floor</option></select>
             <label class="tool-field" title="Camera eye height above selected floor"><span>Eye</span><input id="walk-height" type="number" value="5.5" min="2.5" max="9" step="0.25" /><b>ft</b></label>
@@ -494,26 +496,28 @@
   <script src="../../js/chat-iframe-bridge.js?v=20260914r192-morning1"></script>
   <script src="diagnostics-r29.js?v=20260914r192-morning1"></script>
   <script src="../../js/wallt-agent.js?v=20260914r192-morning1"></script>
-  <script type="module" src="wallt-controller.js?v=20260914r192-morning1"></script>
+  <script type="module" src="wallt-controller.js?v=20260928r201-audit3"></script>
   <script src="store.js?v=20260914r192-morning1"></script>
   <script src="cache-r21.js?v=20260914r192-morning1"></script>
   <script src="runtime.js?v=20260914r192-morning1"></script>
   <script src="integrity.js?v=20260914r192-morning1"></script>
   <script src="firestore-compat.js?v=20260914r192-morning1"></script>
   <script src="shell-integrity.js?v=20260914r192-morning1"></script>
-  <script src="ui-integrity.js?v=20260927r198-walk-entry2"></script>
+  <script src="ui-integrity.js?v=20260928r201-audit3"></script>
   <script src="projection-integrity.js?v=20260914r192-morning1"></script>
   <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.179.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.179.1/examples/jsm/"}}</script>
   <script src="document-controller.js?v=20260914r192-morning1"></script>
   <script src="sync-docs-r24.js?v=20260914r192-morning1"></script>
   <script src="viewer-host-guard-r21.js?v=20260914r192-morning1"></script>
-  <script type="module" src="app.js?v=20260914r193-books1"></script>
+  <script type="module" src="app.js?v=20260928r201-audit3"></script>
   <script type="module" src="viewer-r26.js?v=20260927r198-level-choice1"></script>
+  <script type="module" src="bim-measure.js?v=20260928r201-audit3"></script>
+  <script type="module" src="browser-assets.js?v=20260928r201-audit3"></script>
   <script type="module" src="workspace-r51.js?v=20260914r192-morning1"></script>
   <script type="module" src="render-agent.js?v=20260914r197-render-return1"></script>
   <script type="module" src="history-r24.js?v=20260914r192-morning1"></script>
   <script type="module" src="history-daily-r126.js?v=20260914r192-morning1"></script>
-  <script src="assets-library-r157.js?v=20260914r197-family-flow1"></script>
+  <script src="assets-library-r157.js?v=20260928r201-audit3"></script>
   <script src="post-recovery-r157.js?v=20260914r192-morning1"></script>
   <script type="module" src="energy-r27.js?v=20260914r192-morning1"></script>
 </body>
