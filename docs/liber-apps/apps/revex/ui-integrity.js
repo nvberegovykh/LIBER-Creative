@@ -75,7 +75,7 @@
     loadScript('docs-convergence-r126.js?v=20260914r192-morning1','docs-convergence-r126');
     loadScript('issues-inspector-r126.js?v=20260914r192-morning1','issues-inspector-r126');
     loadScript('blocks-palette-r126.js?v=20260914r197-family-flow1','blocks-palette-r126');
-    loadScript('render-convergence-r126.js?v=20260914r192-morning1','render-convergence-r126');
+    loadScript('render-convergence-r126.js?v=20260928r202-personal-google','render-convergence-r126');
     loadScript('mobile-safe-r133.js?v=20260928r201-audit3','mobile-safe-r133');
     loadScript('mobile-sheet-r142.js?v=20260914r192-morning1','mobile-sheet-r142');
   }

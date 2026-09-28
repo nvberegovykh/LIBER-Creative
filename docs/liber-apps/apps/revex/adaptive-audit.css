@@ -33,3 +33,39 @@ body.revex-app .design-lane-image img{object-fit:contain;background:var(--bg)}
 @media(max-width:860px){body.revex-app .r157-assets-panel{width:auto;max-height:calc(100dvh - 68px)}}
 @media(max-width:860px){body.revex-app .r157-assets-panel[data-placing=true]{width:auto;top:auto;bottom:calc(55px + env(safe-area-inset-bottom));max-height:48dvh}}
 .browser-asset-row{flex-wrap:wrap}.browser-asset-row>div{flex-basis:100%}
+
+/* Size report contents to the available WebView/container width. */
+body.revex-app .energy-view,body.revex-app .energy-card,body.revex-app .energy-layout,body.revex-app .energy-artifacts,body.revex-app .energy-artifact-row{min-width:0;max-width:100%;box-sizing:border-box}
+body.revex-app .energy-layout{grid-template-columns:repeat(auto-fit,minmax(min(100%,330px),1fr))}
+body.revex-app .energy-results-card{grid-column:auto}
+body.revex-app .energy-artifact-row{display:grid;grid-template-columns:minmax(0,1fr);gap:6px}
+body.revex-app .energy-artifact-row>.button{justify-self:start}
+body.revex-app .energy-artifact{display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:0;max-width:100%;box-sizing:border-box}
+body.revex-app .energy-artifact>*{min-width:0;max-width:100%;overflow-wrap:anywhere;white-space:normal}
+body.revex-app .energy-artifact-meta{word-break:normal}
+body.revex-app .energy-result-summary,body.revex-app .energy-run-status,body.revex-app .energy-exact-failure{overflow-wrap:anywhere}
+body.revex-app #energy-previous-result{font-size:12px;line-height:1.5;color:var(--tx-2);overflow-wrap:anywhere}
+body.revex-app #energy-previous-result>summary{cursor:pointer;padding:10px 0}
+body.revex-app #render-google-generate{background:var(--acc,#ff2875)!important;color:#080b10!important;border-color:var(--acc,#ff2875)!important;opacity:1}
+body.revex-app #render-google-generate:disabled{background:#29323e!important;color:#eef2f7!important;border-color:#596778!important;cursor:wait}
+body.revex-app .render-agent-fields select,body.revex-app .render-agent-fields textarea{background:var(--bg,#090d11);color:var(--tx-1,#edf1f7);border:1px solid var(--line-2,#3b4656);border-radius:8px;padding:8px;box-sizing:border-box;min-width:0;max-width:100%;font:13px/1.5 system-ui;color-scheme:dark}
+body.revex-app .render-agent-fields .render-options select{width:100%}
+body.revex-app .render-agent-fields textarea{min-height:110px}
+body.revex-app .wallt-sourcing-card a{color:inherit}
+.render-google-account,.render-google-links{display:flex;flex-wrap:wrap;gap:.65rem;align-items:center}
+.render-google-config{min-width:0;display:grid;gap:.65rem}
+.render-google-config>*{min-width:0;max-width:100%}
+.render-google-config label{display:grid;gap:.4rem}
+.render-google-config select{width:100%;min-width:0;max-width:100%}
+.render-google-config small{display:block;line-height:1.5;color:var(--muted,#bcc7d6)}
+.render-google-links a{color:#9dccff;font-size:.8rem}
+/* One scrollable properties area prevents setup content from crushing the form. */
+body.revex-app .render-agent-panel{display:flex;flex-direction:column}
+body.revex-app .render-agent-head,body.revex-app .render-sheet-handle,body.revex-app .render-agent-status-slot,body.revex-app #render-google-generate{flex-shrink:0}
+body.revex-app #render-agent-body{flex:1 1 0;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain}
+body.revex-app .render-google-config{grid-template-columns:minmax(0,1fr);align-items:start}
+body.revex-app .render-google-config .button{min-height:34px;height:auto;align-self:start;background:var(--panel-2,#151b23);color:var(--tx-1,#edf1f7);border:1px solid var(--line-2,#3b4656)}
+body.revex-app .render-google-account{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+body.revex-app .render-google-account #google-ai-connect{grid-column:auto;width:auto}
+body.revex-app .render-agent-fields{overflow:visible;min-height:auto}
+@media(max-width:860px){body.revex-app .render-agent-panel{height:var(--revex-render-sheet-h,58dvh);max-height:82dvh;padding-bottom:52px}body.revex-app .render-agent-status-slot .render-status{max-height:46px}}

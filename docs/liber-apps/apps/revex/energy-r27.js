@@ -103,9 +103,14 @@ function renderResult() {
   const summary = $('#energy-result-summary');
   const artifacts = $('#energy-artifacts');
   const manifest = resultState?.manifest;
+  const currentRevision = clean(sourceState?.revision || sourceState?.manifest?.revision);
+  const resultSource = clean(manifest?.sourceEngineeringRevision || manifest?.sourceRevision);
+  const runtime = window.__revexHostedEnergyRuntime;
+  const pending = runtime?.running && runtime.projectId === projectId() && runtime.revision === currentRevision;
+  const previous = Boolean(manifest && currentRevision && resultSource && resultSource !== currentRevision);
   if (!manifest) {
     if(resultError){summary.textContent='Energy results could not be read.';artifacts.innerHTML='<div class="energy-empty">Refresh to retry loading the current result.</div>';return;}
-    summary.textContent = 'No result yet.';
+    summary.textContent = pending ? 'This Engineering revision is processing. Models and reports will appear here when it finishes.' : 'No result yet.';
     artifacts.innerHTML = '<div class="energy-empty">The current revision’s OSMs, simulations, COMcheck/CXL, PRM review package, and EN-1 will appear here.</div>';
     return;
   }
@@ -131,10 +136,16 @@ function renderResult() {
     const filing = complete && rank(row) === 1;
     const failureEvidence = !complete && isFailureEvidence(row);
     const label = failureEvidence ? 'Failure evidence' : filing ? 'Ready to insert later' : row.kind || 'Energy evidence';
-    const body = `<span>${esc(row.reviewName || row.name || 'Artifact')}</span><small>${esc(label)}${row.bytes ? ` · ${size(row.bytes)}` : ''}</small>`;
+    const body = `<span class="energy-artifact-name">${esc(row.reviewName || row.name || 'Artifact')}</span><small class="energy-artifact-meta">${esc(label)}${row.bytes ? ` · ${size(row.bytes)}` : ''}</small>`;
     const url=clean(row.url),name=clean(row.reviewName||row.name||'REVEX-artifact');
     return url ? `<div class="energy-artifact-row"><a class="energy-artifact${filing?' is-filing':''}" href="${esc(url)}" data-download-url="${esc(url)}" data-download-name="${esc(name)}" download="${esc(name)}" style="cursor:pointer;touch-action:manipulation">${body}<small>Download</small></a>${/\.(pdf|png|jpe?g|webp|txt|json|csv|log|err|xml|md)$/i.test(name)?`<button class="button ghost" type="button" data-energy-preview="${index}">View</button>`:''}</div>` : `<div class="energy-artifact${filing?' is-filing':''}">${body}</div>`;
   }).join('') || '<div class="energy-empty">The result manifest contains no downloadable artifact index.</div>';
+  if (pending || previous) {
+    summary.textContent = pending
+      ? 'This Engineering revision is processing. Its models and reports will appear here when the run finishes.'
+      : 'This Engineering revision has no completed result yet. The previous attempt is available below.';
+    artifacts.innerHTML = `<details id="energy-previous-result"><summary>Previous attempt · ${esc(manifest.status || 'Result')} · ${esc(resultSource || 'earlier revision')}</summary><p>${esc(manifest.error || 'Earlier result preserved.')}</p>${artifacts.innerHTML}</details>`;
+  }
 }
 
 async function downloadArtifact(url,name){
@@ -221,7 +232,7 @@ function subscribe() {
   boundProject = id;
   if (!id) return hydrate();
   const current = () => id === boundProject && id === projectId();
-  unsubscribeSource = Store.subscribeEngineeringState?.(id, (value) => { if(!current())return;sourceState=value;sourceError='';readWarning(); renderSource(); },error=>{if(current()){sourceError=error.message||'Connection failed';readWarning();renderSource();}}) || (()=>{});
+  unsubscribeSource = Store.subscribeEngineeringState?.(id, (value) => { if(!current())return;sourceState=value;sourceError='';readWarning(); renderSource(); renderResult(); },error=>{if(current()){sourceError=error.message||'Connection failed';readWarning();renderSource();}}) || (()=>{});
   unsubscribeResult = Store.subscribeEnergyResult?.(id, (value) => { if(!current())return;resultState=value;resultError='';readWarning(); renderResult(); },error=>{if(current()){resultError=error.message||'Connection failed';readWarning();renderResult();}}) || (()=>{});
   hydrate().catch((error)=>setRun(error.message || 'Energy state could not load.','bad'));
 }
@@ -234,6 +245,7 @@ window.addEventListener('revex:managed-energy-status', (event) => {
   if (detail.projectId && detail.projectId !== projectId()) return;
   setRun(detail.message || detail.stage || 'Managed Energy update', detail.ok ? 'good' : (detail.stage === 'BROKER_FAILED' ? 'bad' : 'busy'));
   if (detail.stage === 'CLOUD_UPLOAD_PASSED' || detail.stage === 'BROKER_FAILED') hydrate();
+  setTimeout(renderResult, 0);
 });
 window.addEventListener('revex:managed-energy-result', (event) => {
   if (event.detail?.projectId !== projectId()) return;
