@@ -4,6 +4,10 @@ on:
     paths:
       - 'docs/liber-apps/**'
       - 'tests/revex-recovery/**'
+      - 'tests/revex-audit-20260928/**'
+      - 'server/revex-assistant-functions/**'
+      - 'server/revex-energy-functions/**'
+      - 'server/revex-report-functions/**'
       - '.github/scripts/hosting-preservation.ps1'
       - '.github/scripts/test-hosting-preservation.ps1'
       - '.github/workflows/revex-companion-recovery.yml'
@@ -12,6 +16,10 @@ on:
     paths:
       - 'docs/liber-apps/**'
       - 'tests/revex-recovery/**'
+      - 'tests/revex-audit-20260928/**'
+      - 'server/revex-assistant-functions/**'
+      - 'server/revex-energy-functions/**'
+      - 'server/revex-report-functions/**'
   workflow_dispatch:
 permissions:
   contents: read
@@ -26,6 +34,7 @@ jobs:
       - run: node tests/revex-recovery/test-render-auth.cjs
       - run: node tests/revex-recovery/test-family-handoff.cjs
       - run: node tests/revex-recovery/test-walk-levels.cjs
+      - run: node --test server/revex-report-functions/publication-source.test.js server/revex-energy-functions/job-ownership.test.js server/revex-assistant-functions/purchase-links.test.js
       - run: node .github/scripts/verify-revex-security-boundaries.js
       - name: Hosting preserves unrelated app assets and rejects concurrent releases
         shell: pwsh
