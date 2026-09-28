@@ -142,6 +142,9 @@
     const current=currentRevisionOf(source),failedRevision=sourceRevisionOf(result);
     const failed=clean(result?.manifest?.status).toUpperCase()==='FAILED';
     const same=failed&&current&&failedRevision&&failedRevision===current;
+    const repair=root.__revexEnergySourceRepair;
+    if(same&&repair?.projectId===projectId()&&repair.revision===current){button.disabled=true;button.textContent='New Engineering Sync required';button.title=repair.message;return;}
+    if(root.__revexHostedEnergyRuntime?.running)return;
     button.disabled=false;
     if(same){
       button.textContent='Retry this published revision';
@@ -183,10 +186,13 @@
   async function inspect(mode='historical'){
     if(running)return;
     const id=projectId(),store=Store();
+    const owner=`${store?.user?.uid||''}:${id}:${state().activationToken||''}`;
+    const isCurrent=()=>owner===`${Store()?.user?.uid||''}:${projectId()}:${state().activationToken||''}`;
     if(!id||!store?.getEnergyResult||!store?.getEngineeringState)return;
     running=true;
     try{
       const [source,result]=await Promise.all([store.getEngineeringState(id),store.getEnergyResult(id)]);
+      if(!isCurrent())return;
       setRetryPolicy(source,result);
       const current=currentRevisionOf(source),failedRevision=sourceRevisionOf(result);
       const status=clean(result?.manifest?.status).toUpperCase();
@@ -210,14 +216,23 @@
         }catch(error){diagnostic('WARN','ENERGY_FAILURE_LOG_READ',error?.message||String(error));}
       }
       const currentFailure=mode==='current-failure';
+      if(!isCurrent())return;
+      const sourceGeometry=sameCurrentFailure(source,result)&&/OPENINGS_EXCEED_PARENT_AREA|OVERLAPPING_SIBLING_OPENINGS/.test(exact);
+      const repairMessage='The exported model contains overlapping openings or openings larger than their wall. Correct the affected openings in Revit, then use SYNC ENGINEERING and import the new package. Retrying this unchanged revision will fail again.';
+      root.__revexEnergySourceRepair=sourceGeometry?{projectId:id,revision:current,message:repairMessage}:null;
+      setRetryPolicy(source,result);
       if(currentFailure||sameCurrentFailure(source,result))updateRequiredIdentityFallback(exact);
       ensureIdentitySubmitGuard();
       box.hidden=false;
       box.innerHTML=`<div class="eyebrow">${currentFailure?'EXACT WORKER FAILURE':'PREVIOUS ATTEMPT FAILURE'}</div><strong>${esc(result?.manifest?.failureContext?.failedStage||'Energy pipeline')}</strong><p>${esc(exact)}</p>${links.length?`<div class="energy-exact-failure-links">${links.join('')}</div>`:''}<small>${currentFailure?'This failure was returned by the current replay.':'This is preserved evidence from the previous attempt; it is not a new failure on page load.'} Immutable Engineering revision ${esc(failedRevision||'—')} can be replayed without regenerating Revit evidence.</small>`;
       const run=document.getElementById('energy-run-status');
       if(run&&exact){
-        if(currentFailure){run.textContent=`${result?.manifest?.failureContext?.failedStage||'Energy'}: ${exact}`;run.dataset.tone='bad';}
+        if(sourceGeometry){run.textContent=repairMessage;run.dataset.tone='bad';}
+        else if(currentFailure){run.textContent=`${result?.manifest?.failureContext?.failedStage||'Energy'}: ${exact}`;run.dataset.tone='bad';}
         else if(run.dataset.tone==='bad'){run.textContent='Previous attempt failed. Retry published revision to run the repaired server chain.';run.dataset.tone='quiet';}
+      }
+      if(sourceGeometry){
+        box.innerHTML=`<strong>Engineering export needs correction</strong><p>${esc(repairMessage)}</p><p>Simulation and COMcheck have not run for this attempt.</p><details><summary>Affected geometry and diagnostic files</summary><p>${esc(exact)}</p>${links.length?`<div class="energy-exact-failure-links">${links.join('')}</div>`:''}</details>`;
       }
       if(currentFailure){diagnostic('ERROR','ENERGY_EXACT_FAILURE',exact,{projectId:id,revision:failedRevision,artifactCount:rows.length,replayable:sameCurrentFailure(source,result)});}
       else{const sig=`${failedRevision}|${exact}`;if(sig!==lastHistoricalSig){lastHistoricalSig=sig;diagnostic('INFO','ENERGY_PREVIOUS_FAILURE_AVAILABLE','Preserved failure evidence from the previous attempt is available; no new worker failure occurred on page load.',{projectId:id,revision:failedRevision,artifactCount:rows.length});}}

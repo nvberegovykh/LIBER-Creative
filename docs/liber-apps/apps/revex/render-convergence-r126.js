@@ -2,7 +2,7 @@
 'use strict';
 const BUILD='20260904r182-google-account-only1';
 if(root.__revexRenderConvergenceR126)return;
-root.__revexRenderConvergenceR126={build:BUILD,providerOwner:'render-agent.js?v=20260914r192-morning1',provider:'google',userAccountRequired:true,browserInference:false,localModelCache:false,legacyIframe:false,selfHostedEnhancementOptional:false,interactionGuard:'idempotent-frame-src-only'};
+root.__revexRenderConvergenceR126={build:BUILD,providerOwner:'render-agent.js?v=20260928r204-google-permissions',provider:'google',userAccountRequired:true,browserInference:false,localModelCache:false,legacyIframe:false,selfHostedEnhancementOptional:false,interactionGuard:'idempotent-frame-src-only'};
 function diag(level,stage,message,detail={}){try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'render convergence current',...detail})}catch(_){}}
 function suppressLegacyFrame(){
   const frame=document.getElementById('render-frame');
@@ -37,7 +37,7 @@ function preserveGoogleOwner(){
   const connect=document.getElementById('google-ai-connect');
   if(connect?.hasAttribute('hidden'))connect.removeAttribute('hidden');
   const button=document.getElementById('render-google-generate');
-  if(button&&!button.disabled&&button.textContent!=='Render current viewport')button.textContent='Render current viewport';
+  // The current renderer owns its price-aware action label.
   const runtime=panel.querySelector('.render-selfhost-runtime');
   if(runtime&&!runtime.hidden)runtime.hidden=true;
   const fallback=document.getElementById('revex-google-fallback');
@@ -47,7 +47,7 @@ function preserveGoogleOwner(){
 function converge(){
   suppressLegacyFrame();
   const ready=preserveGoogleOwner();
-  if(ready)diag('INFO','RENDER_CLIENT_CURRENT','Nano Banana rendering uses the user Google account exclusively.',{providerOwner:'render-agent.js?v=20260914r192-morning1',provider:'google',userAccountRequired:true,browserInference:false,localModelCache:false,legacyIframe:false,interactionGuard:'idempotent-frame-src-only'});
+  if(ready)diag('INFO','RENDER_CLIENT_CURRENT','Nano Banana rendering uses the user Google account exclusively.',{providerOwner:'render-agent.js?v=20260928r204-google-permissions',provider:'google',userAccountRequired:true,browserInference:false,localModelCache:false,legacyIframe:false,interactionGuard:'idempotent-frame-src-only'});
   return ready;
 }
 let tries=0;

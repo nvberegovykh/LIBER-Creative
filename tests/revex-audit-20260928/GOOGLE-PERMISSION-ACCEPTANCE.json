@@ -1,0 +1,26 @@
+{
+  "checkedAt": "2026-09-28T11:36:38.610Z",
+  "status": "PARTIAL",
+  "observedFailure": {
+    "request": "GET /v1/models/gemini-3.1-flash-image",
+    "tokenContainedCloudPlatform": true,
+    "status": 403,
+    "reason": "ACCESS_TOKEN_SCOPE_INSUFFICIENT"
+  },
+  "correction": {
+    "scopes": [
+      "https://www.googleapis.com/auth/cloud-platform.read-only",
+      "https://www.googleapis.com/auth/generative-language.retriever"
+    ],
+    "geminiScopeSource": "https://ai.google.dev/gemini-api/docs/oauth",
+    "projectReadScopeSource": "https://cloudresourcemanager.googleapis.com/$discovery/rest?version=v1"
+  },
+  "validation": {
+    "authChecks": 10,
+    "browserChecks": 11,
+    "paidImageGenerated": false,
+    "brandingVerified": true,
+    "sensitiveScopeVerification": "Pending real authorization demo video"
+  },
+  "note": "Mocked Google browser responses validate UX and billing isolation, not real provider authorization or a paid image."
+}

@@ -1,10 +1,10 @@
 (function (root) {
   'use strict';
 
-  const BUILD = '20260914r197-render-return1';
+  const BUILD = '20260928r204-google-permissions';
   const MODEL = 'gemini-3.1-flash-image';
   const RENDER_PROVIDER = 'google-gemini';
-  const GOOGLE_PROJECT_DEFAULT = 'liber-apps-cca20';
+  const GOOGLE_CLIENT_ID = '165400046589-ijaucmn2eovfmqof1rhjr46bk34j2o67.apps.googleusercontent.com';
   const Store = root.RevexStore;
   const state = root.__revexState;
   const $ = (selector, base = document) => base.querySelector(selector);
@@ -37,11 +37,13 @@
   let restoredReturnId = '';
 
   const GOOGLE_SCOPES = [
-    'https://www.googleapis.com/auth/cloud-platform',
+    'https://www.googleapis.com/auth/cloud-platform.read-only',
+    // Gemini's documented OAuth scope is required even without retrieval calls.
+    // Cloud Platform alone returns ACCESS_TOKEN_SCOPE_INSUFFICIENT on models.get.
     'https://www.googleapis.com/auth/generative-language.retriever'
   ];
   const GOOGLE_REDIRECT_PENDING = 'liber.revex.google-ai.redirect.pending.v2';
-  const GOOGLE_PROJECT_KEY = 'liber.revex.google-ai.project-id.v2';
+  const GOOGLE_PROJECT_KEY = 'liber.revex.google-ai.personal-project.v3';
   const LOCATION_KEY = 'liber.revex.render.location.v1';
   const RENDER_RETURN_KEY = 'liber.revex.render.return.v1';
   const RENDER_RETURN_TTL = 20 * 60_000;
@@ -78,6 +80,9 @@
     accessToken = '';
     tokenExpiresAt = 0;
     credentialUid = '';
+    googleSessionGeneration += 1;
+    verifiedBillingProject = '';
+    googleProjects = [];
   }
 
   function clearRenderResult() {
@@ -236,150 +241,156 @@
 
   function connectedProjectId() {
     const uid = synchronizeGoogleAccount();
-    if (!uid) return '';
-    return GOOGLE_PROJECT_DEFAULT;
+    return uid ? localStorage.getItem(accountStorageKey(GOOGLE_PROJECT_KEY, uid)) || '' : '';
   }
-
   function rememberProjectId() {
-    const uid = currentUid();
-    if (!uid) throw new Error('Sign in to LIBER Apps first, then connect Gemini.');
-    localStorage.setItem(accountStorageKey(GOOGLE_PROJECT_KEY, uid), GOOGLE_PROJECT_DEFAULT);
-    return GOOGLE_PROJECT_DEFAULT;
+    const project = connectedProjectId();
+    if (!project) throw new Error('Choose your Google billing project in Render first.');
+    return project;
   }
-
   function assertGeminiOnly() {
-    if (RENDER_PROVIDER !== 'google-gemini' || MODEL !== 'gemini-3.1-flash-image') {
-      const error = new Error('REVEX render provider integrity failure. Gemini-only rendering is required.');
-      error.code = 'revex/render-provider-integrity';
-      throw error;
-    }
+    if (RENDER_PROVIDER !== 'google-gemini' || MODEL !== 'gemini-3.1-flash-image') throw new Error('REVEX render provider integrity failure.');
   }
-
   function tokenReady() {
     const uid = synchronizeGoogleAccount();
     return Boolean(uid && credentialUid === uid && accessToken && Date.now() < tokenExpiresAt - 60_000);
   }
+  let googleLibrary = null;
+  let googleConnection = null;
+  let googleProjects = [];
+  let googleSessionGeneration = 0;
+  let verifiedBillingProject = '';
 
-  function adoptGoogleCredential(result, expectedUid) {
-    if (!expectedUid || synchronizeGoogleAccount() !== expectedUid || result?.user?.uid !== expectedUid) {
-      throw new Error('The LIBER account changed during Google authorization. Connect Google again for the current account.');
-    }
-    const f = root.firebaseModular || root.firebase;
-    const credential = f?.GoogleAuthProvider?.credentialFromResult?.(result);
-    if (!credential?.accessToken) return false;
-    accessToken = credential.accessToken;
-    credentialUid = expectedUid;
-    const expiresIn = Number(result?._tokenResponse?.oauthExpireIn || result?._tokenResponse?.expiresIn || 3300);
-    tokenExpiresAt = Date.now() + Math.max(600, expiresIn) * 1000;
-    localStorage.removeItem(accountStorageKey(GOOGLE_REDIRECT_PENDING, expectedUid));
-    rememberProjectId();
-    updateConnectionUi();
-    diagnostic('INFO', 'GOOGLE_AI_CONNECTED', 'Google AI OAuth access granted for this REVEX session.', { projectId: connectedProjectId(), operationType: result?.operationType || null });
-    return true;
+  function loadGoogleLibrary() {
+    if (root.google?.accounts?.oauth2) return Promise.resolve();
+    if (googleLibrary) return googleLibrary;
+    googleLibrary = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://accounts.google.com/gsi/client'; script.async = true;
+      script.onload = () => resolve();
+      script.onerror = () => { googleLibrary = null; script.remove(); reject(new Error('Google connection could not load. Check your connection and try again.')); };
+      document.head.appendChild(script);
+    });
+    return googleLibrary;
   }
-
-  async function restoreRedirectCredential() {
-    // Calling Firebase getRedirectResult when no redirect is pending can trigger
-    // resolver/persistence assertions in embedded or mixed Firebase runtimes.
-    // Only consume a result that this renderer explicitly initiated.
-    const uid = synchronizeGoogleAccount();
-    if (!uid || !redirectPending()) return false;
-    if (redirectReadPromise) return redirectReadPromise;
-    const auth = root.firebaseService?.auth;
-    const f = root.firebaseModular || root.firebase;
-    if (!auth || typeof f?.getRedirectResult !== 'function') return false;
-    redirectReadPromise = (async () => { try {
-      const result = await f.getRedirectResult(auth);
-      if (!result) {
-        localStorage.removeItem(accountStorageKey(GOOGLE_REDIRECT_PENDING, uid));
-        setStatus('Google did not return a rendering permission. Your settings are preserved; press Render current viewport to reconnect.', 'bad');
-        return false;
-      }
-      const adopted = adoptGoogleCredential(result, uid);
-      if (adopted) setStatus(`Google AI connected · ${connectedProjectId()}`, 'good');
-      return adopted;
-    } catch (error) {
-      localStorage.removeItem(accountStorageKey(GOOGLE_REDIRECT_PENDING, uid));
-      diagnostic('WARN', 'GOOGLE_AI_REDIRECT', error?.message || String(error));
-      return false;
-    } })();
-    try { return await redirectReadPromise; }
-    finally { redirectReadPromise = null; updateConnectionUi(); restoreRenderReturn(); }
+  function googleError(error) {
+    const message = String(error?.message || error || 'Google could not complete this request.');
+    if (/ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficient authentication scopes/i.test(message)) return 'Reconnect Google and approve rendering access, then check your project again.';
+    if (/prepay|payment|required.*billing|billing.*disabled|credits.*depleted/i.test(message)) return 'Your selected Google project needs billing or more credits. Open Google billing below, then try again.';
+    if (/SERVICE_DISABLED|has not been used|API.*disabled/i.test(message)) return 'Enable the Gemini API for your selected project using Google setup below, then check again.';
+    if (/PERMISSION_DENIED|permission|forbidden|403/i.test(message)) return 'This Google account cannot use the selected billing project. Choose another project or check its access in Google setup.';
+    if (/429|RESOURCE_EXHAUSTED|quota/i.test(message)) return 'Google has reached this project’s usage limit. Check your limits in Google billing or try again later.';
+    if (/popup_closed|access_denied/i.test(message)) return 'Google connection was cancelled. Your REVEX account and render settings are unchanged.';
+    if (/popup_failed|popup.blocked/i.test(message)) return 'Allow the Google sign-in popup and connect again. In the Revit window, open REVEX in your browser to connect.';
+    return message.replace(/https?:\/\/\S+/g, '').slice(0, 400);
   }
-
-  async function startGoogleRedirect(current, provider, alreadyGoogle) {
-    const f = root.firebaseModular || root.firebase;
-    const pendingKey = accountStorageKey(GOOGLE_REDIRECT_PENDING, current.uid);
-    saveRenderReturn(current.uid);
-    localStorage.setItem(pendingKey, '1');
-    setStatus('Opening Google permission in this window; REVEX returns here automatically…', 'busy');
-    redirectNavigationStarted = true;
-    try { if (alreadyGoogle && typeof f?.reauthenticateWithRedirect === 'function') {
-      await f.reauthenticateWithRedirect(current, provider);
-      return;
+  async function googleRequest(url, options = {}, billingProject = '') {
+    if (!tokenReady()) throw new Error('Connect your Google account first.');
+    const uid = credentialUid, generation = googleSessionGeneration;
+    const response = await fetch(url, { ...options, headers: { Authorization: 'Bearer ' + accessToken, ...(billingProject ? { 'x-goog-user-project': billingProject } : {}), ...options.headers } });
+    const json = await response.json().catch(() => ({}));
+    if (currentUid() !== uid || generation !== googleSessionGeneration) throw new Error('The connected account changed. Connect again.');
+    if (!response.ok) {
+      if (response.status === 401) { clearGoogleCredential(); updateConnectionUi(); }
+      throw new Error(googleError(json?.error?.message || ('Google returned ' + response.status + '.')));
     }
-    if (!alreadyGoogle && typeof f?.linkWithRedirect === 'function') {
-      await f.linkWithRedirect(current, provider);
-      return;
-    }
-    throw new Error('Google redirect authorization is unavailable in this Firebase runtime.');
-    } catch (error) {
-      redirectNavigationStarted = false;
-      localStorage.removeItem(pendingKey);
-      sessionStorage.removeItem(RENDER_RETURN_KEY);
-      throw error;
-    }
+    return json;
   }
-
-  async function connectGoogle(forceConsent = false) {
+  function updateGoogleProjects() {
+    const field = $('#google-ai-project');
+    if (!field) return;
+    const selected = connectedProjectId();
+    field.innerHTML = '<option value="">Choose your Google billing project…</option>' + googleProjects.map(p => '<option value="' + esc(p.projectId) + '">' + esc(p.name || p.projectId) + ' · ' + esc(p.projectId) + '</option>').join('');
+    // A saved preference is not a grant of access: it must appear in this session's list.
+    field.value = googleProjects.some(p => p.projectId === selected) ? selected : '';
+    field.disabled = !tokenReady() || Boolean(activeOwner);
+  }
+  async function discoverGoogleProjects() {
+    const uid = currentUid(), generation = googleSessionGeneration;
+    let projects = [], pageToken = '';
+    do {
+      const url = new URL('https://cloudresourcemanager.googleapis.com/v1/projects');
+      url.searchParams.set('pageSize', '100');
+      if (pageToken) url.searchParams.set('pageToken', pageToken);
+      const result = await googleRequest(url);
+      projects.push(...(result.projects || []).filter(p => p.lifecycleState === 'ACTIVE'));
+      pageToken = result.nextPageToken || '';
+    } while (pageToken && projects.length < 1000);
+    if (currentUid() !== uid || generation !== googleSessionGeneration) return;
+    googleProjects = projects;
+    updateGoogleProjects(); updateConnectionUi();
+  }
+  function connectGoogle(forceConsent = false) {
     bindGoogleAccountGuard();
-    rememberProjectId();
-    if (redirectPending()) await restoreRedirectCredential();
-    if (tokenReady() && !forceConsent) return accessToken;
-    const auth = root.firebaseService?.auth;
-    const f = root.firebaseModular || root.firebase;
-    if (!auth || !f?.GoogleAuthProvider) throw new Error('Google authorization is not ready in this REVEX session.');
-
-    const provider = new f.GoogleAuthProvider();
-    GOOGLE_SCOPES.forEach((scope) => provider.addScope(scope));
-    provider.setCustomParameters?.({ prompt: forceConsent ? 'consent select_account' : 'select_account' });
-
-    const current = auth.currentUser;
-    if (!current) throw new Error('Sign in to LIBER Apps first, then connect Google AI.');
-    const alreadyGoogle = (current.providerData || []).some((row) => row.providerId === 'google.com');
-
-    // WebView2 and embedded shells are hostile to popup ownership. Use the Firebase
-    // redirect flow there; normal standalone browsers keep the faster popup path.
-    if (constrainedAuthHost()) {
-      await startGoogleRedirect(current, provider, alreadyGoogle);
-      return '';
+    if (tokenReady() && !forceConsent) return Promise.resolve(accessToken);
+    if (googleConnection) return googleConnection;
+    if (!root.google?.accounts?.oauth2) {
+      void loadGoogleLibrary().catch(error => setStatus(googleError(error), 'bad'));
+      return Promise.reject(new Error('Google sign-in is loading. Press Connect Google again in a moment.'));
     }
-
-    try {
-      const result = alreadyGoogle
-        ? await f.reauthenticateWithPopup(current, provider)
-        : await f.linkWithPopup(current, provider);
-      if (!adoptGoogleCredential(result, current.uid)) throw new Error('Google approved the account but did not return a usable Gemini OAuth access token.');
-      return accessToken;
-    } catch (error) {
-      const text = `${error?.code || ''} ${error?.message || error}`;
-      if (/popup-blocked|cancelled-popup|pending promise|internal assertion|web-storage-unsupported/i.test(text) &&
-          (f?.linkWithRedirect || f?.reauthenticateWithRedirect)) {
-        await startGoogleRedirect(current, provider, alreadyGoogle);
-        return '';
-      }
-      throw error;
-    }
+    const uid = currentUid(), boundary = accountBoundaryGeneration;
+    if (!uid) return Promise.reject(new Error('Sign in to LIBER Apps first.'));
+    clearGoogleCredential(); updateGoogleProjects(); updateConnectionUi();
+    googleConnection = new Promise((resolve, reject) => {
+      const client = root.google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: GOOGLE_SCOPES.join(' '), include_granted_scopes: false,
+        callback: response => {
+          if (currentUid() !== uid || accountBoundaryGeneration !== boundary) return reject(new Error('The LIBER account changed during Google connection. Connect again.'));
+          if (response.error || !response.access_token) return reject(new Error(googleError(response.error || 'Google did not return permission.')));
+          if (!root.google.accounts.oauth2.hasGrantedAllScopes(response, ...GOOGLE_SCOPES)) return reject(new Error('Google permission was not granted. Connect again to authorize rendering.'));
+          clearGoogleCredential();
+          accessToken = response.access_token; credentialUid = uid;
+          tokenExpiresAt = Date.now() + Math.max(0, Number(response.expires_in) || 0) * 1000;
+          googleProjects = []; updateGoogleProjects(); updateConnectionUi();
+          resolve(accessToken);
+        },
+        error_callback: error => reject(new Error(googleError(error.type || error)))
+      });
+      // Stay inside the click handler; Firebase sign-in is never linked or replaced.
+      client.requestAccessToken({ prompt: 'select_account' });
+    }).finally(() => { googleConnection = null; updateConnectionUi(); });
+    return googleConnection;
   }
-
+  async function connectFromMenu() {
+    if (activeOwner || authorizationIntent) return;
+    setStatus('Connecting your Google account…', 'busy');
+    try {
+      await connectGoogle(true);
+      await discoverGoogleProjects();
+      setStatus(googleProjects.length ? 'Google connected. Choose the project Google should bill for your images.' : 'Google connected. Create or import a project in Google setup below, enable billing, then refresh the list.');
+    } catch (error) { setStatus(googleError(error), 'bad'); }
+  }
+  async function checkGoogleProject() {
+    if (activeOwner || authorizationIntent) return;
+    verifiedBillingProject = ''; updateConnectionUi();
+    try {
+      const project = rememberProjectId();
+      if (!googleProjects.some(p => p.projectId === project)) throw new Error('Connect Google and choose a project available to that account.');
+      setStatus('Checking Google project access…', 'busy');
+      await googleRequest('https://generativelanguage.googleapis.com/v1/models/' + MODEL, {}, project);
+      if (connectedProjectId() !== project) return;
+      verifiedBillingProject = project;
+      setStatus('Project access checked. Google bills each render directly; available credits are checked by Google when rendering.', 'good');
+    } catch (error) { setStatus(googleError(error), 'bad'); }
+    updateConnectionUi();
+  }
   function updateConnectionUi() {
+    const connected = tokenReady();
+    const project = connectedProjectId();
+    const checked = connected && project && verifiedBillingProject === project;
     const chip = $('#render-agent-capability');
-    const pending = redirectPending();
-    const ready = tokenReady();
-    if (chip) {
-      chip.textContent = pending ? 'Gemini · connecting…' : ready ? 'Gemini · ready' : 'Gemini';
-      chip.dataset.tone = ready ? 'good' : 'quiet';
-    }
+    if (chip) { chip.textContent = checked ? 'Google · project checked' : connected ? 'Google connected' : 'Google · connect'; chip.dataset.tone = checked ? 'good' : 'quiet'; }
+    const connect = $('#google-ai-connect');
+    if (connect) { connect.textContent = connected ? 'Change Google account' : 'Connect Google'; connect.disabled = Boolean(activeOwner || authorizationIntent || googleConnection); }
+    const check = $('#google-ai-check'); if (check) check.disabled = !connected || !project || Boolean(activeOwner || authorizationIntent);
+    const resolution = $('#google-ai-resolution')?.value || '1K';
+    const cost = { '1K': '0.067', '2K': '0.101', '4K': '0.151' }[resolution];
+    const price = $('#google-ai-price');
+    if (price) price.textContent = 'About $' + cost + ' USD per image + input and text usage. Google sets the final charge. No LIBER rendering subscription.';
+    const field = $('#google-ai-project'); if (field) field.disabled = !connected || Boolean(activeOwner || authorizationIntent);
+    const generate = $('#render-google-generate');
+    if (generate && !activeOwner && !authorizationIntent) generate.textContent = checked ? 'Render · ~$' + cost + ' + input' : 'Render current viewport';
   }
 
   function bindGoogleAccountGuard() {
@@ -392,7 +403,7 @@
       if (root.firebaseService?.auth !== auth) return;
       synchronizeGoogleAccount();
       updateConnectionUi();
-      void restoreRedirectCredential();
+
     });
   }
 
@@ -400,7 +411,7 @@
     bindGoogleAccountGuard();
     synchronizeGoogleAccount();
     updateConnectionUi();
-    void restoreRedirectCredential();
+
   }
 
   function cameraContext(reference) {
@@ -519,6 +530,7 @@
     const requestUid = credentialUid;
     const { mimeType, data } = cleanBase64(reference.imageDataUrl);
     const projectId = rememberProjectId();
+    if (verifiedBillingProject !== projectId) throw new Error('Check the selected Google billing project before rendering.');
     generationAbort?.abort?.();
     generationAbort = new AbortController();
     const response = await fetch(`https://generativelanguage.googleapis.com/v1/models/${MODEL}:generateContent`, {
@@ -546,7 +558,8 @@
     if (!response.ok) {
       if (response.status === 401) { clearGoogleCredential(); updateConnectionUi(); }
       const detail = json?.error?.message || json?.message || `Google AI returned HTTP ${response.status}.`;
-      throw new Error(detail + (response.status === 403 ? ` Verify that the Gemini API and billing are enabled for Google Cloud project ${projectId}, then reconnect.` : ''));
+      verifiedBillingProject = ''; updateConnectionUi();
+      throw new Error(googleError(detail));
     }
     let imagePart = null;
     const texts = [];
@@ -581,6 +594,8 @@
     synchronizeGoogleAccount();
     retireStaleRenderWork();
     if (activeOwner || authorizationIntent || savingOwner) return;
+    if (!tokenReady()) { setStatus('Connect Google in the Render menu before rendering.'); $('#google-ai-connect')?.focus(); return; }
+    if (!connectedProjectId() || verifiedBillingProject !== connectedProjectId()) { setStatus('Choose your Google billing project and press Check project first.'); $('#google-ai-project')?.focus(); return; }
     const reference = captureReference();
     if (!reference?.imageDataUrl) return toast('The current BIM viewport is not ready to render.', true);
     clearRenderResult();
@@ -597,7 +612,8 @@
     const resolution = $('#google-ai-resolution')?.value || '1K';
     const button = $('#render-google-generate');
     if (button) { button.disabled = true; button.textContent = 'Rendering…'; }
-    setStatus('Checking Google AI permission for the current viewport…', 'busy');
+    updateConnectionUi();
+    setStatus('Preparing the current viewport for your Google billing project…', 'busy');
     const sourceStage = $('#render-ai-stage');
     if (sourceStage) {
       sourceStage.classList.add('has-result');
@@ -616,7 +632,7 @@
         settings: { resolution, aspectRatio: '16:9', preserveGeometry: true }, status: 'generating'
     };
     try {
-      await connectGoogle(false);
+      if (!tokenReady()) throw new Error('Reconnect Google before rendering.');
       if (redirectNavigationStarted) return;
       if (!renderIntentCurrent(intent)) {
         const error = new Error('The account, project or source revision changed during Google authorization.');
@@ -662,7 +678,8 @@
       if (finishingIntent) authorizationIntent = null;
       if (activeOwner === owner) activeOwner = null;
       if (finishingIntent && !activeOwner && !authorizationIntent) {
-        if (button) { button.disabled = false; button.textContent = 'Render current viewport'; }
+        if (button) button.disabled = false;
+        updateConnectionUi();
       }
     }
   }
@@ -864,12 +881,25 @@
         <header class="render-agent-head"><div><strong>REVEX Render</strong><span>Gemini image · current viewport</span></div><span id="render-agent-capability" class="render-agent-chip" data-tone="quiet">Gemini</span></header>
         <div id="render-agent-messages" class="render-agent-messages"><div class="render-agent-message assistant"><div class="render-agent-message-body">Move, zoom or Walk normally. Render captures the current viewport only when you press Render.</div></div></div>
         <div class="render-google-config">
+          <div class="render-google-account"><button id="google-ai-connect" class="button" type="button">Connect Google</button><button id="google-ai-refresh" class="button" type="button">Refresh projects</button></div>
+          <label>Bill images to<select id="google-ai-project" disabled><option value="">Connect Google to choose your billing project…</option></select></label>
+          <button id="google-ai-check" class="button" type="button" disabled>Check project</button>
+          <small>Your Google account pays Google directly. First use requires an API billing project; a Gemini chat subscription does not include API images.</small>
+          <div class="render-google-links"><a id="google-ai-setup" href="https://aistudio.google.com/projects" target="_blank" rel="noopener noreferrer">Google setup</a><a id="google-ai-billing" href="https://aistudio.google.com/billing" target="_blank" rel="noopener noreferrer">Add credits</a><a href="https://aistudio.google.com/spend" target="_blank" rel="noopener noreferrer">Set spending limit</a></div>
           <label>Output<select id="google-ai-resolution"><option value="1K">1K · fastest</option><option value="2K">2K · review</option><option value="4K">4K · final</option></select></label>
+          <small id="google-ai-price" aria-live="polite"></small>
         </div>
         <div id="render-agent-fields" class="render-agent-fields"><label class="render-location-field">Location / surroundings<div class="render-location-wrap"><input id="render-location" type="search" autocomplete="off" spellcheck="false" placeholder="Start typing a city…" /><div id="render-location-suggestions" class="render-location-suggestions" hidden></div></div><small>Used only for sky, climate, vegetation and surrounding context.</small></label></div>
         <div id="render-agent-status-slot" class="render-agent-status-slot"></div>
         <button id="render-google-generate" class="button render-google-generate" type="button">Render current viewport</button>`;
       layout.appendChild(panel);
+    }
+
+    let body = $('#render-agent-body');
+    if (!body) {
+      body = document.createElement('div'); body.id = 'render-agent-body';
+      panel.insertBefore(body, $('#render-agent-messages'));
+      ['#render-agent-messages', '.render-google-config', '#render-agent-fields'].forEach(selector => body.appendChild($(selector, panel)));
     }
 
     synchronizeGoogleAccount();
@@ -878,6 +908,18 @@
     if ($('#render-google-generate').dataset.bound !== '1') {
       $('#render-google-generate').dataset.bound = '1';
       $('#render-google-generate').addEventListener('click', generateRender);
+      $('#google-ai-connect').addEventListener('click', connectFromMenu);
+      $('#google-ai-refresh').addEventListener('click', () => discoverGoogleProjects().catch(error => setStatus(googleError(error), 'bad')));
+      $('#google-ai-check').addEventListener('click', checkGoogleProject);
+      $('#google-ai-resolution').addEventListener('change', updateConnectionUi);
+      $('#google-ai-project').addEventListener('change', event => {
+        if (activeOwner || authorizationIntent) return;
+        const key = accountStorageKey(GOOGLE_PROJECT_KEY);
+        if (!key) return;
+        localStorage.setItem(key, event.target.value);
+        verifiedBillingProject = ''; updateConnectionUi();
+        setStatus('Press Check project to verify access before rendering.');
+      });
     }
 
     const fieldHost = $('#render-agent-fields');
@@ -914,7 +956,7 @@
     const sourcePrompt = $('#render-prompt');
     if (sourcePrompt && !sourcePrompt.value.trim()) sourcePrompt.value = 'Create a realistic architectural rendering of the current viewport while preserving the design exactly.';
     const pending = redirectPending();
-    setStatus(!currentUid() ? 'Sign in to LIBER Apps to render.' : pending ? 'Preparing render session…' : 'REVEX Render ready.');
+    setStatus(!currentUid() ? 'Sign in to LIBER Apps to render.' : !tokenReady() ? 'Connect Google and choose the project Google should bill.' : 'Choose your output size. Each render is charged to your selected Google project.');
   }
 
   async function init() {
@@ -927,7 +969,7 @@
     root.addEventListener('revex:auth-mode-changed', reconcileGoogleSession);
     for (const name of ['revex:authoritative-project-bound', 'revex:source-revision-loaded']) root.addEventListener(name, restoreRenderReturn);
     for (const name of ['revex:project-boundary', 'revex:authoritative-project-bound', 'revex:source-revision-loaded', 'revex:auth-mode-changed']) root.addEventListener(name, retireStaleRenderWork);
-    await restoreRedirectCredential();
+    void loadGoogleLibrary().catch(error => diagnostic('WARN', 'GOOGLE_LIBRARY', error.message));
     // Detail geometry can complete after the source-revision event. This bounded
     // return-only retry stops once the draft is consumed; it does not poll auth.
     if (readRenderReturn()) {
@@ -942,7 +984,7 @@
     if (dialog) new MutationObserver(() => { if (!dialog.hidden) onDialogOpen(); }).observe(dialog, { attributes: true, attributeFilter: ['hidden'] });
     root.addEventListener('resize', syncDockOffset, { passive: true });
     if (!dialog?.hidden) onDialogOpen();
-    console.info('[REVEX] Google renderer ' + BUILD, { model: MODEL, oauth: 'Firebase popup in browser / redirect in WebView', apiKeyInBrowser: false, input: 'live current viewport + camera context', location: 'OpenStreetMap Nominatim suggestions' });
+    console.info('[REVEX] Google renderer ' + BUILD, { model: MODEL, oauth: 'Independent Google authorization; user-selected billing project', apiKeyInBrowser: false, input: 'live current viewport + camera context', location: 'OpenStreetMap Nominatim suggestions' });
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true }); else void init();

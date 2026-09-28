@@ -1,0 +1,21 @@
+{
+  "status": "PASS",
+  "version": "sites/liber-apps-cca20/versions/24df4d95c67d9ee1",
+  "baseline": "sites/liber-apps-cca20/versions/ac62d841eae037c3",
+  "verifiedAt": "2026-09-28T11:35:22.269Z",
+  "preservedPaths": 595,
+  "changedPaths": [
+    {
+      "path": "/liber-apps/apps/revex/index.html",
+      "sha256": "f6e2ec61d05a9413c7a4daf6571ccdab6d7264ffd63b13b4b204e14dacfb61f5"
+    },
+    {
+      "path": "/liber-apps/apps/revex/render-agent.js",
+      "sha256": "33192ee845f2aa244de38f0df14bc0442c229575dd4b08d43bd2bdebf8fc1ba3"
+    },
+    {
+      "path": "/liber-apps/apps/revex/render-convergence-r126.js",
+      "sha256": "acd5dfe41ba081975e7ea86433101dd1b928016147b39772e1b773a5ac2d3e33"
+    }
+  ]
+}

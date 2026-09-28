@@ -1,4 +1,4 @@
-import { bookFilename, printBookDocument } from '../revex/book-structure.js?v=20260914r193-books1';
+import { bookFilename, printBookDocument } from '../revex/book-structure.js?v=20260928r201-audit3';
 /* LIBER Specifications — UI controller */
 (function () {
   'use strict';
@@ -389,7 +389,24 @@ import { bookFilename, printBookDocument } from '../revex/book-structure.js?v=20
     return list;
   }
 
+  const disclosureState = new Map();
+  function disclosureKey(node, project = S.sid) {
+    return JSON.stringify([project, node.closest('[data-sec]')?.dataset.sec, node.className]);
+  }
   function renderContent() {
+    const host = $('#content'), scrollTop = host.scrollTop, scrollLeft = host.scrollLeft;
+    // Firestore snapshots replace the book DOM. Preserve the reader's disclosure
+    // choices, including closed sections whose default is open.
+    host.querySelectorAll('details').forEach(node => disclosureState.set(disclosureKey(node, host.dataset.disclosureProject), node.open));
+    renderContentBody();
+    host.dataset.disclosureProject = S.sid || '';
+    host.querySelectorAll('details').forEach(node => {
+      const key = disclosureKey(node);
+      if (disclosureState.has(key)) node.open = disclosureState.get(key);
+    });
+    host.scrollTop = scrollTop; host.scrollLeft = scrollLeft;
+  }
+  function renderContentBody() {
     const host = $('#content');
     if (Object.keys(S.readErrors).length) {
       host.innerHTML = `<div class="sp-empty" role="alert"><p>${esc(Object.values(S.readErrors)[0])}</p><p>Saved records have not been replaced with an empty book.</p><button class="sp-btn" id="sp-retry-load">Retry loading this book</button></div>`;

@@ -15,7 +15,7 @@ function css(){
  const style=document.createElement('style');style.id='revex-r133-mobile-safe-css';style.textContent=`
 :root{--r133-safe-top:env(safe-area-inset-top,0px);--r133-safe-right:env(safe-area-inset-right,0px);--r133-safe-bottom:env(safe-area-inset-bottom,0px);--r133-safe-left:env(safe-area-inset-left,0px)}
 body.revex-mobile-touch .viewport-tools.viewer-controls #camera-tools-toggle{display:inline-grid!important;place-items:center!important;margin-left:auto}
-body.revex-mobile-touch .viewport-tools.viewer-controls:not([data-options-open="true"])>:not(#fit-model):not(#section-toggle):not(#walk-toggle):not(#camera-tools-toggle){display:none!important}
+body.revex-mobile-touch .viewport-tools.viewer-controls:not([data-options-open="true"])>:not(#fit-model):not(#section-toggle):not(#walk-toggle):not(#measure-toggle):not(#camera-tools-toggle){display:none!important}
 .revex-install-banner{padding-top:calc(8px + var(--r133-safe-top))!important;padding-right:max(12px,var(--r133-safe-right))!important;padding-left:max(12px,var(--r133-safe-left))!important;min-height:calc(46px + var(--r133-safe-top))!important}
 body.revex-install-banner-open .app-shell{padding-top:calc(47px + var(--r133-safe-top))!important}
 #revex-r122-guide{padding-top:max(10px,var(--r133-safe-top))!important;padding-right:max(8px,var(--r133-safe-right))!important;padding-bottom:max(10px,var(--r133-safe-bottom))!important;padding-left:max(8px,var(--r133-safe-left))!important}

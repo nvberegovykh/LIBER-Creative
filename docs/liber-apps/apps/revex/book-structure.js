@@ -1,11 +1,16 @@
 // Presentation policy only. Source identities and saved decisions remain intact.
 export const REFERENCE_DIVISIONS = new Set(['FACADE','MAIN LOBBY','STAIRWELL','TYPICAL CORRIDORS','APARTMENT INTERIORS','KITCHENS','MAIN BATHROOM','GUEST BATHROOM','POWDER ROOM','COMMON CELLAR','LANDSCAPING','ROOFTOP']);
+export function isVisibleDesignChapter(chapter) {
+  // Room-number placeholders remain in the source and retain their overlays.
+  return !/^\p{N}+$/u.test(String(chapter.title || '').normalize('NFKC').trim());
+}
 export function hasSelection(source, edit = {}) {
   const item = { ...source, ...edit };
   return Boolean(item.source || item.images?.length || (item.status && !['Not Selected','Archived'].includes(item.status)) ||
     (String(item.description || '').trim() && (!source.revit || item.description !== source.description)));
 }
 export function isBookDivision(chapter, chapterEdit = {}, edits = new Map()) {
+  if (!isVisibleDesignChapter(chapter)) return false;
   if (chapterEdit.bookVisibility === 'included') return true;
   if (chapterEdit.bookVisibility === 'source') return false;
   if (chapter.sourceKind === 'revex-overlay-archive') return false;

@@ -1,0 +1,47 @@
+{
+  "status": "PASS",
+  "checkedAt": "2026-09-28T11:30:47.278Z",
+  "sourceCandidate": "74faaedc9b84561dec3a47c50c8abe05d88c1f7ca28830c67828caa18402283b",
+  "resultRevision": "energy_20260928T112851Z",
+  "sourceEngineeringRevision": "eng_20260928T092852379Z",
+  "publishedDownloadCount": 17,
+  "allDownloadsMatchHash": true,
+  "annualSimulations": [
+    "BASELINE",
+    "PROPOSED"
+  ],
+  "releaseContents": [
+    "GEOMETRY.osm",
+    "BASELINE.osm",
+    "PROPOSED.osm",
+    "BASELINE_REPORT.html",
+    "PROPOSED_REPORT.html",
+    "EN-1.xlsx",
+    "COMcheck_BACKSTOP.pdf",
+    "PACKAGER_REPORTS.zip",
+    "EN-1.pdf"
+  ],
+  "reportPdfCount": 9,
+  "en1Pdf": true,
+  "en1Spreadsheet": true,
+  "officialComcheck": {
+    "status": "OFFICIAL_REPORT_READY",
+    "passes": true,
+    "complianceIndex": 6,
+    "reportPages": 4
+  },
+  "geometryReviewRequired": true,
+  "geometryReviewPolicy": null,
+  "limitations": [
+    "Analytical opening adjustments and zone-enclosure warnings require professional review before filing.",
+    "The original Engineering export is preserved.",
+    "This proves the tested 156-space Winthrop revision, not arbitrary Revit geometry."
+  ],
+  "releaseDownload": {
+    "name": "REVEX_ENERGY_RELEASE_PACKAGE.zip",
+    "kind": "release-package",
+    "bytes": 4269685,
+    "sha256": "6823c7b858253874cd6cc8756e1e43533bcdf54c9fa367ce447cfacb6b3b93b0",
+    "status": 200
+  }
+}

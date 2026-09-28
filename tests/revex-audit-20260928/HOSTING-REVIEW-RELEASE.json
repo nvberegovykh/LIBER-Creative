@@ -1,0 +1,25 @@
+{
+  "status": "PASS",
+  "version": "sites/liber-apps-cca20/versions/ac62d841eae037c3",
+  "baseline": "sites/liber-apps-cca20/versions/43d785904171ed4b",
+  "verifiedAt": "2026-09-28T10:56:45.066Z",
+  "preservedPaths": 594,
+  "changedPaths": [
+    {
+      "path": "/liber-apps/apps/revex/asset-import.js",
+      "sha256": "e438163d36e3d8cec18c900a598d7588cddd3ac61b9c2292ec911a04d6c511ac"
+    },
+    {
+      "path": "/liber-apps/apps/revex/browser-assets.js",
+      "sha256": "0d453c7390c64ed656c1c620593fa03d63afeb2445eb4ea746d7a63ff189c365"
+    },
+    {
+      "path": "/liber-apps/apps/revex/energy-r27.js",
+      "sha256": "609a48dc06c506ad928a1bc62d8871f3f8af190d4e460e524b7b6d3c1115c07e"
+    },
+    {
+      "path": "/liber-apps/apps/revex/index.html",
+      "sha256": "4d2c873f85cca304be473168a0cc00139f8a99923638a284c20fc56aad3a725f"
+    }
+  ]
+}

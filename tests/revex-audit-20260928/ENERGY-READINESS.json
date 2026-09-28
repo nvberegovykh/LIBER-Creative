@@ -1,0 +1,10 @@
+{
+  "acceptsProjectWork": true,
+  "execution": "managed-server",
+  "livenessPath": "/health",
+  "ok": true,
+  "readinessPath": "/ready",
+  "schema": "liber.revex.energy-worker-ready.v1",
+  "sideEffectFree": true,
+  "sourceCandidate": "74faaedc9b84561dec3a47c50c8abe05d88c1f7ca28830c67828caa18402283b"
+}

@@ -9,6 +9,10 @@
 #design-search-count { flex: none; color: var(--tx-2); font-size: 12px; }
 .design-result-location { display: block; margin-bottom: 6px; color: var(--tx-2); line-height: 1.4; }
 #camera-tools-toggle { display: none; }
+.bim-measuring{cursor:crosshair}
+.bim-measure-panel{position:absolute;left:12px;bottom:44px;z-index:25;max-width:calc(100% - 24px);padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);box-shadow:0 6px 24px #0005;font-size:13px}
+.bim-measure-panel[hidden]{display:none}.bim-measure-panel output{display:block;max-width:380px;line-height:1.5}.bim-measure-panel>div{display:flex;gap:8px;margin-top:8px}.bim-measure-panel button{padding:6px 12px;border:1px solid var(--line);border-radius:7px;background:var(--panel-2);color:var(--tx-1);cursor:pointer}
+.position-versions{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}.position-versions>summary{cursor:pointer;color:var(--tx-2);font-size:12px;padding:6px 0}.position-versions>summary span{margin-left:6px;color:var(--tx-3)}.position-version-list{max-height:280px;overflow:auto;overscroll-behavior:contain}.position-version-row{display:grid;gap:5px;padding:10px 0;border-bottom:1px solid var(--line);font-size:12px}.position-version-row small{color:var(--tx-3);font-size:11px}.position-version-row p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
 #design-inspector .edit-form input,#design-inspector .edit-form select,#design-inspector .edit-form textarea { box-sizing: border-box; max-width: 100%; font: 13px/1.5 system-ui,sans-serif; letter-spacing: 0; }
 #design-description { min-height: 110px; resize: vertical; }
 .design-source-summary summary { cursor: pointer; color: var(--tx-2); font: 600 12px/1.5 system-ui,sans-serif; }
