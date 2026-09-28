@@ -1,7 +1,7 @@
 (function (root) {
   'use strict';
 
-  const BUILD = '20260928r202-personal-google';
+  const BUILD = '20260928r204-google-permissions';
   const MODEL = 'gemini-3.1-flash-image';
   const RENDER_PROVIDER = 'google-gemini';
   const GOOGLE_CLIENT_ID = '165400046589-ijaucmn2eovfmqof1rhjr46bk34j2o67.apps.googleusercontent.com';
@@ -37,7 +37,10 @@
   let restoredReturnId = '';
 
   const GOOGLE_SCOPES = [
-    'https://www.googleapis.com/auth/cloud-platform'
+    'https://www.googleapis.com/auth/cloud-platform.read-only',
+    // Gemini's documented OAuth scope is required even without retrieval calls.
+    // Cloud Platform alone returns ACCESS_TOKEN_SCOPE_INSUFFICIENT on models.get.
+    'https://www.googleapis.com/auth/generative-language.retriever'
   ];
   const GOOGLE_REDIRECT_PENDING = 'liber.revex.google-ai.redirect.pending.v2';
   const GOOGLE_PROJECT_KEY = 'liber.revex.google-ai.personal-project.v3';
@@ -272,6 +275,7 @@
   }
   function googleError(error) {
     const message = String(error?.message || error || 'Google could not complete this request.');
+    if (/ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficient authentication scopes/i.test(message)) return 'Reconnect Google and approve rendering access, then check your project again.';
     if (/prepay|payment|required.*billing|billing.*disabled|credits.*depleted/i.test(message)) return 'Your selected Google project needs billing or more credits. Open Google billing below, then try again.';
     if (/SERVICE_DISABLED|has not been used|API.*disabled/i.test(message)) return 'Enable the Gemini API for your selected project using Google setup below, then check again.';
     if (/PERMISSION_DENIED|permission|forbidden|403/i.test(message)) return 'This Google account cannot use the selected billing project. Choose another project or check its access in Google setup.';

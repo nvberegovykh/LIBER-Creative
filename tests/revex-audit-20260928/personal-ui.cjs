@@ -29,8 +29,11 @@ const pass=(name,evidence)=>{checks.push({name,status:'PASS',evidence});console.
  await page.locator('#google-ai-connect').click();await page.waitForFunction(()=>document.querySelector('#google-ai-project').options.length===3);
  assert.equal(await page.locator('#google-ai-project').inputValue(),'');assert.equal(calls.length,0);
  assert.equal(await page.evaluate(()=>firebaseService.auth.currentUser.uid),fixture.accounts[0].uid);
- assert(!(await page.evaluate(()=>qaGoogleConfig.scope)).includes('retriever'));
- pass('Independent Google authorization preserves LIBER identity, removes unused scope, and never automatically selects LIBER billing');
+ const requestedScopes=(await page.evaluate(()=>qaGoogleConfig.scope)).split(' ');
+ assert(requestedScopes.includes('https://www.googleapis.com/auth/generative-language.retriever'));
+ assert(requestedScopes.includes('https://www.googleapis.com/auth/cloud-platform.read-only'));
+ assert(!requestedScopes.includes('https://www.googleapis.com/auth/cloud-platform'));
+ pass('Independent Google authorization preserves LIBER identity, requires the documented Gemini scope with read-only Cloud access, and never automatically selects LIBER billing');
  await page.locator('#google-ai-project').selectOption('designer-owned-project');await page.locator('#google-ai-check').click();
  await page.waitForFunction(()=>document.querySelector('#render-agent-capability').textContent.includes('project checked'));
  assert(calls.every(c=>c.project==='designer-owned-project'));

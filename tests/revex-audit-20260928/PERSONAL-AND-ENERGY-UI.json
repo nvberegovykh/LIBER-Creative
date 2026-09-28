@@ -1,5 +1,5 @@
 {
-  "preview": "https://liber-apps-cca20--revex-review-ac62d841-5wzo520t.web.app",
+  "preview": "https://liber-apps-cca20--revex-permission-24df4d95-miq58w96.web.app",
   "checks": [
     {
       "name": "Real authenticated REVEX project and model load without an error overlay",
@@ -10,7 +10,7 @@
       }
     },
     {
-      "name": "Independent Google authorization preserves LIBER identity, removes unused scope, and never automatically selects LIBER billing",
+      "name": "Independent Google authorization preserves LIBER identity, requires the documented Gemini scope with read-only Cloud access, and never automatically selects LIBER billing",
       "status": "PASS"
     },
     {
