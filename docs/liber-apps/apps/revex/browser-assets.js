@@ -65,5 +65,3 @@ function ensure(){const host=$('#revex-r157-assets-panel');if(!host||!V())return
 window.RevexWebAssets={browse(provider){pendingProvider=provider;const urls={bimobject:'https://www.bimobject.com/en-us',blocks:'https://www.blocksrvt.com/en/families'};if(!urls[provider])return;window.open(urls[provider],'_blank','noopener,noreferrer');message('Store opened. Choose an IFC, FBX, GLB or OBJ download, then return here to place it. Connect a download folder to preview new downloads automatically.');},stage,placed,stopWatch};
 for(const name of ['revex:project-boundary','revex:auth-mode-changed','revex:source-revision-loaded'])window.addEventListener(name,()=>setTimeout(bindProject,0));
 function boot(){if(!ensure())setTimeout(boot,100);}boot();
-
-

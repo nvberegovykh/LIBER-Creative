@@ -8,4 +8,3 @@ function createReportJobs({db,now=()=>Date.now(),build}){
  return {claim,fail,complete};
 }
 module.exports={createReportJobs};
-

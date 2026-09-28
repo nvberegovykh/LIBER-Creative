@@ -184,5 +184,6 @@
     },
     "render": "Permission/ownership and provider-return handling passed; a paid live image generation was not requested for this audit."
   },
-  "cleanup": "Temporary report job, report source archive and QA credential object removed."
+  "cleanup": "Temporary report job, report source archive and QA credential object removed.",
+  "sourceNote": "Repository-only EOF whitespace cleanup followed release verification; runtime behavior is unchanged. Recorded hashes identify the exact deployed and browser-tested bytes."
 }
