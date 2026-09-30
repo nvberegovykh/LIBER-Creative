@@ -1,11 +1,4 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
-import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
-import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
-import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
-import { STLLoader } from 'three/addons/loaders/STLLoader.js';
-import { unzipSync } from 'https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js';
 
 const MAX_BYTES=60*1024*1024,MAX_VERTICES=4000000;
 export const MODEL_EXTENSIONS=/\.(glb|gltf|ifc|fbx|obj|stl)$/i;
@@ -14,6 +7,7 @@ function safePath(name){const p=String(name).replaceAll('\\','/');if(p.startsWit
 async function filesFrom(input){
  const files=[...input];if(files.reduce((n,f)=>n+f.size,0)>MAX_BYTES)throw Error('Choose a model package smaller than 60 MB.');
  if(files.length===1&&/\.zip$/i.test(files[0].name)){
+  const {unzipSync}=await import('https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js');
   let bytes=0,count=0;const unpacked=unzipSync(new Uint8Array(await files[0].arrayBuffer()),{filter:entry=>{safePath(entry.name);bytes+=entry.originalSize;count++;if(bytes>MAX_BYTES||count>200)throw Error('The expanded model package is too large.');return !entry.name.endsWith('/');}});
   return Object.entries(unpacked).map(([name,data])=>new File([data],safePath(name)));
  }return files;
@@ -56,15 +50,17 @@ export async function importAsset(input){
   if(ext==='gltf'||ext==='glb'){
    const json=ext==='gltf'?JSON.parse(new TextDecoder().decode(buffer)):JSON.parse(new TextDecoder().decode(new Uint8Array(buffer,20,new DataView(buffer).getUint32(12,true))));
    if((json.accessors||[]).some(a=>!Number.isSafeInteger(a.count)||a.count<0||a.count>MAX_VERTICES))throw Error('The model contains an oversized geometry buffer.');
+   const {GLTFLoader}=await import('three/addons/loaders/GLTFLoader.js');
    root=(await new GLTFLoader(manager).parseAsync(buffer,'')).scene;
   }else if(ext==='ifc')root=await loadIfc(buffer);
-  else if(ext==='fbx')root=new FBXLoader(manager).parse(buffer,'');
+  else if(ext==='fbx'){const {FBXLoader}=await import('three/addons/loaders/FBXLoader.js');root=new FBXLoader(manager).parse(buffer,'');}
   else if(ext==='obj'){
+   const [{OBJLoader},{MTLLoader}]=await Promise.all([import('three/addons/loaders/OBJLoader.js'),import('three/addons/loaders/MTLLoader.js')]);
    const loader=new OBJLoader(manager),materials=files.filter(f=>/\.mtl$/i.test(f.name));
    if(materials.length===1){const mtl=new MTLLoader(manager).parse(await materials[0].text(),'');mtl.preload();loader.setMaterials(mtl);}
    root=loader.parse(new TextDecoder().decode(buffer));
   }
-  else root=new THREE.Mesh(new STLLoader(manager).parse(buffer),new THREE.MeshStandardMaterial({color:0xc6c9cc,roughness:.7}));
+  else {const {STLLoader}=await import('three/addons/loaders/STLLoader.js');root=new THREE.Mesh(new STLLoader(manager).parse(buffer),new THREE.MeshStandardMaterial({color:0xc6c9cc,roughness:.7}));}
   const deadline=Date.now()+30000;while(pending&&Date.now()<deadline)await new Promise(r=>setTimeout(r,25));
   if(pending||resourceError)throw Error('A model texture could not be opened. Choose the model with all its texture files.');
   let vertices=0,meshes=0;root.traverse(n=>{if(n.isMesh){vertices+=n.geometry?.attributes.position?.count||0;meshes++;}});
@@ -73,5 +69,5 @@ export async function importAsset(input){
   return {root,name:file.name,format:ext,units:['glb','gltf','ifc'].includes(ext)?'m':ext==='fbx'?'cm':'mm',vertices};
  }catch(e){disposeAsset(root);throw e;}finally{for(const url of urls.values())URL.revokeObjectURL(url);}
 }
-export async function exportAsset(root){const bytes=await new GLTFExporter().parseAsync(root,{binary:true,onlyVisible:true});if(bytes.byteLength>MAX_BYTES)throw Error('The converted model is too large to save.');return new File([bytes],'asset.glb',{type:'model/gltf-binary'});}
-export async function loadSavedAsset(buffer){const manager=new THREE.LoadingManager();manager.setURLModifier(url=>{if(/^(data:|blob:)/.test(url))return url;throw Error('Saved placements must contain their own model resources.');});return(await new GLTFLoader(manager).parseAsync(buffer,'')).scene;}
+export async function exportAsset(root){const {GLTFExporter}=await import('three/addons/exporters/GLTFExporter.js');const bytes=await new GLTFExporter().parseAsync(root,{binary:true,onlyVisible:true});if(bytes.byteLength>MAX_BYTES)throw Error('The converted model is too large to save.');return new File([bytes],'asset.glb',{type:'model/gltf-binary'});}
+export async function loadSavedAsset(buffer){const {GLTFLoader}=await import('three/addons/loaders/GLTFLoader.js');const manager=new THREE.LoadingManager();manager.setURLModifier(url=>{if(/^(data:|blob:)/.test(url))return url;throw Error('Saved placements must contain their own model resources.');});return(await new GLTFLoader(manager).parseAsync(buffer,'')).scene;}

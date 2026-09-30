@@ -28,7 +28,7 @@ function projectIdentity(){
   const s=state();
   const project=s.project||s.currentProject||null;
   const projectId=clean(s.projectId||s.currentProjectId||project?.id||project?.projectId||'');
-  const revision=clean(s.revision||s.currentRevision||s.viewerData?.revision||s.viewerData?.rev||project?.revision||'');
+  const revision=clean(s.cloudState?.revision||s.revision||s.currentRevision||s.viewerData?.revision||s.viewerData?.rev||project?.revision||'');
   return {projectId,revision,project:clone(project)};
 }
 function selectedIdentity(){
@@ -112,7 +112,7 @@ function snapshot(){
     schema:'liber.revex.observer.snapshot.v1',version:VERSION,at:now(),
     projectId:p.projectId,revision:p.revision,activeView:s.activeView||s.viewName||s.viewerData?.source?.viewName||null,
     selected:selectedIdentity(),viewerMode:s.viewerMode||s.bimMode||null,
-    sectionBox:s.sectionBox||v?.sectionBox||null,camera:s.camera||v?.cameraState||null,
+    sectionBox:s.sectionBox||(v?.section?.enabled?v.sectionBox?.():null),camera:s.camera||v?.cameraState?.()||null,
     runtimeOwners,diagnostics:s.browserDiagnostics?.slice?.(-20)||null
   });
 }

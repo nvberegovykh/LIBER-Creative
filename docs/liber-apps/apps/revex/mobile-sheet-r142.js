@@ -35,7 +35,7 @@ body.revex-mobile-touch.revex-r142-pane-model #view-bim>.rail,body.revex-mobile-
 /* Open panes belong to this sheet, not legacy offscreen rail transforms. */
 body.revex-mobile-touch.revex-r142-pane-model #view-bim>.rail,body.revex-mobile-touch.revex-r142-pane-properties #view-bim>#bim-inspector,body.revex-mobile-touch.revex-r142-pane-selector #view-design>.chapter-rail,body.revex-mobile-touch.revex-r142-pane-position #view-design>#design-inspector{top:auto!important;transform:none!important}
 body.revex-mobile-touch #revex-r142-sheet{display:block!important;position:fixed!important;z-index:9400!important;left:max(4px,var(--r133-safe-left,0px))!important;right:max(4px,var(--r133-safe-right,0px))!important;bottom:max(4px,var(--r133-safe-bottom,0px))!important;width:auto!important;height:var(--revex-r142-sheet-bar)!important;max-width:none!important;min-width:0!important;border:1px solid var(--line-2)!important;border-radius:13px!important;background:rgba(13,17,23,.985)!important;box-shadow:0 10px 36px rgba(0,0,0,.5)!important;overflow:hidden!important}
-body.revex-mobile-touch #revex-r142-sheet[hidden],body.revex-mobile-touch.revex-r142-walk-active #revex-r142-sheet{display:none!important}
+body.revex-mobile-touch #revex-r142-sheet[hidden]{display:none!important}
 body.revex-mobile-touch #revex-r142-sheet-tabs{display:grid!important;grid-template-columns:1fr 1fr 44px!important;height:100%!important;min-height:44px!important}
 body.revex-mobile-touch #revex-r142-sheet-tabs button{min-width:0!important;min-height:44px!important;border:0!important;border-right:1px solid var(--line)!important;border-radius:0!important;background:transparent!important;color:var(--tx-2)!important;font:600 11px/1.1 system-ui,sans-serif!important;padding:0 9px!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;touch-action:manipulation!important}
 body.revex-mobile-touch #revex-r142-sheet-tabs button.active{background:rgba(83,163,255,.16)!important;color:#b9dcff!important}
@@ -85,6 +85,7 @@ function configureTabs(view){
 }
 function openPane(which){
  if(!mobile())return;
+ const viewer=root.__revexViewerR26Instance;if(viewer?.walk)viewer.walkOn(false);
  const c=config(currentView),pane=c?.[which],s=sheet();if(!pane?.node)return;
  PANE_CLASSES.forEach(name=>document.body.classList.remove(name));
  document.body.classList.add(`revex-r142-pane-${pane.mode}`);
@@ -100,7 +101,8 @@ function activeView(){const b=document.querySelector('.main-nav [data-view].acti
 function walkActive(){const viewer=root.__revexViewerR26Instance;return Boolean(viewer?.walk&&activeView()==='bim');}
 function sync(){
  const walking=walkActive();document.body?.classList.toggle('revex-r142-walk-active',walking);
- if(!mobile()||walking){restoreAll();return;}
+ if(!mobile()){restoreAll();return;}
+ if(walking&&currentPane)closePane();
  const view=activeView();if(view==='bim'||view==='design')configureTabs(view);else restoreAll();
 }
 function schedule(){if(scheduled)return;scheduled=true;(root.requestAnimationFrame||((fn)=>setTimeout(fn,0)))(()=>{scheduled=false;sync();ensureActionsMenu();});}
