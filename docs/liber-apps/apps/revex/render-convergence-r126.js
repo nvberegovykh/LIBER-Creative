@@ -2,7 +2,7 @@
 'use strict';
 const BUILD='20260904r182-google-account-only1';
 if(root.__revexRenderConvergenceR126)return;
-root.__revexRenderConvergenceR126={build:BUILD,providerOwner:'render-agent.js?v=20260928r204-google-permissions',provider:'google',userAccountRequired:true,browserInference:false,localModelCache:false,legacyIframe:false,selfHostedEnhancementOptional:false,interactionGuard:'idempotent-frame-src-only'};
+root.__revexRenderConvergenceR126={build:BUILD,providerOwner:'render-agent.js?v=20260930-bim1',provider:'ai-session-with-google-option',userAccountRequired:true,browserInference:false,localModelCache:false,legacyIframe:false,selfHostedEnhancementOptional:false,interactionGuard:'idempotent-frame-src-only'};
 function diag(level,stage,message,detail={}){try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'render convergence current',...detail})}catch(_){}}
 function suppressLegacyFrame(){
   const frame=document.getElementById('render-frame');
@@ -27,6 +27,7 @@ function suppressLegacyFrame(){
   return true;
 }
 function preserveGoogleOwner(){
+  if(document.querySelector('#render-provider')?.value==='ai-session')return true;
   const panel=document.getElementById('render-agent-panel');
   if(!panel)return false;
   const cap=document.getElementById('render-agent-capability');
@@ -47,7 +48,7 @@ function preserveGoogleOwner(){
 function converge(){
   suppressLegacyFrame();
   const ready=preserveGoogleOwner();
-  if(ready)diag('INFO','RENDER_CLIENT_CURRENT','Nano Banana rendering uses the user Google account exclusively.',{providerOwner:'render-agent.js?v=20260928r204-google-permissions',provider:'google',userAccountRequired:true,browserInference:false,localModelCache:false,legacyIframe:false,interactionGuard:'idempotent-frame-src-only'});
+  if(ready)diag('INFO','RENDER_CLIENT_CURRENT','The current renderer offers an Observer AI handoff with optional Google rendering.',{providerOwner:'render-agent.js?v=20260930-bim1',provider:'ai-session-with-google-option',userAccountRequired:true,browserInference:false,localModelCache:false,legacyIframe:false,interactionGuard:'idempotent-frame-src-only'});
   return ready;
 }
 let tries=0;

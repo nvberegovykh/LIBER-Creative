@@ -25,7 +25,7 @@ function clientId(){
   }catch(_){return `bridge_${Date.now().toString(36)}`;}
 }
 function projectId(){const s=state();return clean(s.projectId||s.currentProjectId||s.project?.id||s.currentProject?.id);}
-function revision(){const s=state();return clean(s.revision||s.currentRevision||s.viewerData?.revision||s.viewerData?.rev||s.project?.revision);}
+function revision(){const s=state();return clean(s.cloudState?.revision||s.revision||s.currentRevision||s.viewerData?.revision||s.viewerData?.rev||s.project?.revision);}
 function activeView(){const s=state();return clean(s.activeView||s.viewName||s.viewerData?.source?.viewName);}
 function diag(level,stage,message,detail={}){try{root.__revexBrowserDiagnostics?.emit?.(level,stage,message,{initiator:'REVEX Observer AI bridge r152',build:BUILD,...detail});}catch(_){}}
 

@@ -21,7 +21,7 @@ dialog.querySelector('label[for="revex-wallt-question"]').textContent='What woul
 byId('revex-wallt-question').placeholder='Ask about this view, find something, or describe what feels wrong…';
 const modes=document.createElement('div');modes.className='wallt-modes';modes.innerHTML='<button type="button" data-mode="helper" aria-pressed="true">Helper</button><button type="button" data-mode="fixer" aria-pressed="false">Fixer</button>';
 dialog.querySelector('header').after(modes);
-const shortcuts=document.createElement('div');shortcuts.className='wallt-shortcuts';shortcuts.innerHTML='<button type="button" data-wall-action="explain">Explain this screen</button><button type="button" data-wall-action="products">Source products · NYC</button><button type="button" data-wall-action="assets">Place a model</button><button type="button" data-wall-action="energy">Review Energy</button><button type="button" data-wall-action="packages">Arrange packages</button>';
+const shortcuts=document.createElement('div');shortcuts.className='wallt-shortcuts';shortcuts.innerHTML='<button type="button" data-wall-action="explain">Explain this screen</button><button type="button" data-wall-action="products">Source products · NYC</button><button type="button" data-wall-action="assets">Place a model</button><button type="button" data-wall-action="render">Render with AI</button><button type="button" data-wall-action="energy">Review Energy</button><button type="button" data-wall-action="packages">Arrange packages</button>';
 byId('revex-wallt-context').after(shortcuts);
 const repairs=document.createElement('section');repairs.className='wallt-repairs';repairs.hidden=true;repairs.innerHTML='<p data-health></p><div class="wallt-shortcuts"><button type="button" data-fix="fit">Reset model view</button><button type="button" data-fix="reload">Reload model geometry</button><button type="button" data-fix="energy">Review failed calculation</button></div><small>Choose a repair to apply it. Project decisions and source geometry stay intact.</small>';
 shortcuts.after(repairs);
@@ -33,6 +33,7 @@ function showView(view){document.querySelector(`.main-nav [data-view="${view}"]`
 shortcuts.addEventListener('click',event=>{const action=event.target.closest('[data-wall-action]')?.dataset.wallAction;if(!action)return;
  if(action==='explain'){byId('revex-wallt-question').value=`Explain what I can do in the ${activeView()} view and the next useful step.`;ask(byId('revex-wallt-question').value);}
  if(action==='packages'){window.RevexPackages?.arrange();dialog.close();}
+ if(action==='render'){showView('bim');dialog.close();document.getElementById('render-button')?.click();}
  if(action==='energy'){showView('energy');dialog.close();}
  if(action==='assets'){showView('bim');dialog.close();document.getElementById('revex-r157-assets-open')?.click();}
  if(action==='products'){if(!state().selectedDesign){showView('design');byId('revex-wallt-status').textContent='Select a Design Book position, then choose “Source products · NYC”.';return;}dialog.close();window.dispatchEvent(new CustomEvent('revex:source-products'));}

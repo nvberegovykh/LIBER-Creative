@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { pickSurface, surfaceAnchor, anchorPoint, visibleSurface } from './bim-surface.js?v=20260930-bim1';
 
 // The viewer normalizes exact Revit geometry into internal feet (including FBX).
 // Measurements stay local to the loaded revision and never edit model geometry.
@@ -17,9 +18,29 @@ function install(v) {
   panel.innerHTML = '<output aria-live="polite">Choose the first point on the model.</output><div><button type="button" data-measure-clear>Clear</button><button type="button" data-measure-done>Done</button></div>';
   v.host.parentElement.append(panel);
   const output = panel.querySelector('output');
-  const state = { active: false, points: [], distanceFeet: null, loadToken: v.loadToken };
+  const state = { active: false, points: [], anchors: [], distanceFeet: null, loadToken: v.loadToken };
   const dispose = () => { for (const child of [...group.children]) { child.geometry?.dispose(); child.material?.dispose(); group.remove(child); } };
-  function clear() { dispose(); state.points = []; state.distanceFeet = null; output.textContent = 'Choose the first point on the model.'; v.requestRender(); }
+  function clear() { dispose(); state.points = []; state.anchors = []; state.distanceFeet = null; output.textContent = 'Choose the first point on the model.'; v.requestRender(); }
+  function sync() {
+    state.anchors.forEach((anchor, i) => anchorPoint(anchor, state.points[i]));
+    const visible = state.anchors.map((anchor, i) => Boolean(anchor.object.parent) && visibleSurface({object:anchor.object, face:anchor.face, point:state.points[i]}));
+    for (const child of group.children) {
+      child.visible = child.isLine ? visible.every(Boolean) : visible[child.userData.pointIndex];
+      const points = child.isLine ? state.points : [state.points[child.userData.pointIndex]];
+      const position = child.geometry.attributes.position;
+      points.forEach((p, i) => position.setXYZ(i, p.x, p.y, p.z));
+      position.needsUpdate = true;
+    }
+    if (state.points.length === 2) {
+      state.distanceFeet = state.points[0].distanceTo(state.points[1]);
+      output.textContent = `${formatDistance(state.distanceFeet)} — straight-line distance`;
+    }
+  }
+  const beforeRender = v.scene.onBeforeRender;
+  v.scene.onBeforeRender = function (...args) {
+    beforeRender?.apply(this, args);
+    if (state.active) sync();
+  };
   function setActive(active) {
     state.active = active; panel.hidden = !active; group.visible = active;
     button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active));
@@ -33,33 +54,23 @@ function install(v) {
     }
     v.requestRender();
   }
-  function usable(hit) {
-    if (!hit.object.isMesh || hit.object.name.startsWith('REVEX_PROXY_')) return false;
-    for (let node = hit.object; node; node = node.parent) if (!node.visible || node.userData?.revexFallbackOnly) return false;
-    const material = Array.isArray(hit.object.material) ? hit.object.material[hit.face?.materialIndex || 0] : hit.object.material;
-    if (!material || material.visible === false || material.opacity === 0) return false;
-    const clipped = (material.clippingPlanes || []).map(plane => plane.distanceToPoint(hit.point) < 0);
-    return !(material.clipIntersection ? clipped.length && clipped.every(Boolean) : clipped.some(Boolean));
-  }
   function pick(event) {
     if (!v.detailLoaded || state.loadToken !== v.loadToken) { clear(); setActive(false); return; }
-    const rect = canvas.getBoundingClientRect(), pointer = new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1, 1 - (event.clientY - rect.top) / rect.height * 2);
-    const ray = new THREE.Raycaster(); ray.setFromCamera(pointer, v.camera);
-    v.scene.updateMatrixWorld(true);
-    const targets = [v.model, ...v.editGroups.values()].filter(Boolean);
-    const hit = ray.intersectObjects(targets, true).find(usable);
+    const hit = pickSurface(v, event.clientX, event.clientY);
     if (!hit) { output.textContent = 'Choose a visible model surface. Empty space and placeholder geometry cannot be measured.'; return; }
     if (state.points.length === 2) clear();
     const point = hit.point.clone();
     if (state.points.length && state.points[0].distanceTo(point) < .001) { output.textContent = 'Choose a different second point.'; return; }
     state.points.push(point);
+    state.anchors.push(surfaceAnchor(hit));
     // Points render at a consistent screen size while orbiting or zooming.
-    const dot = new THREE.Points(new THREE.BufferGeometry().setFromPoints([point]), new THREE.PointsMaterial({ color: 0xff2b80, size: 9, sizeAttenuation: false, depthTest: false }));
+    const dot = new THREE.Points(new THREE.BufferGeometry().setFromPoints([point]), new THREE.PointsMaterial({ color: 0xff2b80, size: 9, sizeAttenuation: false, depthTest: true, depthWrite: false }));
+    dot.userData.pointIndex = state.points.length - 1; dot.frustumCulled = false;
     dot.renderOrder = 1000; group.add(dot);
     if (state.points.length === 1) output.textContent = 'Choose the second point. Drag to orbit; scroll to zoom.';
     else {
-      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(state.points), new THREE.LineBasicMaterial({ color: 0xff2b80, depthTest: false }));
-      line.renderOrder = 999; group.add(line);
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(state.points), new THREE.LineBasicMaterial({ color: 0xff2b80, depthTest: true, depthWrite: false }));
+      line.frustumCulled = false; line.renderOrder = 999; group.add(line);
       state.distanceFeet = state.points[0].distanceTo(state.points[1]);
       output.textContent = `${formatDistance(state.distanceFeet)} — straight-line distance`;
     }
@@ -83,7 +94,7 @@ function install(v) {
     if (state.loadToken !== v.loadToken) reset();
     else if (state.active && v.detailLoaded && !state.points.length) clear();
   });
-  v.measurement = { state, clear, setActive };
+  v.measurement = { state, clear, setActive, sync };
 }
 function boot() { const v = window.__revexViewerR26Instance; if (v) install(v); else setTimeout(boot, 100); }
 boot();

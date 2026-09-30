@@ -1,7 +1,7 @@
 (function (root) {
   'use strict';
 
-  const BUILD = '20260928r204-google-permissions';
+  const BUILD = '20260930-bim-ai-session';
   const MODEL = 'gemini-3.1-flash-image';
   const RENDER_PROVIDER = 'google-gemini';
   const GOOGLE_CLIENT_ID = '165400046589-ijaucmn2eovfmqof1rhjr46bk34j2o67.apps.googleusercontent.com';
@@ -35,6 +35,8 @@
   let selectedLocation = null;
   let redirectNavigationStarted = false;
   let restoredReturnId = '';
+  let renderMode = 'ai-session';
+  let aiDraft = null;
 
   const GOOGLE_SCOPES = [
     'https://www.googleapis.com/auth/cloud-platform.read-only',
@@ -96,6 +98,9 @@
   }
 
   function retireRenderWork() {
+    aiDraft = null;
+    if ($('#render-ai-brief')) $('#render-ai-brief').value = '';
+    if ($('#render-ai-import')) $('#render-ai-import').disabled = true;
     renderGeneration += 1;
     generationAbort?.abort?.();
     generationAbort = null;
@@ -152,7 +157,7 @@
   }
 
   function retireStaleRenderWork() {
-    if ((activeOwner && !renderOwnerCurrent(activeOwner)) || (resultOwner && !renderOwnerCurrent(resultOwner))) retireRenderWork();
+    if ((activeOwner && !renderOwnerCurrent(activeOwner)) || (resultOwner && !renderOwnerCurrent(resultOwner)) || (aiDraft && !renderOwnerCurrent(aiDraft.owner))) retireRenderWork();
   }
 
   function synchronizeGoogleAccount() {
@@ -376,6 +381,13 @@
     updateConnectionUi();
   }
   function updateConnectionUi() {
+    if (renderMode === 'ai-session') {
+      const chip = $('#render-agent-capability');
+      if (chip) { chip.textContent = 'AI session'; chip.dataset.tone = 'quiet'; }
+      const button = $('#render-google-generate');
+      if (button && !activeOwner) button.textContent = 'Prepare AI render';
+      return;
+    }
     const connected = tokenReady();
     const project = connectedProjectId();
     const checked = connected && project && verifiedBillingProject === project;
@@ -484,6 +496,7 @@
   }
 
   function usageText(json, resolution) {
+    if (json?.provider === 'observer-openai') return 'AI session · imported render';
     const usage = json?.usageMetadata || {};
     const total = Number(usage.totalTokenCount || 0);
     const prompt = Number(usage.promptTokenCount || 0);
@@ -585,7 +598,70 @@
     host.scrollTop = host.scrollHeight;
   }
 
+  async function prepareAiRender(event) {
+    event?.preventDefault?.();
+    synchronizeGoogleAccount(); retireStaleRenderWork();
+    if (activeOwner || savingOwner || authorizationIntent) return;
+    let owner;
+    try {
+      if (!activeViewer()?.detailLoaded) throw new Error('Wait for the exact model to load before preparing a render.');
+      clearRenderResult(); aiDraft = null; renderGeneration += 1;
+      owner = captureRenderOwner(); activeOwner = owner;
+      $('#render-google-generate').disabled = true;
+      $('#render-ai-import').disabled = true;
+      $('#render-ai-brief').value = '';
+      setStatus('Preparing the view and AI brief…', 'busy');
+      if (!root.RevexObserver) await import('./observer-focus-api-r143.js?v=20260930-bim1');
+      if (!root.RevexObserverAgentBridge) await import('./observer-agent-bridge-r151.js?v=20260930-bim1');
+      assertRenderOwner(owner);
+      const pairButton = $('#observer-ai-pair-button');
+      if (pairButton) $('.render-ai-connection .browser-asset-actions').append(pairButton);
+      activeViewer().measurement?.setActive(false);
+      const reference = captureReference();
+      if (!reference?.imageDataUrl) throw new Error('The model viewport could not be captured.');
+      const prompt = refinedPrompt($('#render-prompt')?.value || '', reference);
+      const encoded = reference.imageDataUrl.split(',')[1];
+      if (!encoded || !reference.imageDataUrl.startsWith('data:image/png;base64,')) throw new Error('The model viewport must be a PNG image.');
+      const source = new File([bytesToBlob(encoded, 'image/png')], 'viewport.png', { type:'image/png' });
+      const path = `projects/${owner.projectId}/revex/renders/${root.crypto.randomUUID()}/viewport.png`;
+      const uploaded = await Store.uploadFile(path, source); assertRenderOwner(owner);
+      const sourceUrl = uploaded?.url || await Store.fileUrl(path); assertRenderOwner(owner);
+      const focus = root.RevexObserver.createFocus({name:'render.current-view',target:'Render the captured view with OpenAI image generation',protected:['source geometry','camera projection','crop','object placement'],expectedDelta:{kind:'image-only',sourceRevision:owner.revision}});
+      root.RevexObserver.updateFocus(focus.focusId,{state:'RENDER_REQUESTED',notes:{schema:'liber.revex.ai-render.v1',provider:'observer-openai',prompt,sourceUrl,sourcePath:path,camera:reference.camera,sourceRevision:owner.revision,requestedAt:new Date().toISOString(),humanRenderRequested:true}});
+      const pair = await root.RevexObserverAgentBridge.issuePairCode({focusId:focus.focusId}); assertRenderOwner(owner);
+      const brief = `Use https://liberpict.com/ai/guide.json to connect this AI session to REVEX. Pair with the one-time code ${pair.pairCode} (expires ${pair.expiresAt || 'in 10 minutes'}). Read focus ${focus.focusId}. I authorize rendering the captured viewport with your OpenAI image tool. Preserve the source geometry and camera; use the focus notes for the image and instructions. Return the image for review. Do not edit the BIM model. Keep REVEX open while connected.`;
+      activeJob = await Store.createRenderJob(owner.projectId,{status:'awaiting-ai',provider:'observer-openai',focusId:focus.focusId,prompt,sourcePath:path,sourceRevision:owner.revision,sourceCamera:reference.camera}); assertRenderOwner(owner);
+      aiDraft = {owner,reference,focusId:focus.focusId,brief};
+      $('#render-ai-brief').value = brief;
+      $('#render-ai-import').disabled = false;
+      try { await navigator.clipboard.writeText(brief); setStatus('Brief copied. Paste it into Astra / ChatGPT, then import the returned image here. Keep REVEX open.', 'good'); }
+      catch { setStatus('Brief ready below. Copy it to Astra / ChatGPT, then import the returned image here.', 'good'); }
+    } catch (error) { if (!owner || renderOwnerCurrent(owner)) setStatus(error.message || 'Could not prepare the AI render.', 'bad'); }
+    finally { if (activeOwner === owner) activeOwner = null; $('#render-google-generate').disabled = false; updateConnectionUi(); }
+  }
+
+  async function importAiResult(file) {
+    const draft = aiDraft;
+    if (!file || !draft) return;
+    try {
+      assertRenderOwner(draft.owner);
+      if (!['image/png','image/jpeg','image/webp'].includes(file.type) || file.size > 20 * 1024 * 1024) throw new Error('Choose a PNG, JPEG or WebP image smaller than 20 MB.');
+      const bitmap = await createImageBitmap(file); bitmap.close(); assertRenderOwner(draft.owner);
+      showResult(file,draft.reference.imageDataUrl,{provider:'observer-openai'},'Compare the result with the captured source before saving it.',draft.owner);
+      if (activeJob?.id) await Store.updateRenderJob(draft.owner.projectId,activeJob.id,{status:'imported',provider:'observer-openai'});
+    } catch (error) { if (renderOwnerCurrent(draft.owner)) setStatus(error.message, 'bad'); }
+    finally { $('#render-ai-file').value = ''; }
+  }
+
+  function syncRenderMode() {
+    $('.render-google-config').hidden = renderMode !== 'google';
+    $('.render-ai-connection').hidden = renderMode !== 'ai-session';
+    $('#render-agent-panel .render-agent-head div span').textContent = renderMode === 'ai-session' ? 'WALLT · Astra / ChatGPT' : 'Gemini image · current viewport';
+    updateConnectionUi();
+  }
+
   async function generateRender(event) {
+    if (renderMode === 'ai-session') return prepareAiRender(event);
     event?.preventDefault?.();
     event?.stopImmediatePropagation?.();
     try { assertGeminiOnly(); }
@@ -902,6 +978,20 @@
       ['#render-agent-messages', '.render-google-config', '#render-agent-fields'].forEach(selector => body.appendChild($(selector, panel)));
     }
 
+    if (!$('#render-provider')) {
+      const selector = document.createElement('label'); selector.className = 'render-provider';
+      selector.innerHTML = 'Render with<select id="render-provider"><option value="ai-session">WALLT + AI session</option><option value="google">Google Gemini</option></select>';
+      body.prepend(selector);
+      const connection = document.createElement('section'); connection.className = 'render-ai-connection';
+      connection.innerHTML = '<p>Prepare this view for your Astra / ChatGPT session. The brief connects through LIBER AI and asks the session to use its OpenAI image tool.</p><textarea id="render-ai-brief" readonly rows="4" aria-label="AI render brief" placeholder="Your brief appears here after you prepare the view."></textarea><div class="browser-asset-actions"><button type="button" id="render-ai-copy">Copy brief</button><button type="button" id="render-ai-import" disabled>Import rendered image</button></div><input type="file" id="render-ai-file" hidden accept="image/png,image/jpeg,image/webp"><small>Generation happens in your AI session. REVEX does not start an API render or charge a Google billing project.</small>';
+      selector.after(connection);
+      $('#render-provider').onchange = event => { if (activeOwner || authorizationIntent || savingOwner) { event.target.value = renderMode; return; } retireRenderWork(); renderMode = event.target.value; syncRenderMode(); onDialogOpen(); };
+      $('#render-ai-copy').onclick = async () => { try { if (!aiDraft) throw new Error('Prepare the view first.'); assertRenderOwner(aiDraft.owner); await navigator.clipboard.writeText(aiDraft.brief); setStatus('AI brief copied.'); } catch (error) { setStatus(error.message, 'bad'); } };
+      $('#render-ai-import').onclick = () => $('#render-ai-file').click();
+      $('#render-ai-file').onchange = event => void importAiResult(event.target.files?.[0]);
+    }
+    syncRenderMode();
+
     synchronizeGoogleAccount();
     // Rendering the panel is not an authenticated operation. Account-specific
     // configuration is remembered by the existing explicit connect action.
@@ -956,7 +1046,7 @@
     const sourcePrompt = $('#render-prompt');
     if (sourcePrompt && !sourcePrompt.value.trim()) sourcePrompt.value = 'Create a realistic architectural rendering of the current viewport while preserving the design exactly.';
     const pending = redirectPending();
-    setStatus(!currentUid() ? 'Sign in to LIBER Apps to render.' : !tokenReady() ? 'Connect Google and choose the project Google should bill.' : 'Choose your output size. Each render is charged to your selected Google project.');
+    setStatus(!currentUid() ? 'Sign in to LIBER Apps to render.' : renderMode === 'ai-session' ? 'Prepare this view, then give the brief to your Astra / ChatGPT session.' : !tokenReady() ? 'Connect Google and choose the project Google should bill.' : 'Choose your output size. Each render is charged to your selected Google project.');
   }
 
   async function init() {
@@ -969,7 +1059,7 @@
     root.addEventListener('revex:auth-mode-changed', reconcileGoogleSession);
     for (const name of ['revex:authoritative-project-bound', 'revex:source-revision-loaded']) root.addEventListener(name, restoreRenderReturn);
     for (const name of ['revex:project-boundary', 'revex:authoritative-project-bound', 'revex:source-revision-loaded', 'revex:auth-mode-changed']) root.addEventListener(name, retireStaleRenderWork);
-    void loadGoogleLibrary().catch(error => diagnostic('WARN', 'GOOGLE_LIBRARY', error.message));
+    // Google authorization loads only when the optional Google provider is chosen.
     // Detail geometry can complete after the source-revision event. This bounded
     // return-only retry stops once the draft is consumed; it does not poll auth.
     if (readRenderReturn()) {
@@ -984,7 +1074,7 @@
     if (dialog) new MutationObserver(() => { if (!dialog.hidden) onDialogOpen(); }).observe(dialog, { attributes: true, attributeFilter: ['hidden'] });
     root.addEventListener('resize', syncDockOffset, { passive: true });
     if (!dialog?.hidden) onDialogOpen();
-    console.info('[REVEX] Google renderer ' + BUILD, { model: MODEL, oauth: 'Independent Google authorization; user-selected billing project', apiKeyInBrowser: false, input: 'live current viewport + camera context', location: 'OpenStreetMap Nominatim suggestions' });
+    console.info('[REVEX] Render ' + BUILD, { provider: 'observer-ai-handoff', optionalGoogleModel: MODEL, oauth: 'Independent Google authorization; user-selected billing project', apiKeyInBrowser: false, input: 'live current viewport + camera context', location: 'OpenStreetMap Nominatim suggestions' });
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true }); else void init();

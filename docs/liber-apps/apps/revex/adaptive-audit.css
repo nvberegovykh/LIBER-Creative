@@ -1,4 +1,24 @@
 /* Controls shrink with their actual container, not just the window width. */
+body.revex-app .topbar #revex-r110-render,body.revex-app .topbar #revex-r109-actions{background:var(--bg)!important;align-items:center;justify-content:center;padding:0!important;border-color:var(--line-2)!important}
+body.revex-app .render-google-config[hidden],body.revex-app .render-ai-connection[hidden]{display:none!important}
+body.revex-app .render-provider{display:grid;gap:6px;padding:12px 0;font-size:12px}
+body.revex-app .render-provider select{width:100%;min-height:38px;background:var(--panel);color:var(--tx);border:1px solid var(--line-2);border-radius:8px;padding:8px}
+body.revex-app .render-ai-connection{font:12px/1.5 system-ui;padding-bottom:14px;color:var(--tx-2)}
+body.revex-app .render-ai-connection textarea{width:100%;box-sizing:border-box;resize:vertical;min-height:88px;max-height:160px;background:var(--bg);color:var(--tx);border:1px solid var(--line-2);border-radius:8px;padding:8px;font:12px/1.5 system-ui}
+body.revex-app .render-ai-connection small{display:block;margin-top:10px}
+.bim-placing{cursor:crosshair!important}
+/* BIM controls use the same secondary surface and centered icon geometry. */
+body.revex-app .viewport-tools button.tool{display:inline-flex!important;align-items:center!important;justify-content:center!important;gap:6px;background:var(--panel,#11161e)!important;color:var(--tx,#edf1f7)!important;border:1px solid var(--line-2,#343d49)!important;line-height:1!important;box-sizing:border-box}
+body.revex-app .viewport-tools button.tool.active,body.revex-app .viewport-tools button.tool[aria-pressed=true]{background:color-mix(in srgb,var(--acc) 18%,var(--panel))!important;border-color:var(--acc)!important}
+body.revex-app .viewport-tools button.tool svg,body.revex-app .icon-button svg{display:block;flex:none;margin:0;vertical-align:middle}
+body.revex-app .bim-measure-panel button{display:inline-flex;align-items:center;justify-content:center;min-height:36px;background:var(--panel-2);color:var(--tx)}
+body.revex-app .bim-measure-panel{box-sizing:border-box;overflow:auto;max-height:45%;color:var(--tx)}
+body.revex-app.revex-mobile-touch{--revex-bim-bottom-clearance:calc(var(--revex-r142-sheet-bar,48px) + max(12px,var(--r133-safe-bottom,0px)))}
+body.revex-app.revex-mobile-touch .bim-measure-panel{left:8px;right:8px;bottom:var(--revex-bim-bottom-clearance)!important;max-width:none;max-height:38%;padding:10px;font-size:12px}
+body.revex-app.revex-mobile-touch #walk-controls:not([hidden]){bottom:var(--revex-bim-bottom-clearance)!important}
+body.revex-app.revex-mobile-touch #revex-r122-walk-touch{bottom:calc(var(--revex-bim-bottom-clearance) + 40px)!important}
+body.revex-app.revex-mobile-touch .bim-measure-panel button{min-height:40px}
+body.revex-app.revex-mobile-touch #revex-r142-sheet-tabs button{display:flex!important;align-items:center!important;justify-content:center!important}
 body.revex-app .topbar>*{min-width:0}
 body.revex-app #revex-wallt-open{flex:0 0 38px;width:38px;height:38px;min-width:38px;padding:0;display:grid;place-items:center;font:26px/1 system-ui;color:var(--acc);white-space:nowrap;border-radius:11px}
 body.revex-app.revex-mobile-touch:not(.revex-r157-chat-active) #revex-wallt-open{display:grid!important;flex:0 0 34px!important;width:34px!important;min-width:34px!important;height:34px!important;padding:0!important}
