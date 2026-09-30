@@ -1,7 +1,7 @@
 (function (root) {
   'use strict';
 
-  const BUILD = '20260930-bim-ai-session';
+  const BUILD = '20260930-ai-pairing1';
   const MODEL = 'gemini-3.1-flash-image';
   const RENDER_PROVIDER = 'google-gemini';
   const GOOGLE_CLIENT_ID = '165400046589-ijaucmn2eovfmqof1rhjr46bk34j2o67.apps.googleusercontent.com';
@@ -385,7 +385,7 @@
       const chip = $('#render-agent-capability');
       if (chip) { chip.textContent = 'AI session'; chip.dataset.tone = 'quiet'; }
       const button = $('#render-google-generate');
-      if (button && !activeOwner) button.textContent = 'Prepare AI render';
+      if (button && !activeOwner) button.textContent = 'Prepare render brief';
       return;
     }
     const connected = tokenReady();
@@ -612,7 +612,7 @@
       $('#render-ai-brief').value = '';
       setStatus('Preparing the view and AI brief…', 'busy');
       if (!root.RevexObserver) await import('./observer-focus-api-r143.js?v=20260930-bim1');
-      if (!root.RevexObserverAgentBridge) await import('./observer-agent-bridge-r151.js?v=20260930-bim1');
+      if (!root.RevexObserverAgentBridge) await import('./observer-agent-bridge-r151.js?v=20260930-pair1');
       assertRenderOwner(owner);
       const pairButton = $('#observer-ai-pair-button');
       if (pairButton) $('.render-ai-connection .browser-asset-actions').append(pairButton);
@@ -656,7 +656,7 @@
   function syncRenderMode() {
     $('.render-google-config').hidden = renderMode !== 'google';
     $('.render-ai-connection').hidden = renderMode !== 'ai-session';
-    $('#render-agent-panel .render-agent-head div span').textContent = renderMode === 'ai-session' ? 'WALLT · Astra / ChatGPT' : 'Gemini image · current viewport';
+    $('#render-agent-panel .render-agent-head div span').textContent = renderMode === 'ai-session' ? 'External AI session · manual transfer' : 'Gemini image · current viewport';
     updateConnectionUi();
   }
 
@@ -980,7 +980,7 @@
 
     if (!$('#render-provider')) {
       const selector = document.createElement('label'); selector.className = 'render-provider';
-      selector.innerHTML = 'Render with<select id="render-provider"><option value="ai-session">WALLT + AI session</option><option value="google">Google Gemini</option></select>';
+      selector.innerHTML = 'Render with<select id="render-provider"><option value="ai-session">External AI session · manual transfer</option><option value="google">Google Gemini</option></select>';
       body.prepend(selector);
       const connection = document.createElement('section'); connection.className = 'render-ai-connection';
       connection.innerHTML = '<p>Prepare this view for your Astra / ChatGPT session. The brief connects through LIBER AI and asks the session to use its OpenAI image tool.</p><textarea id="render-ai-brief" readonly rows="4" aria-label="AI render brief" placeholder="Your brief appears here after you prepare the view."></textarea><div class="browser-asset-actions"><button type="button" id="render-ai-copy">Copy brief</button><button type="button" id="render-ai-import" disabled>Import rendered image</button></div><input type="file" id="render-ai-file" hidden accept="image/png,image/jpeg,image/webp"><small>Generation happens in your AI session. REVEX does not start an API render or charge a Google billing project.</small>';

@@ -7,16 +7,30 @@
 if(root.__revexObserverAgentBridgeR151)return;
 root.__revexObserverAgentBridgeR151=true;
 
-const BUILD='20260917r152-public-counter1';
+const BUILD='20260930-observer-region1';
 const CLIENT_KEY='liber.revex.observer.agent.bridge.client.v1';
 let stopped=false;
 let timer=0;
 let busy=false;
+let failures=0;
 
 function clean(v){return String(v??'').trim();}
 function state(){return root.__revexState||{};}
 function observer(){return root.RevexObserver||null;}
 function fs(){return root.firebaseService||null;}
+function owner(){const service=fs();return {service,auth:service?.auth,uid:service?.auth?.currentUser?.uid,project:projectId(),activation:state().activationToken};}
+function current(o){return !!o.uid&&o.service===fs()&&o.auth===fs()?.auth&&o.uid===fs()?.auth?.currentUser?.uid&&o.project===projectId()&&o.activation===state().activationToken;}
+async function call(name,payload,o){
+  if(!current(o))throw new Error('Sign in and keep the same REVEX project open while connecting.');
+  const modular=root.firebaseModular;
+  if(!modular?.getFunctions||!modular?.httpsCallable||!o.service?.app)throw new Error('The AI connection service is unavailable. Reload REVEX and retry.');
+  // Observer is deployed only in us-central1. The legacy regional failover
+  // suppresses the original error and can turn an auth failure into null.
+  const response=await modular.httpsCallable(modular.getFunctions(o.service.app,'us-central1'),name,{timeout:35000})(payload);
+  if(!current(o))throw new Error('The account or project changed while connecting.');
+  if(response?.data==null)throw new Error('The AI connection service returned an empty response.');
+  return response.data;
+}
 function clientId(){
   try{
     let value=localStorage.getItem(CLIENT_KEY)||'';
@@ -44,10 +58,8 @@ function argsFor(method,args){
     default: throw new Error(`Unsupported Observer relay method: ${method}`);
   }
 }
-async function complete(project,requestId,success,result,error){
-  const service=fs();
-  if(!service?.callFunction)throw new Error('Firebase callable bridge unavailable.');
-  const response=await service.callFunction('completeRevexObserverAgentRequest',{projectId:project,requestId,success,result:success?result:null,error:success?null:clean(error)});
+async function complete(o,requestId,success,result,error){
+  const response=await call('completeRevexObserverAgentRequest',{projectId:o.project,requestId,success,result:success?result:null,error:success?null:clean(error)},o);
   if(!response?.ok)throw new Error('Observer request completion was not acknowledged.');
 }
 async function execute(project,request){
@@ -60,10 +72,9 @@ async function execute(project,request){
   return result===undefined?null:result;
 }
 async function issuePairCode(options={}){
-  const service=fs(),project=projectId();
-  if(!service?.callFunction)throw new Error('Firebase callable bridge unavailable.');
+  const o=owner(),project=o.project;
   if(!project)throw new Error('Choose a REVEX project before pairing an AI.');
-  const response=await service.callFunction('issueRevexObserverPairCode',{projectId:project,focusId:clean(options.focusId)||null});
+  const response=await call('issueRevexObserverPairCode',{projectId:project,focusId:clean(options.focusId)||null},o);
   if(!response?.pairCode)throw new Error('Pairing service returned no code.');
   try{await navigator.clipboard.writeText(response.pairCode);}catch(_){}
   diag('INFO','OBSERVER_AGENT_PAIR_CODE','Issued one-time AI pairing code.',{projectId:project,expiresAt:response.expiresAt});
@@ -90,30 +101,33 @@ function ensurePairButton(){
 }
 async function poll(){
   if(stopped||busy)return schedule();
-  const api=observer(),service=fs(),project=projectId();
+  const api=observer(),o=owner(),project=o.project;
   ensurePairButton();
-  if(!api||!service?.callFunction||!project)return schedule();
+  if(!api||!current(o)||!project)return schedule();
   busy=true;
   try{
-    const response=await service.callFunction('pullRevexObserverAgentRequests',{
+    const response=await call('pullRevexObserverAgentRequests',{
       projectId:project,
       bridge:{clientId:clientId(),observerVersion:api.version||null,revision:revision()||null,activeView:activeView()||null}
-    });
+    },o);
+    failures=0;
     for(const request of response?.requests||[]){
+      if(!current(o)||stopped)break;
       try{
         const result=await execute(project,request);
-        await complete(project,request.requestId,true,result,null);
+        await complete(o,request.requestId,true,result,null);
         diag('INFO','OBSERVER_AGENT_REQUEST_COMPLETE','Serviced one external Observer request.',{requestId:request.requestId,method:request.method,projectId:project});
       }catch(error){
-        try{await complete(project,request.requestId,false,null,error?.message||String(error));}catch(_){}
+        try{await complete(o,request.requestId,false,null,error?.message||String(error));}catch(_){}
         diag('WARN','OBSERVER_AGENT_REQUEST_FAILED',error?.message||String(error),{requestId:request?.requestId||null,method:request?.method||null,projectId:project});
       }
     }
   }catch(error){
+    failures=Math.min(failures+1,5);
     diag('WARN','OBSERVER_AGENT_POLL',error?.message||String(error),{projectId:project});
   }finally{busy=false;schedule();}
 }
-function schedule(){clearTimeout(timer);if(stopped)return;timer=setTimeout(poll,document.visibilityState==='hidden'?2200:900);}
+function schedule(){clearTimeout(timer);if(stopped)return;timer=setTimeout(poll,failures?Math.min(30000,1000*2**failures):document.visibilityState==='hidden'?2200:900);}
 function start(){stopped=false;ensurePairButton();schedule();diag('INFO','OBSERVER_AGENT_BRIDGE_READY','External Observer relay ready.',{clientId:clientId()});return {build:BUILD,clientId:clientId()};}
 function stop(){stopped=true;clearTimeout(timer);timer=0;}
 
