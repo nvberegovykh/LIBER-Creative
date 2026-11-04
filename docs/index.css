@@ -720,6 +720,7 @@
 
 /* Partners section – before reviews */
 .home-partners-section {
+  scroll-margin-top: 128px;
   display: flex;
   flex-direction: column;
   align-items: center;
