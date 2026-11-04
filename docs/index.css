@@ -756,7 +756,7 @@
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  min-height: 104px;
+  min-height: 112px;
   padding: 0.75rem 0.5rem;
   text-align: center;
   color: rgba(255, 255, 255, 0.9);
@@ -767,12 +767,25 @@
   color: #fff;
   transform: translateY(-2px);
 }
+.home-partner-logo-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 168px;
+  max-width: 100%;
+  height: 72px;
+  padding: 8px;
+  border-radius: 6px;
+}
+.home-partner-logo-frame-light {
+  background: #fff;
+}
 .home-partner-logo {
-  height: 48px;
-  width: auto;
-  max-width: 140px;
+  display: block;
+  width: 100%;
+  height: 56px;
+  max-width: 152px;
   object-fit: contain;
-  opacity: 0.85;
   transition: opacity 0.2s;
 }
 .home-partner-link:hover .home-partner-logo {

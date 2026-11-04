@@ -1,0 +1,157 @@
+[
+  {
+    "slug": "openai",
+    "file": "openai.svg",
+    "source": "https://cdn.jsdelivr.net/npm/simple-icons@13.21.0/icons/openai.svg"
+  },
+  {
+    "slug": "amazon",
+    "file": "amazon.svg",
+    "source": "https://cdn.jsdelivr.net/npm/simple-icons@13.21.0/icons/amazon.svg"
+  },
+  {
+    "slug": "apple",
+    "file": "apple.svg",
+    "source": "https://cdn.jsdelivr.net/npm/simple-icons@13.21.0/icons/apple.svg"
+  },
+  {
+    "slug": "twitch",
+    "file": "twitch.svg",
+    "source": "https://cdn.jsdelivr.net/npm/simple-icons@13.21.0/icons/twitch.svg"
+  },
+  {
+    "slug": "discord",
+    "file": "discord.svg",
+    "source": "https://cdn.jsdelivr.net/npm/simple-icons@13.21.0/icons/discord.svg"
+  },
+  {
+    "slug": "marriott",
+    "file": "marriott.svg",
+    "source": "https://cdn.jsdelivr.net/npm/simple-icons@13.21.0/icons/marriott.svg"
+  },
+  {
+    "slug": "ionos",
+    "file": "ionos.svg",
+    "source": "https://cdn.jsdelivr.net/npm/simple-icons@13.21.0/icons/ionos.svg"
+  },
+  {
+    "slug": "microsoft",
+    "file": "microsoft.png",
+    "source": "https://uhf.microsoft.com/images/microsoft/RE1Mu3b.png"
+  },
+  {
+    "slug": "spacex",
+    "file": "spacex.svg",
+    "source": "https://cdn.jsdelivr.net/npm/simple-icons@13.21.0/icons/spacex.svg"
+  },
+  {
+    "slug": "united-of-web",
+    "file": "united-of-web.svg",
+    "source": "https://www.unitedofweb.com/client/images/logo/svg/logo_white.svg"
+  },
+  {
+    "slug": "byappi",
+    "file": "byappi.svg",
+    "source": "https://byappi.com/uploads/logo/2-White.svg"
+  },
+  {
+    "slug": "acde-group",
+    "file": "acde-group.png",
+    "source": "https://cdn.prod.website-files.com/6797d4d187499a7a143fc763/67a40287ca341d4536f42e2e_Logo-01.png"
+  },
+  {
+    "slug": "rsi",
+    "file": "rsi.png",
+    "source": "https://cdn.robertsspaceindustries.com/static/images/favicons/rsi/apple-touch-icon.png"
+  },
+  {
+    "slug": "leviev",
+    "file": "leviev.jpg",
+    "source": "https://leviev.com/cdn/shop/files/LEVIEV_Type_RGB_512x.jpg?v=1771531897"
+  },
+  {
+    "slug": "freename",
+    "file": "freename.png",
+    "source": "https://freename.com/apple-touch-icon.png"
+  },
+  {
+    "slug": "kate-snap",
+    "file": "kate-snap.png",
+    "source": "https://static.tildacdn.com/tild3661-3961-4236-b563-363937363831/forn_kate_snap.png"
+  },
+  {
+    "slug": "united-nations",
+    "file": "united-nations.svg",
+    "source": "https://upload.wikimedia.org/wikipedia/commons/e/ee/UN_emblem_blue.svg?utm_source=commons.wikimedia.org&amp;utm_campaign=index&amp;utm_content=original"
+  },
+  {
+    "slug": "nasa",
+    "file": "nasa.svg",
+    "source": "https://www.nasa.gov/wp-content/themes/nasa/assets/images/nasa-logo.svg"
+  },
+  {
+    "slug": "centersvet",
+    "file": "centersvet.svg",
+    "source": "https://www.centersvet.ru/static-bc22a47ca/favicon/c-icon_ru.svg"
+  },
+  {
+    "slug": "volchok",
+    "file": "volchok.png",
+    "source": "https://volchok.ru/local/templates/volchok/images/new_favicon_2/apple-touch-icon.png"
+  },
+  {
+    "slug": "google",
+    "file": "google.webp",
+    "source": "Existing Google wordmark asset in docs/public"
+  },
+  {
+    "slug": "xai",
+    "file": "xai.svg",
+    "source": "https://upload.wikimedia.org/wikipedia/commons/5/57/XAI-Logo.svg"
+  },
+  {
+    "slug": "ndp",
+    "file": "ndp.jpg",
+    "source": "https://assets.softr-files.com/applications/2f528e48-f806-4a80-8645-eaac0e60e46a/assets/2ba17b27-d0fc-4310-abbd-f94fbaa417bf.jpeg?rnd=1728266144696"
+  },
+  {
+    "slug": "bayer",
+    "file": "bayer.svg",
+    "source": "https://www.bayer.com/favicon-light.svg"
+  },
+  {
+    "slug": "89squad",
+    "file": "89squad.png",
+    "source": "https://cdn.discordapp.com/icons/259124796971941890/e599dc482cbfcc659bd4e3f7dcbbdeac.png?size=256"
+  },
+  {
+    "slug": "veta",
+    "file": "veta.png",
+    "source": "https://cisleads.com/Content/img/company/427832/rda31doc.png"
+  },
+  {
+    "slug": "aa-group",
+    "file": "aa-group.png",
+    "source": "https://img.edilportale.com/profile-image/thumb4_2179674d-97dc-41ba-a1a9-2460ac037af9-log1.jpg"
+  },
+  {
+    "slug": "marchi",
+    "file": "marchi.jpg",
+    "source": "https://marhi.ru/mh8_2011.jpg"
+  },
+  {
+    "slug": "park-karo",
+    "file": "park-karo.png",
+    "source": "https://cdn.imweb.me/thumbnail/20211101/433dd43a85f63.png"
+  },
+  {
+    "slug": "san4u",
+    "file": "san4u.png",
+    "source": "https://cdn.san4u.ru/assets/app/i/logo_san4u.png"
+  },
+  {
+    "slug": "lebedev",
+    "file": "lebedev.png",
+    "source": "https://img.artlebedev.ru/icons/touch-icon-ipad-retina.png"
+  }
+]
