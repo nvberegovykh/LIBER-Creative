@@ -12,6 +12,18 @@ function Invoke-Gcloud {
   if ($LASTEXITCODE -ne 0) { throw 'Google Cloud setup failed. Enrollment remains closed.' }
 }
 # Values never enter the command line, source tree, or deployment output.
+$requiredSecrets = @(
+  @{ Name = 'JERICHO_STRIPE_KEY'; Version = $KeyVersion },
+  @{ Name = 'JERICHO_STRIPE_WEBHOOK_SECRET'; Version = $WebhookVersion }
+)
+# A secret can exist without a value. Validate every version before changing IAM
+# or deploying either service, so incomplete setup leaves the running site intact.
+foreach ($secret in $requiredSecrets) {
+  $state = Invoke-Gcloud secrets versions describe $secret.Version --secret=$($secret.Name) --project=$project --format='value(state)' --quiet
+  if ($state -ne 'ENABLED') {
+    throw "Secret $($secret.Name) version $($secret.Version) must be enabled before deployment. Enrollment remains closed."
+  }
+}
 foreach ($name in @('JERICHO_STRIPE_KEY','JERICHO_STRIPE_WEBHOOK_SECRET')) {
   Invoke-Gcloud secrets describe $name --project=$project --format='value(name)'
   Invoke-Gcloud secrets add-iam-policy-binding $name --project=$project --member="serviceAccount:$runtime" --role=roles/secretmanager.secretAccessor --quiet
