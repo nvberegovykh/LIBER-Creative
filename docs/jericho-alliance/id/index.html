@@ -6,119 +6,129 @@
     <meta name="referrer" content="no-referrer" />
     <meta
       name="description"
-      content="Jericho Alliance community covenant and private membership profile proposal."
+      content="Jericho Alliance — private community profiles, a voluntary covenant, and shared negotiations on the LIBER network."
     />
     <title>Jericho Alliance Profile | Jericho Alliance</title>
-    <link rel="stylesheet" href="/jericho-alliance/style.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='8' fill='%23172c29'/%3E%3Ctext x='32' y='48' text-anchor='middle' font-family='Georgia' font-size='48' fill='%23f6f3eb'%3EJ%3C/text%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/jericho-alliance/portal.css" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' https://www.gstatic.com https://apis.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://*.googleapis.com https://us-central1-liber-apps-cca20.cloudfunctions.net; frame-src https://liber-apps-cca20.firebaseapp.com https://accounts.google.com; object-src 'none'; base-uri 'self'; form-action 'self'"
+    />
   </head>
   <body>
     <a class="skip" href="#main">Skip to content</a>
-    <header>
-      <a href="/">LIBER</a><span>JERICHO ALLIANCE</span>
+    <header class="site-header" id="site-header">
+      <a href="/jericho-alliance/id" class="brand"
+        ><span class="monogram" aria-hidden="true">J</span>Jericho Alliance</a
+      >
       <nav aria-label="Alliance">
-        <a href="/jericho-alliance/sip/">SIP</a
-        ><a href="/jericho-alliance/id/">JAP</a
-        ><a href="/declaration-of-presence/">Declaration</a
-        ><a href="/negotiations">UNP</a>
+        <a href="/jericho-alliance/id" aria-current="page">Profile</a
+        ><a href="/declaration-of-presence">Declaration</a
+        ><a href="/negotiations">Negotiations</a
+        ><button class="quiet account" id="account-button">Sign in</button>
       </nav>
     </header>
-    <main id="main">
-      <section class="intro">
-        <p class="eyebrow">02 / JAP</p>
-        <h1>A profile.<br />A considered presence.</h1>
-        <p class="lead">
-          Verify a private Jericho Alliance membership reference.
-        </p>
-      </section>
-      <form id="lookup" class="lookup" novalidate>
-        <label for="jap-id">Enter the 27-digit JAP number</label>
+    <main class="wrap" id="main">
+      <p id="global-status" class="status" role="status" aria-live="polite"></p>
+      <section class="hero">
         <div>
-          <input
-            id="jap-id"
-            name="jap"
-            type="text"
-            inputmode="numeric"
-            autocomplete="off"
-            spellcheck="false"
-            maxlength="27"
-            pattern="[0-9]{27}"
-            aria-describedby="lookup-help"
-            placeholder="27-digit JAP number"
-          /><button type="submit">Check profile</button>
-        </div>
-        <p id="lookup-help" class="small">
-          Use all 27 digits, including any leading zeros. A reference number is
-          a locator, not permission to view private records.
-        </p>
-        <p role="status" id="lookup-status" aria-live="polite">
-          Prelaunch · Live verification is unavailable.
-        </p>
-      </form>
-      <section class="split">
-        <div>
-          <p class="eyebrow">PRIVATE MEMBERSHIP CREDENTIAL</p>
-          <h2>Designed for accountable access.</h2>
-          <p>
-            A QR opens the issuer verification page. Authorized disclosures
-            require verified requestors, a defined purpose, and consent or other
-            valid legal authority.
+          <h1>Your presence.<br />Your terms.</h1>
+          <p class="lead">
+            A place for your identity, your community, and the agreements you
+            choose.
           </p>
-          <p>
-            JAP is a private community credential. It is not a government ID,
-            REAL ID, passport, immigration document, or authorization to travel.
-            Agencies and transport providers determine acceptable identification
-            under applicable rules.
-          </p>
+          <div class="accent-rule"></div>
           <div class="actions">
-            <button class="quiet" id="show-sample">View sample profile</button
-            ><a
-              class="button quiet"
-              href="/jericho-alliance/assets/jap-template.pdf"
-              download
-              >Download both card sides</a
-            >
+            <a class="button" id="profile-cta" href="/jericho-alliance/sip"
+              >Create your profile</a
+            ><a class="button quiet" href="#lookup">Find a JAP</a>
           </div>
         </div>
-        <div class="card-preview">
-          <img
-            src="/jericho-alliance/card-front.png"
-            alt="Specimen front of JAP private membership card"
-          /><img
-            src="/jericho-alliance/card-back.png"
-            alt="Specimen back of JAP card with sample QR"
-          />
-        </div>
+        <div
+          class="card-stage"
+          id="hero-card"
+          aria-label="Private community profile design preview"
+        ></div>
       </section>
-      <section id="sample" class="panel" hidden>
-        <p class="eyebrow">ILLUSTRATIVE SAMPLE · NO PERSON RECORD</p>
-        <h2>JAP specimen</h2>
-        <div class="sample-row">
-          <img
-            class="sample-qr"
-            src="/jericho-alliance/assets/sample-qr.png"
-            alt="Sample QR linking to this demonstration"
-          />
+      <section class="lookup-band" id="lookup">
+        <h2>Find a Jericho Alliance Profile</h2>
+        <form id="lookup-form">
+          <label class="small" for="jap-number">27-digit JAP number</label>
+          <div class="lookup-row">
+            <input
+              id="jap-number"
+              name="reference"
+              inputmode="numeric"
+              autocomplete="off"
+              spellcheck="false"
+              minlength="27"
+              maxlength="27"
+              pattern="[0-9]{27}"
+              placeholder="27-digit JAP number"
+              required
+            /><button type="submit">Look up</button>
+          </div>
+          <p
+            id="lookup-status"
+            class="status"
+            role="status"
+            aria-live="polite"
+          ></p>
+        </form>
+      </section>
+      <section
+        class="lookup-result"
+        id="lookup-result"
+        aria-live="polite"
+      ></section>
+      <div class="steps">
+        <section>
+          <span class="step-number">01</span>
           <div>
-            <p>
-              Issuer proposed as Jericho Alliance<br />Status — specimen<br />KYC
-              — not performed<br />PICT token — not minted
-            </p>
-            <a href="/jericho-alliance/assets/sample-qr.png" download
-              >Download sample QR image</a
-            >
+            <h3>Make it yours</h3>
+            <p>Choose a display name and pixel avatar.</p>
           </div>
-        </div>
-      </section>
-    </main>
-    <footer>
-      <p>Jericho Alliance · Volchok community · New York</p>
-      <p>
-        Voluntary association proposal. Private membership credentials.
-        Government recognition and travel acceptance require the relevant
-        authorities.
+        </section>
+        <section>
+          <span class="step-number">02</span>
+          <div>
+            <h3>Verify with care</h3>
+            <p>
+              Documents go directly to the verification provider when checks are
+              open.
+            </p>
+          </div>
+        </section>
+        <section>
+          <span class="step-number">03</span>
+          <div>
+            <h3>Share on your terms</h3>
+            <p>Control access and revoke it at any time.</p>
+          </div>
+        </section>
+      </div>
+      <p class="footnote">
+        A community credential. Government identification remains separate.
       </p>
-      <a href="/jericho-alliance/legal/">Legal basis &amp; data stewardship</a>
+    </main>
+    <footer class="site-footer" id="site-footer">
+      <a href="/"><strong>LIBER</strong></a>
+      <div>
+        <a href="/jericho-alliance/sip">Self-Identification</a
+        ><a href="/jericho-alliance/privacy">Privacy</a
+        ><a href="/jericho-alliance/legal">Legal</a>
+      </div>
     </footer>
-    <script src="/jericho-alliance/app.js" defer></script>
+    <noscript
+      ><p class="notice">
+        JavaScript is required for sign-in and private records. The declaration
+        and legal pages remain readable.
+      </p></noscript
+    >
+    <script type="module" src="/jericho-alliance/lookup.mjs"></script>
   </body>
 </html>

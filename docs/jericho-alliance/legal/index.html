@@ -6,29 +6,41 @@
     <meta name="referrer" content="no-referrer" />
     <meta
       name="description"
-      content="Jericho Alliance community covenant and private membership profile proposal."
+      content="Jericho Alliance — private community profiles, a voluntary covenant, and shared negotiations on the LIBER network."
     />
-    <title>Legal basis and data stewardship | Jericho Alliance</title>
-    <link rel="stylesheet" href="/jericho-alliance/style.css" />
+    <title>Legal basis | Jericho Alliance</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='8' fill='%23172c29'/%3E%3Ctext x='32' y='48' text-anchor='middle' font-family='Georgia' font-size='48' fill='%23f6f3eb'%3EJ%3C/text%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/jericho-alliance/portal.css" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' https://www.gstatic.com https://apis.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://*.googleapis.com https://us-central1-liber-apps-cca20.cloudfunctions.net; frame-src https://liber-apps-cca20.firebaseapp.com https://accounts.google.com; object-src 'none'; base-uri 'self'; form-action 'self'"
+    />
   </head>
   <body>
     <a class="skip" href="#main">Skip to content</a>
-    <header>
-      <a href="/">LIBER</a><span>JERICHO ALLIANCE</span>
+    <header class="site-header" id="site-header">
+      <a href="/jericho-alliance/id" class="brand"
+        ><span class="monogram" aria-hidden="true">J</span>Jericho Alliance</a
+      >
       <nav aria-label="Alliance">
-        <a href="/jericho-alliance/sip/">SIP</a
-        ><a href="/jericho-alliance/id/">JAP</a
-        ><a href="/declaration-of-presence/">Declaration</a
-        ><a href="/negotiations">UNP</a>
+        <a href="/jericho-alliance/id" aria-current="page">Profile</a
+        ><a href="/declaration-of-presence">Declaration</a
+        ><a href="/negotiations">Negotiations</a
+        ><button class="quiet account" id="account-button">Sign in</button>
       </nav>
     </header>
-    <main id="main">
-      <section class="intro">
-        <p class="eyebrow">LEGAL BASIS / REVIEWED 5 NOVEMBER 2026</p>
-        <h1>Freedom with<br />responsibility.</h1>
-        <p class="lead">A proposed operating boundary for Jericho Alliance.</p>
-      </section>
-      <article class="covenant">
+    <main class="wrap" id="main">
+      <p id="global-status" class="status" role="status" aria-live="polite"></p>
+      <div class="page-heading">
+        <h1>Participation with clarity.</h1>
+        <p class="lead">
+          The legal boundaries of community membership, identity, and agreement.
+        </p>
+      </div>
+      <article class="article">
         <section>
           <h2>Association and statehood</h2>
           <p>
@@ -73,14 +85,14 @@
         <section>
           <h2>Disclosure by purpose and authority</h2>
           <p>
-            Proposed public lookup contains only limited issuer and
-            credential-status information. A full identity dossier will not be
-            exposed through a QR. Officers, agencies, and carriers must follow a
-            verified request process identifying their organization, purpose,
-            legal basis, jurisdiction, requested fields, and retention needs.
-            Every approved disclosure requires a recorded decision and an audit
-            trail. Applicable restrictions on notice, disclosure, and onward use
-            must be assessed.
+            Public lookup contains only limited issuer and credential-status
+            information. A full identity dossier will not be exposed through a
+            QR. Officers, agencies, and carriers must follow a verified request
+            process identifying their organization, purpose, legal basis,
+            jurisdiction, requested fields, and retention needs. Every approved
+            disclosure requires a recorded decision and an audit trail.
+            Applicable restrictions on notice, disclosure, and onward use must
+            be assessed.
           </p>
           <p>
             New York CPL §140.50 addresses specified stops and demands for name,
@@ -96,32 +108,21 @@
           </p>
         </section>
         <section>
-          <h2>Data stewardship before enrollment</h2>
+          <h2>Data stewardship</h2>
           <p>
-            The operator must adopt a privacy notice identifying the responsible
-            entity, purposes, retention periods, processors, rights, contact
-            point, and complaint procedure. The proposed integration keeps
-            identity documents with the verification provider and stores minimal
-            status references. Encrypted records, server-only access,
-            revocation, correction, deletion, and incident response need
-            operational validation before real enrollment.
+            The
+            <a href="/jericho-alliance/privacy">Jericho privacy notice</a>
+            describes the live profile, sharing, verification, and negotiation
+            services. Public lookup is limited by default. Consent-based access
+            passes are restricted to a confirmed email and expire automatically.
+            Document verification activates only with a live provider account;
+            no test verification issues a live JAP.
           </p>
           <p>
-            Avatar creation and any immutable token publication require separate
-            informed choices. Public or on-chain records must exclude identity
-            documents, names, birth dates, addresses, biometrics, immigration
-            case information, and hashes derived from those fields. A token
-            cannot prove the current holder's identity on its own.
-          </p>
-          <p>
-            <a href="https://www.nysenate.gov/legislation/laws/GBS/899-BB"
-              >New York data-security requirements</a
-            >
-            ·
-            <a
-              href="https://docs.stripe.com/identity/access-verification-results"
-              >Stripe restricted verification results</a
-            >
+            PICT is implemented as a parallel channel on the existing LIBER
+            network. Its avatar collectibles and receipts are application
+            records. They do not establish public-chain ownership or government
+            identity.
           </p>
         </section>
         <section>
@@ -137,14 +138,20 @@
         </section>
       </article>
     </main>
-    <footer>
-      <p>Jericho Alliance · Volchok community · New York</p>
-      <p>
-        Voluntary association proposal. Private membership credentials.
-        Government recognition and travel acceptance require the relevant
-        authorities.
-      </p>
-      <a href="/jericho-alliance/legal/">Legal basis &amp; data stewardship</a>
+    <footer class="site-footer" id="site-footer">
+      <a href="/"><strong>LIBER</strong></a>
+      <div>
+        <a href="/jericho-alliance/sip">Self-Identification</a
+        ><a href="/jericho-alliance/privacy">Privacy</a
+        ><a href="/jericho-alliance/legal">Legal</a>
+      </div>
     </footer>
+    <noscript
+      ><p class="notice">
+        JavaScript is required for sign-in and private records. The declaration
+        and legal pages remain readable.
+      </p></noscript
+    >
+    <script type="module" src="/jericho-alliance/static.mjs"></script>
   </body>
 </html>

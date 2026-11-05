@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta
+      name="description"
+      content="A voluntary, facilitator-led UNP negotiation workspace for Jericho Alliance members."
+    />
+    <title>Negotiation Platform | Jericho Alliance</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232f253e'/%3E%3Ctext x='7' y='23' font-size='21' fill='%23d8c8ef'%3EU%3C/text%3E%3C/svg%3E">
+    <link rel="stylesheet" href="/jericho-alliance/style.css" />
+    <link rel="stylesheet" href="/negotiations/style.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header>
+      <a href="/">LIBER</a><span>JERICHO ALLIANCE</span>
+      <nav aria-label="Alliance">
+        <a href="/jericho-alliance/sip/">SIP</a
+        ><a href="/jericho-alliance/id/">JAP</a
+        ><a href="/declaration-of-presence/">Declaration</a
+        ><a href="/negotiations" aria-current="page">UNP</a>
+      </nav>
+    </header>
+    <main id="main">
+      <section class="intro negotiation-intro">
+        <div>
+          <p class="eyebrow">03 / UNIVERSAL NEGOTIATION PROTOCOL</p>
+          <h1>Make room<br />for agreement.</h1>
+          <p class="lead">
+            A shared process for settling differences within Jericho Alliance.
+          </p>
+        </div>
+        <aside class="principles">
+          <p>One representative per side.</p>
+          <p>One shared starting record.</p>
+          <p>One considered correction round.</p>
+          <p>Every side keeps its choice.</p>
+          <a href="#protocol">Read the working protocol ↓</a>
+        </aside>
+      </section>
+      <div class="notice">
+        <strong>Facilitated workspace · Working interpretation v1</strong>
+        <p>
+          Use this first version together on one device with a trusted
+          facilitator. Entries stay in this tab until you export them. Save an
+          export before leaving. Participation, decisions, and representative
+          authority are recorded by the facilitator and remain unverified.
+        </p>
+      </div>
+      <section class="workspace" aria-labelledby="workspace-title">
+        <div class="workspace-heading">
+          <div>
+            <p class="eyebrow">NEGOTIATION PLATFORM</p>
+            <h2 id="workspace-title">Prepare the shared record</h2>
+          </div>
+          <div class="toolbar">
+            <button type="button" class="quiet" id="import-button">
+              Open record</button
+            ><button type="button" class="quiet" id="export-json" disabled>
+              Save record</button
+            ><button type="button" class="quiet" id="export-text" disabled>
+              Download report</button
+            ><input
+              type="file"
+              id="import-file"
+              accept="application/json,.json"
+              hidden
+            />
+          </div>
+        </div>
+        <p id="message" role="status" aria-live="polite"></p>
+        <ol class="progress" aria-label="Session progress">
+          <li data-phase="setup" aria-current="step">01 · Starting record</li>
+          <li data-phase="corrections">02 · Correction round</li>
+          <li data-phase="package">03 · Shared package</li>
+          <li data-phase="decisions">04 · Decisions</li>
+          <li data-phase="closed">05 · Outcome</li>
+        </ol>
+        <form id="setup-form" autocomplete="off">
+          <label
+            >Case title<input
+              name="title"
+              required
+              maxlength="160"
+              placeholder="A short, neutral description"
+          /></label>
+          <div class="two-columns">
+            <fieldset>
+              <legend>Side A</legend>
+              <label
+                >Member or community<input
+                  name="partyA"
+                  required
+                  maxlength="160" /></label
+              ><label
+                >Representative<input
+                  name="representativeA"
+                  required
+                  maxlength="160" /></label
+              ><label
+                >Authority and limits<textarea
+                  name="mandateA"
+                  required
+                  maxlength="12000"
+                  placeholder="Who authorized this representative, and what can they agree to?"
+                ></textarea>
+              </label>
+            </fieldset>
+            <fieldset>
+              <legend>Side B</legend>
+              <label
+                >Member or community<input
+                  name="partyB"
+                  required
+                  maxlength="160" /></label
+              ><label
+                >Representative<input
+                  name="representativeB"
+                  required
+                  maxlength="160" /></label
+              ><label
+                >Authority and limits<textarea
+                  name="mandateB"
+                  required
+                  maxlength="12000"
+                  placeholder="Who authorized this representative, and what can they agree to?"
+                ></textarea>
+              </label>
+            </fieldset>
+          </div>
+          <label
+            >Applicable jurisdiction and process<textarea
+              name="jurisdiction"
+              required
+              maxlength="12000"
+              placeholder="Location, relevant agreements, and any existing court or agency process"
+            ></textarea>
+          </label>
+          <label
+            >Shared starting record<textarea
+              name="baseline"
+              required
+              maxlength="12000"
+              placeholder="Record the issue, each side's starting position, agreed facts, and disputed facts in neutral language."
+            ></textarea>
+          </label>
+          <label
+            >Boundaries and rights<textarea
+              name="boundaries"
+              required
+              maxlength="12000"
+              placeholder="What is within scope? Which rights and obligations require independent legal review?"
+            ></textarea>
+          </label>
+          <label
+            >Evidence, units, and uncertainty<textarea
+              name="evidence"
+              maxlength="12000"
+              placeholder="Use references and summaries. Keep unnecessary identity and sensitive document details out of the record."
+            ></textarea>
+          </label>
+          <div class="two-columns">
+            <label
+              >Agreed neutral reviewer or agency<input
+                name="reviewer"
+                maxlength="300"
+                placeholder="Name, expertise, and any disclosed conflict; or pending" /></label
+            ><label
+              >Deadlines and review dates<input
+                name="deadline"
+                maxlength="300"
+                placeholder="Include existing legal deadlines where relevant"
+            /></label>
+          </div>
+          <label class="check"
+            ><input name="consentA" type="checkbox" required />Side A confirms
+            voluntary participation, its representative's mandate, and this
+            starting record.</label
+          >
+          <label class="check"
+            ><input name="consentB" type="checkbox" required />Side B confirms
+            voluntary participation, its representative's mandate, and this
+            starting record.</label
+          >
+          <p class="small">
+            This workspace creates a local working record. It provides no remote
+            accounts, private party channels, identity verification, or
+            authenticated signatures. Applicable law and any later formal
+            agreement determine legal effect.
+          </p>
+          <button type="submit">Open the correction round</button>
+        </form>
+        <section id="active-session" hidden>
+          <div class="session-meta">
+            <strong id="case-title"></strong><span id="case-id"></span>
+          </div>
+          <details>
+            <summary>View the fixed starting record</summary>
+            <dl id="starting-record"></dl>
+          </details>
+          <section id="corrections" hidden>
+            <h3>One correction per side</h3>
+            <p>
+              Each side responds to the same starting record. Both entries
+              appear together after submission. This display rule relies on the
+              facilitator on this shared device.
+            </p>
+            <div class="two-columns" id="revision-forms"></div>
+          </section>
+          <section id="revisions" hidden>
+            <h3>The correction round</h3>
+            <div class="two-columns" id="revision-results"></div>
+          </section>
+          <form id="package-form" hidden>
+            <h3>Prepare the exact package</h3>
+            <p>
+              Bring forward only terms the sides are willing to consider.
+              Preserve every unresolved issue. If there is no common ground,
+              record that outcome below.
+            </p>
+            <label
+              >Proposed settlement terms<textarea
+                name="terms"
+                required
+                maxlength="12000"
+              ></textarea></label
+            ><label
+              >Unresolved disagreements<textarea
+                name="unresolved"
+                required
+                maxlength="12000"
+                placeholder="List remaining issues, or explicitly record none."
+              ></textarea></label
+            ><label
+              >Responsibilities, dates, verification, and remedies<textarea
+                name="implementation"
+                required
+                maxlength="12000"
+                placeholder="Who does what, by when, how completion is checked, and how an implementation dispute can be reviewed."
+              ></textarea></label
+            ><label
+              >Neutral review and corrections<textarea
+                name="review"
+                required
+                maxlength="12000"
+                placeholder="Record expert findings, conflicts of interest, factual corrections, uncertainty, and independent review needs. If no expert was used, record the reason accepted by both sides."
+              ></textarea></label
+            ><label class="check"
+              ><input name="reviewConfirmed" type="checkbox" required />The
+              facilitator records that both sides reviewed the package and
+              identified applicable rights, authority limits, and independent
+              review needs.</label
+            ><button type="submit">Freeze this package for decisions</button>
+            <div class="closure-option">
+              <label
+                >Reason for closing with no common agreement<textarea
+                  name="closureReason"
+                  maxlength="12000"
+                ></textarea></label
+              ><button type="button" id="no-agreement" class="quiet">
+                Close without agreement
+              </button>
+            </div>
+          </form>
+          <section id="frozen-package" hidden>
+            <h3>Frozen package</h3>
+            <p>
+              Decisions refer to these exact terms and the starting record.
+              Changes require a new session with fresh consent.
+            </p>
+            <dl id="package-display"></dl>
+            <p class="small">Content fingerprint · SHA-256</p>
+            <code id="fingerprint"></code>
+            <p class="small">
+              The fingerprint checks content consistency. It does not
+              authenticate a person, signature, or the history of an imported
+              file.
+            </p>
+          </section>
+          <section id="decisions" hidden>
+            <h3>Record each side's choice</h3>
+            <div class="two-columns" id="decision-forms"></div>
+          </section>
+          <section id="outcome" class="outcome" hidden>
+            <p class="eyebrow">SESSION CLOSED</p>
+            <h3 id="outcome-title"></h3>
+            <div id="decision-summary"></div>
+            <p>
+              Retain this working record for independent review and any formal
+              documentation the sides choose or the law requires.
+            </p>
+            <button type="button" class="quiet" id="new-session">
+              Start a new session
+            </button>
+          </section>
+          <details id="withdrawal">
+            <summary>Record a side's withdrawal</summary>
+            <form id="withdraw-form">
+              <label
+                >Withdrawing side<select name="side">
+                  <option value="a">Side A</option>
+                  <option value="b">Side B</option>
+                </select></label
+              ><label
+                >Reason or statement<textarea
+                  name="reason"
+                  required
+                  maxlength="12000"
+                ></textarea></label
+              ><button type="submit" class="quiet">
+                Close and record withdrawal
+              </button>
+            </form>
+          </details>
+          <details>
+            <summary>Facilitator event history</summary>
+            <ol id="event-history"></ol>
+          </details>
+        </section>
+      </section>
+      <section id="protocol" class="covenant">
+        <p class="eyebrow">RESEARCH → WORKING INTERPRETATION</p>
+        <h2>Universal Negotiation Protocol</h2>
+        <p>
+          The recovered author concept in LIBER's research proposes one
+          representative per side, a protected negotiation chamber, an agreement
+          space controlled by its participants, one correction round, neutral
+          terminology, professional evaluation, and an independent agency
+          accepted by the sides.
+        </p>
+        <p>
+          The research's proposed operational interpretation adds a common
+          starting record, simultaneous reveal of corrections, a frozen package,
+          separate acceptance or refusal, and fresh consent before another
+          round. This workspace applies that sequence to a two-sided,
+          facilitator-entered record. A complete formal UNP specification was
+          not located in the cited research.
+        </p>
+        <p>
+          Keeping a position, withdrawing, and closing with unresolved
+          disagreements are supported outcomes. Expert advice informs the
+          discussion. Each party retains its own choice and access to applicable
+          legal remedies. Existing court orders and legal deadlines require
+          separate attention.
+        </p>
+        <p>
+          <a
+            href="https://research.liberpict.com/liberty-power/#universal-negotiation-protocol-interface"
+            target="_blank"
+            rel="noopener noreferrer"
+            >Read the UNP research</a
+          >
+          ·
+          <a
+            href="https://research.liberpict.com/liberty-power/unp-provenance.json"
+            target="_blank"
+            rel="noopener noreferrer"
+            >Read the concept provenance</a
+          >
+        </p>
+        <h3>Using the workspace responsibly</h3>
+        <p>
+          The page holds entries in memory and provides file export and import.
+          Exported files contain the entered information in readable form. Use a
+          trusted device and share files deliberately. Imported entries are
+          unverified and should be checked with the participants. No case data
+          is placed on PICT or any blockchain by this version.
+        </p>
+        <p>
+          A voluntary process depends on meaningful choice. Where safety,
+          coercion, or a substantial power imbalance prevents free
+          participation, seek a suitable independent service. New York Courts
+          describes mediation and neutral evaluation and provides information
+          about community dispute-resolution services.
+        </p>
+        <p>
+          <a
+            href="https://www.nycourts.gov/alternative-dispute-resolution/definitions-adr-processes"
+            target="_blank"
+            rel="noopener noreferrer"
+            >New York Courts guidance</a
+          >
+        </p>
+      </section>
+    </main>
+    <footer>
+      <p>Jericho Alliance · Volchok community · New York</p>
+      <a href="/jericho-alliance/legal/">Legal basis &amp; data stewardship</a>
+    </footer>
+    <script type="module" src="/negotiations/app.mjs"></script>
+  </body>
+</html>

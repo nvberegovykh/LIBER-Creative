@@ -6,61 +6,70 @@
     <meta name="referrer" content="no-referrer" />
     <meta
       name="description"
-      content="Jericho Alliance community covenant and private membership profile proposal."
+      content="Jericho Alliance — private community profiles, a voluntary covenant, and shared negotiations on the LIBER network."
     />
     <title>Declaration of Presence | Jericho Alliance</title>
-    <link rel="stylesheet" href="/jericho-alliance/style.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='8' fill='%23172c29'/%3E%3Ctext x='32' y='48' text-anchor='middle' font-family='Georgia' font-size='48' fill='%23f6f3eb'%3EJ%3C/text%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/jericho-alliance/portal.css" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' https://www.gstatic.com https://apis.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://*.googleapis.com https://us-central1-liber-apps-cca20.cloudfunctions.net; frame-src https://liber-apps-cca20.firebaseapp.com https://accounts.google.com; object-src 'none'; base-uri 'self'; form-action 'self'"
+    />
   </head>
   <body>
     <a class="skip" href="#main">Skip to content</a>
-    <header>
-      <a href="/">LIBER</a><span>JERICHO ALLIANCE</span>
+    <header class="site-header" id="site-header">
+      <a href="/jericho-alliance/id" class="brand"
+        ><span class="monogram" aria-hidden="true">J</span>Jericho Alliance</a
+      >
       <nav aria-label="Alliance">
-        <a href="/jericho-alliance/sip/">SIP</a
-        ><a href="/jericho-alliance/id/">JAP</a
-        ><a href="/declaration-of-presence/">Declaration</a
-        ><a href="/negotiations">UNP</a>
+        <a href="/jericho-alliance/id">Profile</a
+        ><a href="/declaration-of-presence" aria-current="page">Declaration</a
+        ><a href="/negotiations">Negotiations</a
+        ><button class="quiet account" id="account-button">Sign in</button>
       </nav>
     </header>
-    <main id="main">
-      <section class="hero">
+    <main class="wrap" id="main">
+      <p id="global-status" class="status" role="status" aria-live="polite"></p>
+      <section class="declaration-hero">
         <div>
-          <p class="eyebrow">
-            A VOLUNTARY COMMUNITY COVENANT · PROPOSED FOR ADOPTION
-          </p>
-          <h1 class="gothic">Declaration<br />of Presence</h1>
+          <h1>Declaration<br />of Presence</h1>
           <p class="lead">Mind Follows Wind to Find Jericho.</p>
           <p>
             People, families, and communities joining in mutual aid, responsible
             freedom, and care for the living world.
           </p>
           <div class="actions">
-            <a
-              class="button"
+            <a class="button" href="/jericho-alliance/sip"
+              >Make your declaration</a
+            ><a
+              class="button quiet"
               href="/jericho-alliance/assets/declaration-letter.pdf"
               download
-              >Download one-page declaration</a
-            ><a class="button quiet" href="#covenant">Read the covenant ↓</a>
+              >Print one page</a
+            >
           </div>
         </div>
         <figure>
           <img
             src="/jericho-alliance/assets/flag.png"
-            alt="Volchok flag proposal with lavender and rose forms, sweeping colored lines, and a green central emblem"
+            alt="Volchok and Jericho Alliance community flag"
           />
           <figcaption>
-            VOLCHOK / JERICHO ALLIANCE · FLAG PROPOSAL
+            VOLCHOK / JERICHO ALLIANCE · COMMUNITY FLAG ·
             <a href="/jericho-alliance/assets/flag.png" download>Download</a>
           </figcaption>
         </figure>
       </section>
       <div class="notice">
-        This publication presents a proposed association covenant. Adoption,
-        organizational filings, and any official recognition require their own
-        documented steps.
+        A voluntary community covenant. Publishing or accepting it records an
+        agreement to participate; legal formation and government recognition
+        require the applicable documented processes.
       </div>
-      <article class="covenant" id="covenant">
-        <p class="eyebrow">THE COVENANT</p>
+      <article class="article" id="covenant">
         <section>
           <h2>Our presence</h2>
           <p>
@@ -129,33 +138,37 @@
         <p class="signature">
           In witness of our free agreement, we set our names below.
         </p>
-        <p>Adoption date and authorized signatures are pending.</p>
+        <p class="small">
+          Each member’s acceptance is recorded separately through the
+          Self-Identification Procedure. Organizational filings and official
+          recognition remain separate legal processes.
+        </p>
       </article>
-      <section class="tiles">
-        <a href="/jericho-alliance/sip/"
-          ><span>01 / PARTICIPATE</span>
-          <h2>Self-Identification Procedure</h2>
-          <p>
-            A proposed path from consent to identity checks and private
-            membership.
-          </p></a
-        ><a href="/jericho-alliance/id/"
-          ><span>02 / VERIFY</span>
-          <h2>Jericho Alliance Profile</h2>
-          <p>
-            A 27-digit reference, a personal avatar, and controlled disclosure.
-          </p></a
-        >
+      <section class="content-section">
+        <h2>Presence becomes participation.</h2>
+        <p class="lead">
+          Create your profile, keep your records, and make agreements with care.
+        </p>
+        <div class="actions">
+          <a class="button" href="/jericho-alliance/sip">Join the community</a
+          ><a class="button quiet" href="/negotiations">Open negotiations</a>
+        </div>
       </section>
     </main>
-    <footer>
-      <p>Jericho Alliance · Volchok community · New York</p>
-      <p>
-        Voluntary association proposal. Private membership credentials.
-        Government recognition and travel acceptance require the relevant
-        authorities.
-      </p>
-      <a href="/jericho-alliance/legal/">Legal basis &amp; data stewardship</a>
+    <footer class="site-footer" id="site-footer">
+      <a href="/"><strong>LIBER</strong></a>
+      <div>
+        <a href="/jericho-alliance/sip">Self-Identification</a
+        ><a href="/jericho-alliance/privacy">Privacy</a
+        ><a href="/jericho-alliance/legal">Legal</a>
+      </div>
     </footer>
+    <noscript
+      ><p class="notice">
+        JavaScript is required for sign-in and private records. The declaration
+        and legal pages remain readable.
+      </p></noscript
+    >
+    <script type="module" src="/jericho-alliance/static.mjs"></script>
   </body>
 </html>
