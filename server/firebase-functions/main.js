@@ -5,8 +5,10 @@
 const energy = require('./index');
 const projectChat = require('./project-chat');
 const observerAgent = require('./observer-agent-broker');
+const jerichoIdentity = require('./jericho-identity');
 
 module.exports = {
+  ...jerichoIdentity,
   ...energy,
   ensureProjectChatHttp: projectChat.ensureProjectChatHttp,
   issueRevexObserverAnonymousClaim: observerAgent.issueRevexObserverAnonymousClaim,
