@@ -334,6 +334,8 @@
 }
 .footer15-credits2 {
   gap: var(--dl-space-space-twounits);
+  flex-wrap: wrap;
+  max-width: 100%;
   flex: 0 0 auto;
   width: auto;
   display: flex;

@@ -1,0 +1,399 @@
+@font-face {
+  font-family: Gothic;
+  src: url("/jericho-alliance/assets/gothic.ttf");
+}
+* {
+  box-sizing: border-box;
+}
+html {
+  scroll-behavior: smooth;
+}
+body {
+  margin: 0;
+  background: #f6f3ed;
+  color: #26202f;
+  font:
+    16px/1.6 Georgia,
+    serif;
+}
+a {
+  color: inherit;
+  text-underline-offset: 4px;
+}
+header {
+  max-width: 1280px;
+  margin: auto;
+  padding: 27px 42px;
+  display: flex;
+  align-items: center;
+  gap: 30px;
+  border-bottom: 1px solid #d9d2de;
+  font:
+    12px/1.4 Arial,
+    sans-serif;
+  letter-spacing: 1.5px;
+}
+header > a {
+  font-size: 22px;
+  font-weight: bold;
+  text-decoration: none;
+}
+header > span {
+  flex: 1;
+}
+nav {
+  display: flex;
+  gap: 26px;
+}
+nav a {
+  text-decoration: none;
+}
+main {
+  max-width: 1196px;
+  padding: 0 30px;
+  margin: auto;
+}
+h1 {
+  font-weight: normal;
+  line-height: 1.08;
+  font-size: clamp(44px, 6.3vw, 80px);
+  letter-spacing: -2px;
+  margin: 18px 0 24px;
+}
+h2 {
+  font-size: 27px;
+  font-weight: normal;
+  line-height: 1.25;
+  margin: 12px 0;
+}
+p {
+  max-width: 72ch;
+}
+.gothic {
+  font-family: Gothic;
+  font-size: clamp(49px, 6.9vw, 86px);
+  letter-spacing: 0;
+}
+.eyebrow,
+figcaption {
+  font:
+    11px/1.6 Arial,
+    sans-serif;
+  letter-spacing: 1.5px;
+}
+.eyebrow {
+  color: #655171;
+}
+.lead {
+  font-size: 23px;
+  color: #675a70;
+}
+.hero {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 50px;
+  align-items: center;
+  padding: 70px 0 56px;
+}
+.hero figure {
+  margin: 0;
+}
+.hero img {
+  width: 100%;
+  border: 1px solid #e4dfe7;
+}
+.hero figcaption {
+  margin-top: 16px;
+}
+.hero figcaption a {
+  display: block;
+  margin-top: 8px;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 24px 0;
+}
+.button,
+button {
+  display: inline-block;
+  padding: 13px 20px;
+  background: #2f253e;
+  border: 1px solid #2f253e;
+  color: white;
+  text-decoration: none;
+  font:
+    14px/1.3 Arial,
+    sans-serif;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.quiet {
+  background: transparent;
+  color: #2f253e;
+}
+.notice {
+  padding: 18px 22px;
+  border-left: 3px solid #8d719c;
+  background: #eae4ed;
+  font-size: 15px;
+}
+.covenant {
+  max-width: 760px;
+  margin: 65px auto;
+}
+.covenant section {
+  margin-bottom: 32px;
+}
+.covenant p {
+  line-height: 1.8;
+}
+.signature {
+  font-style: italic;
+}
+.tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin: 50px 0;
+  gap: 22px;
+}
+.tiles > a {
+  padding: 30px;
+  background: #ece6f0;
+  text-decoration: none;
+}
+.tiles span {
+  font: 11px Arial;
+  letter-spacing: 1.5px;
+}
+.intro {
+  padding: 56px 0 20px;
+}
+.split {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 65px;
+  margin: 45px 0 65px;
+  align-items: start;
+}
+.panel {
+  padding: 30px;
+  background: #ede7f0;
+  border: 1px solid #d7cddd;
+  margin-bottom: 35px;
+}
+.steps {
+  padding: 0;
+  list-style: none;
+  counter-reset: steps;
+}
+.steps li {
+  counter-increment: steps;
+  padding: 0 0 25px 45px;
+  position: relative;
+}
+.steps li:before {
+  content: counter(steps, decimal-leading-zero);
+  position: absolute;
+  left: 0;
+  top: 4px;
+  color: #896796;
+  font: 12px Arial;
+}
+.avatar-stage {
+  height: 280px;
+  background: #d8c8ef;
+  display: grid;
+  place-items: center;
+}
+.avatar-stage img {
+  height: 255px;
+  max-width: 100%;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+fieldset {
+  border: 0;
+  padding: 18px 0 0;
+}
+legend {
+  font-size: 15px;
+}
+.swatches {
+  display: flex;
+  gap: 12px;
+}
+.swatches button {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid #786185;
+  padding: 0;
+}
+.lavender {
+  background: #d8c8ef;
+}
+.mint {
+  background: #c1decd;
+}
+.rose {
+  background: #edc5d0;
+}
+.small {
+  font:
+    13px/1.6 Arial,
+    sans-serif;
+  color: #685e70;
+}
+.lookup {
+  max-width: 840px;
+  margin: 30px 0 55px;
+}
+.lookup label {
+  display: block;
+  margin-bottom: 12px;
+}
+.lookup > div {
+  display: flex;
+  gap: 10px;
+}
+.lookup input {
+  width: 100%;
+  min-width: 0;
+  padding: 17px;
+  font: 20px/1.3 monospace;
+  border: 1px solid #95879f;
+  background: #fff;
+  letter-spacing: 1px;
+}
+.lookup button {
+  flex-shrink: 0;
+}
+#lookup-status {
+  font-size: 15px;
+}
+input:focus,
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid #a36cba;
+  outline-offset: 3px;
+}
+.card-preview {
+  display: grid;
+  gap: 18px;
+}
+.card-preview img {
+  width: 100%;
+  box-shadow: 0 12px 25px #30253c17;
+}
+.sample-row {
+  display: flex;
+  align-items: center;
+  gap: 30px;
+}
+.sample-qr {
+  width: 180px;
+  image-rendering: pixelated;
+}
+footer {
+  max-width: 1196px;
+  margin: 70px auto 0;
+  padding: 30px;
+  border-top: 1px solid #d9d2de;
+  font:
+    12px/1.7 Arial,
+    sans-serif;
+  color: #685e70;
+}
+.skip {
+  position: absolute;
+  top: -100px;
+}
+.skip:focus {
+  top: 0;
+  background: white;
+  padding: 10px;
+  z-index: 2;
+}
+[hidden] {
+  display: none !important;
+}
+@media (max-width: 720px) {
+  header {
+    padding: 20px;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  header > span {
+    font-size: 10px;
+  }
+  nav {
+    width: 100%;
+    justify-content: space-between;
+    margin-top: 10px;
+  }
+  main {
+    padding: 0 20px;
+  }
+  .hero,
+  .split,
+  .tiles {
+    grid-template-columns: 1fr;
+    gap: 30px;
+  }
+  .hero {
+    padding-top: 35px;
+  }
+  .hero figure {
+    max-width: 480px;
+  }
+  .intro {
+    padding-top: 35px;
+  }
+  .lookup > div {
+    flex-direction: column;
+  }
+  .lookup input {
+    font-size: 17px;
+    letter-spacing: 0;
+  }
+  .sample-row {
+    flex-direction: column;
+    align-items: start;
+  }
+  .panel {
+    padding: 22px;
+  }
+  .covenant {
+    margin-top: 40px;
+  }
+}
+@media print {
+  header,
+  footer,
+  .actions,
+  .notice,
+  .tiles {
+    display: none;
+  }
+  body {
+    background: white;
+  }
+  .hero {
+    display: block;
+    padding: 0;
+  }
+  .hero figure {
+    display: none;
+  }
+  h1 {
+    font-size: 40px;
+  }
+  .covenant {
+    margin: 20px auto;
+  }
+  main {
+    padding: 0;
+  }
+}
