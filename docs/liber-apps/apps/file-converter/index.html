@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>File Converter</title>
-  <link rel="stylesheet" href="../../css/style.css" />
+  <link rel="stylesheet" href="../../css/style.css?v=20260914r192-morning1" />
   <style>
     body{background:var(--primary-bg,#000);color:var(--primary-text,#eaeaea);font-family:var(--app-font,"Courier Prime","Courier New","Lucida Console",monospace)}
     .wrap{max-width:900px;margin:0 auto;padding:16px;padding-top:max(16px,env(safe-area-inset-top))}
@@ -17,6 +17,7 @@
   </style>
 </head>
 <body>
+  <!-- R163_FFMPEG_SINGLE_THREAD_0_11: @ffmpeg/ffmpeg 0.11.6 + @ffmpeg/core-st 0.11.1 -->
   <div class="wrap">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
       <h2>File Converter</h2>
@@ -65,7 +66,7 @@
               <option value="avi">AVI</option>
               <option value="mov">MOV</option>
               <option value="mkv">MKV</option>
-              <option value="gifv">GIFV</option>
+              <option value="gifv">Animated GIF</option>
             </optgroup>
           </select>
         </div>
@@ -81,28 +82,21 @@
   </div>
 
   <script>
-    // Resilient ffmpeg loader with awaitable ready function
+    // R163: load one compatible wrapper at a time. Concurrent CDN copies can race and
+    // leave a half-initialized FFmpeg namespace; the fallback is intentionally sequential.
     (function(){
-      const add=(u)=>{const s=document.createElement('script');s.src=u;s.async=true;s.onerror=()=>{};document.head.appendChild(s)};
-      if (!window.FFmpeg){
-        add('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/ffmpeg.min.js');
-        add('https://unpkg.com/@ffmpeg/ffmpeg@0.12.6/dist/ffmpeg.min.js');
-      }
-      // Vectorizer for SVG output
-      if (!window.ImageTracer){
-        add('https://unpkg.com/imagetracerjs@1.2.6/imagetracer_v1.2.6.js');
-      }
-      window.waitForFFmpeg = function waitForFFmpeg(){
-        return new Promise(resolve=>{
-          let tries = 0;
-          const tick = ()=>{
-            if (window.FFmpeg && window.FFmpeg.createFFmpeg){ return resolve(window.FFmpeg); }
-            if (tries++ > 120){ return resolve(null); }
-            setTimeout(tick, 100);
-          };
-          tick();
-        });
+      const loadScript=(src)=>new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=src;s.async=true;s.crossOrigin='anonymous';s.onload=()=>resolve(src);s.onerror=()=>{s.remove();reject(new Error('Could not load '+src))};document.head.appendChild(s)});
+      const wrapperUrls=['https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js','https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js'];
+      let wrapperPromise=null;
+      window.waitForFFmpeg=function waitForFFmpeg(){
+        if(window.FFmpeg?.createFFmpeg)return Promise.resolve(window.FFmpeg);
+        if(wrapperPromise)return wrapperPromise;
+        // Share an in-flight attempt, but let the next click retry after a
+        // temporary CDN failure. A successful wrapper lives on window.FFmpeg.
+        wrapperPromise=(async()=>{let last=null;for(const src of wrapperUrls){try{await loadScript(src);if(window.FFmpeg?.createFFmpeg)return window.FFmpeg;last=new Error('FFmpeg wrapper loaded without createFFmpeg: '+src)}catch(error){last=error}}console.error(last);return null})().finally(()=>{wrapperPromise=null;});
+        return wrapperPromise;
       };
+      if(!window.ImageTracer){void loadScript('https://unpkg.com/imagetracerjs@1.2.6/imagetracer_v1.2.6.js').catch(()=>{});}
     })();
   </script>
   <script>
@@ -137,18 +131,18 @@
         if (!mod){ throw new Error('FFmpeg failed to load'); }
         const { createFFmpeg } = mod;
         const candidates = [
-          'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/ffmpeg-core.js',
-          'https://unpkg.com/@ffmpeg/core@0.12.6/dist/ffmpeg-core.js',
-          'https://unpkg.com/@ffmpeg/core@0.11.1/dist/ffmpeg-core.js'
+          'https://cdn.jsdelivr.net/npm/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js',
+          'https://unpkg.com/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js'
         ];
         let lastErr = null;
         for (const corePath of candidates){
+          let inst = null;
           try{
-            const inst = createFFmpeg({ log: true, corePath });
+            inst = createFFmpeg({ log: true, mainName: 'main', corePath });
             el('progress').textContent = 'Loading FFmpeg...';
             await inst.load();
             ffmpeg = inst; lastErr = null; break;
-          }catch(e){ lastErr = e; }
+          }catch(e){ try { inst?.exit?.(); } catch(_) {} lastErr = e; }
         }
         if (!ffmpeg){
           throw lastErr || new Error('FFmpeg failed to load');
@@ -161,48 +155,109 @@
 
     function downloadBlob(blob, name){ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 5000); }
 
+    async function imageBitmap(input){
+      try { return await createImageBitmap(input); }
+      catch (originalError) {
+        // Some browsers do not support SVG through createImageBitmap.
+        if (input.type !== 'image/svg+xml') throw originalError;
+        const url=URL.createObjectURL(input);
+        try { return await new Promise((resolve,reject)=>{const img=new Image();img.onload=()=>resolve(img);img.onerror=()=>reject(new Error('Could not decode the SVG image.'));img.src=url;}); }
+        finally { URL.revokeObjectURL(url); }
+      }
+    }
+
+    async function convertImageToPdf(input,outName){
+      const bitmap=await imageBitmap(input);
+      try {
+        const width=bitmap.width||bitmap.naturalWidth, height=bitmap.height||bitmap.naturalHeight;
+        if (!width || !height || width*height>40000000) throw new Error('Use an image no larger than 40 megapixels.');
+        const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
+        const ctx=canvas.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,width,height);ctx.drawImage(bitmap,0,0);
+        const jpeg=await new Promise((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(new Error('Could not encode the image.')),'image/jpeg',0.94));
+        const bytes=new Uint8Array(await jpeg.arrayBuffer()), enc=new TextEncoder(), parts=[], offsets=[0];let length=0;
+        const append=value=>{const chunk=typeof value==='string'?enc.encode(value):value;parts.push(chunk);length+=chunk.length;};
+        const object=(id,body)=>{offsets[id]=length;append(`${id} 0 obj\n${body}\nendobj\n`);};
+        const pageWidth=width>height?842:595,pageHeight=width>height?595:842;
+        const scale=Math.min((pageWidth-48)/width,(pageHeight-48)/height);
+        const w=width*scale,h=height*scale;
+        const commands=`q ${w.toFixed(3)} 0 0 ${h.toFixed(3)} ${((pageWidth-w)/2).toFixed(3)} ${((pageHeight-h)/2).toFixed(3)} cm /Im0 Do Q\n`;
+        append('%PDF-1.4\n');
+        object(1,'<< /Type /Catalog /Pages 2 0 R >>');
+        object(2,'<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
+        object(3,`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>`);
+        offsets[4]=length;append(`4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${bytes.length} >>\nstream\n`);append(bytes);append('\nendstream\nendobj\n');
+        object(5,`<< /Length ${enc.encode(commands).length} >>\nstream\n${commands}endstream`);
+        const xref=length;append('xref\n0 6\n0000000000 65535 f \n');
+        for(let i=1;i<=5;i++)append(String(offsets[i]).padStart(10,'0')+' 00000 n \n');
+        append(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+        downloadBlob(new Blob(parts,{type:'application/pdf'}),outName);
+        el('output').textContent='Done: '+outName;el('progress').textContent='';
+      } finally { bitmap.close?.(); }
+    }
+
+    async function convertRasterInBrowser(input, target, outName){
+      if (!['jpg','jpeg','png','webp'].includes(String(target).toLowerCase())) return false;
+      const bitmap = await imageBitmap(input);
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = bitmap.width; canvas.height = bitmap.height;
+        const ctx = canvas.getContext('2d', { alpha: target !== 'jpg' && target !== 'jpeg' });
+        if (target === 'jpg' || target === 'jpeg'){ ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,canvas.width,canvas.height); }
+        ctx.drawImage(bitmap,0,0);
+        const mime = (target === 'jpg' || target === 'jpeg') ? 'image/jpeg' : `image/${target}`;
+        const blob = await new Promise((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(new Error('Browser image conversion failed.')),mime,0.94));
+        downloadBlob(blob,outName);
+        el('output').textContent = 'Done: ' + outName + ' (' + (blob.size/1024).toFixed(1) + ' KB)';
+        el('progress').textContent = '';
+        return true;
+      } finally { bitmap.close?.(); }
+    }
+
     document.getElementById('convert-btn').onclick = async()=>{
       const input = el('file-input').files[0];
       if (!input){ alert('Choose a file'); return; }
       const kind = (el('type-select').value==='auto') ? detectType(input) : el('type-select').value;
       const target = el('format-select').value;
       const inName = 'input.' + (input.name.split('.').pop()||'dat');
-      const outName = 'output.' + target;
+      const outName = 'output.' + (target==='gifv'?'gif':target);
+      const button=el('convert-btn');
+      if(button.disabled)return;
+      button.disabled=true;el('output').textContent='';el('progress').textContent='Preparing conversion...';
       try{
-        await ensureFFmpeg();
-        el('progress').textContent = 'Running conversion...';
-        const { fetchFile } = window.FFmpeg;
+        const formats={image:['jpg','png','webp','bmp','tiff','gif','ico','svg','pdf'],audio:['wav','mp3','ogg','flac','aac','m4a'],video:['mp4','webm','avi','mov','mkv','gifv','gif']};
+        if(formats[kind]&&!formats[kind].includes(target))throw new Error('Choose a '+kind+' output format for this file.');
+        if(kind==='image'&&target==='pdf'){await convertImageToPdf(input,outName);return;}
+        // Browser-native image conversion is faster and does not depend on ffmpeg.wasm.
+        if (kind==='image' && await convertRasterInBrowser(input,target,outName)) return;
         // Special handling for SVG vector output without ffmpeg
         if (kind==='image' && target==='svg'){
           el('progress').textContent = 'Vectorizing to SVG...';
-          const blobUrl = URL.createObjectURL(input);
-          const img = new Image();
-          img.onload = ()=>{
-            try{
-              const canvas = document.createElement('canvas');
-              canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
-              const ctx = canvas.getContext('2d');
-              ctx.drawImage(img, 0, 0);
-              const imdata = ctx.getImageData(0, 0, canvas.width, canvas.height);
-              const svgstr = (window.ImageTracer && ImageTracer.imagedataToSVG) ? ImageTracer.imagedataToSVG(imdata, { ltres:1, qtres:1, pathomit:8 }) : null;
-              if (!svgstr) throw new Error('SVG vectorizer unavailable');
-              const blob = new Blob([svgstr], { type:'image/svg+xml' });
-              downloadBlob(blob, outName);
-              el('output').textContent = 'Done: ' + outName;
-              el('progress').textContent = '';
-            }catch(e){ el('progress').textContent = 'Conversion failed'; el('output').textContent = e.message; }
-            finally{ URL.revokeObjectURL(blobUrl); }
-          };
-          img.onerror = ()=>{ el('progress').textContent='Conversion failed'; el('output').textContent='Could not load image'; };
-          img.src = blobUrl;
+          // Keep the one conversion owner until decoding and vectorization
+          // finish. Detached image callbacks previously released it too early.
+          const bitmap = await imageBitmap(input);
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = bitmap.width || bitmap.naturalWidth;
+            canvas.height = bitmap.height || bitmap.naturalHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(bitmap, 0, 0);
+            const imdata = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            if (!window.ImageTracer?.imagedataToSVG) throw new Error('SVG vectorizer unavailable');
+            const svgstr = window.ImageTracer.imagedataToSVG(imdata, { ltres:1, qtres:1, pathomit:8 });
+            downloadBlob(new Blob([svgstr], { type:'image/svg+xml' }), outName);
+            el('output').textContent = 'Done: ' + outName;
+            el('progress').textContent = '';
+          } finally { bitmap.close?.(); }
           return;
         }
 
+        await ensureFFmpeg();
+        el('progress').textContent = 'Running conversion...';
+        const { fetchFile } = window.FFmpeg;
         ffmpeg.FS('writeFile', inName, await fetchFile(input));
         let args = [];
         if (kind==='image'){
-          if (target==='pdf') { args = ['-i', inName, '-vf', 'scale=1200:-1', '-f', 'pdf', outName]; }
-          else { args = ['-i', inName, outName]; }
+          args = ['-i', inName, outName];
         } else if (kind==='audio'){
           if (target==='mp3') args = ['-i', inName, '-b:a', '192k', outName];
           else if (target==='aac' || target==='m4a') args = ['-i', inName, '-c:a', 'aac', '-b:a','192k', outName];
@@ -212,22 +267,26 @@
           if (target==='mp4') args = ['-i', inName, '-c:v', 'libx264', '-preset', 'veryfast', '-c:a', 'aac', outName];
           else if (target==='webm') args = ['-i', inName, '-c:v', 'libvpx-vp9', '-b:v', '0', '-crf', '30', '-c:a', 'libopus', outName];
           else if (target==='avi') args = ['-i', inName, '-c:v', 'mpeg4', '-qscale:v', '3', '-c:a', 'mp2', outName];
-          else if (target==='gifv' || target==='gif') args = ['-i', inName, '-vf','fps=12,scale=640:-1:flags=lanczos', outName==='gifv'? 'out.gif': outName];
+          else if (target==='gifv' || target==='gif') args = ['-i', inName, '-vf','fps=12,scale=640:-1:flags=lanczos', outName];
           else args = ['-i', inName, outName];
         } else { args = ['-i', inName, outName]; }
-        await ffmpeg.run(...args);
+        await ffmpeg.run('-y',...args);
         const data = ffmpeg.FS('readFile', outName);
-        const blob = new Blob([data.buffer], { type: (kind==='image' ? 'image/'+target : (kind==='audio' ? 'audio/'+target : 'video/'+target))});
+        const outputMime = { jpg:'image/jpeg', png:'image/png', webp:'image/webp', bmp:'image/bmp', tiff:'image/tiff', gif:'image/gif', gifv:'image/gif', ico:'image/vnd.microsoft.icon', wav:'audio/wav', mp3:'audio/mpeg', ogg:'audio/ogg', flac:'audio/flac', aac:'audio/aac', m4a:'audio/mp4', mp4:'video/mp4', webm:'video/webm', avi:'video/x-msvideo', mov:'video/quicktime', mkv:'video/x-matroska' };
+        const blob = new Blob([data], { type: outputMime[target] || 'application/octet-stream' });
         downloadBlob(blob, outName);
         el('output').textContent = 'Done: ' + outName + ' (' + (blob.size/1024).toFixed(1) + ' KB)';
         el('progress').textContent = '';
       }catch(e){
         console.error(e); el('progress').textContent = 'Conversion failed';
         el('output').textContent = (e && e.message) || String(e);
+      }finally{
+        button.disabled=false;
+        if(ffmpeg?.isLoaded?.())for(const name of [inName,outName]){try{ffmpeg.FS('unlink',name);}catch(_){}}
+        // The single-thread core terminates main(); use a fresh engine next time.
+        try { ffmpeg?.exit?.(); } catch(_) {} ffmpeg=null;
       }
     };
   </script>
 </body>
 </html>
-
-

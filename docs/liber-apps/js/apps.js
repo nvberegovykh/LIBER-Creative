@@ -411,6 +411,100 @@ class AppsManager {
     /**
      * Load apps from the apps directory
      */
+    async resumeRevexAfterSignIn() {
+        const request = new URL(window.location.href);
+        if (request.searchParams.get('returnTo') !== 'revex') {
+            this._revexReturnStop?.();
+            this._revexReturnStop = null;
+            this._revexReturnAuth = null;
+            if (this._revexReturnReady) window.removeEventListener('firebase-ready', this._revexReturnReady);
+            this._revexReturnReady = null;
+            return false;
+        }
+        if (this._revexReturnPending) {
+            // An auth event can arrive while the previous account's readiness
+            // wait is still pending. Replay once against the latest identity.
+            this._revexReturnQueued = true;
+            return true;
+        }
+        this._revexReturnPending = true;
+        try {
+            const service = window.firebaseService;
+            const api = service?.firebase || window.firebaseModular || window.firebase;
+            if (!service?.auth || typeof service.waitForAuthState !== 'function' || typeof api?.onAuthStateChanged !== 'function') {
+                if (!this._revexReturnReady) {
+                    this._revexReturnReady = () => {
+                        this._revexReturnReady = null;
+                        void this.loadApps();
+                    };
+                    window.addEventListener('firebase-ready', this._revexReturnReady, { once: true });
+                }
+                return true;
+            }
+            if (this._revexReturnAuth !== service.auth) {
+                this._revexReturnStop?.();
+                this._revexReturnAuth = service.auth;
+                this._revexReturnStop = api.onAuthStateChanged(service.auth, (next) => {
+                    if (next && window.firebaseService === service && service.auth.currentUser?.uid === next.uid) void this.loadApps();
+                });
+            }
+            // First-auth-state confirmation owns remembered login. Null while
+            // Firebase is hydrating is not a reason to discard the return route.
+            // The listener is already attached so a late confirmation recovers
+            // even if this bounded wait times out.
+            const user = await service.waitForAuthState(15000);
+            if (window.firebaseService !== service) return true;
+            if (!user || service.auth.currentUser?.uid !== user.uid) return true;
+            const current = new URL(window.location.href);
+            if (current.searchParams.get('returnTo') !== 'revex') return true;
+            const app = this.apps.find((row) => row.id === 'revex' && !row.adminOnly);
+            if (!app) return true;
+            const destination = new URL(app.path, window.location.href);
+            if (destination.origin !== window.location.origin || destination.pathname !== '/liber-apps/apps/revex/index.html') {
+                this.showError('The REVEX application link is unavailable.');
+                return true;
+            }
+            // No caller-provided URL or arbitrary query is forwarded. Keep the
+            // intended project/view while denying external and privileged routes.
+            destination.search = '';
+            destination.hash = '';
+            for (const key of ['projectId', 'specProjectId']) {
+                const value = current.searchParams.get(key) || '';
+                // This is a Firestore document segment, not a route or slug.
+                // Preserve valid Unicode, spaces and punctuation verbatim.
+                let utf8Length = Infinity;
+                try { utf8Length = encodeURIComponent(value).replace(/%[0-9A-F]{2}/gi, 'x').length; } catch (_) {}
+                // Firestore also exposes imported Datastore numeric IDs using
+                // this documented reserved form; existing projects may use it.
+                const reserved = value.startsWith('__') && value.endsWith('__') && !/^__id[0-9]+__$/.test(value);
+                if (value && utf8Length <= 1500 && !value.includes('/') && value !== '.' && value !== '..' && !reserved) destination.searchParams.set(key, value);
+            }
+            const view = current.searchParams.get('view');
+            if (['bim', 'design', 'spec', 'docs', 'energy', 'chat', 'history'].includes(view)) destination.searchParams.set('view', view);
+            // The existing shell handoff is synchronous. Keep both intent and
+            // recovery listeners intact if that owner throws before completing.
+            this.openAppInShell(app, destination.href);
+            this._revexReturnStop?.();
+            this._revexReturnStop = null;
+            this._revexReturnAuth = null;
+            if (this._revexReturnReady) window.removeEventListener('firebase-ready', this._revexReturnReady);
+            this._revexReturnReady = null;
+            ['returnTo', 'projectId', 'specProjectId', 'view'].forEach((key) => current.searchParams.delete(key));
+            window.history.replaceState({}, '', current.href);
+            return true;
+        } catch (_) {
+            this.showError('Sign-in could not be confirmed. Check your connection and try again.');
+            return true;
+        } finally {
+            this._revexReturnPending = false;
+            const queued = this._revexReturnQueued;
+            this._revexReturnQueued = false;
+            if (queued && new URL(window.location.href).searchParams.get('returnTo') === 'revex') {
+                void this.loadApps();
+            }
+        }
+    }
+
     async loadApps() {
         try {
             // Show loading state
@@ -426,6 +520,8 @@ class AppsManager {
             this.filterApps();
             this.renderApps();
             this.updateAppsCount();
+
+            if (await this.resumeRevexAfterSignIn()) return;
 
             let launchId = sessionStorage.getItem('liber_launch_after_verify');
             let projectId = sessionStorage.getItem('liber_verify_project_id');
@@ -625,9 +721,8 @@ class AppsManager {
                 version: '1.0.0',
                 category: 'utilities',
                 icon: 'fab fa-whatsapp',
-                status: 'online',
-                path: '#whatsapp-monitor-external',
-                externalUrl: 'https://github.com/nvberegovykh/liber-whatsapp-monitor',
+                status: 'recovery-hold',
+                path: 'apps/recovery-hold/index.html?item=whatsapp-monitor',
                 author: 'Liber Apps',
                 lastUpdated: '2026-05-29',
                 logo: null
@@ -839,6 +934,15 @@ class AppsManager {
         const shell = document.getElementById('app-shell');
         const frame = document.getElementById('app-shell-frame');
         const title = document.getElementById('app-shell-title');
+        const nextIsChat = String(app?.id || '') === 'secure-chat' || /apps\/secure-chat\/index\.html/i.test(String(appUrl || ''));
+        const chatBuild = String(window.LIBER_CHAT_BUILD || window.LIBER_APP_VERSION || '').trim();
+        if (nextIsChat && chatBuild){
+            try{
+                const chatUrl = new URL(appUrl, window.location.href);
+                chatUrl.searchParams.set('__liberChatBuild', chatBuild);
+                appUrl = chatUrl.href;
+            } catch (_) {}
+        }
         if (!shell || !frame){
             window.location.href = appUrl;
             return;
@@ -847,14 +951,18 @@ class AppsManager {
         try { frame.setAttribute('allow', 'web-share; clipboard-write; clipboard-read; fullscreen; camera; microphone'); } catch (_) {}
         const currentSrc = String(frame.getAttribute('src') || '');
         const currentIsChat = /apps\/secure-chat\/index\.html/i.test(currentSrc) && currentSrc !== 'about:blank';
-        const nextIsChat = String(app?.id || '') === 'secure-chat' || /apps\/secure-chat\/index\.html/i.test(String(appUrl || ''));
-        const shouldReuseChat = currentIsChat && nextIsChat;
+        let currentChatBuild = '';
+        if (currentIsChat){
+            try { currentChatBuild = new URL(currentSrc, window.location.href).searchParams.get('__liberChatBuild') || ''; } catch (_) {}
+        }
+        const chatBuildMatches = !nextIsChat || !chatBuild || currentChatBuild === chatBuild;
+        const shouldReuseChat = currentIsChat && nextIsChat && chatBuildMatches;
         // Same app reopened while its iframe is still mounted: keep it alive so the
         // user resumes exactly where they left off, and hand parameters over by
         // postMessage instead of reloading the document.
         const sameMounted = currentSrc && currentSrc !== 'about:blank'
             && this.appDocKey(currentSrc) === this.appDocKey(appUrl);
-        const shouldReuse = shouldReuseChat || (sameMounted && this.isKeepAliveApp(appUrl));
+        const shouldReuse = shouldReuseChat || (sameMounted && this.isKeepAliveApp(appUrl) && chatBuildMatches);
         if (!shouldReuse){
             const separator = appUrl.includes('?') ? '&' : '?';
             frame.src = `${appUrl}${separator}inShell=1`;

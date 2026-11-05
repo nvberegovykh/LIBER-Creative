@@ -73,10 +73,14 @@ class ChatGPTIntegration {
                 // On mobile, let the dashboard control visibility
                 this.isExpanded = false;
                 // Don't auto-expand on mobile - let dashboard handle it
-            } else {
-                // On desktop, always ensure widget is visible
+            } else if (this.canDisplayForAuthentication()) {
                 this.isExpanded = true;
                 this.expandChat();
+            }
+            this.reconcileAuthenticationVisibility();
+            if (!this._authVisibilityListener) {
+                this._authVisibilityListener = () => this.reconcileAuthenticationVisibility();
+                window.addEventListener('firebase-auth-state', this._authVisibilityListener);
             }
             
             if (window.__devLog) window.__devLog('✅ WALL-E widget initialized successfully');
@@ -88,6 +92,26 @@ class ChatGPTIntegration {
     /**
      * Helper: base URL for OpenAI (proxy-aware)
      */
+    canDisplayForAuthentication() {
+        try {
+            if (sessionStorage.getItem('wallE_activated_on_login') === 'true') return true;
+        } catch (_) { }
+        const authScreen = document.getElementById('auth-screen');
+        return !!window.firebaseService?.auth?.currentUser &&
+            (!authScreen || authScreen.classList.contains('hidden'));
+    }
+
+    reconcileAuthenticationVisibility() {
+        const widget = document.getElementById('chatgpt-widget');
+        if (!widget) return;
+        const visible = this.canDisplayForAuthentication();
+        widget.style.display = visible ? '' : 'none';
+        if (!visible) {
+            this.isExpanded = false;
+            widget.classList.remove('expanded', 'mobile-activated');
+        }
+    }
+
     getOpenAIBase() {
         return this.proxyUrl || 'https://api.openai.com';
     }
@@ -795,6 +819,7 @@ class ChatGPTIntegration {
         }
 
         this.setupChatEventListeners();
+        this.reconcileAuthenticationVisibility();
     }
 
     /**
@@ -1153,15 +1178,15 @@ class ChatGPTIntegration {
                         <label for="image-size">Image Size:</label>
                         <select id="image-size">
                             <option value="1024x1024">Square (1024x1024)</option>
-                            <option value="1792x1024">Landscape (1792x1024)</option>
-                            <option value="1024x1792">Portrait (1024x1792)</option>
+                            <option value="1536x1024">Landscape (1536x1024)</option>
+                            <option value="1024x1536">Portrait (1024x1536)</option>
                         </select>
                     </div>
                     <div class="setting-group">
                         <label for="image-quality">Quality:</label>
                         <select id="image-quality">
-                            <option value="standard">Standard</option>
-                            <option value="hd">HD</option>
+                            <option value="medium">Medium</option>
+                            <option value="high">High</option>
                         </select>
                     </div>
                 </div>
@@ -1244,26 +1269,36 @@ class ChatGPTIntegration {
     /**
      * Call DALL-E API
      */
-    async callDALLE(prompt, size, quality) {
+    async callDALLE(prompt, size = '1024x1024', quality = 'medium') {
+        const normalizedSize = ({
+            '1792x1024': '1536x1024',
+            '1024x1792': '1024x1536'
+        })[String(size || '')] || String(size || '1024x1024');
+        const normalizedQuality = ({ standard: 'medium', hd: 'high' })[String(quality || '').toLowerCase()]
+            || (['low', 'medium', 'high'].includes(String(quality || '').toLowerCase()) ? String(quality).toLowerCase() : 'medium');
         const response = await this.openaiFetch('/v1/images/generations', {
             method: 'POST',
             beta: null,
             body: JSON.stringify({
-                model: 'dall-e-3',
-                prompt: prompt,
+                model: 'gpt-image-2',
+                prompt: String(prompt || '').trim(),
                 n: 1,
-                size: size,
-                quality: quality
+                size: normalizedSize,
+                quality: normalizedQuality
             })
         });
 
         if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error?.message || 'Failed to generate image');
+            let error = null;
+            try { error = await response.json(); } catch (_) {}
+            throw new Error(error?.error?.message || `Image generation failed (${response.status})`);
         }
 
         const data = await response.json();
-        return data.data[0].url;
+        const item = Array.isArray(data?.data) ? data.data[0] : null;
+        if (item?.url) return String(item.url);
+        if (item?.b64_json) return `data:image/png;base64,${String(item.b64_json)}`;
+        throw new Error('Image generation returned no image payload.');
     }
 
     /**
@@ -1360,6 +1395,10 @@ class ChatGPTIntegration {
      * Expand chat
      */
     expandChat() {
+        if (!this.canDisplayForAuthentication()) {
+            this.reconcileAuthenticationVisibility();
+            return;
+        }
         if (window.__devLog) window.__devLog('Expanding chat');
         const widget = document.getElementById('chatgpt-widget');
         const body = document.getElementById('chatgpt-body');
@@ -1375,7 +1414,9 @@ class ChatGPTIntegration {
             // Focus on input
             const input = document.getElementById('chatgpt-input');
             if (input) {
-                setTimeout(() => input.focus(), 100);
+                setTimeout(() => {
+                    if (this.canDisplayForAuthentication() && this.isExpanded) input.focus();
+                }, 100);
             }
         }
         
@@ -1520,15 +1561,21 @@ class ChatGPTIntegration {
      * Check if message is an image generation request
      */
     isImageGenerationRequest(message) {
-        const imageKeywords = [
-            'generate an image', 'create an image', 'make an image', 'generate a picture', 
-            'create a picture', 'make a picture', 'generate image', 'create image', 
-            'make image', 'generate picture', 'create picture', 'make picture',
-            'draw', 'paint', 'visualize', 'show me', 'picture of', 'image of'
-        ];
-        
-        const lowerMessage = message.toLowerCase();
-        return imageKeywords.some(keyword => lowerMessage.includes(keyword));
+        const text = String(message || '').trim();
+        if (!text) return false;
+        // Image mode is opt-in. Generic phrases such as "show me" or "visualize"
+        // are normal assistant requests unless the user explicitly asks for a
+        // visual artifact. This prevents engineering/drafting tasks from being
+        // hijacked into the image endpoint.
+        const explicitVisualNoun = /\b(image|picture|photo|illustration|rendering|concept art|diagram|visual graphic|visualization)\b/i;
+        const createVerb = /\b(generate|create|make|render|illustrate|sketch|draw|paint)\b/i;
+        const directPhrase = /\b(image|picture|photo|illustration|render|rendering|concept art)\s+(of|showing|depicting|for)\b/i;
+        const imperativeArt = /^\s*(please\s+)?(draw|paint|sketch|illustrate)\b/i;
+        const transformToVisual = /\b(turn|convert|transform)\b[\s\S]{0,80}\b(into|to)\b[\s\S]{0,30}\b(image|picture|illustration|render|diagram|visualization)\b/i;
+        return directPhrase.test(text)
+            || imperativeArt.test(text)
+            || transformToVisual.test(text)
+            || (explicitVisualNoun.test(text) && createVerb.test(text));
     }
 
     isAddressAnalysisRequest(message) {
@@ -2635,29 +2682,14 @@ Autonomous mode requirements:
      */
     async handleImageGenerationRequest(message) {
         try {
-            // Extract the image description from the message
-            const imageKeywords = [
-                'generate an image of', 'create an image of', 'make an image of',
-                'generate a picture of', 'create a picture of', 'make a picture of',
-                'generate image of', 'create image of', 'make image of',
-                'generate picture of', 'create picture of', 'make picture of',
-                'draw', 'paint', 'visualize', 'show me', 'picture of', 'image of'
-            ];
-            
-            let prompt = message;
-            for (const keyword of imageKeywords) {
-                if (message.toLowerCase().includes(keyword)) {
-                    prompt = message.substring(message.toLowerCase().indexOf(keyword) + keyword.length).trim();
-                    break;
-                }
-            }
-            
-            if (!prompt) {
-                prompt = message; // Use the full message if no keyword found
-            }
+            // Strip only explicit image-generation framing. Do not remove generic
+            // task language such as "show me" because it is no longer an image trigger.
+            let prompt = String(message || '').trim();
+            prompt = prompt
+                .replace(/^\s*(please\s+)?(generate|create|make|render|draw|paint|sketch|illustrate)\s+(me\s+)?(an?\s+)?(image|picture|photo|illustration|render|rendering|concept art|diagram|visualization)?\s*(of|showing|depicting|for)?\s*/i, '')
+                .trim() || String(message || '').trim();
 
-            // Generate image using DALL-E
-            const imageUrl = await this.callDALLE(prompt, '1024x1024', 'standard');
+            const imageUrl = await this.callDALLE(prompt, '1024x1024', 'medium');
             this.removeTypingIndicator();
             
             // Add image response
@@ -2875,7 +2907,7 @@ Regenerate as final report only. No questions. Include zoning/FAR/max-possible c
      * Build system prompt with base personality and page-specific guidelines
      */
     buildSystemPrompt() {
-        const base = `You are WALL-E, a friendly, straightforward, calm expert assistant for LIBER. Be concise, practical, and natural. Keep continuity across turns: remember recent user intents, constraints, and unresolved asks. Prefer direct helpful answers over generic questions. If clarification is needed, ask one focused question and propose a best-effort assumption path in parallel.`;
+        const base = `You are WALL-E, a friendly, straightforward, calm expert assistant for LIBER. Be concise, practical, and natural. Keep continuity across turns: remember recent user intents, constraints, and unresolved asks. Execute the user's requested deliverable directly whenever it can be produced in the response: write the email/message, do the calculation, produce the checklist/table/note, analyze the supplied material, or give the concrete instructions. Do not answer an executable request with a generic offer to help. Never reinterpret an engineering, drafting, document, calculation, or communication task as image generation unless the user explicitly asks for an image/render/illustration/diagram. If a tool/backend operation is unavailable, still return the complete useful draft/result that does not require the unavailable action and state the blocked operation briefly. Ask one focused clarification only when a missing fact materially prevents a correct deliverable; otherwise proceed under explicit assumptions.`;
         const guidelines = this.getContextGuidelines();
         const appKnowledge = `LIBER Control Panel quick map:
 - Apps icon (\`fa-th\`) => Apps grid

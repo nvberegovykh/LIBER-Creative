@@ -1,9 +1,8 @@
-// Dynamic Firebase SDK loader with version fallback
-// Attempts latest first, falls back if CDN path is unavailable
+// One SDK version per realm. The previous 13.1.0 fallback is not published;
+// fail explicitly if the pinned, deployed SDK cannot load.
 
 const FIREBASE_VERSIONS = [
-	'12.1.0',
-	'13.1.0'
+	'12.1.0'
 ];
 
 async function loadFirebaseVersion(version) {
@@ -22,6 +21,7 @@ async function loadFirebaseVersion(version) {
 
 	const {
 		getAuth,
+		initializeAuth,
 		GoogleAuthProvider,
 		signInWithPopup,
 		linkWithPopup,
@@ -41,6 +41,9 @@ async function loadFirebaseVersion(version) {
 		confirmPasswordReset,
 		updatePassword,
 		browserLocalPersistence,
+		indexedDBLocalPersistence,
+		browserSessionPersistence,
+		browserPopupRedirectResolver,
 		setPersistence,
 		signOut,
 		updateProfile,
@@ -71,7 +74,8 @@ async function loadFirebaseVersion(version) {
 		startAfter,
 		deleteDoc,
 		onSnapshot,
-		runTransaction
+		runTransaction,
+		writeBatch
 	} = fsMod;
 
 	const {
@@ -99,6 +103,7 @@ async function loadFirebaseVersion(version) {
 		firestore: getFirestore,
 		SDK_VERSION: version,
 		// Auth
+		initializeAuth,
 		createUserWithEmailAndPassword,
 		GoogleAuthProvider,
 		signInWithPopup,
@@ -118,6 +123,9 @@ async function loadFirebaseVersion(version) {
 		confirmPasswordReset,
 		updatePassword,
 		browserLocalPersistence,
+		indexedDBLocalPersistence,
+		browserSessionPersistence,
+		browserPopupRedirectResolver,
 		setPersistence,
 		signOut,
 		updateProfile,
@@ -143,6 +151,7 @@ async function loadFirebaseVersion(version) {
 		deleteDoc,
 		onSnapshot,
 		runTransaction,
+		writeBatch,
 		enableIndexedDbPersistence,
 		enableMultiTabIndexedDbPersistence,
 		serverTimestamp,
@@ -160,6 +169,7 @@ async function loadFirebaseVersion(version) {
 	window.firebaseModular = {
 		initializeApp,
 		getAuth,
+		initializeAuth,
 		getFirestore,
 		createUserWithEmailAndPassword,
 		GoogleAuthProvider,
@@ -180,6 +190,9 @@ async function loadFirebaseVersion(version) {
 		confirmPasswordReset,
 		updatePassword,
 		browserLocalPersistence,
+		indexedDBLocalPersistence,
+		browserSessionPersistence,
+		browserPopupRedirectResolver,
 		setPersistence,
 		signOut,
 		updateProfile,
@@ -203,6 +216,7 @@ async function loadFirebaseVersion(version) {
 		deleteDoc,
 		onSnapshot,
 		runTransaction,
+		writeBatch,
 		enableIndexedDbPersistence,
 		enableMultiTabIndexedDbPersistence,
 		serverTimestamp,
@@ -222,7 +236,7 @@ async function loadFirebaseVersion(version) {
 	console.log('Available services: Auth, Firestore');
 }
 
-(async () => {
+window.firebaseSDKReady = window.firebaseSDKReady || (async () => {
 	let lastError = null;
 	for (const v of FIREBASE_VERSIONS) {
 		try {
@@ -235,4 +249,8 @@ async function loadFirebaseVersion(version) {
 	}
 	console.error('❌ All Firebase SDK versions failed to load');
 	window.firebaseLoadError = lastError;
+	throw lastError || new Error('Firebase SDK could not be loaded.');
 })();
+// Bootstrap consumers await the same result; avoid an unhandled rejection if
+// the service script itself is unavailable.
+window.firebaseSDKReady.catch(() => {});

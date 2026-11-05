@@ -1,3 +1,4 @@
+import { bookFilename, printBookDocument } from '../revex/book-structure.js?v=20260914r193-books1';
 /* LIBER Specifications — UI controller */
 (function () {
   'use strict';
@@ -8,10 +9,12 @@
   const nowISO = () => new Date().toISOString();
 
   const S = {
-    sid: null, project: null, sections: [], items: [], inbox: [], history: [],
+    sid: null, epoch: 0, project: null, sections: [], items: [], inbox: [], history: [],
     activeSec: null, view: 'book', groupBy: 'none', sortBy: 'order',
-    showRemoved: false, filter: '', gap: null, unsub: [], pending: null
+    showRemoved: false, filter: '', gap: null, unsub: [], pending: null,
+    loaded: { sections: false, items: false }, readErrors: {}, syncError: ''
   };
+  let projectListGeneration = 0;
 
   /* ---------------- utils ---------------- */
   let toastT;
@@ -29,6 +32,11 @@
   function closeModal() { $('#modal').hidden = true; $('#modal-card').innerHTML = ''; }
   function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms || 250); }; }
   const num = (v) => (v == null || v === '' ? '' : v);
+  function sourceQuantity(item) {
+    const entries=Object.entries(item.fields||{}),quantity=entries.find(([key])=>/^(?:total\s+)?(?:qty\.?|quantity|count|number of)(?:$|\s|\()/i.test(String(key).trim()));
+    if(quantity)return quantity[1]??'';
+    return String(item.source||'').startsWith('revit:')&&entries.length?'':num(item.qty);
+  }
 
   /* ---------------- boot ---------------- */
   async function boot() {
@@ -38,9 +46,9 @@
     if (embedded) document.title = 'Spec Book — REVEX';
     const mode = await ST.init();
     const b = $('#mode-badge');
-    b.textContent = mode === 'cloud' ? 'synced' : 'local';
+    b.textContent = mode === 'cloud' ? 'connected' : 'local';
     b.className = 'sp-badge ' + mode;
-    b.title = mode === 'cloud' ? 'Live Firestore sync with project participants' : 'Signed out — data stored on this device only';
+    b.title = mode === 'cloud' ? 'Connected to project storage. Source coverage is shown inside the book.' : 'Data stored on this device only';
 
     wireChrome();
     // Handoff from the browser extension: ?specUrl=&specTitle=  or  #add?url=&title=
@@ -52,7 +60,7 @@
     if (qs.get('demo')) return demoSeed();
     const last = localStorage.getItem('liber.spec.last');
     await renderProjects();
-    if (last) { const p = await ST.getProject(last); if (p) return openProject(last); }
+    if (last) return openProject(last);
   }
 
   /** ?demo=1 — seed a local project from bundled sample Revit exports (evaluation only). */
@@ -96,7 +104,8 @@
     const g = $('#group-by'); if (g) g.value = S.groupBy;
     const so = $('#sort-by'); if (so) so.value = S.sortBy;
     const sr = $('#show-removed'); if (sr) sr.checked = S.showRemoved;
-    if (u.scroll) setTimeout(() => { const c = $('#content'); if (c) c.scrollTop = u.scroll; }, 120);
+    const epoch = S.epoch;
+    if (u.scroll) setTimeout(() => { const c = $('#content'); if (c && S.sid === sid && S.epoch === epoch) c.scrollTop = u.scroll; }, 120);
   }
 
   /** Params handed over while the app is already mounted (shell reuses the iframe). */
@@ -122,6 +131,7 @@
 
   function wireChrome() {
     window.addEventListener('message', (e) => {
+      if (e.origin !== location.origin || ![window, window.parent, window.top].includes(e.source)) return;
       const d = e.data;
       if (d && d.type === 'liber:app-params') applyHandoff(d.params || {});
     });
@@ -160,6 +170,13 @@
   }
 
   function showView(v) {
+    projectListGeneration++;
+    if (v === 'projects') {
+      S.epoch++;
+      S.unsub.forEach(unsubscribe => { try { unsubscribe(); } catch (_) {} });
+      S.unsub = [];
+      S.sid = null;
+    }
     $('#view-projects').hidden = v !== 'projects';
     $('#view-book').hidden = v !== 'book';
   }
@@ -167,8 +184,20 @@
   /* ---------------- projects ---------------- */
   async function renderProjects() {
     showView('projects');
-    const list = await ST.listProjects();
+    const generation = projectListGeneration, owner = ST.captureProjectListOwner();
+    const current = () => generation === projectListGeneration && owner.isCurrent();
     const host = $('#projects-list');
+    let list;
+    try { list = await ST.listProjects(); }
+    catch (error) {
+      if (!current()) return;
+      $('#projects-empty').hidden = true;
+      host.innerHTML = `<div class="sp-card" role="alert"><h3>Could not load specification projects</h3><p>${esc(error?.message || 'Please retry.')}</p><button type="button" class="sp-btn" data-retry-projects>Retry</button></div>`;
+      $('[data-retry-projects]', host).onclick = renderProjects;
+      console.error('[Specifications] Project list failed', error);
+      return;
+    }
+    if (!current()) return;
     $('#projects-empty').hidden = list.length > 0;
     host.innerHTML = list.map((p) => `
       <div class="sp-card" data-id="${p.id}">
@@ -207,23 +236,58 @@
   }
 
   async function openProject(sid) {
+    saveUI();
+    projectListGeneration++;
+    const openGeneration = ++S.epoch;
+    const owner = ST.captureProjectListOwner();
+    const current = () => S.sid === sid && S.epoch === openGeneration && owner.isCurrent();
     S.unsub.forEach((u) => { try { u(); } catch (_) {} });
     S.unsub = [];
+    clearInterval(autoTimer);
+    closeDrawer(); closeModal();
+    Object.assign(S, { project: null, sections: [], items: [], inbox: [], history: [], activeSec: null,
+      view: 'book', groupBy: 'none', sortBy: 'order', showRemoved: false, filter: '', gap: null,
+      loaded: { sections: false, items: false }, readErrors: {}, syncError: '' });
+    $('#rail-search').value = ''; $('#group-by').value = 'none'; $('#sort-by').value = 'order';
+    $('#show-removed').checked = false; $('#inbox-count').textContent = '0'; $('#history-count').textContent = '0';
+    $$('.sp-seg button').forEach(b => b.classList.toggle('active', b.dataset.view === 'book'));
     S.sid = sid; localStorage.setItem('liber.spec.last', sid);
-    S.project = await ST.getProject(sid);
-    if (!S.project) { localStorage.removeItem('liber.spec.last'); return renderProjects(); }
-    showView('book');
-    $('#crumb').textContent = S.project.name + (S.project.linkedProjectName ? ' · ' + S.project.linkedProjectName : '');
-    S.unsub.push(ST.subscribeProject(sid, (p) => { if (p) { S.project = p; } }));
-    S.unsub.push(ST.subscribe('sections', sid, (rows) => { S.sections = rows; renderRail(); renderContent(); }));
-    S.unsub.push(ST.subscribe('items', sid, (rows) => { S.items = rows; renderRail(); renderContent(); }));
-    S.unsub.push(ST.subscribe('inbox', sid, (rows) => { S.inbox = rows.filter((r) => r.status !== 'done'); $('#inbox-count').textContent = S.inbox.length; }));
-    S.unsub.push(ST.subscribe('history', sid, (rows) => {
-      S.history = rows.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, ST.HISTORY_MAX);
-      $('#history-count').textContent = S.history.filter((h) => !h.undone).length;
-    }));
-    restoreUI(sid);
+    sourceStatus();
+    showView('book'); $('#crumb').textContent = 'Opening specification project…';
     renderRail(); renderContent();
+    const fail = kind => error => {
+      if (!current()) return;
+      S.readErrors[kind] = error?.code === 'permission-denied' ? 'Project access could not be verified. Check your sign-in and retry.' : 'Project records could not be loaded. Check your connection and retry.';
+      renderRail(); renderContent();
+    };
+    let project;
+    try { project = await ST.getProject(sid); }
+    catch (error) { fail('project')(error); return; }
+    if (!current()) return;
+    S.project = project;
+    if (!S.project) { localStorage.removeItem('liber.spec.last'); return renderProjects(); }
+    $('#crumb').textContent = S.project.name + (S.project.linkedProjectName ? ' · ' + S.project.linkedProjectName : '');
+    restoreUI(sid);
+    S.unsub.push(ST.subscribeProject(sid, (p) => {
+      if (!current()) return;
+      if (!p) { fail('project')({ code: 'permission-denied' }); return; }
+      const recovering = !!S.readErrors.project; S.project = p; delete S.readErrors.project; if (recovering) renderContent();
+    }, fail('project')));
+    S.unsub.push(ST.subscribe('sections', sid, (rows) => {
+      if (!current()) return; S.sections = rows; S.loaded.sections = true; delete S.readErrors.sections;
+      if (S.activeSec && !rows.some(row => row.id === S.activeSec)) S.activeSec = null;
+      renderRail(); renderContent();
+    }, fail('sections')));
+    S.unsub.push(ST.subscribe('items', sid, (rows) => { if (!current()) return; S.items = rows; S.loaded.items = true; delete S.readErrors.items; renderRail(); renderContent(); }, fail('items')));
+    S.unsub.push(ST.subscribe('inbox', sid, (rows) => { if (!current()) return; const recovering = !!S.readErrors.inbox; delete S.readErrors.inbox; S.inbox = rows.filter((r) => r.status !== 'done'); $('#inbox-count').textContent = S.inbox.length; if (recovering) renderContent(); }, fail('inbox')));
+    S.unsub.push(ST.subscribe('history', sid, (rows) => {
+      if (!current()) return;
+      const recovering = !!S.readErrors.history; delete S.readErrors.history; S.history = rows.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, ST.HISTORY_MAX);
+      $('#history-count').textContent = S.history.filter((h) => !h.undone).length;
+      if (recovering) renderContent();
+    }, fail('history')));
+    renderRail(); renderContent();
+    startAutoSync();
     if (S.pending) { const p = S.pending; S.pending = null; addLinkFlow(p); }
     // deep links: ?view=table|issues  &item=<key>  &section=<id>
     const q = new URLSearchParams(location.search);
@@ -242,26 +306,57 @@
       return String(da).localeCompare(String(db2)) || (a.order || 0) - (b.order || 0);
     });
   }
-  const secNum = (s) => s.numberOverride || s.number;
-  const secDiv = (s) => (secNum(s) ? String(secNum(s)).slice(0, 2) : (s.division || '01'));
-  function itemsOf(secId) { return S.items.filter((i) => i.sectionId === secId); }
+  let mappingRows=null,mappingCache=new Map();
+  function inferredMapping(s) {
+    if(mappingRows!==S.items){mappingRows=S.items;mappingCache=new Map();}
+    if(mappingCache.has(s.id))return mappingCache.get(s.id);
+    const profiles=itemsOf(s.id).filter(i=>!['removed','deleted'].includes(i.status)).map(i=>String(i.fields?.Type||i.type||i.label||'').trim());
+    let result=null;
+    if(/structural.*(?:framing|column)/i.test(s.scheduleName||'')&&profiles.length&&profiles.every(value=>/^(?:W|S|C|MC)\d+(?:\.\d+)?\s*[xX]\s*\d|^HSS\s*\d/i.test(value)))result={number:'051200',title:'Structural Steel Framing'};
+    else if(/framing/i.test(s.scheduleName||'')&&profiles.length&&profiles.every(value=>/^\d{3,4}[STU]\d{3}-\d{2,3}/i.test(value)))result={number:'054000',title:'Cold-Formed Metal Framing'};
+    else if(/structural connections/i.test(s.scheduleName||''))result={number:null,title:'Structural connections — section review needed',division:'05',needsMapping:true};
+    else if(/structural.*framing/i.test(s.scheduleName||'')&&s.number==='061000'&&!profiles.every(value=>/wood|timber|lumber|\bLVL\b|\bGLULAM\b/i.test(value)))result={number:null,title:'Mixed structural profiles — section review needed',division:'05',needsMapping:true};
+    mappingCache.set(s.id,result);return result;
+  }
+  const secNum = s => s.numberOverride || (inferredMapping(s)?inferredMapping(s).number:s.number);
+  const secDiv = s => secNum(s)?String(secNum(s)).slice(0,2):(inferredMapping(s)?.division||s.division||'01');
+  const needsMapping = s => !isReferenceSection(s)&&!s.numberOverride&&Boolean(inferredMapping(s)?.needsMapping||s.needsMapping);
+  function isSourceHeader(item) {
+    const fields=Object.entries(item.fields||{}).filter(([,value])=>String(value??'').trim());
+    return String(item.source||'').startsWith('revit:')&&fields.length>=2&&fields.every(([key,value])=>String(key).trim().toLocaleLowerCase()===String(value).trim().toLocaleLowerCase());
+  }
+  function itemsOf(secId) { return S.items.filter(i=>i.sectionId===secId&&!isSourceHeader(i)); }
+
+  function isReferenceSection(s) {
+    if (s.bookRole) return s.bookRole === 'reference';
+    return s.kind === 'locations' || /revision schedule|analytical|calculation|(?:^|\b)(?:area|zoning|FAR)(?:\b|$)|energy (?:analysis|model summary)|code (?:analysis|compliance)|drawing list|(?:sheet|view) list|building story|project information|job applications|progress inspections|estimated quantities|thermal bridges|^EN envelope|^DOT standards/i.test(s.scheduleName || '');
+  }
+  function specificationSections() { return sectionsSorted().filter(s=>!isReferenceSection(s)); }
+  function sectionOverview() {
+    const specifications=specificationSections(),references=S.sections.length-specifications.length;
+    return `<section class="sp-book-overview"><div class="sp-sec-num">SPEC BOOK · ${esc(S.project?.name||'Project')}</div><h2>Project specifications</h2><p>${specifications.length} specification sections · ${references} reference schedules preserved separately</p><div class="sp-section-index">${specifications.map(s=>`<button type="button" data-select-section="${esc(s.id)}"><small>${secNum(s)?MF.fmt(secNum(s)):'Needs section number'}</small><strong>${esc(s.scheduleName)}</strong><span>${itemsOf(s.id).filter(i=>!['removed','deleted'].includes(i.status)).length} positions</span></button>`).join('')||'<p>No product specification sections yet. Import a product schedule or include a reference schedule as a specification.</p>'}</div><p class="sp-muted">Choose a section to review its positions and write the specification. Revit calculations, drawing lists, rooms and revision registers are under Reference schedules.</p></section>`;
+  }
+  function wireSectionIndex(host) { $$('[data-select-section]',host).forEach(button=>button.onclick=()=>{S.activeSec=button.dataset.selectSection;renderRail();renderContent();$('#content').scrollTop=0;saveUI();}); }
 
   function renderRail() {
     const host = $('#rail-tree');
+    if (Object.keys(S.readErrors).length) { host.innerHTML = '<p class="sp-empty">Project records need attention.</p>'; return; }
+    if (!S.loaded.sections || !S.loaded.items) { host.innerHTML = '<p class="sp-empty" role="status">Loading sections and positions…</p>'; return; }
     if (!S.sections.length) { host.innerHTML = `<p class="sp-empty">No sections yet.<br><button class="sp-btn sp-btn-sm" id="rail-imp">Import schedules</button></p>`; const b = $('#rail-imp'); if (b) b.onclick = importDialog; return; }
     const byDiv = new Map();
-    sectionsSorted().forEach((s) => {
+    specificationSections().forEach((s) => {
       const d = secDiv(s);
       if (!byDiv.has(d)) byDiv.set(d, []);
       byDiv.get(d).push(s);
     });
     const divs = [...byDiv.keys()].sort();
-    host.innerHTML = divs.map((d) => `
+    const referenceOpen = $('#sp-reference-schedules')?.open || S.sections.some(s=>s.id===S.activeSec&&isReferenceSection(s));
+    host.innerHTML = '<button type="button" class="sp-btn sp-btn-ghost sp-w" id="sp-book-overview">All specification sections</button>' + divs.map((d) => `
       <div class="sp-div">
         <div class="sp-div-h"><b>${d}</b><span>${esc(MF.divisionTitle(d))}</span></div>
         ${byDiv.get(d).map((s) => {
           const n = itemsOf(s.id).filter((i) => S.showRemoved || i.status !== 'removed').length;
-          const warn = s.needsMapping && !s.numberOverride;
+          const warn = needsMapping(s);
           const g = gapCount(s.id);
           return `<div class="sp-sec ${S.activeSec === s.id ? 'active' : ''}" data-id="${s.id}">
             <code>${secNum(s) ? MF.fmt(secNum(s)) : '– – –'}</code>
@@ -269,23 +364,26 @@
             <span class="sp-pill ${warn || g ? 'warn' : ''}" title="${warn ? 'Needs a MasterFormat number' : g ? g + ' of ' + n + ' rows still have blanks' : n + ' rows, all complete'}">${warn ? '!' : g ? '!' + g : n}</span></div>`;
         }).join('')}
       </div>`).join('');
+    const reference=S.sections.filter(isReferenceSection);
+    if(reference.length) host.insertAdjacentHTML('beforeend',`<details id="sp-reference-schedules" ${referenceOpen?'open':''}><summary>Reference schedules (${reference.length})</summary><p class="sp-muted">Source registers and calculations. No product fields are required.</p>${reference.map(s=>`<div class="sp-sec ${S.activeSec===s.id?'active':''}" data-id="${esc(s.id)}"><span class="n">${esc(s.scheduleName)}</span><span class="sp-pill">${itemsOf(s.id).filter(i=>i.status!=='removed').length}</span></div>`).join('')}</details>`);
+    $('#sp-book-overview').onclick=()=>{S.activeSec=null;S.filter='';S.gap=null;$('#rail-search').value='';renderRail();renderContent();saveUI();};
     $$('.sp-sec', host).forEach((el) => el.onclick = () => {
       if (window.innerWidth <= 860) setRail(false);
       S.activeSec = el.dataset.id; renderRail(); renderContent();
       $('#content').scrollTop = 0; saveUI();
     });
-    const issues = S.sections.filter((s) => s.needsMapping && !s.numberOverride).length + S.items.filter((i) => i.mismatch).length;
+    const issues = S.sections.filter(needsMapping).length + S.items.filter((i) => i.mismatch&&!isReferenceSection(S.sections.find(s=>s.id===i.sectionId)||{})).length;
     $('#issue-count').textContent = issues;
   }
 
   /* ---------------- content ---------------- */
-  function visibleItems(secId) {
+  function visibleItems(secId, ignoreFilters = false) {
     let list = itemsOf(secId).filter((i) => i.status !== 'deleted').filter((i) => S.showRemoved || i.status !== 'removed');
-    if (S.filter) list = list.filter((i) => JSON.stringify(i).toLowerCase().includes(S.filter));
-    if (S.gap) { const sec = S.sections.find((s) => s.id === secId) || {}; list = list.filter((i) => gapsOf(i, sec).includes(S.gap)); }
+    if (S.filter && !ignoreFilters) list = list.filter((i) => JSON.stringify(i).toLowerCase().includes(S.filter));
+    if (S.gap && !ignoreFilters) { const sec = S.sections.find((s) => s.id === secId) || {}; list = list.filter((i) => gapsOf(i, sec).includes(S.gap)); }
     const dir = (a, b, k) => String(a[k] == null ? '' : a[k]).localeCompare(String(b[k] == null ? '' : b[k]), undefined, { numeric: true });
     list.sort((a, b) => S.sortBy === 'order' ? (a.order || 0) - (b.order || 0)
-      : S.sortBy === 'qty' ? (b.qty || 0) - (a.qty || 0)
+      : S.sortBy === 'qty' ? (Number(sourceQuantity(b)) || 0) - (Number(sourceQuantity(a)) || 0)
       : S.sortBy === 'area' ? (b.area || 0) - (a.area || 0)
       : dir(a, b, S.sortBy === 'label' ? 'label' : 'mark'));
     return list;
@@ -293,14 +391,23 @@
 
   function renderContent() {
     const host = $('#content');
+    if (Object.keys(S.readErrors).length) {
+      host.innerHTML = `<div class="sp-empty" role="alert"><p>${esc(Object.values(S.readErrors)[0])}</p><p>Saved records have not been replaced with an empty book.</p><button class="sp-btn" id="sp-retry-load">Retry loading this book</button></div>`;
+      $('#sp-retry-load').onclick = () => openProject(S.sid); return;
+    }
+    if (!S.project || !S.loaded.sections || !S.loaded.items) { host.innerHTML = '<p class="sp-empty" role="status">Loading specification records…</p>'; return; }
+    if (S.activeSec && !S.sections.some(section => section.id === S.activeSec)) S.activeSec = null;
     if (!S.sections.length) {
-      host.innerHTML = `<p class="sp-empty">This project has no specifications yet.<br><br>
-        <button class="sp-btn" id="c-imp">Batch-import Revit schedules</button></p>`;
-      const b = $('#c-imp'); if (b) b.onclick = importDialog; return;
+      host.innerHTML = `<div class="sp-empty"><p>No specification sections are stored in this book.</p><p>${S.project.linkedProjectId ? 'This book is linked to a REVEX project. Check its published sources before importing another copy.' : 'This is an independent book. Other books with the same name can contain different records.'}</p><p>${S.items.length ? esc(S.items.length) + ' stored positions need their section links restored.' : 'Local files and Drive folders appear here only after their sources have been linked and merged.'}</p><button class="sp-btn" id="c-sync">Check synced sources</button> <button class="sp-btn sp-btn-ghost" id="c-imp">Import schedules</button> <button class="sp-btn sp-btn-ghost" id="c-projects">Other specification books</button></div>`;
+      $('#c-imp').onclick = importDialog; $('#c-sync').onclick = sourcesDialog; $('#c-projects').onclick = renderProjects; return;
     }
     if (S.view === 'issues') return renderIssues(host);
+    if (!S.activeSec && !S.filter && !S.gap) { host.innerHTML=sectionOverview();wireSectionIndex(host);return; }
+
     const list = S.activeSec ? [S.sections.find((s) => s.id === S.activeSec)].filter(Boolean) : sectionsSorted();
-    host.innerHTML = attentionPanel() + list.map((s) => S.view === 'table' ? sectionTable(s) : sectionBook(s)).join('');
+    const ambiguous = list.reduce((count, section) => count + (section.identityReviewCount || 0), 0);
+    const identityNotice = ambiguous ? `<p class="sp-empty" style="padding:12px;text-align:left">${ambiguous} source rows have repeated identifiers. Each row is retained separately. When these rows change, previous versions and their notes remain available under “Show removed” for review.</p>` : '';
+    host.innerHTML = identityNotice + attentionPanel() + list.map((s) => S.view === 'table' ? sectionTable(s) : sectionBook(s)).join('');
     wireContent(host);
     wireAttention(host);
   }
@@ -312,7 +419,7 @@
   const REQ_PRODUCT = [['manufacturer', 'Manufacturer'], ['model', 'Model'], ['finish', 'Finish'], ['links', 'Reference link']];
   const REQ_LOCATION = []; // rooms are a registry: only user-added columns count as placeholders
 
-  function reqFor(sec) { return sec.kind === 'locations' ? REQ_LOCATION : REQ_PRODUCT; }
+  function reqFor(sec) { return isReferenceSection(sec) ? REQ_LOCATION : REQ_PRODUCT; }
 
   const isBlank = (v) => v == null || v === '' || (Array.isArray(v) && !v.length);
 
@@ -327,8 +434,8 @@
     return out;
   }
 
-  function gapReport() {
-    const secs = S.activeSec ? S.sections.filter((s) => s.id === S.activeSec) : S.sections;
+  function gapReport(scope) {
+    const secs = scope || (S.activeSec ? S.sections.filter((s) => s.id === S.activeSec) : S.sections);
     const labels = new Map(); const counts = new Map();
     let rows = 0, complete = 0, withGaps = 0;
     secs.forEach((sec) => {
@@ -343,8 +450,8 @@
         g.forEach((k) => { counts.set(k, (counts.get(k) || 0) + 1); if (!labels.has(k)) labels.set(k, lbl.get(k) || k); });
       });
     });
-    const unmapped = secs.filter((s) => s.needsMapping && !s.numberOverride);
-    const emptyText = secs.filter((s) => s.kind !== 'locations' && !Object.values(s.body || {}).some((t) => String(t || '').trim()));
+    const unmapped = secs.filter(needsMapping);
+    const emptyText = secs.filter((s) => !isReferenceSection(s) && !Object.values(s.body || {}).some((t) => String(t || '').trim()));
     const chips = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => ({ k, n, label: labels.get(k) }));
     return { rows, complete, withGaps, chips, unmapped, emptyText, pct: rows ? Math.round((complete / rows) * 100) : 0 };
   }
@@ -399,8 +506,9 @@
       <div class="sp-sec-num">${n ? 'SECTION ' + MF.fmt(n) : 'SECTION — UNMAPPED'} · DIVISION ${secDiv(s)} — ${esc(MF.divisionTitle(secDiv(s))).toUpperCase()}</div>
       <h2 class="sp-sec-title">${esc(s.scheduleName)}</h2>
       <div class="sp-sec-sub">
-        ${s.title ? 'CSI mask: ' + esc(s.title) + ' · ' : ''}${itemsOf(s.id).filter((i) => i.status !== 'removed').length} items${(() => { const g = gapCount(s.id); return g ? ` · <b class="sp-warntx">${g} incomplete</b>` : ' · complete'; })()}
-        ${s.kind === 'locations' ? ' · location registry (not printed as product spec)' : ''}
+        ${(inferredMapping(s)?.title||s.title) ? 'Classification: ' + esc(s.numberOverride?s.title:(inferredMapping(s)?.title||s.title)) + ' · ' : ''}${itemsOf(s.id).filter((i) => i.status !== 'removed').length} items${(() => { const g = gapCount(s.id); return g ? ` · <b class="sp-warntx">${g} incomplete</b>` : ' · complete'; })()}
+        ${isReferenceSection(s) ? ' · reference schedule' : ''}
+        <button class="sp-btn sp-btn-ghost sp-btn-sm" data-book-role="${s.id}">${isReferenceSection(s)?'Include as specification':'Move to reference schedules'}</button>
         <button class="sp-btn sp-btn-ghost sp-btn-sm" data-remap="${s.id}">Remap section</button>
         <button class="sp-btn sp-btn-ghost sp-btn-sm" data-share="${s.id}">Share / export</button>
       </div></div>`;
@@ -434,35 +542,20 @@
     </div>`;
   }
 
+  function sourceDisclosure(s) { const source=nativeScheduleTable(s);return source?`<details class="sp-source-disclosure"><summary>View original Revit schedule</summary>${source}</details>`:''; }
   function sectionBook(s) {
-    if (s.kind === 'locations') {
-      return `<article class="sp-section" data-sec="${s.id}">${sectionHead(s)}${nativeScheduleTable(s)}
-        <div class="sp-part"><div class="sp-part-h">LOCATION REGISTRY</div>${itemsTable(s)}</div></article>`;
-    }
-    const body = s.body || {};
-    const parts = MF.SECTIONFORMAT.map((p) => `
-      <div class="sp-part">
-        <div class="sp-part-h">PART ${p.number} — ${p.title}</div>
-        ${p.articles.map((a) => `
-          <div class="sp-art">
-            <div class="sp-art-h">${a.number} ${a.title}</div>
-            ${a.itemTable ? itemsTable(s) : a.locationTable ? locationSummary(s) : `
-            <div class="sp-art-body"><div class="sp-rich" contenteditable="true" data-sec="${s.id}" data-art="${a.number}"
-                 data-ph="Write ${a.title.toLowerCase()}…">${esc(body[a.number] || '')}</div></div>`}
-          </div>`).join('')}
-      </div>`).join('');
-    return `<article class="sp-section" data-sec="${s.id}">${sectionHead(s)}${nativeScheduleTable(s)}${parts}</article>`;
+    const body=s.body||{},reference=isReferenceSection(s),hasText=Object.values(body).some(value=>String(value||'').trim());
+    if(reference) return `<article class="sp-section sp-reference-section" data-sec="${s.id}">${sectionHead(s)}${nativeScheduleTable(s)}<details class="sp-source-disclosure" ${!s.nativePresentation?'open':''}><summary>Notes and linked records</summary>${itemsTable(s)}</details></article>`;
+    const parts=MF.SECTIONFORMAT.map(part=>`<div class="sp-part"><div class="sp-part-h">PART ${part.number} — ${part.title}</div>${part.articles.filter(article=>!article.itemTable).map(article=>`<div class="sp-art"><div class="sp-art-h">${article.number} ${article.title}</div><div class="sp-art-body"><div class="sp-rich" contenteditable="true" data-sec="${s.id}" data-art="${article.number}" data-ph="Write ${article.title.toLowerCase()}…">${esc(body[article.number]||'')}</div></div></div>`).join('')}</div>`).join('');
+    return `<article class="sp-section" data-sec="${s.id}">${sectionHead(s)}<div class="sp-part"><div class="sp-part-h">PRODUCTS &amp; SELECTIONS</div>${itemsTable(s)}</div><details class="sp-authored-spec" ${hasText?'open':''}><summary>${hasText?'Written specification':'Write the specification'} · General, Products, Execution</summary>${parts}</details>${sourceDisclosure(s)}</article>`;
   }
-
-  function sectionTable(s) {
-    return `<article class="sp-section" data-sec="${s.id}">${sectionHead(s)}${nativeScheduleTable(s)}${itemsTable(s, true)}</article>`;
-  }
+  function sectionTable(s) { return `<article class="sp-section" data-sec="${s.id}">${sectionHead(s)}${itemsTable(s,true)}${sourceDisclosure(s)}</article>`; }
 
   /* Base grid per section kind, then user columns appended. */
   function baseCols(s) {
     return s.kind === 'locations'
       ? [['mark', 'No.', 0], ['label', 'Room', 0], ['level', 'Level', 0], ['area', 'Area', 0], ['spec', 'Spec / links', 0]]
-      : [['mark', 'Mark', 0], ['label', 'Type', 0], ['level', 'Level', 0], ['qty', 'Qty', 0],
+      : [['mark', 'Mark', 0], ['label', 'Type', 0], ['level', 'Level', 0], ['qty', 'Qty', 0], ['sourceDetails', 'Source properties', 0],
          ['manufacturer', 'Manufacturer', 1], ['model', 'Model', 1], ['finish', 'Finish', 1], ['spec', 'Status / links', 0]];
   }
   const userCols = (s) => (s.columns || []).filter((c) => c && c.id);
@@ -481,8 +574,8 @@
     const rows = [...groups.entries()].map(([g, arr]) => {
       const head = g ? `<tr class="sp-grouprow"><td colspan="${span + 1}">${esc(g)} · ${arr.length}</td></tr>` : '';
       return head + arr.map((i) => { const gs = gapsOf(i, s); return `<tr data-item="${i.id}" class="${i.status === 'removed' ? 'removed' : ''}${gs.length ? ' hasgap' : ''}">
-        ${cols.map(([k, , ed]) => `<td${ed ? ` class="ed${gs.includes(k) ? ' blank' : ''}" data-cell="${i.id}" data-field="${k}"` : ''}>${cell(i, k)}</td>`).join('')}
-        ${ucols.map((c) => `<td class="ed u${gs.includes('col:' + c.id) ? ' blank' : ''}" data-cell="${i.id}" data-col="${c.id}" data-type="${c.type}">${userCell(i, c)}</td>`).join('')}
+        ${cols.map(([k, label, ed]) => `<td data-label="${esc(label)}"${ed ? ` class="ed${gs.includes(k) ? ' blank' : ''}" data-cell="${i.id}" data-field="${k}"` : ''}>${cell(i, k)}</td>`).join('')}
+        ${ucols.map((c) => `<td data-label="${esc(c.label)}" class="ed u${gs.includes('col:' + c.id) ? ' blank' : ''}" data-cell="${i.id}" data-col="${c.id}" data-type="${c.type}">${userCell(i, c)}</td>`).join('')}
         <td class="sp-rowend"><button class="sp-icon" data-open="${i.id}" title="Open item">⤢</button></td>
       </tr>`; }).join('');
     }).join('');
@@ -510,7 +603,9 @@
     }
     if (['manufacturer', 'model', 'finish'].includes(k)) return esc(sp[k] || '') || '<span class="sp-ph">—</span>';
     if (k === 'area') return i.area != null ? esc(i.area + ' ' + (i.areaUnit || '')) : '';
-    if (k === 'label') return esc(i.type || i.label || '') + (i.family && i.type ? `<div class="sp-sub">${esc(i.family)}</div>` : '');
+    if (k === 'label') { const sourceName=i.fields?.Item||i.fields?.Product;return esc(sourceName||i.type||i.label||'')+(sourceName&&i.fields?.Notes?`<div class="sp-sub">${esc(i.fields.Notes)}</div>`:i.family&&i.type?`<div class="sp-sub">${esc(i.family)}</div>`:''); }
+    if (k === 'qty') return esc([sourceQuantity(i),i.fields?.Unit||i.quantityUnit||''].filter(value=>value!==''&&value!=null).join(' '));
+    if (k === 'sourceDetails') return Object.entries(i.fields||{}).filter(([key,value])=>value!=null&&value!==''&&!/^(?:mark|type|item|product|family|level|qty|quantity|unit)$/i.test(key)).map(([key,value])=>`<div class="sp-source-property"><small>${esc(key)}: </small><span>${esc(value)}</span></div>`).join('')||'—';
     return esc(num(i[k]));
   }
 
@@ -540,7 +635,7 @@
   }
 
   function renderIssues(host) {
-    const unmapped = S.sections.filter((s) => s.needsMapping && !s.numberOverride);
+    const unmapped = S.sections.filter(needsMapping);
     const mism = S.items.filter((i) => i.mismatch && i.status !== 'removed');
     const removed = S.items.filter((i) => i.status === 'removed');
     host.innerHTML = `<div class="sp-section">
@@ -558,6 +653,8 @@
   }
 
   function wireContent(host) {
+    $$('[data-book-role]',host).forEach(button=>button.onclick=async()=>{const sid=S.sid,epoch=S.epoch,section=S.sections.find(s=>s.id===button.dataset.bookRole);if(!section)return;button.disabled=true;try{await ST.setDocIn('sections',sid,section.id,{bookRole:isReferenceSection(section)?'specification':'reference',updatedAt:nowISO()});if(S.sid===sid&&S.epoch===epoch)toast('Book organization saved. Source rows and notes are preserved.');}catch(error){if(S.sid===sid&&S.epoch===epoch){button.disabled=false;toast(error.message);}}});
+
     $$('[data-remap]', host).forEach((b) => b.onclick = (e) => { e.stopPropagation(); remapDialog(b.dataset.remap); });
     $$('[data-move]', host).forEach((b) => b.onclick = async (e) => {
       e.stopPropagation();
@@ -1124,66 +1221,174 @@
 
   /* ---------------- sources / sync ---------------- */
   async function sourcesDialog() {
-    const sources = await ST.listIn('sources', S.sid);
-    modal(`<h3>Sync sources</h3>
-      <p style="font-size:13px;color:var(--tx-2);margin:0 0 10px">Spec text and links are yours; quantities, levels and types are owned by the model/sheet and refresh on every pull.</p>
-      <div class="sp-links">${sources.length ? sources.map((s) => `<div class="sp-link">
-        <span class="t">${esc(s.type)} · ${esc(s.url || s.label || '')}</span>
+    if (!S.sid || !S.project) return toast('Open a specification project first.');
+    const { sid, assertCurrent } = captureSyncOwner();
+    let sources;
+    try { sources = await ST.listIn('sources', sid); }
+    catch (error) {
+      try { assertCurrent(); } catch (_) { return; }
+      sourceStatus('Source records could not be loaded. Existing specification rows are preserved.');
+      modal('<h3>Sources could not be loaded</h3><p role="alert">Check your connection and project access, then retry. Existing specification rows are preserved.</p><div class="sp-modal-actions"><button class="sp-btn sp-btn-ghost" id="sr-cancel">Close</button><button class="sp-btn" id="sr-load-retry">Retry source list</button></div>', c => {
+        $('#sr-cancel', c).onclick = closeModal;
+        $('#sr-load-retry', c).onclick = () => { try { assertCurrent(); void sourcesDialog(); } catch (_) { closeModal(); } };
+      });
+      return;
+    }
+    assertCurrent();
+    const sourceName = s => s.label || s.name || s.payload?.[0]?.schedule || s.url || 'Revit model';
+    const sourceType = s => ({ revit: 'Revit schedule', 'revit-manifest': 'Revit model', gsheet: 'Google Sheet', upload: 'Uploaded file' }[s.type] || 'Source');
+    modal(`<div class="sp-source-heading"><h3>Sync sources</h3>
+      <p>Your specification text and links stay intact. Model and spreadsheet values refresh from their sources.</p>
+      <input id="sr-filter" aria-label="Find a source" placeholder="Find a source…" /></div>
+      <div class="sp-source-scroll"><div class="sp-links">${sources.length ? sources.map((s) => `<div class="sp-link" data-source-row>
+        <span class="t"><strong>${esc(sourceName(s))}</strong><small>${esc(sourceType(s))} · ${esc(s.payloadHydrationError || s.lastError || (s.retired ? 'Replaced by a newer source' : s.type === 'revit' && s.rev ? (s.rev === s.appliedRev ? 'Up to date' : 'Update pending') : s.type === 'revit-manifest' ? 'Model source index' : 'Connected'))}</small></span>
+        <span class="sp-source-actions">
         <span class="sp-tag">${(s.lastSync || s.addedAt || '').slice(0, 16).replace('T', ' ')}</span>
-        ${s.url ? `<button class="sp-btn sp-btn-sm sp-btn-ghost" data-pull="${s.id}">Pull</button>` : ''}
-        <button class="sp-icon-btn sp-btn-sm" data-del="${s.id}">✕</button></div>`).join('') : '<p style="color:var(--tx-3);font-size:13px">No sources yet.</p>'}
+        ${s.url ? `<button class="sp-btn sp-btn-sm sp-btn-ghost" data-pull="${s.id}">Refresh</button>` : ''}
+        <button class="sp-icon-btn sp-btn-sm" data-del="${s.id}" aria-label="Remove source: ${esc(sourceName(s))}">✕</button></span></div>`).join('') : '<p class="sp-muted">No sources yet.</p>'}
       </div>
-      <div class="sp-row" style="margin-top:12px"><label>Add Google Sheet</label><input id="sr-url" placeholder="https://docs.google.com/spreadsheets/d/…" /></div>
-      <div class="sp-row"><label>Auto-pull while app is open</label><select id="sr-int">
+      <p id="sr-no-results" class="sp-muted" hidden>No matching sources.</p>
+      <details id="sr-add-panel" class="sp-source-add"><summary>Add a Google Sheet</summary>
+      <div class="sp-row"><label for="sr-url">Sheet link</label><input id="sr-url" placeholder="https://docs.google.com/spreadsheets/d/…" /></div>
+      <div class="sp-row"><label for="sr-int">Refresh while app is open</label><select id="sr-int">
         <option value="0">Off</option><option value="60">Every minute</option><option value="300" selected>Every 5 minutes</option><option value="900">Every 15 minutes</option></select></div>
-      <div class="sp-sub">Model push endpoint (Revit / Atlantist)</div>
-      <p style="font-size:12.5px;color:var(--tx-2)">Write parsed schedules to <code style="font-family:var(--mono)">specProjects/${esc(S.sid)}/sources/&lt;id&gt;</code> with
-        <code style="font-family:var(--mono)">{type:'revit', payload:[{schedule, headers, rows}]}</code> — the app merges them live via realtime listeners.</p>
-      <div class="sp-modal-actions"><button class="sp-btn sp-btn-ghost" id="sr-cancel">Close</button><button class="sp-btn" id="sr-add">Add source</button></div>`, (c) => {
+      <p>Keep confidential sheets restricted. You can also import an exported XLSX or CSV from the book.</p></details></div>
+      <div class="sp-modal-actions"><button class="sp-btn sp-btn-ghost" id="sr-cancel">Close</button><button class="sp-btn sp-btn-ghost" id="sr-retry">Refresh schedules</button><button class="sp-btn" id="sr-add">Add source</button></div>`, (c) => {
       $('#sr-cancel', c).onclick = closeModal;
+      $('#sr-filter', c).oninput = e => {
+        const term = e.target.value.trim().toLocaleLowerCase(); let visible = 0;
+        $$('[data-source-row]', c).forEach(row => { row.hidden = !row.textContent.toLocaleLowerCase().includes(term); if (!row.hidden) visible++; });
+        $('#sr-no-results', c).hidden = !term || visible > 0;
+      };
+      $('#sr-retry', c).onclick = async () => {
+        const button = $('#sr-retry', c); button.disabled = true; button.textContent = 'Refreshing…';
+        try { assertCurrent(); await runSourceSync({ force: true }); assertCurrent(); await sourcesDialog(); }
+        catch (error) { toast(error.message, 5000); }
+        finally { button.disabled = false; button.textContent = 'Refresh schedules'; }
+      };
       $('#sr-add', c).onclick = async () => {
-        const url = $('#sr-url', c).value.trim(); if (!url) return toast('Paste a sheet URL');
-        await ST.addDocIn('sources', S.sid, { type: 'gsheet', url, autoSyncSec: +$('#sr-int', c).value, addedAt: nowISO() });
+        const url = $('#sr-url', c).value.trim();
+        if (!url) { $('#sr-add-panel', c).open = true; $('#sr-url', c).focus(); $('#sr-add-panel', c).scrollIntoView({ block: 'nearest' }); return; }
+        assertCurrent();
+        await ST.addDocIn('sources', sid, { type: 'gsheet', url, autoSyncSec: +$('#sr-int', c).value, addedAt: nowISO() });
+        assertCurrent();
         closeModal(); startAutoSync(); toast('Source added');
       };
       $$('[data-pull]', c).forEach((b) => b.onclick = () => pullSource(sources.find((s) => s.id === b.dataset.pull)));
-      $$('[data-del]', c).forEach((b) => b.onclick = async () => { await ST.deleteDocIn('sources', S.sid, b.dataset.del); closeModal(); toast('Source removed'); });
+      $$('[data-del]', c).forEach((b) => b.onclick = async () => { assertCurrent(); await ST.deleteDocIn('sources', sid, b.dataset.del); assertCurrent(); closeModal(); toast('Source removed'); });
     });
+  }
+
+  function captureSyncOwner() {
+    const sid = S.sid, generation = S.epoch, owner = ST.captureProjectListOwner();
+    const assertCurrent = () => {
+      owner.assertCurrent();
+      if (!sid || S.sid !== sid || S.epoch !== generation) throw new Error('The active specification project changed.');
+    };
+    return { sid, assertCurrent };
   }
 
   async function pullSource(src) {
     if (!src || !src.url) return;
+    const { sid, assertCurrent } = captureSyncOwner();
     try {
+      assertCurrent();
       const text = await SP.fetchSheet(src.url);
+      assertCurrent();
       const parsed = PR.parseCSVText(text, src.label || 'Sheet');
-      const existing = await ST.listIn('items', S.sid);
-      const res = await SP.apply(ST, S.sid, SP.build(parsed), existing, 'gsheet:' + src.id);
-      await ST.setDocIn('sources', S.sid, src.id, { lastSync: nowISO(), lastResult: res }, true);
+      const existing = await ST.listIn('items', sid);
+      assertCurrent();
+      const res = await SP.apply(ST, sid, SP.build(parsed), existing, 'gsheet:' + src.id, { assertCurrent });
+      assertCurrent();
+      await ST.setDocIn('sources', sid, src.id, { lastSync: nowISO(), lastResult: res }, true);
+      assertCurrent();
       toast(`Sheet synced · ${res.added} new, ${res.updated} updated`);
-    } catch (e) { toast('Sync failed: ' + e.message, 5000); }
+      return { ok: true };
+    } catch (e) {
+      try { assertCurrent(); } catch (_) { return { cancelled: true }; }
+      sourceStatus('Sheet sync failed. Existing specification rows are preserved.');
+      toast('Sync failed: ' + e.message, 5000); return { ok: false };
+    }
   }
 
-  let autoTimer = null;
-  async function startAutoSync() {
-    clearInterval(autoTimer);
-    const run = async () => {
-      if (!S.sid || document.hidden) return;
-      const sources = await ST.listIn('sources', S.sid);
+  let autoTimer = null, autoRun = null, autoPending = false;
+  function sourceStatus(message = '') {
+    S.syncError = message;
+    const badge = $('#mode-badge');
+    badge.textContent = message ? 'sync needs attention' : ST.isCloud() ? 'connected' : 'local';
+    badge.title = message || (ST.isCloud() ? 'Connected to project storage. Source coverage is shown inside the book.' : 'Data stored on this device only');
+    badge.classList.toggle('warn', !!message);
+  }
+  async function runSourceSync({ force = false } = {}) {
+    if (autoRun) {
+      if (force) { const { assertCurrent } = captureSyncOwner(); await autoRun; assertCurrent(); return runSourceSync({ force: true }); }
+      autoPending = true; return autoRun;
+    }
+    if (!S.sid || document.hidden) return;
+    const { sid, assertCurrent } = captureSyncOwner();
+    autoRun = (async () => {
+      assertCurrent();
+      const sources = await ST.listIn('sources', sid);
+      assertCurrent();
+      let items = null, completed = 0, failed = 0;
       for (const s of sources) {
-        if (s.type === 'gsheet' && s.autoSyncSec) {
+        assertCurrent();
+        if (s.retired) continue;
+        if (s.type === 'gsheet' && (force || s.autoSyncSec)) {
           const last = s.lastSync ? Date.parse(s.lastSync) : 0;
-          if (Date.now() - last > s.autoSyncSec * 1000) await pullSource(s);
+          if (force || Date.now() - last > s.autoSyncSec * 1000) {
+            const result = await pullSource(s); if (result?.ok === false) failed++;
+          }
         }
-        if (s.type === 'revit' && s.payload && s.rev !== s.appliedRev) {
-          const existing = await ST.listIn('items', S.sid);
-          const res = await SP.apply(ST, S.sid, SP.build(SP.normalisePush(s.payload)), existing, 'revit:' + s.id);
-          await ST.setDocIn('sources', S.sid, s.id, { appliedRev: s.rev, lastSync: nowISO(), lastResult: res }, true);
-          toast('Model push merged · ' + res.added + ' new');
+        if (s.type === 'revit' && s.rev && (force || s.rev !== s.appliedRev || s.appliedMergeSchema !== 'liber.spec.source-merge.v4')) {
+          try {
+            assertCurrent();
+            if (s.payloadHydrationError) throw new Error(s.payloadHydrationError);
+            if (!Array.isArray(s.payload) || !s.payload.length) {
+              if (s.payloadEncoding === 'revex-storage-index-v1') throw new Error('The schedule package could not be read. Previous rows are preserved.');
+              continue; // package summary documents are not schedule sources
+            }
+            if (!items) {
+              const existing = await ST.listIn('items', sid);
+              assertCurrent();
+              items = new Map(existing.map(item => [item.id, item]));
+            }
+            const res = await SP.apply(ST, sid, SP.build(SP.normalisePush(s.payload)), [...items.values()], 'revit:' + s.id, {
+              assertCurrent,
+              onWrites: writes => writes.forEach(r => items.set(r.id, { ...items.get(r.id), ...r.data, id: r.id }))
+            });
+            assertCurrent();
+            await ST.setDocIn('sources', sid, s.id, { appliedRev: s.rev, appliedPresentationSchema: 'liber.revit.schedule.presentation.v1', appliedMergeSchema: 'liber.spec.source-merge.v4', lastSync: nowISO(), lastResult: res, lastError: null }, true);
+            assertCurrent();
+            completed++;
+          } catch (error) {
+            assertCurrent();
+            failed++;
+            console.warn('[Spec sync]', s.id, error);
+            await ST.setDocIn('sources', sid, s.id, { lastError: String(error.message || error).slice(0,400) }, true);
+            assertCurrent();
+            toast('One schedule needs attention. Open Sync sources to retry.', 5000);
+          }
         }
       }
-    };
-    autoTimer = setInterval(run, 30000); run();
+      assertCurrent();
+      sourceStatus(failed ? `${failed} schedules need attention. Open Sync sources to retry; existing rows are preserved.` : '');
+      if (completed) toast(`${completed} Revit schedules updated. Your notes and links are preserved.`);
+    })().catch(error => {
+      try { assertCurrent(); sourceStatus('Source sync could not finish. Open Sync sources to retry; existing rows are preserved.'); } catch (_) {}
+      console.warn('[Spec sync] stopped', error.message);
+    }).finally(() => {
+      autoRun = null;
+      if (autoPending) { autoPending = false; void runSourceSync(); }
+    });
+    return autoRun;
   }
+  function startAutoSync() {
+    clearInterval(autoTimer);
+    autoTimer = setInterval(() => { if (!autoRun) void runSourceSync(); }, 30000);
+    void runSourceSync();
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) void runSourceSync(); });
 
   /* ---------------- inbox (extension queue) ---------------- */
   function inboxDialog() {
@@ -1220,9 +1425,15 @@
     if (k === 'approval') return sp.approval || 'draft';
     if (k === 'notes') return sp.notes || '';
     if (['manufacturer', 'model', 'finish'].includes(k)) return sp[k] || '';
-    if (k === 'label') return i.type || i.label || '';
+    if (k === 'label') return i.fields?.Item || i.fields?.Product || i.type || i.label || '';
+    if (k === 'sourceDetails') return Object.entries(i.fields||{}).map(([key,value])=>`${key}: ${value??''}`).join('\n');
     if (k === 'area') return i.area == null ? '' : i.area;
-    if (k === 'qty') return i.qty == null ? '' : i.qty;
+    if (k === 'qty') {
+      const value=sourceQuantity(i),text=String(value??'').trim();
+      // Excel stores at most 15 significant digits. Keep longer values as literal text.
+      return /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(text)&&text.replace(/^[+-]?0*|\./g,'').length<=15?Number(text):value;
+    }
+    if (k === 'quantityUnit') return i.fields?.Unit||i.quantityUnit||'';
     if (k.slice(0, 4) === 'col:') {
       const v = (sp.custom || {})[k.slice(4)];
       if (Array.isArray(v)) return v.map((x) => x && (x.url || x.name) || x).join('\n');
@@ -1232,15 +1443,15 @@
   }
 
   function sheetFor(s) {
-    const cols = baseCols(s).filter(([k]) => k !== 'spec').concat(SHEET_EXTRA)
+    const cols = baseCols(s).filter(([k]) => k !== 'spec').concat(s.kind==='locations'?[['sourceDetails','Source properties']]:[['quantityUnit','Unit']]).concat(SHEET_EXTRA)
       .concat(userCols(s).map((c) => ['col:' + c.id, c.label]));
     const rows = [cols.map(([, t]) => t)];
-    visibleItems(s.id).forEach((i) => rows.push(cols.map(([k]) => xlText(i, k, s))));
+    visibleItems(s.id,true).forEach((i) => rows.push(cols.map(([k]) => xlText(i, k, s))));
     return rows;
   }
 
   function summaryRows(secs) {
-    const r = gapReport();
+    const r = gapReport(secs);
     const out = [
       [S.project ? S.project.name : 'Specifications'],
       ['Code', S.project ? (S.project.code || '') : ''],
@@ -1255,7 +1466,7 @@
       [],
       ['SECTION', 'CSI', 'ROWS', 'INCOMPLETE']
     ];
-    secs.forEach((s) => out.push([s.scheduleName, secNum(s) ? MF.fmt(secNum(s)) : 'unmapped', visibleItems(s.id).length, gapCount(s.id)]));
+    secs.forEach((s) => out.push([s.scheduleName, secNum(s) ? MF.fmt(secNum(s)) : 'unmapped', visibleItems(s.id,true).length, gapCount(s.id)]));
     return out;
   }
 
@@ -1267,23 +1478,24 @@
     if (!X) return null;
     const wb = X.utils.book_new();
     X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(summaryRows(secs)), 'Summary');
-    const used = {};
+    const used = new Set(['summary']);
     secs.forEach((s) => {
-      let n = safeName(s.scheduleName);
-      if (used[n]) n = safeName(n.slice(0, 27) + ' ' + (++used[n])); else used[n] = 1;
+      const base = safeName(s.scheduleName).replace(/^'+|'+$/g,'').trim() || 'Section';
+      let n=base,index=2;while(used.has(n.toLocaleLowerCase())){const suffix=` (${index++})`;n=base.slice(0,31-suffix.length)+suffix;}used.add(n.toLocaleLowerCase());
       X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(sheetFor(s)), n);
     });
+    for(const name of wb.SheetNames)for(const cell of Object.values(wb.Sheets[name]))if(typeof cell?.v==='string'&&cell.v.length>32767)throw new Error('A cell exceeds Excel’s text limit. Use CSV to preserve the complete text.');
     return new Blob([X.write(wb, { bookType: 'xlsx', type: 'array' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   }
 
   function csvBlob(secs) {
-    const rows = [['Section', 'CSI', 'Schedule', 'Mark', 'Family', 'Type', 'Level', 'Qty', 'Area', 'Manufacturer', 'Model', 'Finish', 'Status', 'Links', 'Notes']];
-    secs.forEach((s) => visibleItems(s.id).forEach((i) => {
+    const rows = [['Section', 'CSI', 'Schedule', 'Mark', 'Family', 'Type', 'Level', 'Qty', 'Area', 'Manufacturer', 'Model', 'Finish', 'Status', 'Links', 'Notes', 'Source properties']];
+    secs.forEach((s) => visibleItems(s.id,true).forEach((i) => {
       const sp = i.spec || {};
-      rows.push([s.scheduleName, secNum(s) ? MF.fmt(secNum(s)) : '', i.sourceSchedule, i.mark, i.family, i.type, i.level, i.qty, i.area,
-        sp.manufacturer, sp.model, sp.finish, sp.approval, (sp.links || []).map((l) => l.url).join(' '), sp.notes]);
+      rows.push([s.scheduleName, secNum(s) ? MF.fmt(secNum(s)) : '', i.sourceSchedule, i.mark, i.family, xlText(i,'label',s), i.level, xlText(i,'qty',s), i.area,
+        sp.manufacturer, sp.model, sp.finish, sp.approval, (sp.links || []).map((l) => l.url).join(' '), sp.notes,xlText(i,'sourceDetails',s)]);
     }));
-    return new Blob([rows.map((r) => r.map((v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`).join(',')).join('\n')], { type: 'text/csv' });
+    return new Blob(['\uFEFF'+rows.map(r=>r.map(value=>{let text=String(value??'');if(typeof value!=='number'&&/^[\s]*[=+@-]/.test(text))text="'"+text;return '"'+text.replace(/"/g,'""')+'"';}).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
   }
 
   /** Deep link back into the platform shell, opening this project (and section). */
@@ -1346,7 +1558,7 @@
       <div class="sp-form">
         <button class="sp-btn sp-btn-ghost sp-w" id="ex-xlsx">Excel (.xlsx) — sheet per schedule</button>
         <button class="sp-btn sp-btn-ghost sp-w" id="ex-csv">CSV — flat item register</button>
-        <button class="sp-btn sp-btn-ghost sp-w" id="ex-print">Print / PDF — full CSI book</button>
+        <button class="sp-btn sp-btn-ghost sp-w" id="ex-print">Print / PDF — specification sections</button>
         <button class="sp-btn sp-btn-ghost sp-w" id="ex-md">Markdown — section outline</button>
         <button class="sp-btn sp-btn-ghost sp-w" id="ex-json">JSON — full data (round-trip)</button>
       </div>
@@ -1355,7 +1567,7 @@
       const scopeId = () => ($('#ex-scope', c).value === 'sec' && sec ? sec.id : null);
       const stem = () => ((S.project && (S.project.code || S.project.name)) || 'specifications').replace(/[^\w\-]+/g, '-')
         + ($('#ex-scope', c).value === 'sec' && sec ? '-' + safeName(sec.scheduleName).replace(/[^\w\-]+/g, '-') : '-spec-book');
-      const wb = () => { const b = workbookBlob(scope()); if (!b) toast('Spreadsheet engine still loading — try again'); return b; };
+      const wb = () => { try{const b = workbookBlob(scope()); if (!b) toast('Spreadsheet engine still loading — try again'); return b;}catch(error){toast(error.message||'Excel export failed. Retry or use CSV.',6000);return null;} };
 
       $('#ex-close', c).onclick = closeModal;
       $('#ex-wa-x', c).onclick = async () => { const b = wb(); if (b) await shareOut(b, stem() + '.xlsx', waText(scope(), scopeId())); };
@@ -1365,9 +1577,21 @@
         try { await navigator.clipboard.writeText(link); toast('Link copied'); }
         catch (_) { prompt('Copy this link', link); }
       };
-      $('#ex-xlsx', c).onclick = () => { const b = wb(); if (b) { saveBlob(b, stem() + '.xlsx'); closeModal(); toast('Exported ' + stem() + '.xlsx'); } };
+      $('#ex-xlsx', c).onclick = () => { const b = wb(); if (b) { const filename=stem()+'.xlsx';saveBlob(b,filename);closeModal();toast('Exported '+filename); } };
       $('#ex-csv', c).onclick = () => { saveBlob(csvBlob(scope()), stem() + '.csv'); closeModal(); toast('Exported CSV'); };
-      $('#ex-print', c).onclick = () => { closeModal(); const a = S.activeSec; if ($('#ex-scope', c) && !scopeId()) S.activeSec = null; renderContent(); setTimeout(() => { window.print(); S.activeSec = a; renderContent(); }, 250); };
+      $('#ex-print', c).onclick = () => {
+        const selected=scopeId()?scope():scope().filter(s=>!isReferenceSection(s));
+        const previous={filter:S.filter,gap:S.gap}; S.filter='';S.gap=null;
+        let html;try{html=selected.map(sectionBook).join('');}finally{Object.assign(S,previous);}
+        const fragment=document.createElement('div');fragment.innerHTML=html;
+        fragment.querySelectorAll('button,.sp-source-disclosure,.sp-tablefoot,.sp-sec-sub,.sp-rowend').forEach(node=>node.remove());
+        fragment.querySelectorAll('.sp-art').forEach(article=>{if(!article.querySelector('.sp-rich')?.textContent.trim())article.remove();});
+        fragment.querySelectorAll('.sp-part').forEach(part=>{if(!part.querySelector('.sp-art,.sp-table'))part.remove();});
+        fragment.querySelectorAll('.sp-authored-spec').forEach(details=>{details.querySelector('summary')?.remove();details.replaceWith(...details.childNodes);});
+        fragment.querySelectorAll('.sp-sec-head').forEach(head=>{const label=document.createElement('p');label.className='sp-print-project';label.textContent=bookFilename('Spec Book',S.project?.linkedProjectName||S.project?.name);head.prepend(label);});
+        const css=`@page{size:A4 landscape;margin:13mm}*{box-sizing:border-box}body{font:11px/1.5 Arial,sans-serif;color:#18212b;margin:0}h1{font-size:22px}h2{font-size:20px}a{color:#255866}.sp-section{break-before:page}.sp-section:first-child{break-before:auto}.sp-sec-head{border-bottom:2px solid #253c47;padding-bottom:10px;margin-bottom:18px;break-after:avoid}.sp-sec-num{font-size:10px;color:#586573}.sp-table{width:100%;border-collapse:collapse;table-layout:fixed}.sp-table th,.sp-table td{border-bottom:1px solid #ccd4da;padding:9px 7px;text-align:left;vertical-align:top;overflow-wrap:anywhere;white-space:pre-wrap}.sp-table th{font-size:10px}.sp-table tr{break-inside:avoid}.sp-part-h{font-weight:bold;margin:20px 0 12px}.sp-art{break-inside:avoid;margin:12px 0}.sp-art-h{font-weight:bold}.sp-rich{white-space:pre-wrap}.sp-native-head{font-size:10px;margin-bottom:10px}.sp-native-head span{margin-left:10px}.sp-tag{font-size:10px;margin-right:6px}.sp-thumb img{max-width:100px;max-height:80px}.sp-muted{color:#586573}.sp-source-property{margin-bottom:7px}.sp-source-property small{display:block;color:#586573;font-size:9px}.sp-source-property span{display:block}.sp-print-project{font-size:10px;color:#586573;margin:0 0 12px}.sp-table:has(th:nth-child(9)):not(:has(th:nth-child(10))) :is(th,td):nth-child(1){width:5%}.sp-table:has(th:nth-child(9)):not(:has(th:nth-child(10))) :is(th,td):nth-child(2){width:16%}.sp-table:has(th:nth-child(9)):not(:has(th:nth-child(10))) :is(th,td):nth-child(3){width:7%}.sp-table:has(th:nth-child(9)):not(:has(th:nth-child(10))) :is(th,td):nth-child(4){width:5%}.sp-table:has(th:nth-child(9)):not(:has(th:nth-child(10))) :is(th,td):nth-child(5){width:22%}`;
+        try{printBookDocument({title:bookFilename('Spec Book',S.project?.linkedProjectName||S.project?.name),html:fragment.innerHTML||'<p>No specification sections included.</p>',css});closeModal();}catch(error){toast(error.message);}
+      };
       $('#ex-json', c).onclick = () => dl(JSON.stringify({ project: S.project, sections: S.sections, items: S.items }, null, 2), stem() + '.json', 'application/json');
       $('#ex-md', c).onclick = () => {
         let out = `# ${S.project.name}\n\n`;

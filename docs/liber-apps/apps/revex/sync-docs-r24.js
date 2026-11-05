@@ -1,15 +1,72 @@
 (function(root){
   'use strict';
-  const BUILD='20260817r113-docs-core2';
+  const BUILD='20260909r191-sync-reader1';
   const Store=root.RevexStore;
   if(!Store||root.__revexSyncDocsR24) return;
   root.__revexSyncDocsR24=true;
+  Store.revisionDocumentIdentity='manifest-path-sha256-size-v1';
 
   const safe=v=>String(v||'file').replace(/[^a-zA-Z0-9._-]+/g,'_').slice(0,120)||'file';
   const docId=v=>safe(v).replace(/\./g,'_');
   const clone=v=>JSON.parse(JSON.stringify(v===undefined?null:v));
-  const byName=(files,name)=>files.find(f=>String(f.name||'').toLowerCase()===String(name||'').toLowerCase())||null;
   const readJson=async file=>file?JSON.parse(await file.text()):null;
+  const readerUrl=new URL('./affected-index-worker.mjs?build=20260909r191-sync-reader1&v=20260914r192-morning1',document.currentScript?.src||root.location?.href||'http://localhost/');
+  let cancelActiveIndexRead=null;
+  const readerFailure=message=>Object.assign(new Error(message),{code:'revex/index-read'});
+  Store.readAffectedDocumentIndex=function(file,expectedRevision,{assertCurrent=()=>{},signal}={}){
+    if(!file)return Promise.resolve(null);
+    cancelActiveIndexRead?.();
+    return new Promise((resolve,reject)=>{
+      let worker=null,timer=null,finished=false,unsubscribe=null;
+      const cancel=()=>finish(readerFailure('The affected-plan index read was canceled. The preserved revision can be retried.'));
+      const finish=(error,index)=>{
+        if(finished)return;finished=true;
+        worker?.terminate();clearTimeout(timer);unsubscribe?.();
+        signal?.removeEventListener('abort',cancel);
+        root.removeEventListener?.('revex:project-boundary',cancel);
+        root.removeEventListener?.('pagehide',cancel);
+        if(cancelActiveIndexRead===cancel)cancelActiveIndexRead=null;
+        error?reject(error):resolve(index);
+      };
+      try{
+        assertCurrent();
+        if(signal?.aborted){cancel();return;}
+        if(typeof root.Worker!=='function')throw readerFailure('This browser cannot safely read the affected-plan index. Open REVEX in a current supported browser; the preserved revision was not published.');
+        worker=new root.Worker(readerUrl,{type:'module',name:'revex-affected-document-index'});
+        cancelActiveIndexRead=cancel;
+        signal?.addEventListener('abort',cancel,{once:true});
+        root.addEventListener?.('revex:project-boundary',cancel);
+        root.addEventListener?.('pagehide',cancel);
+        if(typeof Store.api?.onAuthStateChanged==='function'&&Store.fs?.auth)
+          unsubscribe=Store.api.onAuthStateChanged(Store.fs.auth,()=>{try{assertCurrent();}catch(error){finish(error);}});
+        if(finished){unsubscribe?.();return;}
+        worker.onmessage=event=>{
+          try{
+            if(finished)return;
+            assertCurrent();if(signal?.aborted){cancel();return;}
+            if(event.data?.type==='progress'){
+              post('docs-index-reading',{bytes:event.data.bytes,total:event.data.total});
+              if(!finished)worker.postMessage({type:'continue'});
+            }else if(event.data?.type==='complete'){
+              post('docs-index-read',{bytes:event.data.stats?.inputBytes,views:event.data.stats?.views});
+              finish(null,event.data.index);
+            }else if(event.data?.type==='failed'){
+              // Never surface arbitrary worker/parser text or source excerpts.
+              const kind=String(event.data.code||'');
+              const message=kind==='revex/index-limits'?'The affected-plan index exceeds safe document-reader limits. The preserved revision was not published.':
+                kind==='revex/index-revision'?'The affected-plan index does not belong to this revision. Nothing was published.':
+                'The affected-plan index is malformed or incomplete. The preserved revision was not published.';
+              finish(readerFailure(message));
+            }
+          }catch(error){finish(error);}
+        };
+        worker.onerror=event=>{event.preventDefault?.();finish(readerFailure('The affected-plan document reader could not finish. The preserved revision was not published; retry after reloading Companion.'));};
+        worker.onmessageerror=()=>finish(readerFailure('The affected-plan document reader could not return a verified index. Nothing was published.'));
+        timer=setTimeout(()=>finish(readerFailure('Reading the affected-plan index timed out. The preserved revision was not published and can be retried.')),180000);
+        worker.postMessage({type:'read',file,expectedRevision});
+      }catch(error){finish(error);}
+    });
+  };
   const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const fmt=value=>{
     if(!value)return '—';
@@ -21,37 +78,47 @@
     try{root.chrome?.webview?.postMessage({type:'liber:revex-sync-progress',stage,build:BUILD,...detail});}catch(_){}
   }
 
-  async function upload(projectId,revision,file,lane){
-    const path=`projects/${projectId}/library/revex/revisions/${revision}/${lane}/${safe(file.name)}`;
-    const ref=Store.api.ref(Store.fs.storage,path);
+  function documentPath(projectId,revision,file,identity){
+    return `projects/${projectId}/library/revex/revisions/${revision}/${identity.path(file)}`;
+  }
+  function reusableDocument(prior,projectId,revision,file,identity){
+    const entry=identity.entry(file);
+    return prior?.revision===revision&&prior.size===file.size&&prior.manifestPath===entry.path&&
+      prior.sha256===entry.digest&&prior.storagePath===documentPath(projectId,revision,file,identity);
+  }
+  async function upload(projectId,revision,file,identity,publisher){
+    const path=documentPath(projectId,revision,file,identity);
     post('docs-upload-start',{path,bytes:file.size});
-    await Store.api.uploadBytes(ref,file,clone({contentType:file.type||'application/pdf'}));
+    const uploaded=await Store.publishRevisionFile(projectId,revision,file,identity,publisher);
     post('docs-upload-complete',{path,bytes:file.size});
-    return{path,url:await Store.api.getDownloadURL(ref)};
+    return uploaded;
   }
 
-  function pageWithLocalPdf(page,files){
-    const single=page?.singlePageFileName?byName(files,page.singlePageFileName):null;
-    return{...page,singlePageLocalUrl:single?URL.createObjectURL(single):null,singlePageSize:single?.size||null};
+  function pageFile(page,identity){
+    return page?.singlePagePdf||page?.singlePageFileName?identity.resolve(page.singlePagePdf||page.singlePageFileName,'printing-sets'):null;
+  }
+  function pageWithLocalPdf(page,identity){
+    const single=pageFile(page,identity);
+    return{...page,singlePageLocalUrl:single?URL.createObjectURL(single):null,singlePageSize:single?.size||null,
+      singlePageManifestPath:single?identity.path(single):null};
   }
 
-  function localPrinting(manifest,files){
+  function localPrinting(manifest,identity){
     return(manifest?.sets||[]).map(set=>{
-      const file=byName(files,set.fileName);
-      if(!file)return null;
-      const pages=(set.pages||[]).map(page=>pageWithLocalPdf(page,files));
-      return{name:file.name,size:file.size,url:URL.createObjectURL(file),set:{...set,pages}};
+      const file=identity.resolve(set.pdf||set.fileName,'printing-sets');
+      const pages=(set.pages||[]).map(page=>pageWithLocalPdf(page,identity));
+      return{name:file.name,manifestPath:identity.path(file),size:file.size,url:URL.createObjectURL(file),set:{...set,pages}};
     }).filter(Boolean);
   }
 
-  function localAffected(manifest,files){
+  function localAffected(manifest,identity){
     return(manifest?.views||[]).map(view=>{
-      const file=byName(files,view.fileName);
-      return file?{name:file.name,size:file.size,url:URL.createObjectURL(file),view}:null;
+      const file=identity.resolve(view.pdf||view.fileName,'affected-plans');
+      return{name:file.name,manifestPath:identity.path(file),size:file.size,url:URL.createObjectURL(file),view};
     }).filter(Boolean);
   }
 
-  async function publishSheetPages(projectId,revision,set,files){
+  async function publishSheetPages(projectId,revision,set,identity,publisher,priorPages=[]){
     const out=[];
     for(const page of set.pages||[]){
       const row={
@@ -60,34 +127,89 @@
         currentRevision:page.currentRevision||null,singlePageFileName:page.singlePageFileName||null,
         singlePagePdf:page.singlePagePdf||null
       };
-      if(page.singlePageFileName){
-        const single=byName(files,page.singlePageFileName);
-        if(!single) throw new Error(`REVEX printing set is missing required single-page PDF ${page.singlePageFileName}. Re-sync this Revit revision.`);
-        const uploaded=await upload(projectId,revision,single,`printing-sets/sheets/${safe(set.id||set.name||'set')}`);
+      const single=pageFile(page,identity);
+      if(single){
+        const entry=identity.entry(single);
+        const prior=priorPages.find(p=>p.singlePageManifestPath===entry.path&&p.singlePageSha256===entry.digest&&
+          p.singlePageSize===single.size&&p.singlePageStoragePath===documentPath(projectId,revision,single,identity));
+        const uploaded=prior?{path:prior.singlePageStoragePath}:await upload(projectId,revision,single,identity,publisher);
         row.singlePageStoragePath=uploaded.path;
         row.singlePageSize=single.size;
+        row.singlePageManifestPath=entry.path;
+        row.singlePageSha256=entry.digest;
       }
       out.push(row);
     }
     return out;
   }
 
+  async function existingDoc(projectId,id,publisher){
+    const snapshot=await Store.api.getDoc(Store.api.doc(Store.db,'projects',projectId,'library',id));
+    publisher.assertCurrent();
+    return snapshot.exists()?snapshot.data():null;
+  }
+
+  async function packageDigest(identity){
+    const file=identity.manifestFile;
+    if(!file)throw new Error('The publication receipt requires integrity.json.');
+    const digest=await crypto.subtle.digest('SHA-256',await file.arrayBuffer());
+    return [...new Uint8Array(digest)].map(value=>value.toString(16).padStart(2,'0')).join('');
+  }
+
   const original=Store.syncPackage.bind(Store);
-  Store.syncPackage=async function(fileList,preferredProjectId,preferredSpecProjectId){
-    const files=Array.from(fileList||[]);
-    const printing=await readJson(byName(files,'printing-sets.json')).catch(()=>null);
-    const affected=await readJson(byName(files,'affected-plan-views.json')).catch(()=>null);
-    const result=await original(fileList,preferredProjectId,preferredSpecProjectId);
+  Store.syncPackage=async function(fileList,preferredProjectId,preferredSpecProjectId,options={}){
+    const files=Object.freeze(Array.from(fileList||[]));
+    const publisher=Store.captureSyncPublisher();
+    const ownerState=root.__revexState,ownerProject=ownerState?.projectId,ownerActivation=ownerState?.activationToken;
+    const assertReaderCurrent=()=>{
+      publisher.assertCurrent();
+      if(options.signal?.aborted||root.__revexState!==ownerState||ownerState?.projectId!==ownerProject||ownerState?.activationToken!==ownerActivation)
+        throw readerFailure('The active project changed or the index read was canceled. The preserved revision was not published and can be retried.');
+    };
+    if(typeof Store.prepareRevisionFiles!=='function'||typeof Store.publishRevisionFile!=='function')
+      throw new Error('REVEX sync components are not aligned. Reload Companion before retrying; this revision was not published.');
+    const identity=await Store.prepareRevisionFiles(files);
+    assertReaderCurrent();
+    const printing=await readJson(identity.resolve('printing-sets.json','',false));
+    const affected=await Store.readAffectedDocumentIndex(identity.resolve('affected-plan-views.json','',false),identity.integrity.revision,{assertCurrent:assertReaderCurrent,signal:options.signal});
+    assertReaderCurrent();
+    // Resolve every document relation before the core can advance the BIM revision.
+    const referenced=new Set();
+    for(const set of printing?.sets||[]){
+      referenced.add(identity.resolve(set.pdf||set.fileName,'printing-sets'));
+      for(const page of set.pages||[]){const file=pageFile(page,identity);if(file)referenced.add(file);}
+    }
+    for(const view of affected?.views||[])referenced.add(identity.resolve(view.pdf||view.fileName,'affected-plans'));
+    if(identity.files.some(file=>/\.pdf$/i.test(file.name)&&!referenced.has(file)))
+      throw new Error('REVEX package has a PDF missing from its printing/affected-plan index. Re-export the complete revision.');
+    const result=await original(files,preferredProjectId,preferredSpecProjectId);
+    publisher.assertCurrent();
     result.printingSets=printing;
-    result.printingDocs=localPrinting(printing,files);
+    result.printingDocs=localPrinting(printing,identity);
     result.affectedPlans=affected;
-    result.affectedPlanDocs=localAffected(affected,files);
+    result.affectedPlanDocs=localAffected(affected,identity);
+
+    const receiptId=`revex_revision_receipt_${docId(result.revision)}`;
+    const packageSha256=await packageDigest(identity);
+    if(result.cloud){
+      const receipt=await existingDoc(result.projectId,receiptId,publisher);
+      if(receipt){
+        if(receipt.schema!=='liber.revex.publication-receipt.v1'||receipt.projectId!==result.projectId||receipt.revision!==result.revision||receipt.packageSha256!==packageSha256)
+          throw new Error('The completed publication receipt does not match this immutable package.');
+        result.reusedPublication=true;
+        result.publicationReceipt={id:receiptId,packageSha256};
+        return result;
+      }
+    }
 
     const announce=()=>{
       try{root.dispatchEvent(new CustomEvent('revex:r24-revision',{detail:{projectId:result.projectId,revision:result.revision,cloud:!!result.cloud,affectedPlanViews:affected?.views?.length||0}}));}catch(_){}
     };
     try{
-      await Store.appendHistory(result.projectId,{
+      const sourceHistoryId=`source_${docId(result.revision)}`;
+      const previousHistory=result.cloud?await existingDoc(result.projectId,`revex_history_${sourceHistoryId}`,publisher):null;
+      publisher.assertCurrent();
+      if(!previousHistory)await Store.appendHistory(result.projectId,{
         id:`source_${docId(result.revision)}`,sourceRevision:result.revision,kind:'source-revision',operation:'sync',
         label:`Revit revision ${result.revision}`,affectedElementIds:[],affectedUniqueIds:[],affectedLevels:[],
         affectedViews:(affected?.views||[]).map(v=>v.name).filter(Boolean),before:null,
@@ -96,6 +218,7 @@
       });
     }catch(e){console.warn('[REVEX r113 Docs] source history',e);}
 
+    publisher.assertCurrent();
     if(!result.cloud||!Store.isCloud()||!Store.user?.uid||!Store.fs?.storage){
       post('docs-local-preview',{printingSets:printing?.sets?.length||0,affectedPlans:affected?.views?.length||0});
       announce();
@@ -104,43 +227,53 @@
 
     const printingRecords=[];
     for(const set of printing?.sets||[]){
-      const file=byName(files,set.fileName);
-      if(!file)continue;
-      const uploaded=await upload(result.projectId,result.revision,file,'printing-sets');
+      const file=identity.resolve(set.pdf||set.fileName,'printing-sets');
       const id=`revex_print_${docId(set.id||set.name)}_${docId(result.revision)}`;
+      const prior=await existingDoc(result.projectId,id,publisher);
+      const reusable=reusableDocument(prior,result.projectId,result.revision,file,identity);
+      const uploaded=reusable?{path:prior.storagePath,url:await Store.api.getDownloadURL(Store.api.ref(Store.fs.storage,prior.storagePath))}:await upload(result.projectId,result.revision,file,identity,publisher);
       const at=result.syncedAt||new Date().toISOString();
-      const sheetIndex=await publishSheetPages(result.projectId,result.revision,set,files);
+      const sheetIndex=await publishSheetPages(result.projectId,result.revision,set,identity,publisher,reusable?(prior.sheetIndex||[]):[]);
       const data=clone({
         type:'file',hidden:false,name:`${set.name||'Printing Set'} · ${result.revision}.pdf`,
-        storagePath:uploaded.path,folderPath:'record_out/printing_sets',size:file.size,mimeType:'application/pdf',
+        storagePath:uploaded.path,manifestPath:identity.path(file),sha256:identity.entry(file).digest,
+        folderPath:'record_out/printing_sets',size:file.size,mimeType:'application/pdf',
         source:'revex-revit-printing-set',editable:false,revexDocKind:'printing-set',printingSetId:set.id||null,
-        printingSetName:set.name||'Printing Set',revision:result.revision,sheetIndex,createdAt:at,updatedAt:at,createdBy:Store.user.uid
+        printingSetName:set.name||'Printing Set',revision:result.revision,sheetIndex,createdAt:at,updatedAt:at,createdBy:publisher.uid
       });
-      await Store.api.setDoc(Store.api.doc(Store.db,'projects',result.projectId,'library',id),data,clone({merge:true}));
+      publisher.assertCurrent();
+      if(!reusable||JSON.stringify(prior.sheetIndex)!==JSON.stringify(sheetIndex))
+        await Store.api.setDoc(Store.api.doc(Store.db,'projects',result.projectId,'library',id),data,clone({merge:true}));
       printingRecords.push({id,...data,url:uploaded.url});
     }
     result.printingDocs=printingRecords;
 
     const affectedRecords=[];
     for(const view of affected?.views||[]){
-      const file=byName(files,view.fileName);
-      if(!file)continue;
-      const uploaded=await upload(result.projectId,result.revision,file,'affected-plans');
+      const file=identity.resolve(view.pdf||view.fileName,'affected-plans');
       const id=`revex_plan_${docId(view.uniqueId||view.id||view.name)}_${docId(result.revision)}`;
+      const prior=await existingDoc(result.projectId,id,publisher);
+      const reusable=reusableDocument(prior,result.projectId,result.revision,file,identity);
+      const uploaded=reusable?{path:prior.storagePath,url:await Store.api.getDownloadURL(Store.api.ref(Store.fs.storage,prior.storagePath))}:await upload(result.projectId,result.revision,file,identity,publisher);
       const at=result.syncedAt||new Date().toISOString();
       const data=clone({
         type:'file',hidden:false,name:`${view.name||'Affected Plan'} · ${result.revision}.pdf`,
-        storagePath:uploaded.path,folderPath:'record_out/affected_plans',size:file.size,mimeType:'application/pdf',
+        storagePath:uploaded.path,manifestPath:identity.path(file),sha256:identity.entry(file).digest,
+        folderPath:'record_out/affected_plans',size:file.size,mimeType:'application/pdf',
         source:'revex-revit-affected-plan',editable:false,revexDocKind:'affected-revit-plan',
         revitViewId:view.id??null,revitViewUniqueId:view.uniqueId||null,revitViewName:view.name||'',
         levelId:view.levelId??null,levelUniqueId:view.levelUniqueId||null,levelName:view.levelName||null,
         changedElementIds:view.changedElementIds||[],reason:view.reason||'',revision:result.revision,
-        createdAt:at,updatedAt:at,createdBy:Store.user.uid
+        createdAt:at,updatedAt:at,createdBy:publisher.uid
       });
-      await Store.api.setDoc(Store.api.doc(Store.db,'projects',result.projectId,'library',id),data,clone({merge:true}));
+      publisher.assertCurrent();
+      if(!reusable)await Store.api.setDoc(Store.api.doc(Store.db,'projects',result.projectId,'library',id),data,clone({merge:true}));
       affectedRecords.push({id,...data,url:uploaded.url});
       try{
-        await Store.appendHistory(result.projectId,{
+        const planHistoryId=`plan_${docId(view.uniqueId||view.id||view.name)}_${docId(result.revision)}`;
+        const priorHistory=await existingDoc(result.projectId,`revex_history_${planHistoryId}`,publisher);
+        publisher.assertCurrent();
+        if(!priorHistory)await Store.appendHistory(result.projectId,{
           id:`plan_${docId(view.uniqueId||view.id||view.name)}_${docId(result.revision)}`,sourceRevision:result.revision,
           kind:'derived-plan',operation:'native-revit-export',label:`Updated plan · ${view.name||'Plan'}`,
           affectedElementIds:view.changedElementIds||[],affectedUniqueIds:[],affectedLevels:view.levelName?[view.levelName]:[],
@@ -150,6 +283,14 @@
       }catch(e){console.warn('[REVEX r113 Docs] plan history',e);}
     }
     result.affectedPlanDocs=affectedRecords;
+    publisher.assertCurrent();
+    // Separate write-once receipt, not a mutation of the immutable source revision.
+    await Store.api.setDoc(Store.api.doc(Store.db,'projects',result.projectId,'library',receiptId),clone({
+      schema:'liber.revex.publication-receipt.v1',type:'revex',hidden:true,revexKind:'publication-receipt',
+      projectId:result.projectId,revision:result.revision,packageSha256,completedAt:new Date().toISOString(),createdBy:publisher.uid
+    }),clone({merge:false}));
+    publisher.assertCurrent();
+    result.publicationReceipt={id:receiptId,packageSha256};
     post('docs-index-complete',{
       printingSets:printingRecords.length,
       printingPages:printingRecords.reduce((n,r)=>n+(r.sheetIndex?.length||0),0),
@@ -225,11 +366,13 @@
   }
 
   async function selectDocument(file,page=null,sheet=null){
+    const selectionCurrent=root.__revexDocumentViewer.beginSelection();
     const s=state();if(!s)return;
     const frame=document.getElementById('docs-frame'),empty=document.getElementById('docs-empty');
     const pageNumber=page?Number(page):null;
     const isolated=sheet?await isolatedSheetUrl(sheet):null;
     const full=file.localUrl||file.url||(file.storagePath&&typeof Store.fileUrl==='function'?await Store.fileUrl(file.storagePath):null);
+    if(!selectionCurrent())return;
     if(!isolated&&!full)throw new Error('Document URL is unavailable.');
     const url=isolated||full;
     s.docSelection={file,page:isolated?null:pageNumber,sourcePage:pageNumber,sheet:sheet||null,url,isolatedSheetUrl:isolated||null,mode:isolated?'isolated-sheet-pdf':'document'};
@@ -240,7 +383,7 @@
     const copy=document.getElementById('docs-copy-ref');if(copy)copy.disabled=false;
     const external=document.getElementById('docs-open-external');if(external)external.disabled=false;
     const share=ensureShareButton();if(share)share.hidden=!isolated;
-    if(frame){frame.src=isolated?url:(pageNumber?`${url}#page=${pageNumber}`:url);frame.hidden=false;}
+    root.__revexDocumentViewer.show(frame,s.docSelection);
     if(empty)empty.hidden=true;
     renderLibrary();
   }

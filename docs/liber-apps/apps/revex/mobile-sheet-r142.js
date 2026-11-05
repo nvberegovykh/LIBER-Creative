@@ -1,6 +1,6 @@
 (function(root){
 'use strict';
-const BUILD='20260820r143-ui-recovery1';
+const BUILD='20260909r190-mobile-controls1';
 const R142_COMPAT_BUILD_MARKER="const BUILD='20260819r142-mobile-sheet1'";void R142_COMPAT_BUILD_MARKER;
 if(root.__revexMobileSheetR142)return;
 const api=root.__revexMobileSheetR142={build:BUILD,presentationOnly:true,reusesExistingNodes:true,nodesStayInOriginalModule:true,docsOwner:'r133',chatOwner:'secure-chat'};
@@ -32,6 +32,8 @@ body.revex-mobile-touch #view-design .design-lanes{grid-template-columns:1fr!imp
 body.revex-mobile-touch #view-design .design-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;max-width:100%!important}
 body.revex-mobile-touch #view-bim>.rail,body.revex-mobile-touch #view-bim>#bim-inspector,body.revex-mobile-touch #view-design>.chapter-rail,body.revex-mobile-touch #view-design>#design-inspector{display:none!important}
 body.revex-mobile-touch.revex-r142-pane-model #view-bim>.rail,body.revex-mobile-touch.revex-r142-pane-properties #view-bim>#bim-inspector,body.revex-mobile-touch.revex-r142-pane-selector #view-design>.chapter-rail,body.revex-mobile-touch.revex-r142-pane-position #view-design>#design-inspector{display:block!important;position:fixed!important;z-index:9395!important;left:max(4px,var(--r133-safe-left,0px))!important;right:max(4px,var(--r133-safe-right,0px))!important;bottom:calc(var(--revex-r142-sheet-bar) + max(4px,var(--r133-safe-bottom,0px)))!important;width:auto!important;max-width:none!important;height:auto!important;min-height:0!important;max-height:min(58dvh,560px)!important;overflow:auto!important;-webkit-overflow-scrolling:touch!important;overscroll-behavior:contain!important;border:1px solid var(--line-2)!important;border-radius:13px 13px 0 0!important;background:rgba(13,17,23,.985)!important;box-shadow:0 16px 60px rgba(0,0,0,.55)!important;padding:12px!important}
+/* Open panes belong to this sheet, not legacy offscreen rail transforms. */
+body.revex-mobile-touch.revex-r142-pane-model #view-bim>.rail,body.revex-mobile-touch.revex-r142-pane-properties #view-bim>#bim-inspector,body.revex-mobile-touch.revex-r142-pane-selector #view-design>.chapter-rail,body.revex-mobile-touch.revex-r142-pane-position #view-design>#design-inspector{top:auto!important;transform:none!important}
 body.revex-mobile-touch #revex-r142-sheet{display:block!important;position:fixed!important;z-index:9400!important;left:max(4px,var(--r133-safe-left,0px))!important;right:max(4px,var(--r133-safe-right,0px))!important;bottom:max(4px,var(--r133-safe-bottom,0px))!important;width:auto!important;height:var(--revex-r142-sheet-bar)!important;max-width:none!important;min-width:0!important;border:1px solid var(--line-2)!important;border-radius:13px!important;background:rgba(13,17,23,.985)!important;box-shadow:0 10px 36px rgba(0,0,0,.5)!important;overflow:hidden!important}
 body.revex-mobile-touch #revex-r142-sheet[hidden],body.revex-mobile-touch.revex-r142-walk-active #revex-r142-sheet{display:none!important}
 body.revex-mobile-touch #revex-r142-sheet-tabs{display:grid!important;grid-template-columns:1fr 1fr 44px!important;height:100%!important;min-height:44px!important}
@@ -104,12 +106,14 @@ function sync(){
 function schedule(){if(scheduled)return;scheduled=true;(root.requestAnimationFrame||((fn)=>setTimeout(fn,0)))(()=>{scheduled=false;sync();ensureActionsMenu();});}
 function ensureActionsMenu(){
  const menu=byId('revex-r109-actions-menu');if(!menu)return;
- if(!byId('revex-r142-wallt-menu')){const b=document.createElement('button');b.type='button';b.id='revex-r142-wallt-menu';b.textContent='WALLT Helper / Fixer';b.addEventListener('click',()=>{menu.hidden=true;byId('revex-r109-actions')?.setAttribute('aria-expanded','false');byId('revex-wallt-open')?.click();});menu.appendChild(b);}
+ if(byId('revex-wallt-open')&&!byId('revex-r142-wallt-menu')){const b=document.createElement('button');b.type='button';b.id='revex-r142-wallt-menu';b.textContent='Ask WALLT';b.addEventListener('click',()=>{menu.hidden=true;byId('revex-r109-actions')?.setAttribute('aria-expanded','false');byId('revex-wallt-open')?.click();});menu.appendChild(b);}
  if(!byId('revex-r142-issues-menu')&&byId('revex-r126-issues-button')){const b=document.createElement('button');b.type='button';b.id='revex-r142-issues-menu';b.textContent='Project Issues';b.addEventListener('click',()=>{menu.hidden=true;byId('revex-r109-actions')?.setAttribute('aria-expanded','false');byId('revex-r126-issues-button')?.click();});menu.appendChild(b);}
 }
 function install(){
  css();sheet();sync();ensureActionsMenu();
  document.querySelectorAll('.main-nav [data-view]').forEach(button=>button.addEventListener('click',schedule));
+ document.getElementById('design-grid')?.addEventListener('click', event => { if (event.target.closest('.design-card') && mobile()) { sync(); openPane('b'); } });
+ document.addEventListener('keydown', event => { if (event.key === 'Escape' && currentPane && !document.querySelector('dialog[open],.drawer:not([hidden]),.render-modal:not([hidden])')) { closePane(); event.preventDefault(); } });
  for(const event of['revex:mobile-mode-changed','revex:walk-mode-changed','revex:source-revision-loaded','revex:authoritative-project-bound','revex:viewer-host-ready'])root.addEventListener(event,schedule);
  root.addEventListener('resize',schedule,{passive:true});root.addEventListener('orientationchange',schedule,{passive:true});
 }

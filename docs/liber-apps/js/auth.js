@@ -6,6 +6,9 @@
 class AuthManager {
     constructor() {
         this.currentUser = null;
+        this._sessionGeneration = 0;
+        this._sessionHydration = null;
+        this._loginPending = false;
         // Persist session for a very long period to "remember device"
         this.sessionTimeout = 10 * 365 * 24 * 60 * 60 * 1000; // ~10 years
         this.init();
@@ -13,24 +16,26 @@ class AuthManager {
 
     async init() {
         try {
-            // Restore currentUser from storage immediately (before any await) so admin checks work
+            // R158: restore local identity only as a cache.  It is never cloud-auth
+            // authority until Firebase's first auth-state callback confirms the UID.
+            this._cachedLocalUser = null;
             try {
                 const raw = localStorage.getItem('liber_current_user');
                 if (raw) {
                     const u = JSON.parse(raw);
-                    if (u && (u.id || u.uid)) this.currentUser = { id: u.id || u.uid, username: u.username, email: u.email, role: u.role || 'user' };
+                    if (u && (u.id || u.uid)) this._cachedLocalUser = { id: u.id || u.uid, uid: u.uid || u.id, username: u.username, email: u.email, role: u.role || 'user' };
                 }
-                if (!this.currentUser) {
+                if (!this._cachedLocalUser) {
                     const sess = localStorage.getItem('liber_session');
                     if (sess) {
                         const parsed = JSON.parse(sess);
                         const user = parsed?.user;
-                        if (user && (user.id || user.uid)) this.currentUser = { id: user.id || user.uid, username: user.username, email: user.email, role: user.role || 'user' };
+                        if (user && (user.id || user.uid)) this._cachedLocalUser = { id: user.id || user.uid, uid: user.uid || user.id, username: user.username, email: user.email, role: user.role || 'user' };
                     }
                 }
             } catch (_) {}
+            this.currentUser = null;
             await this.waitForCryptoManager();
-            this.checkSession();
             
             // Setup event listeners
             this.setupEventListeners();
@@ -44,7 +49,7 @@ class AuthManager {
             
             // Wait for Firebase to be available
             let attempts = 0;
-            const maxAttempts = 50; // 5 seconds with 100ms intervals
+            const maxAttempts = 150; // 15 seconds for Firebase service bootstrap
             
             while ((!window.firebaseService || !window.firebaseService.isInitialized) && attempts < maxAttempts) {
                 await new Promise(resolve => setTimeout(resolve, 100));
@@ -52,16 +57,28 @@ class AuthManager {
             }
             
             if (!window.firebaseService || !window.firebaseService.isInitialized) {
-                if (window.__devWarn) window.__devWarn('⚠️ Firebase service not available after waiting, continuing without user data');
+                console.error('Firebase service did not initialize; protected LIBER session remains closed.');
+                if (this.shouldOpenPublicShareView()) this.showPublicSharedContentView();
+                else this.showAuthScreen();
                 return;
             }
-            
+
+            let firebaseUser = null;
+            try {
+                firebaseUser = (typeof window.firebaseService.waitForAuthState === 'function')
+                    ? await window.firebaseService.waitForAuthState(15000)
+                    : await window.firebaseService.getCurrentUser();
+            } catch (error) {
+                console.error('Firebase auth-state prerequisite failed:', error?.message || error);
+                if (this.shouldOpenPublicShareView()) this.showPublicSharedContentView();
+                else this.showAuthScreen();
+                return;
+            }
+
             // Clean any legacy local users and disable auto test creation
             try { localStorage.removeItem('liber_users'); } catch {}
 
-            if (!this.currentUser && this.shouldOpenPublicShareView()){
-                this.showPublicSharedContentView();
-            }
+            await this.onFirebaseUserChanged(firebaseUser);
             
         } catch (error) {
             console.error('Auth initialization error:', error);
@@ -318,6 +335,23 @@ class AuthManager {
     /**
      * Handle user login
      */
+    authFailureMessage(error) {
+        const code = String(error?.code || '');
+        if (['auth/invalid-credential', 'auth/invalid-login-credentials', 'auth/wrong-password', 'auth/user-not-found'].includes(code)) {
+            return 'Email/password sign-in was not accepted. Check your details or use the sign-in method you registered with.';
+        }
+        if (code === 'auth/invalid-email') return 'Please enter a valid email address.';
+        if (code === 'auth/network-request-failed') return 'Could not reach the sign-in service. Check your connection and try again.';
+        if (code === 'auth/too-many-requests') return 'Sign-in is temporarily limited. Please wait and try again.';
+        if (code === 'auth/user-disabled') return 'This account has been disabled. Contact LIBER support.';
+        if (['auth/operation-not-allowed', 'auth/unauthorized-domain', 'auth/invalid-api-key', 'auth/app-not-authorized', 'auth/configuration-not-found'].includes(code)) {
+            return 'The sign-in service is not configured correctly. Contact LIBER support.';
+        }
+        if (['auth/popup-closed-by-user', 'auth/cancelled-popup-request'].includes(code)) return 'Sign-in was cancelled. Please try again when ready.';
+        if (code === 'auth/popup-blocked') return 'Your browser blocked the sign-in window. Allow the popup and try again.';
+        return 'Sign-in could not be completed. Please try again; this does not necessarily mean your password is wrong.';
+    }
+
     async handleLogin() {
         const email = document.getElementById('loginUsername').value.trim();
         const password = document.getElementById('loginPassword').value;
@@ -327,106 +361,29 @@ class AuthManager {
             return;
         }
 
+        if (this._loginPending) return;
+        if (!this.isValidEmail(email)) return this.showMessage('Please enter a valid email address', 'error');
+        this._loginPending = true;
         try {
-            // Wait for Firebase to be fully initialized
-        let attempts = 0;
-        const maxAttempts = 50; // 5 seconds
-        
-        while ((!window.firebaseService || !window.firebaseService.isInitialized) && attempts < maxAttempts) {
-            await new Promise(resolve => setTimeout(resolve, 100));
-            attempts++;
-        }
-        
-        // First validate email exists, then attempt password; track failures
-        if (window.firebaseService && window.firebaseService.isInitialized) {
+            const service = window.firebaseService;
+            if (!service) throw new Error('Authentication service is unavailable.');
+            await service.waitForInit();
+            // Firebase Auth alone validates credentials. Do not query private
+            // account records or implement browser-side password/lockout checks.
+            let firebaseUser;
             try {
-                if (window.__devLog) window.__devLog('Attempting Firebase login (email/password)...');
-                if (!this.isValidEmail(email)){
-                    this.showMessage('Please enter a valid email address', 'error');
-                    return;
-                }
-                // Check if account exists
-                let account = await window.firebaseService.findUserByEmail(email);
-                // Proceed even if the Firestore users/{uid} is missing (legacy) and rely on Auth result; we'll auto-create doc on success
-                // Check lockout
-                const lockUntilISO = account?.lockoutUntil;
-                if (lockUntilISO){
-                    const until = new Date(lockUntilISO).getTime();
-                    const now = Date.now();
-                    if (until && now < until){
-                        const remain = Math.ceil((until-now)/60000);
-                        this.showMessage(`Account locked. Try again in ${remain} minute(s). A password reset email was sent.`, 'error');
-                        return;
-                    }
-                }
-                // Attempt auth
-                let firebaseUser = null;
-                try{
-                    firebaseUser = await window.firebaseService.signInUser(email, password);
-                }catch(authErr){
-                    // Wrong password handling: increment failed attempts and possibly trigger reset
-                    try{
-                        const count = await window.firebaseService.incrementFailedLogin(account.id);
-                        if (Number(count) >= 5){
-                            await window.firebaseService.sendPasswordResetEmail(email);
-                            this.showMessage('Too many failed attempts. A password reset email has been sent.', 'error');
-                        } else {
-                            this.showMessage(`Incorrect password. Attempts left: ${5-Number(count)}.`, 'error');
-                        }
-                    }catch(_){ this.showMessage('Incorrect password', 'error'); }
-                    return;
-                }
-                
-                if (firebaseUser) {
-                    // Get user data from Firestore
-                    let userData = await window.firebaseService.getUserData(firebaseUser.uid);
-                    // Auto-create missing users/{uid} doc for legacy accounts
-                    if (!userData){
-                        await window.firebaseService.ensureUserDoc(firebaseUser.uid, { email, username: email.split('@')[0], isVerified: true, status: 'approved' });
-                        userData = await window.firebaseService.getUserData(firebaseUser.uid);
-                    }
-                    
-                    if (userData) {
-                        // Reset failed attempts on successful login
-                        try{ await window.firebaseService.resetFailedLogin(firebaseUser.uid); }catch(_){}
-                        try{
-                            const prefCountry = String(userData.country || '').trim().toUpperCase();
-                            const prefLanguage = String(userData.language || '').trim().toLowerCase();
-                            if (prefCountry) localStorage.setItem('liber_preferred_country', prefCountry);
-                            if (prefLanguage){
-                                localStorage.setItem('liber_preferred_language', prefLanguage);
-                                localStorage.setItem('liber_chat_translate_target', prefLanguage);
-                            }
-                        }catch(_){ }
-                        this.currentUser = {
-                            id: firebaseUser.uid,
-                            username: userData.username,
-                            email: userData.email,
-                            role: userData.role || 'user'
-                        };
-                        
-                        this.createSession();
-                        this.showDashboard();
-                        return;
-                    }
-                }
-            } catch (firebaseError) {
-                console.error('Firebase login failed:', firebaseError.message);
-                this.showMessage('Login failed. Please check your credentials.', 'error');
+                firebaseUser = await service.signInUser(email, password);
+            } catch (error) {
+                this.showMessage(this.authFailureMessage(error), 'error');
                 return;
             }
-        } else {
-            console.error('Firebase not available - authentication requires Firebase. No fallback.');
-            this.showMessage('Authentication service not available. Please contact support.', 'error');
-            return;
-        }
-        
-        // No local storage fallback as per user's explicit instruction
-        this.showMessage('Authentication failed. Please try again.', 'error');
-
+            // Auth callbacks and explicit sign-in share one profile/session owner.
+            await this.onFirebaseUserChanged(firebaseUser);
         } catch (error) {
-            console.error('Login error:', error);
-            this.showMessage('Login failed. Please try again.', 'error');
+            console.error('Authentication service unavailable:', error?.code || error?.message);
+            this.showMessage('Authentication service is unavailable. Please try again.', 'error');
+        } finally {
+            this._loginPending = false;
         }
     }
 
@@ -566,32 +523,11 @@ class AuthManager {
             const result = await firebase.signInWithPopup(window.firebaseService.auth, provider);
             const user = result.user;
             if (user){
-                // Ensure doc exists without forcing provider displayName over custom username.
-                await window.firebaseService.ensureUserDoc(user.uid, {
-                    username: '',
-                    email: user.email || '',
-                    role: 'user',
-                    isVerified: true,
-                    status: 'approved'
-                });
-                const data = (await window.firebaseService.getUserData(user.uid)) || {};
-                try{
-                    const prefCountry = String(data.country || '').trim().toUpperCase();
-                    const prefLanguage = String(data.language || '').trim().toLowerCase();
-                    if (prefCountry) localStorage.setItem('liber_preferred_country', prefCountry);
-                    if (prefLanguage){
-                        localStorage.setItem('liber_preferred_language', prefLanguage);
-                        localStorage.setItem('liber_chat_translate_target', prefLanguage);
-                    }
-                }catch(_){ }
-                const stableUsername = String(data.username || '').trim() || String(user.email || '').split('@')[0] || 'user';
-                this.currentUser = { id: user.uid, username: stableUsername, email: user.email, role: (data&&data.role)||'user' };
-                this.createSession();
-                this.showDashboard();
+                await this.onFirebaseUserChanged(user);
             }
         }catch(e){
             console.error('Google sign-in failed', e);
-            this.showMessage('Google sign-in failed', 'error');
+            this.showMessage(this.authFailureMessage(e), 'error');
         }
     }
 
@@ -1244,6 +1180,8 @@ class AuthManager {
     }
 
     createSession() {
+        const uid = this.currentUser?.uid || this.currentUser?.id;
+        if (!uid || window.firebaseService?.auth?.currentUser?.uid !== uid) return false;
         const session = {
             user: this.currentUser,
             createdAt: new Date().toISOString(),
@@ -1280,52 +1218,25 @@ class AuthManager {
         
         // Update user info in dashboard
         this.updateUserInfo();
+        return true;
     }
 
-    checkSession() {
+    async checkSession() {
+        const service = window.firebaseService;
+        if (!service) return;
         try {
-            const sessionData = localStorage.getItem('liber_session');
-            if (!sessionData) return;
-
-            const session = JSON.parse(sessionData);
-            const now = new Date();
-            const expiresAt = new Date(session.expiresAt);
-
-            if (now < expiresAt) {
-                this.currentUser = session.user;
-                this.createSession();
-                this.showDashboard();
-            } else {
-                // If local session is expired, try to recover from Firebase auth state
-                if (window.firebaseService && window.firebaseService.auth && window.firebaseService.auth.currentUser) {
-                    const u = window.firebaseService.auth.currentUser;
-                    // Attempt to read profile to rebuild session
-                    (async () => {
-                        try {
-                            const data = await window.firebaseService.getUserData(u.uid);
-                            this.currentUser = {
-                                id: u.uid,
-                                username: (data && data.username) || (u.email || ''),
-                                email: u.email || '',
-                                role: (data && data.role) || 'user'
-                            };
-                            this.createSession();
-                            this.showDashboard();
-                        } catch (_) {
-                            this.logout();
-                        }
-                    })();
-                } else {
-                    this.logout();
-                }
-            }
+            await service.waitForAuthState();
+            return await this.onFirebaseUserChanged(service.auth.currentUser);
         } catch (error) {
-            console.error('Session check error:', error);
-            this.logout();
+            console.error('Session prerequisite unavailable:', error?.code || error?.message);
+            this.showMessage('The sign-in service is unavailable. Please try again.', 'error');
         }
     }
 
     async logout() {
+        this._sessionGeneration++;
+        this._sessionHydration = null;
+        this._signingOut = true;
         try {
             // Sign out from Firebase if available
             if (window.firebaseService && window.firebaseService.isInitialized) {
@@ -1335,6 +1246,7 @@ class AuthManager {
         } catch (error) {
             console.error('Firebase sign out error:', error);
         }
+        this._signingOut = false;
         
         this.currentUser = null;
         localStorage.removeItem('liber_session');
@@ -1361,6 +1273,7 @@ class AuthManager {
         if (widget && sessionStorage.getItem('wallE_activated_on_login') !== 'true') {
             widget.style.display = 'none';
         }
+        window.wallE?.reconcileAuthenticationVisibility?.();
         
         // One-time prefill email for switch-account flow.
         try{
@@ -1390,6 +1303,8 @@ class AuthManager {
     }
 
     showDashboard() {
+        const uid = this.currentUser?.uid || this.currentUser?.id;
+        if (!uid || window.firebaseService?.auth?.currentUser?.uid !== uid) return false;
         document.getElementById('auth-screen').classList.add('hidden');
         document.getElementById('dashboard').classList.remove('hidden');
         // Lock page scroll and keep scrolling inside active dashboard sections.
@@ -1399,6 +1314,7 @@ class AuthManager {
         if (window.dashboardManager) {
             window.dashboardManager.init();
         }
+        window.wallE?.reconcileAuthenticationVisibility?.();
     }
 
     showMessage(message, type = 'info') {
@@ -1421,50 +1337,109 @@ class AuthManager {
     /**
      * Called by firebase-service onAuthStateChanged after any Firebase auth state change.
      * Rebuilds the app session in-place — no page reload needed.
-     * Skipped if authManager already has this uid as currentUser (initial login path).
+     * One owner finalizes each Firebase UID/auth-state revision. Late profile
+     * reads never resurrect a signed-out or replaced account.
      */
-    onFirebaseUserChanged(firebaseUser) {
-        if (!firebaseUser) return;
-        const newUid = firebaseUser.uid;
-        // Already the active user — nothing to do.
-        if (this.currentUser && (this.currentUser.id === newUid || this.currentUser.uid === newUid)) return;
-        // This is a NEW user (account switch completed via signInWithCustomToken or re-auth).
-        // Rebuild session from Firestore profile.
-        (async () => {
+    async onFirebaseUserChanged(firebaseUser) {
+        const service = window.firebaseService;
+        const newUid = firebaseUser?.uid || '';
+        if ((service?.auth?.currentUser?.uid || '') !== newUid) return null;
+        if (!firebaseUser) {
+            this._sessionGeneration++;
+            this._sessionHydration = null;
+            this.currentUser = null;
+            this._cachedLocalUser = null;
+            try { localStorage.removeItem('liber_session'); } catch (_) { }
+            try { localStorage.removeItem('liber_current_user'); } catch (_) { }
+            try { localStorage.removeItem('liber_user_password'); } catch (_) { }
+            document.getElementById('auth-account-data-retry')?.remove();
+            if (this.shouldOpenPublicShareView()) this.showPublicSharedContentView();
+            else this.showAuthScreen();
+            return null;
+        }
+        if (this._signingOut) return null;
+        const revision = service._authStateRevision || 0;
+        const previous = this._sessionHydration;
+        if (previous?.uid === newUid && previous.revision === revision) return previous.promise;
+        if (this.currentUser && (this.currentUser.uid || this.currentUser.id) !== newUid) {
+            this.currentUser = null;
+            this._cachedLocalUser = null;
+            for (const key of ['liber_session', 'liber_current_user', 'liber_user_password']) {
+                try { localStorage.removeItem(key); } catch (_) { }
+            }
+            this.showAuthScreen();
+        }
+        const generation = ++this._sessionGeneration;
+        const isCurrent = () => !this._signingOut && this._sessionGeneration === generation &&
+            window.firebaseService === service && service.auth?.currentUser?.uid === newUid &&
+            (service._authStateRevision || 0) === revision;
+        const hydration = { uid: newUid, revision, promise: null };
+        this._sessionHydration = hydration;
+        hydration.promise = (async () => {
             try {
-                let role = 'user';
-                let username = firebaseUser.displayName || firebaseUser.email || '';
+                let data = await service.getUserData(newUid);
+                if (!isCurrent()) return null;
+                if (!data) {
+                    await service.ensureUserDoc(newUid, {
+                        email: firebaseUser.email || '', username: '',
+                        isVerified: !!firebaseUser.emailVerified, status: 'approved'
+                    });
+                    if (!isCurrent()) return null;
+                    data = await service.getUserData(newUid);
+                    if (!isCurrent()) return null;
+                }
+                if (!data) throw new Error('Account profile is unavailable.');
+                this.currentUser = {
+                    id: newUid, uid: newUid,
+                    username: data.username || firebaseUser.displayName || firebaseUser.email || '',
+                    email: firebaseUser.email || '', role: data.role || 'user'
+                };
+                this._cachedLocalUser = this.currentUser;
                 try {
-                    const data = await window.firebaseService.getUserData(newUid);
-                    if (data) {
-                        role = data.role || 'user';
-                        username = data.username || username;
+                    const country = String(data.country || '').trim().toUpperCase();
+                    const language = String(data.language || '').trim().toLowerCase();
+                    if (country) localStorage.setItem('liber_preferred_country', country);
+                    if (language) {
+                        localStorage.setItem('liber_preferred_language', language);
+                        localStorage.setItem('liber_chat_translate_target', language);
                     }
                 } catch (_) { }
-                this.currentUser = {
-                    id: newUid,
-                    uid: newUid,
-                    username,
-                    email: firebaseUser.email || '',
-                    role
-                };
-                this.createSession();
-                // Show dashboard if we're on the auth screen, or re-init if already on dashboard.
+                if (!this.createSession()) return null;
+                document.getElementById('auth-account-data-retry')?.remove();
                 const authScreen = document.getElementById('auth-screen');
-                const dashboard = document.getElementById('dashboard');
-                if (authScreen && !authScreen.classList.contains('hidden')) {
-                    this.showDashboard();
-                } else if (dashboard && !dashboard.classList.contains('hidden')) {
-                    // Already on dashboard — just refresh header info and re-init.
-                    this.updateUserInfo();
-                    if (window.dashboardManager) {
-                        try { window.dashboardManager.init(); } catch (_) { }
-                    }
-                }
-            } catch (e) {
-                console.error('onFirebaseUserChanged rebuild failed:', e);
+                if (authScreen && !authScreen.classList.contains('hidden')) this.showDashboard();
+                else this.updateUserInfo();
+                return this.currentUser;
+            } catch (error) {
+                if (!isCurrent()) return null;
+                console.error('Authenticated account data unavailable:', error?.code || error?.message);
+                this.currentUser = null;
+                this.showAccountDataUnavailable(firebaseUser, generation);
+                return null;
             }
         })();
+        return hydration.promise;
+    }
+
+    showAccountDataUnavailable(firebaseUser, generation) {
+        this.showAuthScreen();
+        document.getElementById('auth-account-data-retry')?.remove();
+        const message = document.createElement('div');
+        message.id = 'auth-account-data-retry';
+        message.className = 'auth-message error';
+        message.setAttribute('role', 'status');
+        message.textContent = 'You are signed in, but your LIBER account data is unavailable. Retry loading it; you do not need to sign in again. ';
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.textContent = 'Retry account loading';
+        retry.addEventListener('click', () => {
+            if (this._sessionGeneration !== generation || window.firebaseService?.auth?.currentUser?.uid !== firebaseUser.uid) return;
+            this._sessionHydration = null;
+            retry.disabled = true;
+            void this.onFirebaseUserChanged(window.firebaseService.auth.currentUser);
+        });
+        message.appendChild(retry);
+        document.getElementById('auth-screen')?.appendChild(message);
     }
 
     /**
@@ -1513,6 +1488,7 @@ class AuthManager {
                     if (window.__devLog) window.__devLog('Hiding WALL-E widget...');
                     widget.classList.remove('mobile-activated');
                     sessionStorage.removeItem('wallE_activated_on_login');
+                    window.wallE?.reconcileAuthenticationVisibility?.();
                     return;
                 }
                 
@@ -1547,6 +1523,8 @@ class AuthManager {
                     
                     // Use CSS class instead of inline styles for better compatibility
                     widgetToShow.classList.add('mobile-activated');
+                    sessionStorage.setItem('wallE_activated_on_login', 'true');
+                    window.wallE?.reconcileAuthenticationVisibility?.();
                     
                     // Expand the widget
                     if (window.wallE && typeof window.wallE.expandChat === 'function') {

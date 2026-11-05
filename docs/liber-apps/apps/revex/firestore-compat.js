@@ -66,7 +66,8 @@
       const path=String(ref?.path||'');
       const isRevexSpecSource=/\/sources\/revex-revit$/i.test(path)||/\/library\/revex_spec_source$/i.test(path);
       const isRevexLibrary=/^projects\/[^/]+\/library\/revex_/i.test(path);
-      if(!isRevexSpecSource&&!isRevexLibrary)return originalSetDoc(ref,data,options);
+      const isSpecProject=/^specProjects\//i.test(path);
+      if(!isRevexSpecSource&&!isRevexLibrary&&!isSpecProject)return originalSetDoc(ref,data,options);
       const nextOptions=options===undefined?undefined:firestorePlain(options);
       if(!isRevexSpecSource||!data||!Array.isArray(data.payload))
         return originalSetDoc(ref,firestorePlain(data),nextOptions);

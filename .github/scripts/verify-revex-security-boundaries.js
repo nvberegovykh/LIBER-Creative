@@ -20,6 +20,7 @@ for (const source of [secureKeys, email, chat, wallt, revexWallt, assistant]) ne
 const memory = new Map([['liber_keys_url', 'https://attacker.invalid/config.json']]);
 const context = vm.createContext({
   console, atob, btoa, URL, TextEncoder, TextDecoder,
+  location: { origin: 'https://liberpict.com' },
   crypto: require('node:crypto').webcrypto,
   fetch: async () => { throw new Error('network disabled in security verifier'); },
   localStorage: {
@@ -31,7 +32,7 @@ const context = vm.createContext({
 context.window = context;
 vm.runInContext(secureKeys, context, { filename: 'secure-keys.js' });
 const manager = context.secureKeyManager;
-assert.equal(manager.getKeySource(), 'https://europe-west1-liber-apps-cca20.cloudfunctions.net/getPublicConfig');
+assert.equal(manager.getKeySource(), 'https://liberpict.com/__liber_recovery/public-config');
 assert.equal(manager.setKeySource('https://attacker.invalid/config.json'), false);
 assert.equal(memory.has('liber_keys_url'), false);
 

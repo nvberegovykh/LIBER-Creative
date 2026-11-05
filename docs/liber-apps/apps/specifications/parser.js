@@ -90,7 +90,9 @@
       const uniq = new Set(vals);
       const hit = (re) => vals.length && vals.filter((v) => re.test(v)).length / vals.length > 0.7;
       let role = 'param';
-      if (/level|floor|story|storey/.test(h) || hit(LEVEL_RE)) role = 'level';
+      if (/^(?:item(?: name| description)?|designation|product name)$/.test(h.replace(/_/g, ' '))) role = 'typeName';
+      else if (/^(?:notes?|remarks?|instructions?|unit|units)$/.test(h)) role = 'param';
+      else if (/level|floor|story|storey/.test(h) || hit(LEVEL_RE)) role = 'level';
       else if (/area|sf|region/.test(h) || hit(AREA_RE)) role = 'area';
       else if (/count|qty|quantity|number of/.test(h) || (hit(NUM_RE) && vals.every((v) => Number.isInteger(toNumber(v))))) role = 'qty';
       else if (/mark|number|no\.|id|tag/.test(h) || (hit(MARK_RE) && uniq.size > vals.length * 0.6)) role = 'mark';
@@ -105,6 +107,7 @@
       let best = -1, len = -1;
       for (let i = 0; i < n; i++) {
         if (['area', 'qty', 'cost'].includes(roles[i])) continue;
+        if (/^(?:notes?|remarks?|instructions?|unit|units)$/i.test(clean(headers[i]))) continue;
         const avg = dataRows.reduce((s, r) => s + clean(r[i]).length, 0) / Math.max(1, dataRows.length);
         if (avg > len) { len = avg; best = i; }
       }
@@ -123,18 +126,36 @@
     return (h1.toString(36) + h2.toString(36)).slice(0, 16);
   }
   const MasterFormatNorm = (s) => String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim();
+  function contentIdentity(fields, legacyKey, occurrence = 1) {
+    // Encode exact text before the legacy case-folding hash: punctuation, case and
+    // decimal precision all belong to the immutable source record.
+    const contentKey = fingerprint([Array.from(JSON.stringify(fields), c => c.codePointAt(0)).join('.')]);
+    return { key: `${legacyKey}_${contentKey}_${occurrence}`, identity: { method: 'content-occurrence', legacyKey, contentKey, occurrence, reviewOnChange: true } };
+  }
 
   /**
    * Parse one grid (array of arrays) into a schedule object.
    * @param {string} fallbackName - file/sheet name used if no title row
    */
-  function parseGrid(grid, fallbackName) {
+  function parseGrid(grid, fallbackName, suppliedHeaders = null) {
+    const nativeHeaders = Array.isArray(suppliedHeaders) && suppliedHeaders.length ? suppliedHeaders.map(clean) : null;
+    const nativeMark = nativeHeaders ? nativeHeaders.findIndex(h => /mark|\b(number|id|tag)\b/i.test(h) && !/count|qty|quantity|number of|level|floor/i.test(h)) : -1;
+    // Native exports already separate headings from body rows. A complete row
+    // is data even when a narrow schedule resembles a CSV group or subtotal.
+    const rowKind = (row) => {
+      const kind = classifyRow(row);
+      if (kind === 'subtotal' && /:\s*\d+$/.test(clean(row[0]))) return kind;
+      if (nativeHeaders && kind !== 'blank' && kind !== 'grandtotal' &&
+          (nativeHeaders.every((_, column) => clean(row[column]) !== '') ||
+           (nativeMark >= 0 && MARK_RE.test(clean(row[nativeMark])) && !LEVEL_RE.test(clean(row[nativeMark]))))) return 'data';
+      return kind;
+    };
     let rows = rectangularise(grid.map((r) => r.map(clean))).filter((r) => r.length);
     // title row: first non-empty row with exactly one filled cell
     let title = '';
     let i = 0;
     while (i < rows.length && isEmptyRow(rows[i])) i++;
-    if (i < rows.length) {
+    if (!nativeHeaders && i < rows.length) {
       const cand = clean(rows[i][0]);
       const filled = rows[i].filter((c) => c !== '').length;
       const rest = rows.slice(i + 1);
@@ -146,16 +167,25 @@
     while (i < rows.length && isEmptyRow(rows[i])) i++;
 
     // headers
-    let headers = null;
+    let headers = nativeHeaders ? nativeHeaders.slice() : null;
     const first = rows[i];
     const second = rows.slice(i + 1).find((r) => !isEmptyRow(r));
-    if (first && looksLikeHeader(first, second) && classifyRow(first) === 'data') { headers = first.map(clean); i++; }
+    if (!headers && first && looksLikeHeader(first, second) && classifyRow(first) === 'data') { headers = first.map(clean); i++; }
+    if (nativeHeaders && first && nativeHeaders.every((h, k) => clean(first[k]) === h) && first.slice(nativeHeaders.length).every(v => !clean(v))) i++;
 
     const body = rows.slice(i);
-    const dataRows = body.filter((r) => classifyRow(r) === 'data');
+    const dataRows = body.filter((r) => rowKind(r) === 'data');
     const width = Math.max(headers ? headers.length : 0, ...body.map((r) => r.length), 1);
     if (!headers) headers = Array.from({ length: width }, (_, k) => 'Field ' + (k + 1));
     while (headers.length < width) headers.push('Field ' + (headers.length + 1));
+    const originalHeaders = headers.slice(), usedHeaders = new Set();
+    headers = headers.map((h, index) => {
+      const label = h && !/^__.*__$/.test(h) ? h : `Field ${index + 1}${h ? ' (' + h + ')' : ''}`;
+      let key = label, suffix = 2;
+      while (usedHeaders.has(key)) key = `${label} (${suffix++})`;
+      usedHeaders.add(key);
+      return key;
+    });
 
     const roles = inferRoles(headers, dataRows);
     const roleIdx = (role) => roles.indexOf(role);
@@ -167,7 +197,7 @@
     const totals = [];
 
     for (const r of body) {
-      const kind = classifyRow(r);
+      const kind = rowKind(r);
       if (kind === 'blank') continue;
       if (kind === 'group') { currentGroup = clean(r[0]); if (currentGroup && !groups.includes(currentGroup)) groups.push(currentGroup); continue; }
       if (kind === 'subtotal' || kind === 'grandtotal') { totals.push({ kind, label: clean(r[0]), value: clean(r.filter((c) => c !== '').pop()) }); continue; }
@@ -182,7 +212,9 @@
       const markCol = roleIdx('mark');
       const nameCol = roleIdx('name');
       const areaCol = roleIdx('area');
-      const qtyCol = roleIdx('qty');
+      const explicitQty = headers.findIndex(h=>/^(?:total\s+)?(?:qty\.?|quantity|count|number of)(?:$|\s|\()/i.test(clean(h)));
+      // Named source columns outrank numeric-shape guesses such as stock length.
+      const qtyCol = explicitQty>=0?explicitQty:(headers.every(h=>/^Field \d+/i.test(h))?roleIdx('qty'):-1);
       const catCol = roleIdx('category');
 
       let label = typeCol >= 0 ? clean(r[typeCol]) : '';
@@ -214,7 +246,26 @@
       items.push(item);
     }
 
-    return { name, headers, roles, groups, items, totals, rowCount: items.length };
+    // A label is not a unique source identity. Repeated types/rooms must remain separate.
+    // When the source gives no unique row ID, retain exact content and occurrence; on a
+    // changed ambiguous row the prior record (and its notes) stays recoverable as removed.
+    const keyed = new Map();
+    items.forEach(item => { const rows = keyed.get(item.key) || []; rows.push(item); keyed.set(item.key, rows); });
+    let identityReviewCount = 0;
+    for (const [legacyKey, rows] of keyed) {
+      if (rows.length < 2) continue;
+      const occurrences = new Map();
+      rows.forEach(item => {
+        const contentKey = contentIdentity(item.fields, legacyKey).identity.contentKey;
+        const occurrence = (occurrences.get(contentKey) || 0) + 1;
+        occurrences.set(contentKey, occurrence);
+        const resolved = contentIdentity(item.fields, legacyKey, occurrence);
+        item.key = resolved.key;
+        item.sourceRowIdentity = resolved.identity;
+        identityReviewCount++;
+      });
+    }
+    return { name, headers, originalHeaders, roles, groups, items, totals, rowCount: items.length, identityReviewCount };
   }
 
   function parseCSVText(text, fallbackName) {
@@ -240,5 +291,5 @@
     throw new Error('Unsupported file type: .' + ext);
   }
 
-  root.ScheduleParser = { parseFile, parseCSVText, parseGrid, splitCSV, fingerprint, classifyRow };
+  root.ScheduleParser = { parseFile, parseCSVText, parseGrid, splitCSV, fingerprint, contentIdentity, classifyRow };
 })(typeof window !== 'undefined' ? window : globalThis);

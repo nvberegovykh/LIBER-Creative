@@ -101,14 +101,14 @@
             fetch('invoices.html')
                 .then(response => {
                     if (response.ok) {
-                        return fetch('css/styles.css');
+                        return fetch('css/styles.css?v=20260914r192-morning1');
                     } else {
                         throw new Error('invoices.html not found');
                     }
                 })
                 .then(response => {
                     if (response.ok) {
-                        return fetch('js/app.js');
+                        return fetch('js/app.js?v=20260914r192-morning1');
                     } else {
                         throw new Error('styles.css not found');
                     }

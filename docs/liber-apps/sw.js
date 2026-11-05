@@ -10,10 +10,7 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
 	event.waitUntil((async () => {
-		try {
-			const names = await caches.keys();
-			await Promise.all(names.map((name) => caches.delete(name)));
-		} catch (_) {}
+		// App updates must not erase cached project documents or user data.
 		await clients.claim();
 	})());
 });
@@ -27,17 +24,13 @@ self.addEventListener('fetch', (event) => {
 		if (!request || request.method !== 'GET') return;
 		const url = new URL(request.url);
 		if (url.origin !== self.location.origin) return;
-		const isRevex = /\/liber-apps\/apps\/revex\//.test(url.pathname);
-		const isCoreAsset = isRevex && (/\.(?:js|css|html|webmanifest)$/.test(url.pathname) || /\/revex-r39-runtime\.js$/.test(url.pathname));
+		const isApplication = url.pathname.startsWith('/liber-apps/');
+		const isCoreAsset = isApplication && /\.(?:js|mjs|css|html|webmanifest)$/.test(url.pathname);
 		if (!isCoreAsset) return;
 		event.respondWith((async () => {
-			try {
-				return await fetch(request, { cache: 'no-store' });
-			} catch (error) {
-				const cached = await caches.match(request);
-				if (cached) return cached;
-				throw error;
-			}
+			// A stale script fallback can run incompatible controllers together.
+			// HTTP revalidation still permits the server to return unchanged bytes.
+			return await fetch(request, { cache: 'no-cache' });
 		})());
 	} catch (_) {}
 });
@@ -149,10 +142,7 @@ self.addEventListener('message', (event) => {
 	const msg = event.data || {};
 	if (msg && msg.type === 'force-reload') {
 		event.waitUntil((async () => {
-			try {
-				const names = await caches.keys();
-				await Promise.all(names.map((n) => caches.delete(n)));
-			} catch (_) {}
+			// Core assets are revalidated on every load; preserve document caches.
 			const list = await clients.matchAll({ type: 'window', includeUncontrolled: true });
 			list.forEach((c) => c.postMessage && c.postMessage({ type: 'force-reload-done' }));
 		})());

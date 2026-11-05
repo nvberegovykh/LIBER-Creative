@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import './design-versions-r52.js';
+import './design-versions-r52.js?v=20260914r192-design-conflicts2';
 
-const BUILD = '20260818-current-workspace1';
+const BUILD = '20260909r190-mobile-controls1';
 const state = window.__revexState;
 const $ = (selector, root = document) => root.querySelector(selector);
 
@@ -136,7 +136,7 @@ if (!window.__revexWorkspaceR51) {
       );
       this.look?.();
       this.requestRender?.();
-      try { canvas?.requestPointerLock?.(); } catch (_) {}
+      if (!this.walkUsesTouch?.()) { try { canvas?.requestPointerLock?.(); } catch (_) {} }
       diagnostic('INFO', 'WALK_START', 'ACC-like Walk started. Click the model for mouse look; WASD moves, Shift accelerates, Esc exits.');
     };
 
@@ -177,7 +177,7 @@ if (!window.__revexWorkspaceR51) {
 
     document.addEventListener('pointerlockchange', () => {
       v.__revexWalkPointerLocked = document.pointerLockElement === canvas;
-      if (!v.__revexWalkPointerLocked && v.walk && !document.hidden) {
+      if (!v.__revexWalkPointerLocked && v.walk && !v.walkUsesTouch?.() && !document.hidden) {
         originalWalkOff();
         $('#walk-toggle')?.classList.remove('active');
         const controls = $('#walk-controls'); if (controls) controls.hidden = true;
@@ -191,7 +191,7 @@ if (!window.__revexWorkspaceR51) {
       v.requestRender?.();
     }, true);
     canvas?.addEventListener('click', () => {
-      if (v.walk && document.pointerLockElement !== canvas) canvas.requestPointerLock?.();
+      if (v.walk && !v.walkUsesTouch?.() && document.pointerLockElement !== canvas) canvas.requestPointerLock?.();
     });
     document.addEventListener('keydown', (event) => {
       if (!v.walk) return;

@@ -196,6 +196,9 @@ if (!window.__revexReviewIntegrityR50) {
     if (!button) return;
     const id = button.id;
     if (!['fit-model', 'fit-model-rail', 'detail-toggle', 'walk-toggle', 'section-toggle', 'section-reset'].includes(id)) return;
+    // The current interaction owner selects the section volume and renders
+    // its inspector as well as enabling clipping. Let its handler do both.
+    if (id === 'section-toggle' && window.__revexViewerInteractionR85?.ownsSectionControls) return;
     const v = ensureViewerPatched();
     if (!v) return;
     event.preventDefault();

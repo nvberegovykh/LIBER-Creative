@@ -7,7 +7,6 @@
 
   const originalListIn=Store.listIn.bind(Store);
   const cache=new Map();
-  const forcedRefresh=new Set();
 
   async function packageJson(url){
     const key=String(url||'').trim();
@@ -19,6 +18,7 @@
       return response.json();
     })();
     cache.set(key,promise);
+    while(cache.size>6) cache.delete(cache.keys().next().value);
     try{return await promise;}catch(error){cache.delete(key);throw error;}
   }
 
@@ -30,13 +30,13 @@
       const schedules=Array.isArray(pack?.payload)?pack.payload:[];
       const index=Number(source.payloadIndex);
       let schedule=Number.isInteger(index)&&index>=0?schedules[index]:null;
+      const scheduleId=row=>String(row?.sourceScheduleId||row?.presentation?.scheduleUniqueId||'');
+      if(schedule&&source.sourceScheduleId&&scheduleId(schedule)!==String(source.sourceScheduleId)) schedule=null;
       if(!schedule&&source.sourceScheduleId){
         schedule=schedules.find((row)=>String(row?.sourceScheduleId||row?.presentation?.scheduleUniqueId||'')===String(source.sourceScheduleId));
       }
       if(!schedule) throw new Error(`Schedule ${source.sourceScheduleId||source.id||''} is missing from its immutable REVEX package.`);
-      const refreshKey=String(source.id||source.sourceScheduleId||source.payloadIndex||'');
-      const needsOneRefresh=!!refreshKey&&String(source.appliedRev||'')===String(source.rev||'')&&!forcedRefresh.has(refreshKey);
-      if(needsOneRefresh) forcedRefresh.add(refreshKey);
+      const needsOneRefresh=String(source.appliedRev||'')===String(source.rev||'')&&(source.appliedPresentationSchema!=='liber.revit.schedule.presentation.v1'||source.appliedMergeSchema!=='liber.spec.source-merge.v4');
       return {
         ...source,
         payload:[schedule],
@@ -45,7 +45,8 @@
       };
     }catch(error){
       console.error('[REVEX Spec] source hydration failed',source.id,error);
-      return {...source,payloadHydrationError:String(error?.message||error)};
+      // A failed download is not an empty schedule. Preserve all previously imported rows.
+      return {...source,payload:null,payloadHydrationError:String(error?.message||error)};
     }
   }
 

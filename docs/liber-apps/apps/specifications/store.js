@@ -100,27 +100,75 @@
     isCloud() { return this.mode === 'cloud'; },
     me() { return this.user || { uid: 'local', email: 'local@device', name: 'Local user' }; },
 
+    captureProjectListOwner() {
+      const store = this, mode = this.mode, fs = this.fs, auth = fs?.auth;
+      const user = this.user, authUser = auth?.currentUser, revision = fs?._authStateRevision;
+      const api = this.api, db = this.db, service = getFS(), uid = user?.uid, authUid = authUser?.uid;
+      const isCurrent = () => store.mode === mode && store.fs === fs && fs?.auth === auth
+        && store.user === user && auth?.currentUser === authUser && fs?._authStateRevision === revision
+        && store.api === api && store.db === db && getFS() === service
+        && store.user?.uid === uid && auth?.currentUser?.uid === authUid;
+      return { isCurrent, assertCurrent() {
+        if (!isCurrent() || (mode === 'cloud' && (!uid || uid !== authUid)))
+          throw new Error('Sign-in changed while loading specification projects. Please retry.');
+      } };
+    },
+
+    // Cross-realm Firestore write boundary. Prefer firebaseService wrappers because
+    // those functions execute in the same realm as the modular Firebase SDK.
+    async _setDoc(ref, data, options = null) {
+      if (this.fs && typeof this.fs.setDocPlain === 'function') return this.fs.setDocPlain(ref, data, options);
+      if (options == null) return this.api.setDoc(ref, plain(data));
+      return this.api.setDoc(ref, plain(data), plain(options));
+    },
+    async _addDoc(ref, data) {
+      if (this.fs && typeof this.fs.addDocPlain === 'function') return this.fs.addDocPlain(ref, data);
+      return this.api.addDoc(ref, plain(data));
+    },
+    async _updateDoc(ref, data) {
+      if (this.fs && typeof this.fs.updateDocPlain === 'function') return this.fs.updateDocPlain(ref, data);
+      return this.api.updateDoc(ref, plain(data));
+    },
+    async _uploadBytes(ref, file, metadata = null) {
+      if (this.fs && typeof this.fs.uploadBytesPlain === 'function') return this.fs.uploadBytesPlain(ref, file, metadata);
+      if (metadata == null) return this.api.uploadBytes(ref, file);
+      return this.api.uploadBytes(ref, file, plain(metadata));
+    },
+
     /* ----- projects ----- */
     async listProjects() {
+      const owner = this.captureProjectListOwner();
       if (!this.isCloud()) {
         const db = Local.read();
         return Object.values(db.projects || {}).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
       }
       const f = this.api, me = this.me();
       const out = new Map();
-      const grab = async (q) => { const s = await f.getDocs(q); s.forEach((d) => out.set(d.id, { id: d.id, ...d.data() })); };
-      try { await grab(f.query(f.collection(this.db, 'specProjects'), f.where('ownerId', '==', me.uid), f.limit(100))); } catch (_) {}
-      try { await grab(f.query(f.collection(this.db, 'specProjects'), f.where('memberIds', 'array-contains', me.uid), f.limit(100))); } catch (_) {}
+      const current = owner.assertCurrent;
+      const grab = async (q) => { current(); const s = await f.getDocs(q); current(); s.forEach((d) => out.set(d.id, { id: d.id, ...d.data() })); };
+      // Standalone books keep their own ACL. Linked books are discovered only
+      // through currently authorized parent projects, never copied stale ACLs.
+      await grab(f.query(f.collection(this.db, 'specProjects'), f.where('linkedProjectId', '==', null), f.where('ownerId', '==', me.uid), f.limit(100)));
+      await grab(f.query(f.collection(this.db, 'specProjects'), f.where('linkedProjectId', '==', null), f.where('memberIds', 'array-contains', me.uid), f.limit(100)));
+      const parents = [...new Set((await this.listTrackerProjects()).map(p => p.id))];
+      current();
+      // Retain existing per-query limits; at most four reads are in flight.
+      for (let i = 0; i < parents.length; i += 4) {
+        await Promise.all(parents.slice(i, i + 4).map(id => grab(f.query(f.collection(this.db, 'specProjects'), f.where('linkedProjectId', '==', id), f.limit(100)))));
+      }
+      current();
       return [...out.values()].sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
     },
 
     /** Projects from Project Tracker available to link. */
     async listTrackerProjects() {
       if (!this.isCloud()) return [];
+      const owner = this.captureProjectListOwner();
       const f = this.api, me = this.me(), out = new Map();
-      const grab = async (q) => { const s = await f.getDocs(q); s.forEach((d) => out.set(d.id, { id: d.id, ...d.data() })); };
-      try { await grab(f.query(f.collection(this.db, 'projects'), f.where('ownerId', '==', me.uid), f.limit(50))); } catch (_) {}
-      try { await grab(f.query(f.collection(this.db, 'projects'), f.where('memberIds', 'array-contains', me.uid), f.limit(50))); } catch (_) {}
+      const current = owner.assertCurrent;
+      const grab = async (q) => { current(); const s = await f.getDocs(q); current(); s.forEach((d) => out.set(d.id, { id: d.id, ...d.data() })); };
+      await grab(f.query(f.collection(this.db, 'projects'), f.where('ownerId', '==', me.uid), f.limit(50)));
+      await grab(f.query(f.collection(this.db, 'projects'), f.where('memberIds', 'array-contains', me.uid), f.limit(50)));
       return [...out.values()];
     },
 
@@ -152,14 +200,14 @@
         const db = Local.read(); db.projects = db.projects || {};
         const id = uid4(); db.projects[id] = { id, ...data }; Local.write(db); return id;
       }
-      const ref = await this.api.addDoc(this.api.collection(this.db, 'specProjects'), plain(data));
+      const ref = await this._addDoc(this.api.collection(this.db, 'specProjects'), data);
       return ref.id;
     },
 
     async updateProject(sid, patch) {
       patch = { ...patch, updatedAt: nowISO() };
       if (!this.isCloud()) { const db = Local.read(); Object.assign(db.projects[sid], patch); Local.write(db); return; }
-      await this.api.updateDoc(this.api.doc(this.db, 'specProjects', sid), plain(patch));
+      await this._updateDoc(this.api.doc(this.db, 'specProjects', sid), patch);
     },
 
     async deleteProject(sid) {
@@ -188,13 +236,13 @@
         bucket[id] = merge ? { ...(bucket[id] || {}), ...data, id } : { ...data, id };
         Local.write(db); return id;
       }
-      await this.api.setDoc(this.api.doc(this.db, 'specProjects', sid, kind, id), plain(data), plain({ merge }));
+      await this._setDoc(this.api.doc(this.db, 'specProjects', sid, kind, id), data, { merge });
       return id;
     },
 
     async addDocIn(kind, sid, data) {
       if (!this.isCloud()) { const id = uid4(); await this.setDocIn(kind, sid, id, data, false); return id; }
-      const ref = await this.api.addDoc(this.api.collection(this.db, 'specProjects', sid, kind), plain(data));
+      const ref = await this._addDoc(this.api.collection(this.db, 'specProjects', sid, kind), data);
       return ref.id;
     },
 
@@ -210,24 +258,26 @@
     },
 
     /** Realtime subscription. cb(list). Returns unsubscribe. */
-    subscribe(kind, sid, cb) {
+    subscribe(kind, sid, cb, onError = () => {}) {
       if (!this.isCloud()) {
         const emit = () => cb(Object.values(this._localBucket(kind, sid).bucket));
         emit();
         return Local.onChange(emit);
       }
       try {
-        return this.api.onSnapshot(this.api.collection(this.db, 'specProjects', sid, kind), (snap) => {
+        const collection = this.api.collection(this.db, 'specProjects', sid, kind);
+        const target = kind === 'history' ? this.api.query(collection, this.api.orderBy('at', 'desc'), this.api.limit(this.HISTORY_MAX)) : collection;
+        return this.api.onSnapshot(target, (snap) => {
           cb(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-        }, (e) => console.warn('subscribe ' + kind, e));
-      } catch (e) { console.warn(e); return () => {}; }
+        }, (e) => { console.warn('subscribe ' + kind, e); onError(e); });
+      } catch (e) { console.warn(e); onError(e); return () => {}; }
     },
 
-    subscribeProject(sid, cb) {
+    subscribeProject(sid, cb, onError = () => {}) {
       if (!this.isCloud()) { const emit = () => cb((Local.read().projects || {})[sid]); emit(); return Local.onChange(emit); }
       try {
-        return this.api.onSnapshot(this.api.doc(this.db, 'specProjects', sid), (d) => cb(d.exists() ? { id: d.id, ...d.data() } : null));
-      } catch (e) { return () => {}; }
+        return this.api.onSnapshot(this.api.doc(this.db, 'specProjects', sid), (d) => cb(d.exists() ? { id: d.id, ...d.data() } : null), onError);
+      } catch (e) { onError(e); return () => {}; }
     },
 
     /* ----- media (images in cells) -----
@@ -245,7 +295,7 @@
         const safe = String(file.name || 'image').replace(/[^\w.\-]+/g, '_').slice(-60);
         const path = `specs/${sid}/${uidPart}/${keyHint || 'item'}/${Date.now()}_${safe}`;
         const ref = this.api.ref(this.fs.storage, path);
-        await this.api.uploadBytes(ref, file, plain({ contentType: file.type || 'image/jpeg' }));
+        await this._uploadBytes(ref, file, { contentType: file.type || 'image/jpeg' });
         return { url: await this.api.getDownloadURL(ref), name: file.name, path };
       } catch (e) {
         console.warn('storage upload failed, inlining', e);
@@ -253,7 +303,7 @@
       }
     },
 
-    /* ----- edit history (reversible edits, capped) ----- */
+    /* ----- durable edit history; the recent undo view is bounded ----- */
     HISTORY_MAX: 50,
 
     /** Record one reversible edit. ops: [{kind,id,before,after}] */
@@ -261,16 +311,11 @@
       const rec = { at: nowISO(), by: this.me().uid, byName: this.me().name || this.me().email || 'user', undone: false, ...entry };
       const id = 'h' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       await this.setDocIn('history', sid, id, rec, false);
-      this._trimHistory(sid);
       return id;
     },
 
     async _trimHistory(sid) {
-      try {
-        const all = (await this.listIn('history', sid)).sort((a, b) => String(b.at).localeCompare(String(a.at)));
-        const extra = all.slice(this.HISTORY_MAX);
-        for (const e of extra) await this.deleteDocIn('history', sid, e.id);
-      } catch (_) {}
+      // Kept for older callers. Pruning the undo view must never erase audit evidence.
     },
 
     async listHistory(sid) {
@@ -279,10 +324,38 @@
     },
 
     /** Batched writes with graceful local fallback. */
-    async bulkSet(kind, sid, records) {
+    async bulkSet(kind, sid, records, options = {}) {
+      const owner = this.captureProjectListOwner();
+      const current = () => { owner.assertCurrent(); options.assertCurrent?.(); };
       const chunk = 150;
       for (let i = 0; i < records.length; i += chunk) {
-        await Promise.all(records.slice(i, i + chunk).map((r) => this.setDocIn(kind, sid, r.id, r.data, true)));
+        current();
+        const rows = records.slice(i, i + chunk);
+        if (this.isCloud() && typeof this.api.writeBatch === 'function') {
+          const batch = this.api.writeBatch(this.db);
+          rows.forEach(r => {
+            const data = plain(r.data);
+            // Source maps replace their previous columns; other document fields stay intact.
+            batch.set(this.api.doc(this.db, 'specProjects', sid, kind, r.id), data, plain({ mergeFields: Object.keys(data) }));
+          });
+          current();
+          await batch.commit();
+        } else if (!this.isCloud()) {
+          const { db, bucket } = this._localBucket(kind, sid);
+          rows.forEach(r => { bucket[r.id] = { ...(bucket[r.id] || {}), ...r.data, id: r.id }; });
+          current();
+          Local.write(db);
+        } else {
+          // Compatibility with older shells, with bounded write concurrency.
+          for (let j = 0; j < rows.length; j += 8) {
+            current();
+            await Promise.all(rows.slice(j, j + 8).map(r => {
+              const data = plain(r.data);
+              return this._setDoc(this.api.doc(this.db, 'specProjects', sid, kind, r.id), data, { mergeFields: Object.keys(data) });
+            }));
+          }
+        }
+        current();
       }
     }
   };

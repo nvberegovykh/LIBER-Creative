@@ -5,6 +5,8 @@
  */
 (function (root) {
   'use strict';
+  // Retained URL for old cached entrypoints. Only render-agent.js may render.
+  return;
 
   const BUILD = '20260817r110-selfhost-render2';
   const MODEL = 'Qwen/Qwen-Image-Edit-2511';

@@ -45,9 +45,9 @@ class SecureKeyManager {
     }
 
     getDefaultRawUrl(){
-        // Use the deployed HTTPS function (region may be in Gist keys/firebase.functionsRegion)
-        const region = (window.__CFN_REGION_OVERRIDE__) || 'europe-west1';
-        return `https://${region}-liber-apps-cca20.cloudfunctions.net/getPublicConfig`;
+        // Same-origin Hosting proxy: preview channels and the final custom domain share one
+        // bootstrap path, while the deployed function remains unchanged and server-owned.
+        return new URL('/__liber_recovery/public-config', window.location.origin).href;
     }
 
     /**
@@ -79,6 +79,17 @@ class SecureKeyManager {
 
     /** Fetch keys from the managed endpoint. */
     async fetchKeys() {
+        if (this._fetchPromise) return this._fetchPromise;
+        const pending = this.fetchManagedPublicConfig();
+        this._fetchPromise = pending;
+        try {
+            return await pending;
+        } finally {
+            if (this._fetchPromise === pending) this._fetchPromise = null;
+        }
+    }
+
+    async fetchManagedPublicConfig() {
         // 1) Return in-memory cache if still fresh
         if (this.cachedResponse && Date.now() - this.lastFetch < this.keyCacheExpiry) {
             if (window.__DEBUG_KEYS__) console.log('Using in-memory cached keys');
@@ -132,6 +143,24 @@ class SecureKeyManager {
                             if (plain.firebase) return plain;
                         } catch(_){}
                     }
+                    // Recovery-safe fallback: Firebase Hosting exposes the active project's public
+                    // client configuration on a same-origin reserved URL. This keeps Auth/Firestore
+                    // bootstrap available if the supplemental managed-config proxy is temporarily
+                    // unavailable; server-only credentials are never sourced from this endpoint.
+                    try {
+                        const initResp = await fetch('/__/firebase/init.json', { cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer' });
+                        if (initResp.ok) {
+                            const firebase = await initResp.json();
+                            firebase.functionsRegion = firebase.functionsRegion || 'europe-west1';
+                            const fallback = this.sanitizePublicConfig({ firebase, functionsRegion: 'europe-west1' });
+                            if (fallback.firebase) {
+                                this.cachedResponse = fallback; this.lastFetch = Date.now();
+                                try { await this.encryptAtRest(fallback); } catch(_){}
+                                console.warn('Managed public config unavailable; using Firebase Hosting reserved public config.');
+                                return fallback;
+                            }
+                        }
+                    } catch(_){}
                     return {};
                 }
             }
