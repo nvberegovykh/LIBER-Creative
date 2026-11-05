@@ -4,7 +4,7 @@ Prepared 5 November 2026. The website is a public proposal and demonstration. Th
 
 ## Existing infrastructure
 
-The source owner is `nvberegovykh/LIBER-Creative`. GitHub Pages serves `main/docs` at liberpict.com. Firebase project `liber-apps-cca20` owns the existing LIBER account infrastructure. The `/ai` guide describes the read-only REVEX Observer. It does not provide website writes, KYC services, or blockchain mint authority.
+The source owner is `nvberegovykh/LIBER-Creative`. GitHub Pages builds `main/docs`, while the actual liberpict.com domain is served by Firebase Hosting site `liber-apps-cca20`. Public publication uses a clone of the current Firebase release with a bounded file patch, preserving existing routing and unrelated files. The same Firebase project owns the existing LIBER account infrastructure. The `/ai` guide describes the read-only REVEX Observer. It does not provide website writes, KYC services, or blockchain mint authority.
 
 ## Delivered
 
