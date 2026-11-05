@@ -9,22 +9,26 @@ const {
   Fault,
   need,
   hash,
-  id,
   VERSION,
   CHANNEL,
   DAY,
 } = require("./core");
 const Stripe = require("stripe");
+const { createIdentity } = require("./identity");
 if (!getApps().length) initializeApp();
 const db = getFirestore("jericho");
 const service = createService(db);
 const stripeKey = process.env.JERICHO_STRIPE_KEY;
 const webhookKey = process.env.JERICHO_STRIPE_WEBHOOK_SECRET;
+// DOB access requires a restricted Identity key, not a general secret key.
+const providerConfigured =
+  Boolean(stripeKey?.startsWith("rk_live_")) && Boolean(webhookKey);
 const providerEnabled =
-  Boolean(
-    stripeKey?.startsWith("sk_live_") || stripeKey?.startsWith("rk_live_"),
-  ) && Boolean(webhookKey);
-const stripe = providerEnabled ? new Stripe(stripeKey) : null;
+  providerConfigured && process.env.JERICHO_IDENTITY_LIVE_ENABLED === "true";
+const stripe = providerConfigured ? new Stripe(stripeKey) : null;
+const identity = stripe
+  ? createIdentity({ db, service, auth: getAuth(), stripe, webhookKey })
+  : null;
 const origins = new Set([
   "https://liberpict.com",
   "https://www.liberpict.com",
@@ -67,158 +71,6 @@ async function currentUser(req) {
   );
   return user;
 }
-async function startVerification(uid, data) {
-  need(
-    providerEnabled,
-    "Document verification is awaiting provider activation. Your saved profile remains available.",
-    503,
-  );
-  need(
-    data.consentVersion === VERSION && data.consent === true,
-    "Confirm the identity-verification notice.",
-  );
-  const m = await service.activeMember(uid);
-  if (m.japId && m.expiresAt > Date.now())
-    return { profile: await service.own(uid) };
-  const ref = db.collection("members").doc(uid);
-  const attempt = await db.runTransaction(async (tx) => {
-    const current = (await tx.get(ref)).data();
-    need(
-      current && !current.revokedAt && !current.deletedAt,
-      "Membership unavailable.",
-      409,
-    );
-    if (
-      current.attemptId &&
-      !["canceled", "redacted"].includes(current.kycStatus) &&
-      !(
-        current.expiresAt &&
-        current.expiresAt <= Date.now() &&
-        current.sessionId === current.verifiedSessionId
-      )
-    )
-      return current;
-    const next = {
-      ...current,
-      attemptId: id(),
-      sessionId: null,
-      kycStatus: "pending",
-      updatedAt: Date.now(),
-      revision: current.revision + 1,
-    };
-    tx.set(ref, next);
-    return next;
-  });
-  const session = attempt.sessionId
-    ? await stripe.identity.verificationSessions.retrieve(attempt.sessionId)
-    : await stripe.identity.verificationSessions.create(
-        {
-          type: "document",
-          metadata: {
-            purpose: "jericho-membership",
-            attempt: attempt.attemptId,
-          },
-          options: { document: { require_matching_selfie: true } },
-          return_url:
-            "https://liberpict.com/jericho-alliance/sip/#verification-return",
-        },
-        { idempotencyKey: `jericho-${attempt.attemptId}` },
-      );
-  need(
-    session.livemode === true,
-    "The provider must be activated for live verification.",
-    503,
-  );
-  await db.runTransaction(async (tx) => {
-    const current = (await tx.get(ref)).data();
-    need(
-      current &&
-        !current.deletedAt &&
-        !current.revokedAt &&
-        current.attemptId === attempt.attemptId,
-      "Your enrollment changed. Refresh and try again.",
-      409,
-    );
-    tx.update(ref, { sessionId: session.id, kycStatus: session.status });
-    tx.set(db.collection("providerSessions").doc(session.id), {
-      uid,
-      attemptId: attempt.attemptId,
-    });
-  });
-  await reconcileSession(session.id);
-  return {
-    url: session.url || null,
-    status: session.status,
-    profile: await service.own(uid),
-  };
-}
-async function reconcileSession(sessionId) {
-  const session = await stripe.identity.verificationSessions.retrieve(
-    sessionId,
-    { expand: ["verified_outputs"] },
-  );
-  if (!session.livemode || session.metadata?.purpose !== "jericho-membership")
-    return;
-  const binding = (
-    await db.collection("providerSessions").doc(session.id).get()
-  ).data();
-  need(
-    binding && binding.attemptId === session.metadata.attempt,
-    "Provider binding pending.",
-    503,
-  );
-  const m = await service.getMember(binding.uid);
-  if (!m || m.deletedAt || m.revokedAt || m.sessionId !== session.id) return;
-  if (session.status === "verified" && !session.redaction) {
-    const account = await getAuth().getUser(binding.uid);
-    need(
-      account.emailVerified && !account.disabled,
-      "Account is no longer eligible.",
-      409,
-    );
-    await service.issue(binding.uid, session);
-  } else {
-    await db.runTransaction(async (tx) => {
-      const ref = db.collection("members").doc(binding.uid),
-        current = (await tx.get(ref)).data();
-      if (
-        !current ||
-        current.deletedAt ||
-        current.revokedAt ||
-        current.sessionId !== session.id
-      )
-        return;
-      const updates = { kycStatus: session.status };
-      if (session.redaction || session.status === "canceled") {
-        updates.kycStatus = session.redaction ? "redacted" : "canceled";
-        updates.legalIdentity = null;
-        if (current.japId) {
-          updates.revokedAt = Date.now();
-          tx.set(db.collection("references").doc(current.japId), {
-            revoked: true,
-          });
-        }
-      }
-      tx.update(ref, updates);
-    });
-  }
-}
-async function webhook(req, res) {
-  need(providerEnabled, "Provider unavailable.", 503);
-  let event;
-  try {
-    event = stripe.webhooks.constructEvent(
-      req.rawBody,
-      req.get("stripe-signature"),
-      webhookKey,
-    );
-  } catch (_) {
-    throw new Fault(400, "Invalid signature.");
-  }
-  if (event.livemode && event.type.startsWith("identity.verification_session."))
-    await reconcileSession(event.data.object.id);
-  res.json({ received: true });
-}
 async function handler(req, res) {
   res.set("Cache-Control", "no-store, max-age=0");
   res.set("X-Content-Type-Options", "nosniff");
@@ -241,7 +93,12 @@ async function handler(req, res) {
         providerEnabled,
       });
     need(req.method === "POST", "Use POST.", 405);
-    if (req.path === "/stripe-webhook") return await webhook(req, res);
+    if (req.path === "/stripe-webhook") {
+      need(providerConfigured, "Provider unavailable.", 503);
+      return res.json(
+        await identity.receive(req.rawBody, req.get("stripe-signature")),
+      );
+    }
     need(!origin || origins.has(origin), "Origin is unavailable.", 403);
     need(req.is("application/json"), "Use JSON.", 415);
     need(req.rawBody?.length <= 100000, "This request is too large.", 413);
@@ -297,18 +154,10 @@ async function handler(req, res) {
         );
         const closed = await service.closeProfile(user.uid);
         let redaction = "not-needed";
-        if (closed?.sessionId) {
-          redaction = "pending";
-          if (stripe) {
-            try {
-              await stripe.identity.verificationSessions.redact(
-                closed.sessionId,
-              );
-              redaction = "requested";
-            } catch (_) {
-              /* Keep durable session reference for the redaction retry. */
-            }
-          }
+        if (closed) {
+          redaction = identity
+            ? await identity.redactClosedMember(user.uid)
+            : "pending";
         }
         result = { closed: true, redaction };
         break;
@@ -326,11 +175,16 @@ async function handler(req, res) {
         result = await service.revokeShare(user.uid, data.id);
         break;
       case "verification.start":
-        result = await startVerification(user.uid, data);
+        need(
+          providerEnabled,
+          "Document verification is awaiting provider activation. Your saved profile remains available.",
+          503,
+        );
+        result = await identity.start(user.uid, data);
         break;
       case "verification.refresh": {
         const m = await service.activeMember(user.uid);
-        if (stripe && m.sessionId) await reconcileSession(m.sessionId);
+        if (identity && m.sessionId) await identity.reconcile(m.sessionId);
         result = { profile: await service.own(user.uid), providerEnabled };
         break;
       }
@@ -373,14 +227,12 @@ async function handler(req, res) {
         code: e.code || "internal",
         name: e.name,
       });
-    res
-      .status(status)
-      .json({
-        error:
-          status === 500
-            ? "The request could not be completed. Please try again."
-            : e.message,
-      });
+    res.status(status).json({
+      error:
+        status === 500
+          ? "The request could not be completed. Please try again."
+          : e.message,
+    });
   }
 }
 exports.jerichoApi = onRequest(
@@ -406,34 +258,6 @@ exports.jerichoMaintenance = onSchedule(
     secrets: ["JERICHO_STRIPE_KEY", "JERICHO_STRIPE_WEBHOOK_SECRET"],
   },
   async () => {
-    if (!providerEnabled) return;
-    const pending = await db
-      .collection("members")
-      .where("kycStatus", "==", "redaction-pending")
-      .limit(100)
-      .get();
-    for (const row of pending.docs) {
-      const m = row.data();
-      if (!m.deletedAt) continue;
-      if (!m.sessionId) {
-        await row.ref.update({ kycStatus: "redacted", sessionId: null });
-        continue;
-      }
-      try {
-        let session = await stripe.identity.verificationSessions.retrieve(
-          m.sessionId,
-        );
-        if (!session.redaction)
-          session = await stripe.identity.verificationSessions.redact(
-            m.sessionId,
-          );
-        if (session.redaction?.status === "redacted") {
-          await db.collection("providerSessions").doc(m.sessionId).delete();
-          await row.ref.update({ kycStatus: "redacted", sessionId: null });
-        }
-      } catch (_) {
-        console.error("jericho-redaction-retry-pending");
-      }
-    }
+    if (identity) await identity.maintenance();
   },
 );
